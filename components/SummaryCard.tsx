@@ -13,9 +13,9 @@ const accentMap = {
 
 export function SummaryCard({ title, value, accent }: SummaryCardProps) {
   return (
-    <div className={`rounded-3xl border border-slate-200 p-5 ${accentMap[accent]}`}>
+    <div className={`rounded-lg border border-slate-200 p-5 ${accentMap[accent]}`}>
       <p className="text-sm font-medium text-slate-500">{title}</p>
-      <p className="mt-4 text-3xl font-semibold tracking-tight text-slate-950">{value}</p>
+      <p className="mt-4 text-3xl font-semibold text-slate-950">{value}</p>
     </div>
   );
 }

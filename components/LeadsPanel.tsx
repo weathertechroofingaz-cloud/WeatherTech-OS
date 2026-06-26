@@ -1,59 +1,55 @@
-"use client";
+import type { Lead } from "../lib/mockData";
 
-import { useState } from "react";
+type LeadsPanelProps = {
+  leads: Lead[];
+  onCreateLead?: () => void;
+};
 
-export default function NewLeadPanel() {  const [savedMessage, setSavedMessage] = useState("");
-
-  const handleSave = () =export function NewLeadPanel() {> {
-    setSavedMessage("Lead saved successfully.");
-  };
-
+export function LeadsPanel({ leads, onCreateLead }: LeadsPanelProps) {
   return (
-    <div className="rounded-3xl bg-white p-8 shadow-sm">
-      <h2 className="mb-6 text-2xl font-bold text-slate-950">New Lead</h2>
-
-      {savedMessage && (
-        <div className="mb-4 rounded-xl bg-green-100 p-3 text-sm font-semibold text-green-800">
-          {savedMessage}
+    <section className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-950">Leads</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Active opportunities across roofing and painting.
+          </p>
         </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-4">
-        <input className="rounded-xl border p-3" placeholder="Customer Name" />
-        <input className="rounded-xl border p-3" placeholder="Phone Number" />
-        <input className="rounded-xl border p-3" placeholder="Email Address" />
-        <input className="rounded-xl border p-3" placeholder="Property Address" />
-
-        <select className="rounded-xl border p-3">
-          <option>Lead Source</option>
-          <option>Google</option>
-          <option>Referral</option>
-          <option>BNI</option>
-          <option>Facebook</option>
-          <option>Yelp</option>
-          <option>Door Knocking</option>
-        </select>
-
-        <select className="rounded-xl border p-3">
-          <option>Service Needed</option>
-          <option>Roofing</option>
-          <option>Painting</option>
-          <option>Both</option>
-        </select>
+        {onCreateLead ? (
+          <button
+            type="button"
+            onClick={onCreateLead}
+            className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+          >
+            New lead
+          </button>
+        ) : null}
       </div>
 
-      <textarea
-        className="mt-4 h-32 w-full rounded-xl border p-3"
-        placeholder="Notes..."
-      />
-
-      <button
-        type="button"
-        onClick={handleSave}
-        className="mt-6 rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white"
-      >
-        Save Lead
-      </button>
-    </div>
+      <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-sm">
+        <div className="hidden grid-cols-[1fr_120px_130px_120px] gap-4 border-b border-slate-200 px-4 py-3 font-medium text-slate-500 sm:grid">
+          <span>Lead</span>
+          <span>Service</span>
+          <span>Source</span>
+          <span>Value</span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {leads.map((lead) => (
+            <div
+              key={lead.id}
+              className="grid gap-3 px-4 py-4 sm:grid-cols-[1fr_120px_130px_120px] sm:items-center"
+            >
+              <div>
+                <p className="font-semibold text-slate-900">{lead.name}</p>
+                <p className="mt-1 text-xs text-slate-500">{lead.status}</p>
+              </div>
+              <span className="text-slate-600">{lead.projectType}</span>
+              <span className="text-slate-600">{lead.source}</span>
+              <span className="font-semibold text-slate-900">{lead.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
