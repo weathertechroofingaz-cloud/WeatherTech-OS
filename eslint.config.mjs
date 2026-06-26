@@ -1,7 +1,13 @@
-import nextVitals from "eslint-config-next/core-web-vitals";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { FlatCompat } from "@eslint/eslintrc";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const compat = new FlatCompat({
+  baseDirectory: __dirname,
+});
 
 const eslintConfig = [
-  ...nextVitals,
   {
     ignores: [
       ".next/**",
@@ -11,6 +17,7 @@ const eslintConfig = [
       "WeatherTech-OS.zip",
     ],
   },
+  ...compat.extends("next/core-web-vitals"),
 ];
 
 export default eslintConfig;
