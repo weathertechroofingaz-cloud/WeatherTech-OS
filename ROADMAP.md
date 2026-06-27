@@ -20,6 +20,7 @@ WeatherTech OS is a production-focused roofing and painting operations platform 
 - Jobs, scheduling calendar, material orders, invoices, payments, photo records, customer portal, employee portal, change orders, signatures, document management, notifications, weather dashboard, and route planner.
 - Document generation for estimate packets, invoice packets, scope packets, change orders, job production packets, and customer profile packets.
 - Dashboard action center for overdue invoices, scheduling gaps, missing documents, blocked jobs, pending change orders, and queued communications.
+- Native photo gallery with Supabase Storage uploads, upload previews, search, filtering, pagination, and photo URL actions.
 - Integration foundations for Google Calendar, Gmail, Google Maps routing, and Twilio SMS.
 
 ## Phase 5 Integrations
@@ -39,7 +40,8 @@ WeatherTech OS is a production-focused roofing and painting operations platform 
    - Add DocuSign provider support only after native signature workflow is stable.
 
 5. Photo Management
-   - Finish native Supabase Storage upload workflow with signed upload URLs, bucket policies, thumbnails, and job/customer galleries.
+   - Completed foundation: native Supabase Storage upload workflow, bucket policies, upload preview, searchable job/customer/estimate galleries, pagination, and URL actions.
+   - Next: signed upload URLs, thumbnail derivatives, bulk upload, and field-photo checklists.
    - Add CompanyCam sync later if field teams require it.
 
 6. Weather Alerts

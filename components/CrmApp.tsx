@@ -5064,7 +5064,95 @@ function PhotosView({
   onError,
 }: PhotosViewProps) {
   const [file, setFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("all");
+  const [relationFilter, setRelationFilter] = useState<
+    "all" | "job" | "customer" | "estimate" | "unassigned"
+  >("all");
+  const filteredPhotos = snapshot.jobPhotos.filter((photo) => {
+    const job = snapshot.jobs.find((item) => item.id === photo.job_id);
+    const customer = snapshot.customers.find((item) => item.id === photo.customer_id);
+    const estimate = snapshot.estimates.find((item) => item.id === photo.estimate_id);
+    const query = search.toLowerCase();
+    const targetLabel = [
+      photo.caption,
+      job?.title,
+      customer?.display_name,
+      estimate?.title,
+      photo.file_path,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const matchesSearch = !query || targetLabel.includes(query);
+    const matchesCompany =
+      companyFilter === "all" || photo.company_id === companyFilter;
+    const matchesRelation =
+      relationFilter === "all" ||
+      (relationFilter === "job" && Boolean(photo.job_id)) ||
+      (relationFilter === "customer" && Boolean(photo.customer_id)) ||
+      (relationFilter === "estimate" && Boolean(photo.estimate_id)) ||
+      (relationFilter === "unassigned" &&
+        !photo.job_id &&
+        !photo.customer_id &&
+        !photo.estimate_id);
+
+    return matchesSearch && matchesCompany && matchesRelation;
+  });
+  const {
+    page: photoPage,
+    pageCount: photoPageCount,
+    setPage: setPhotoPage,
+    pagedItems: pagedPhotos,
+  } = usePagination(filteredPhotos, 9);
+  const photoStats = {
+    total: snapshot.jobPhotos.length,
+    jobLinked: snapshot.jobPhotos.filter((photo) => photo.job_id).length,
+    customerLinked: snapshot.jobPhotos.filter((photo) => photo.customer_id).length,
+    estimateLinked: snapshot.jobPhotos.filter((photo) => photo.estimate_id).length,
+  };
+
+  useEffect(() => {
+    if (!file) {
+      setFilePreviewUrl("");
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setFilePreviewUrl(objectUrl);
+
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+
+  const getPhotoTargetLabel = (photo: JobPhotoRecord) => {
+    const job = photo.job_id
+      ? snapshot.jobs.find((item) => item.id === photo.job_id)
+      : null;
+    const customer = photo.customer_id
+      ? snapshot.customers.find((item) => item.id === photo.customer_id)
+      : null;
+    const estimate = photo.estimate_id
+      ? snapshot.estimates.find((item) => item.id === photo.estimate_id)
+      : null;
+
+    return (
+      job?.title ??
+      customer?.display_name ??
+      estimate?.title ??
+      "Unassigned photo"
+    );
+  };
+
+  const copyPhotoUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      onNotice("Photo URL copied.");
+    } catch {
+      onError("Unable to copy photo URL.");
+    }
+  };
 
   const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5101,16 +5189,69 @@ function PhotosView({
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
-          <h2 className="text-xl font-bold text-slate-950">Photos</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Upload and organize job, estimate, and customer photos.
-          </p>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-950">Photos</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Upload, search, and organize job, estimate, and customer photos.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-4 lg:min-w-[520px]">
+              <ProfileStat label="Total" value={photoStats.total} />
+              <ProfileStat label="Jobs" value={photoStats.jobLinked} />
+              <ProfileStat label="Customers" value={photoStats.customerLinked} />
+              <ProfileStat label="Estimates" value={photoStats.estimateLinked} />
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_190px_190px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                placeholder="Search captions, jobs, customers, estimates"
+              />
+            </div>
+            <select
+              value={companyFilter}
+              onChange={(event) => setCompanyFilter(event.target.value)}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="all">All companies</option>
+              {snapshot.companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={relationFilter}
+              onChange={(event) =>
+                setRelationFilter(
+                  event.target.value as
+                    | "all"
+                    | "job"
+                    | "customer"
+                    | "estimate"
+                    | "unassigned",
+                )
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="all">All links</option>
+              <option value="job">Linked to jobs</option>
+              <option value="customer">Linked to customers</option>
+              <option value="estimate">Linked to estimates</option>
+              <option value="unassigned">Unassigned</option>
+            </select>
+          </div>
         </div>
         <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3">
-          {snapshot.jobPhotos.map((photo) => (
+          {pagedPhotos.map((photo) => (
             <article
               key={photo.id}
-              className="overflow-hidden rounded-lg border border-slate-200 bg-white"
+              className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
             >
               {photo.file_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -5125,33 +5266,88 @@ function PhotosView({
                 </div>
               )}
               <div className="p-4">
-                <p className="font-semibold text-slate-950">
-                  {photo.caption ?? "Job photo"}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {photo.job_id
-                    ? snapshot.jobs.find((job) => job.id === photo.job_id)?.title
-                    : getCustomerName(snapshot, photo.customer_id) ?? "Unassigned"}
-                </p>
-                <div className="mt-3 flex items-center justify-between text-xs font-semibold uppercase text-slate-500">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-950">
+                      {photo.caption ?? "Job photo"}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {getPhotoTargetLabel(photo)}
+                    </p>
+                  </div>
+                  <Badge
+                    label={
+                      photo.job_id
+                        ? "Job"
+                        : photo.customer_id
+                          ? "Customer"
+                          : photo.estimate_id
+                            ? "Estimate"
+                            : "General"
+                    }
+                    tone={photo.job_id ? "green" : photo.customer_id ? "blue" : "amber"}
+                  />
+                </div>
+                <div className="mt-3 grid gap-1 text-xs font-semibold uppercase text-slate-500">
                   <span>{formatDate(photo.taken_at)}</span>
                   <span>{companyMap.get(photo.company_id)?.name ?? "Company"}</span>
+                  <span className="truncate normal-case">{photo.file_path}</span>
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => void copyPhotoUrl(photo.file_url)}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.open(photo.file_url, "_blank", "noopener,noreferrer")}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    <Camera className="h-4 w-4" />
+                    Open
+                  </button>
                 </div>
               </div>
             </article>
           ))}
-          {!snapshot.jobPhotos.length ? <EmptyState label="No photos uploaded yet." /> : null}
+          {!filteredPhotos.length ? <EmptyState label="No photos match this view." /> : null}
         </div>
+        <PaginationControls
+          page={photoPage}
+          pageCount={photoPageCount}
+          total={filteredPhotos.length}
+          onPageChange={setPhotoPage}
+        />
       </section>
 
       <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-lg font-bold text-slate-950">Upload photo</h3>
         <form onSubmit={handleUpload} className="mt-4 grid gap-3">
-          <label className="grid gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm font-semibold text-slate-600">
-            <Upload className="mx-auto h-6 w-6 text-sky-600" />
-            {file ? file.name : "Choose job photo"}
+          <label className="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm font-semibold text-slate-600">
+            {filePreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={filePreviewUrl}
+                alt="Selected upload preview"
+                className="mx-auto h-44 w-full rounded-md object-cover"
+              />
+            ) : (
+              <div className="grid h-44 place-items-center rounded-md bg-white text-slate-400">
+                <Upload className="h-8 w-8 text-sky-600" />
+              </div>
+            )}
+            <span>{file ? file.name : "Choose job photo"}</span>
+            {file ? (
+              <span className="text-xs font-medium text-slate-500">
+                {(file.size / 1024 / 1024).toFixed(2)} MB · {file.type || "image"}
+              </span>
+            ) : null}
             <input
-              required={client !== null}
+              required
               type="file"
               accept="image/*"
               className="sr-only"
@@ -5216,12 +5412,16 @@ function PhotosView({
           />
           <button
             type="submit"
-            disabled={isUploading}
+            disabled={isUploading || !file}
             className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Upload className="h-4 w-4" />
             {isUploading ? "Uploading" : "Upload photo"}
           </button>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+            Photos are uploaded to the Supabase `job-photos` storage bucket and
+            indexed in the CRM for job, customer, and estimate galleries.
+          </div>
         </form>
       </aside>
     </div>
