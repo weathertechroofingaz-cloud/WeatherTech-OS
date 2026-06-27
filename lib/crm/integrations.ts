@@ -11,6 +11,9 @@ import type {
   LeadRecord,
   RoutePlanStopInput,
   ScheduleEventRecord,
+  SmsMessageCategory,
+  SmsMessageRecord,
+  SmsMessageStatus,
 } from "./types";
 
 export const googleCalendarScopes = [
@@ -24,6 +27,14 @@ export const googleMapsEnvVars = {
   browserApiKey: "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY",
   serverApiKey: "GOOGLE_MAPS_API_KEY",
   routesEndpoint: "https://routes.googleapis.com/directions/v2:computeRoutes",
+};
+
+export const twilioEnvVars = {
+  accountSid: "TWILIO_ACCOUNT_SID",
+  authToken: "TWILIO_AUTH_TOKEN",
+  messagingServiceSid: "TWILIO_MESSAGING_SERVICE_SID",
+  fromNumber: "TWILIO_FROM_NUMBER",
+  messagesEndpoint: "https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json",
 };
 
 export type RouteCoordinate = {
@@ -264,6 +275,87 @@ export function buildGmailSendPreview(message: EmailMessageRecord) {
       estimateId: message.estimate_id ?? undefined,
       invoiceId: message.invoice_id ?? undefined,
       documentId: message.document_id ?? undefined,
+    },
+  };
+}
+
+export function getSmsOutboxSummary(messages: SmsMessageRecord[]) {
+  return {
+    draft: messages.filter((message) => message.status === "draft").length,
+    queued: messages.filter((message) => message.status === "queued").length,
+    sent: messages.filter((message) => message.status === "sent").length,
+    failed: messages.filter((message) => message.status === "failed").length,
+  };
+}
+
+export function smsMessageStatusLabel(status: SmsMessageStatus) {
+  const labels: Record<SmsMessageStatus, string> = {
+    draft: "Draft",
+    queued: "Queued",
+    sent: "Sent",
+    failed: "Failed",
+  };
+
+  return labels[status];
+}
+
+export function smsCategoryLabel(category: SmsMessageCategory) {
+  const labels: Record<SmsMessageCategory, string> = {
+    appointment_reminder: "Appointment reminder",
+    estimate_follow_up: "Estimate follow-up",
+    invoice_reminder: "Invoice reminder",
+    job_update: "Job update",
+    weather_delay: "Weather delay",
+    general: "General",
+  };
+
+  return labels[category];
+}
+
+export function normalizePhoneForSms(phone: string) {
+  const trimmed = phone.trim();
+
+  if (trimmed.startsWith("+")) {
+    return trimmed;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+
+  return trimmed;
+}
+
+export function countSmsSegments(body: string) {
+  if (!body.length) {
+    return 0;
+  }
+
+  return Math.ceil(body.length / 160);
+}
+
+export function buildTwilioSmsPreview(message: SmsMessageRecord) {
+  return {
+    To: normalizePhoneForSms(message.to_phone),
+    ...(message.from_phone ? { From: normalizePhoneForSms(message.from_phone) } : {}),
+    ...(message.from_phone ? {} : { MessagingServiceSid: "{TWILIO_MESSAGING_SERVICE_SID}" }),
+    Body: message.body,
+    metadata: {
+      weathertechCompanyId: message.company_id,
+      weathertechSmsMessageId: message.id,
+      customerId: message.customer_id ?? undefined,
+      leadId: message.lead_id ?? undefined,
+      jobId: message.job_id ?? undefined,
+      scheduleEventId: message.schedule_event_id ?? undefined,
+      invoiceId: message.invoice_id ?? undefined,
+      category: message.category,
+      segments: countSmsSegments(message.body),
     },
   };
 }

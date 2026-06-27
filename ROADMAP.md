@@ -1,60 +1,55 @@
 # WeatherTech OS Roadmap
 
-WeatherTech OS is being built as a professional roofing and painting CRM for WeatherTech Roofing LLC and IHC Painting. The development approach is to stabilize the core app first, then connect durable Supabase-backed workflows one module at a time.
+WeatherTech OS is a production-focused roofing and painting operations platform for WeatherTech Roofing LLC and IHC Painting. The application now runs on a live Supabase-backed CRM foundation with authenticated Next.js, TypeScript, Tailwind CSS, and typed Supabase repositories.
 
 ## Current Baseline
 
-- Next.js App Router project with TypeScript and Tailwind CSS.
-- Single local app shell with dashboard navigation and mock CRM data.
-- No Supabase client, schema migrations, auth flow, or environment contract exists in the repository yet.
-- The first engineering priority is a clean build, predictable linting, and a clear CRM module structure.
+- Live Supabase data powers dashboard metrics, leads, customers, estimates, scopes, jobs, scheduling, photos, invoices, material orders, portals, documents, notifications, and integrations.
+- Authentication, dark mode, responsive layout, loading states, empty states, toasts, search, filtering, pagination, and commercial SaaS styling are in place.
+- Google Calendar, Gmail, Google Maps routing, and Twilio SMS have local integration foundations with database records, UI controls, status tracking, and payload previews.
+- Supabase migrations are versioned in `supabase/migrations`.
+- Validation target remains `npm run type-check`, `npm run lint`, and `npm run build`.
 
-## Phase 1: Foundation
+## Completed Foundations
 
-- Keep the app buildable with `npm run type-check`, `npm run lint`, and `npm run build`.
-- Define shared CRM domain types for companies, leads, customers, estimates, scopes, jobs, schedules, material orders, photos, invoices, and assistant activity.
-- Add Supabase client setup for browser and server usage.
-- Document required environment variables in an example env file.
-- Add initial database migrations with row-level security policies.
+- CRM shell, navigation, dashboard analytics, and live Supabase snapshot loading.
+- Lead intake, lead list/detail workflow, customer management, and conversion from lead to customer.
+- Estimates with line items, labor, materials, tax, discounts, margin, totals, and PDF-style preview.
+- Estimate-to-job production handoff for approved estimates.
+- Scope of work generator using WeatherTech templates for roofing, exterior painting, interior painting, cabinet refinishing, roof repairs, tile underlayment, and custom scopes.
+- Jobs, scheduling calendar, material orders, invoices, payments, photo records, customer portal, employee portal, change orders, signatures, document management, notifications, weather dashboard, and route planner.
+- Document generation for estimate packets, invoice packets, scope packets, change orders, job production packets, and customer profile packets.
+- Dashboard action center for overdue invoices, scheduling gaps, missing documents, blocked jobs, pending change orders, and queued communications.
+- Integration foundations for Google Calendar, Gmail, Google Maps routing, and Twilio SMS.
 
-## Phase 2: Lead And Customer CRM
+## Phase 5 Integrations
 
-- Replace mock leads with Supabase-backed lead records.
-- Add lead intake, lead list, lead detail, status updates, and source tracking.
-- Create customer profiles and link converted leads to customers.
-- Add notes, contact methods, property addresses, and company ownership.
+1. Twilio SMS
+   - Completed foundation: connection records, SMS outbox, customer/job/lead/invoice links, Twilio payload preview, and status tracking.
+   - Next: server-side send worker, inbound webhook handling, delivery receipts, opt-out enforcement, and reminder automation.
 
-## Phase 3: Estimates And Scope Of Work
+2. Stripe Payments
+   - Add Stripe customer mapping, checkout/payment-link records, webhook processing, portal payment handoff, and invoice balance reconciliation.
 
-- Build estimate records with line items, totals, statuses, and customer/job links.
-- Build a scope of work generator for roofing and painting templates.
-- Support draft, sent, approved, and rejected workflows.
-- Prepare printable/exportable estimate and scope views.
+3. QuickBooks Online
+   - Add OAuth connection records, customer sync, invoice sync, payment sync, product/service mapping, and sync conflict handling.
 
-## Phase 4: Jobs, Scheduling, And Materials
+4. Document Signing
+   - Keep native signatures as the default path.
+   - Add DocuSign provider support only after native signature workflow is stable.
 
-- Convert approved estimates into jobs.
-- Track job phases, production status, crew assignments, and inspection dates.
-- Add calendar and scheduling views.
-- Add material order records tied to jobs and suppliers.
+5. Photo Management
+   - Finish native Supabase Storage upload workflow with signed upload URLs, bucket policies, thumbnails, and job/customer galleries.
+   - Add CompanyCam sync later if field teams require it.
 
-## Phase 5: Photos, Invoices, And Payments
-
-- Add Supabase Storage buckets for job photos.
-- Tie photo metadata to leads, customers, and jobs.
-- Generate invoices from approved estimates or completed jobs.
-- Track invoice status and payment milestones.
-
-## Phase 6: AI Assistant
-
-- Add an assistant panel with scoped actions against CRM records.
-- Generate scope drafts, estimate notes, follow-up messages, and job summaries.
-- Keep AI actions reviewable before they update customer-facing records.
+6. Weather Alerts
+   - Tie forecast and severe-weather checks to job locations.
+   - Generate schedule alerts, customer SMS/email drafts, and production risk indicators.
 
 ## Engineering Rules
 
 - Preserve existing working flows before adding new ones.
-- Make small, logical commits.
-- Prefer typed data models and reusable module boundaries over one-off page code.
-- Keep Supabase schema changes in versioned migrations.
-- Verify each change with type-check, lint, and build before commit.
+- Add schema changes through versioned Supabase migrations.
+- Keep integrations safe by storing connection metadata in the app while credentials live in a server-side vault or environment configuration.
+- Verify major changes with type-check, lint, and build.
+- Commit in small logical steps when Git metadata is available.

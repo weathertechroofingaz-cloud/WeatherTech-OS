@@ -18,6 +18,7 @@ import {
   LogOut,
   Mail,
   MapPin,
+  MessageSquare,
   Moon,
   Package,
   Paintbrush,
@@ -64,6 +65,7 @@ import {
   createRoutePlan,
   createScheduleEvent,
   createSignature,
+  createSmsMessage,
   createScope,
   createTimeEntry,
   fetchCrmSnapshot,
@@ -80,17 +82,24 @@ import {
   updateNotification,
   updateScheduleEvent,
   updateSignature,
+  updateSmsMessage,
   updateTimeEntry,
   updateScope,
   upsertCalendarEventSync,
 } from "../lib/crm/repository";
+import {
+  buildDocumentSourceOptions,
+  buildGeneratedDocumentDraft,
+} from "../lib/crm/documents";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
   buildGoogleCalendarEventPayload,
   buildGmailSendPreview,
   buildRouteCandidates,
   buildRoutePreview,
+  buildTwilioSmsPreview,
   calendarSyncStatusLabel,
+  countSmsSegments,
   createPayloadFingerprint,
   emailCategoryLabel,
   emailMessageStatusLabel,
@@ -99,13 +108,17 @@ import {
   getCalendarSyncRecord,
   getCalendarSyncSummary,
   getEmailOutboxSummary,
+  getSmsOutboxSummary,
   googleMapsEnvVars,
   gmailScopes,
   googleCalendarScopes,
   hasGoogleMapsBrowserKey,
   integrationStatusLabel,
+  smsCategoryLabel,
+  smsMessageStatusLabel,
   routePreviewToStopInputs,
   syncDirectionLabel,
+  twilioEnvVars,
 } from "../lib/crm/integrations";
 import { calculateDashboardMetrics } from "../lib/crm/metrics";
 import {
@@ -177,6 +190,8 @@ import type {
   SignatureInput,
   SignatureRecord,
   SignatureStatus,
+  SmsMessageRecord,
+  SmsMessageCategory,
   ScopeCategory,
   ScopeInput,
   ScopeRecord,
@@ -363,6 +378,15 @@ const notificationStatuses: { value: NotificationStatus; label: string }[] = [
   { value: "sent", label: "Sent" },
   { value: "read", label: "Read" },
   { value: "dismissed", label: "Dismissed" },
+];
+
+const smsCategories: { value: SmsMessageCategory; label: string }[] = [
+  { value: "appointment_reminder", label: "Appointment reminder" },
+  { value: "estimate_follow_up", label: "Estimate follow-up" },
+  { value: "invoice_reminder", label: "Invoice reminder" },
+  { value: "job_update", label: "Job update" },
+  { value: "weather_delay", label: "Weather delay" },
+  { value: "general", label: "General" },
 ];
 
 const scopeCategories = (Object.keys(scopeCategoryLabels) as ScopeCategory[]).map(
@@ -649,6 +673,59 @@ function getPaymentTargetName(snapshot: CrmSnapshot, payment: PaymentRecord) {
     getCustomerName(snapshot, payment.customer_id) ??
     "Payment"
   );
+}
+
+function getSmsTargetName(snapshot: CrmSnapshot, message: SmsMessageRecord) {
+  return (
+    getCustomerName(snapshot, message.customer_id) ??
+    getLeadName(snapshot, message.lead_id) ??
+    getJobName(snapshot, message.job_id) ??
+    snapshot.scheduleEvents.find((event) => event.id === message.schedule_event_id)
+      ?.title ??
+    snapshot.invoices.find((invoice) => invoice.id === message.invoice_id)
+      ?.invoice_number ??
+    "General SMS"
+  );
+}
+
+function buildDefaultSmsBody({
+  category,
+  companyName,
+  targetName,
+  event,
+  invoice,
+  job,
+}: {
+  category: SmsMessageCategory;
+  companyName: string;
+  targetName: string;
+  event?: ScheduleEventRecord;
+  invoice?: InvoiceRecord;
+  job?: JobRecord;
+}) {
+  const optOut = "Reply STOP to opt out.";
+
+  if (category === "appointment_reminder" && event) {
+    return `Hi ${targetName}, this is ${companyName}. Reminder: ${event.title} is scheduled for ${formatDateTime(event.start_at)}${event.location ? ` at ${event.location}` : ""}. ${optOut}`;
+  }
+
+  if (category === "invoice_reminder" && invoice) {
+    return `Hi ${targetName}, ${companyName} invoice ${invoice.invoice_number} has a balance of ${formatMoney(invoice.balance_due)}. Please reply with questions or payment timing. ${optOut}`;
+  }
+
+  if (category === "job_update" && job) {
+    return `Hi ${targetName}, ${companyName} update for ${job.title}: current status is ${jobStatusLabel(job.status)}. We will keep you posted as production moves forward. ${optOut}`;
+  }
+
+  if (category === "weather_delay") {
+    return `Hi ${targetName}, this is ${companyName}. Weather may affect today's schedule. Our team is reviewing conditions and will confirm the next update shortly. ${optOut}`;
+  }
+
+  if (category === "estimate_follow_up") {
+    return `Hi ${targetName}, this is ${companyName}. Following up on your estimate. Reply here with questions or approval and we can help reserve the schedule. ${optOut}`;
+  }
+
+  return `Hi ${targetName}, this is ${companyName}. Reply here if you have any questions or need an update from our team. ${optOut}`;
 }
 
 export function CrmApp() {
@@ -1594,9 +1671,60 @@ function DashboardView({
   companyMap,
   onCreateLead,
 }: DashboardViewProps) {
+  const today = todayIsoDate();
   const urgentLeads = snapshot.leads.filter(
-    (lead) => lead.priority === "urgent" || lead.next_follow_up === todayIsoDate(),
+    (lead) => lead.priority === "urgent" || lead.next_follow_up === today,
   );
+  const activeJobIdsWithUpcomingEvents = new Set(
+    snapshot.scheduleEvents
+      .filter(
+        (event) =>
+          event.job_id &&
+          event.status === "scheduled" &&
+          event.start_at.slice(0, 10) >= today,
+      )
+      .map((event) => event.job_id as string),
+  );
+  const overdueInvoices = snapshot.invoices.filter(
+    (invoice) =>
+      invoice.balance_due > 0 &&
+      invoice.due_date !== null &&
+      invoice.due_date < today &&
+      invoice.status !== "paid" &&
+      invoice.status !== "void",
+  );
+  const jobsNeedingSchedule = snapshot.jobs.filter(
+    (job) =>
+      (job.status === "scheduled" || job.status === "in_progress") &&
+      !activeJobIdsWithUpcomingEvents.has(job.id),
+  );
+  const estimatesMissingDocuments = snapshot.estimates.filter(
+    (estimate) =>
+      (estimate.status === "sent" || estimate.status === "approved") &&
+      !snapshot.documents.some((document) => document.estimate_id === estimate.id),
+  );
+  const invoicesMissingDocuments = snapshot.invoices.filter(
+    (invoice) =>
+      invoice.status !== "draft" &&
+      !snapshot.documents.some((document) => document.invoice_id === invoice.id),
+  );
+  const scopesMissingDocuments = snapshot.scopes.filter(
+    (scope) =>
+      (scope.status === "ready" || scope.status === "approved") &&
+      !snapshot.documents.some((document) => document.estimate_id === scope.estimate_id),
+  );
+  const blockedJobs = snapshot.jobs.filter((job) => job.status === "blocked");
+  const pendingChangeOrders = snapshot.changeOrders.filter(
+    (changeOrder) =>
+      changeOrder.status === "draft" || changeOrder.status === "sent",
+  );
+  const queuedCommunications =
+    snapshot.emailMessages.filter((message) => message.status === "queued").length +
+    snapshot.smsMessages.filter((message) => message.status === "queued").length;
+  const documentsToGenerate =
+    estimatesMissingDocuments.length +
+    invoicesMissingDocuments.length +
+    scopesMissingDocuments.length;
 
   return (
     <div className="space-y-5">
@@ -1690,6 +1818,85 @@ function DashboardView({
         />
       </div>
 
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">
+              Operations action center
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Daily priorities across money, schedule, documents, production, and communications.
+            </p>
+          </div>
+          <Badge
+            label={`${overdueInvoices.length + jobsNeedingSchedule.length + documentsToGenerate + blockedJobs.length + pendingChangeOrders.length + queuedCommunications} active`}
+            tone="amber"
+          />
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+          <ActionCenterCard
+            icon={ReceiptText}
+            label="Overdue balances"
+            value={overdueInvoices.length}
+            detail={formatMoney(
+              overdueInvoices.reduce((total, invoice) => total + invoice.balance_due, 0),
+            )}
+            items={overdueInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
+          />
+          <ActionCenterCard
+            icon={CalendarClock}
+            label="Jobs needing schedule"
+            value={jobsNeedingSchedule.length}
+            detail="No upcoming scheduled event"
+            items={jobsNeedingSchedule.slice(0, 3).map((job) => job.title)}
+          />
+          <ActionCenterCard
+            icon={FileText}
+            label="Documents to generate"
+            value={documentsToGenerate}
+            detail="Estimate, invoice, or scope packets"
+            items={[
+              ...estimatesMissingDocuments.map((estimate) => estimate.title),
+              ...invoicesMissingDocuments.map((invoice) => invoice.invoice_number),
+              ...scopesMissingDocuments.map((scope) => scope.title),
+            ].slice(0, 3)}
+          />
+          <ActionCenterCard
+            icon={ShieldCheck}
+            label="Blocked production"
+            value={blockedJobs.length}
+            detail="Needs operational review"
+            items={blockedJobs.slice(0, 3).map((job) => job.title)}
+          />
+          <ActionCenterCard
+            icon={ReceiptText}
+            label="Pending change orders"
+            value={pendingChangeOrders.length}
+            detail={formatMoney(
+              pendingChangeOrders.reduce(
+                (total, changeOrder) => total + changeOrder.total,
+                0,
+              ),
+            )}
+            items={pendingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
+          />
+          <ActionCenterCard
+            icon={MessageSquare}
+            label="Queued communications"
+            value={queuedCommunications}
+            detail="Email and SMS waiting to send"
+            items={[
+              ...snapshot.emailMessages
+                .filter((message) => message.status === "queued")
+                .map((message) => message.subject),
+              ...snapshot.smsMessages
+                .filter((message) => message.status === "queued")
+                .map((message) => message.body),
+            ].slice(0, 3)}
+          />
+        </div>
+      </section>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4">
@@ -1758,6 +1965,44 @@ type MetricCardProps = {
   value: string | number;
   icon: typeof Home;
 };
+
+function ActionCenterCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  items,
+}: {
+  icon: typeof Home;
+  label: string;
+  value: number;
+  detail: string;
+  items: string[];
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-600">{label}</p>
+          <p className="mt-2 text-3xl font-bold text-slate-950">{value}</p>
+        </div>
+        <Icon className="h-5 w-5 text-sky-600" />
+      </div>
+      <p className="mt-2 text-sm font-semibold text-slate-700">{detail}</p>
+      <div className="mt-3 grid gap-1.5">
+        {items.length ? (
+          items.map((item, index) => (
+            <p key={`${item}-${index}`} className="truncate text-sm text-slate-500">
+              {item}
+            </p>
+          ))
+        ) : (
+          <p className="text-sm text-slate-500">No action needed.</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function MetricCard({ label, value, icon: Icon }: MetricCardProps) {
   return (
@@ -2767,6 +3012,12 @@ function EstimatesView({
     setPage: setEstimatePage,
     pagedItems: pagedEstimates,
   } = usePagination(filteredEstimates);
+  const selectedEstimateJob = selectedEstimate
+    ? snapshot.jobs.find((job) => job.estimate_id === selectedEstimate.id) ?? null
+    : null;
+  const selectedEstimateScope = selectedEstimate
+    ? snapshot.scopes.find((scope) => scope.estimate_id === selectedEstimate.id) ?? null
+    : null;
 
   const handleSaveEstimate = async (
     input: EstimateInput,
@@ -2787,6 +3038,53 @@ function EstimatesView({
         currentError instanceof Error
           ? currentError.message
           : "Unable to save estimate.",
+      );
+    }
+  };
+
+  const handleCreateJobFromEstimate = async (estimate: EstimateRecord) => {
+    if (selectedEstimateJob) {
+      onNotice("This estimate already has a linked job.");
+      return;
+    }
+
+    const customer = estimate.customer_id
+      ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+      : null;
+    const lead = estimate.lead_id
+      ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+      : null;
+    const propertyAddress =
+      customer?.property_address ?? lead?.property_address ?? "Address to confirm";
+
+    try {
+      const job = await createJob(client, {
+        company_id: estimate.company_id,
+        customer_id: estimate.customer_id,
+        lead_id: estimate.lead_id,
+        estimate_id: estimate.id,
+        scope_id: selectedEstimateScope?.id ?? null,
+        title: `${estimate.title} Production`,
+        service_type: estimate.service_type,
+        status: "scheduled",
+        start_date: null,
+        end_date: null,
+        crew_name: null,
+        project_manager: null,
+        property_address: propertyAddress,
+        latitude: lead?.latitude ?? null,
+        longitude: lead?.longitude ?? null,
+        google_place_id: lead?.google_place_id ?? null,
+        address_verified_at: lead?.address_verified_at ?? null,
+        notes: `Created from approved estimate ${estimate.title}.`,
+      });
+      await onReload();
+      onNotice(`Job created: ${job.title}`);
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to create job from estimate.",
       );
     }
   };
@@ -2903,6 +3201,15 @@ function EstimatesView({
           lineItems={selectedLineItems}
           snapshot={snapshot}
           company={selectedEstimate ? companyMap.get(selectedEstimate.company_id) : undefined}
+        />
+        <EstimateWorkflowPanel
+          estimate={selectedEstimate}
+          linkedJob={selectedEstimateJob}
+          linkedScope={selectedEstimateScope}
+          documents={snapshot.documents.filter(
+            (document) => document.estimate_id === selectedEstimate?.id,
+          )}
+          onCreateJob={handleCreateJobFromEstimate}
         />
       </aside>
     </div>
@@ -3459,6 +3766,86 @@ function EstimatePdfPreview({
           </div>
         ) : null}
       </div>
+    </section>
+  );
+}
+
+function EstimateWorkflowPanel({
+  estimate,
+  linkedJob,
+  linkedScope,
+  documents,
+  onCreateJob,
+}: {
+  estimate: EstimateRecord | null;
+  linkedJob: JobRecord | null;
+  linkedScope: ScopeRecord | null;
+  documents: DocumentRecord[];
+  onCreateJob: (estimate: EstimateRecord) => Promise<void>;
+}) {
+  if (!estimate) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-950">Production handoff</h3>
+        <EmptyState label="Select an estimate to review handoff readiness." />
+      </section>
+    );
+  }
+
+  const canCreateJob = estimate.status === "approved" && linkedJob === null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Production handoff</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Move approved work into jobs with linked records intact.
+          </p>
+        </div>
+        <Badge
+          label={
+            linkedJob
+              ? "Job linked"
+              : estimate.status === "approved"
+                ? "Ready"
+                : "Needs approval"
+          }
+          tone={linkedJob ? "green" : estimate.status === "approved" ? "blue" : "amber"}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <ProfileStat
+          label="Scope"
+          value={linkedScope ? scopeStatusLabel(linkedScope.status) : "Not linked"}
+        />
+        <ProfileStat label="Documents" value={documents.length} />
+        <ProfileStat
+          label="Job"
+          value={linkedJob ? jobStatusLabel(linkedJob.status) : "Not created"}
+        />
+      </div>
+      {linkedJob ? (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <p className="text-sm font-bold text-emerald-900">{linkedJob.title}</p>
+          <p className="mt-1 text-sm text-emerald-700">
+            {linkedJob.property_address} - {formatDate(linkedJob.start_date)}
+          </p>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => void onCreateJob(estimate)}
+        disabled={!canCreateJob}
+        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+      >
+        <CalendarClock className="h-4 w-4" />
+        {linkedJob
+          ? "Production job already exists"
+          : estimate.status === "approved"
+            ? "Create production job"
+            : "Approve estimate before job creation"}
+      </button>
     </section>
   );
 }
@@ -7576,6 +7963,32 @@ function DocumentsAndSignaturesView({
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 }) {
+  const documentSourceOptions = useMemo(
+    () => buildDocumentSourceOptions(snapshot),
+    [snapshot],
+  );
+  const [generatedSourceId, setGeneratedSourceId] = useState(
+    documentSourceOptions[0]?.value ?? "",
+  );
+  const generatedDraft = useMemo(
+    () =>
+      generatedSourceId
+        ? buildGeneratedDocumentDraft(snapshot, generatedSourceId)
+        : null,
+    [generatedSourceId, snapshot],
+  );
+
+  useEffect(() => {
+    if (!documentSourceOptions.length) {
+      setGeneratedSourceId("");
+      return;
+    }
+
+    if (!documentSourceOptions.some((option) => option.value === generatedSourceId)) {
+      setGeneratedSourceId(documentSourceOptions[0].value);
+    }
+  }, [documentSourceOptions, generatedSourceId]);
+
   const signDocument = async (signature: SignatureRecord, form: HTMLFormElement) => {
     const formData = new FormData(form);
 
@@ -7589,6 +8002,36 @@ function DocumentsAndSignaturesView({
       onNotice("Signature captured.");
     } catch (currentError) {
       onError(currentError instanceof Error ? currentError.message : "Unable to sign.");
+    }
+  };
+
+  const handleSaveGeneratedDocument = async () => {
+    if (!generatedDraft) {
+      onError("Choose a CRM record before generating a document.");
+      return;
+    }
+
+    try {
+      await createDocument(client, {
+        company_id: generatedDraft.company_id,
+        customer_id: generatedDraft.customer_id,
+        job_id: generatedDraft.job_id,
+        estimate_id: generatedDraft.estimate_id,
+        invoice_id: generatedDraft.invoice_id,
+        change_order_id: generatedDraft.change_order_id,
+        title: generatedDraft.title,
+        category: generatedDraft.category,
+        file_url: generatedDraft.file_url,
+        body: generatedDraft.body,
+      });
+      await onReload();
+      onNotice("Generated document saved.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to save generated document.",
+      );
     }
   };
 
@@ -7674,7 +8117,72 @@ function DocumentsAndSignaturesView({
         </div>
       </section>
 
-      <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <aside className="space-y-5">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Generate document</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Create a customer-ready packet from existing CRM records.
+          </p>
+          <div className="mt-4 grid gap-3">
+            <select
+              value={generatedSourceId}
+              onChange={(event) => setGeneratedSourceId(event.target.value)}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              disabled={!documentSourceOptions.length}
+            >
+              {documentSourceOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {generatedDraft ? (
+              <>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-slate-950">
+                        {generatedDraft.title}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {generatedDraft.sourceLabel} · {generatedDraft.summary}
+                      </p>
+                    </div>
+                    <Badge
+                      label={documentCategoryLabel(generatedDraft.category)}
+                      tone="blue"
+                    />
+                  </div>
+                </div>
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                  {generatedDraft.body}
+                </pre>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Print preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveGeneratedDocument()}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Save document
+                  </button>
+                </div>
+              </>
+            ) : (
+              <EmptyState label="Create an estimate, invoice, scope, job, or customer to generate documents." />
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-lg font-bold text-slate-950">New document</h3>
         <form onSubmit={handleCreateDocument} className="mt-4 grid gap-3">
           <select name="company_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -7724,6 +8232,7 @@ function DocumentsAndSignaturesView({
           <textarea name="body" className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Document body or notes" />
           <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save document</button>
         </form>
+        </section>
       </aside>
     </div>
   );
@@ -7978,8 +8487,8 @@ const integrationCards = [
   },
   {
     name: "Twilio SMS",
-    status: "Queued",
-    detail: "Customer reminders, technician alerts, and weather-delay notifications.",
+    status: "Outbox active",
+    detail: "Connection records, SMS queueing, status tracking, and Twilio payload previews.",
   },
   {
     name: "DocuSign / Native signatures",
@@ -8055,6 +8564,17 @@ function IntegrationsView({
   const emailPreviewPayload = previewEmail
     ? buildGmailSendPreview(previewEmail)
     : null;
+  const twilioConnections = snapshot.integrationConnections.filter(
+    (connection) => connection.provider === "twilio_sms",
+  );
+  const primaryTwilioConnection = twilioConnections[0];
+  const smsSummary = getSmsOutboxSummary(snapshot.smsMessages);
+  const previewSms = snapshot.smsMessages[0];
+  const smsPreviewPayload = previewSms ? buildTwilioSmsPreview(previewSms) : null;
+  const primaryTwilioFromNumber =
+    typeof primaryTwilioConnection?.settings.fromNumber === "string"
+      ? primaryTwilioConnection.settings.fromNumber
+      : null;
 
   const handleCreateGmailConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -8144,6 +8664,153 @@ function IntegrationsView({
     }
   };
 
+  const handleCreateTwilioConnection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const companyId = getFormString(formData, "company_id");
+    const displayName = getFormString(formData, "display_name");
+    const accountLabel = getOptionalFormString(formData, "account_label");
+    const messagingServiceSid = getOptionalFormString(formData, "messaging_service_sid");
+    const fromNumber = getOptionalFormString(formData, "from_phone");
+
+    try {
+      await createIntegrationConnection(client, {
+        company_id: companyId,
+        provider: "twilio_sms",
+        status: "connected",
+        display_name: displayName,
+        account_email: null,
+        external_account_id: accountLabel,
+        scopes: [],
+        sync_direction: "weathertech_to_provider",
+        credential_reference: `vault://twilio/${companyId}`,
+        settings: {
+          messagingServiceSid,
+          fromNumber,
+          optOutText: "Reply STOP to opt out.",
+          deliveryReceipts: true,
+        },
+      });
+      onNotice("Twilio SMS connection saved.");
+      await onReload();
+      form.reset();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not save Twilio connection.");
+    }
+  };
+
+  const handleCreateSmsMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const companyId = getFormString(formData, "company_id");
+    const targetKey = getFormString(formData, "target_key", "general:none");
+    const [targetType, targetId] = targetKey.split(":");
+    const category = getFormString(
+      formData,
+      "category",
+      "general",
+    ) as SmsMessageCategory;
+    const toPhoneOverride = getOptionalFormString(formData, "to_phone");
+    const bodyOverride = getOptionalFormString(formData, "body");
+    const intent = getFormString(formData, "intent", "draft");
+
+    const selectedCustomer =
+      targetType === "customer"
+        ? snapshot.customers.find((customer) => customer.id === targetId)
+        : undefined;
+    const selectedLead =
+      targetType === "lead"
+        ? snapshot.leads.find((lead) => lead.id === targetId)
+        : undefined;
+    const selectedJob =
+      targetType === "job" ? snapshot.jobs.find((job) => job.id === targetId) : undefined;
+    const selectedScheduleEvent =
+      targetType === "schedule"
+        ? snapshot.scheduleEvents.find((scheduleEvent) => scheduleEvent.id === targetId)
+        : undefined;
+    const selectedInvoice =
+      targetType === "invoice"
+        ? snapshot.invoices.find((invoice) => invoice.id === targetId)
+        : undefined;
+    const scheduleJob = selectedScheduleEvent?.job_id
+      ? snapshot.jobs.find((job) => job.id === selectedScheduleEvent.job_id)
+      : undefined;
+    const resolvedCustomerId =
+      selectedCustomer?.id ??
+      selectedLead?.customer_id ??
+      selectedJob?.customer_id ??
+      selectedScheduleEvent?.customer_id ??
+      scheduleJob?.customer_id ??
+      selectedInvoice?.customer_id ??
+      null;
+    const resolvedCustomer = resolvedCustomerId
+      ? snapshot.customers.find((customer) => customer.id === resolvedCustomerId)
+      : undefined;
+    const resolvedLeadId =
+      selectedLead?.id ??
+      selectedJob?.lead_id ??
+      selectedScheduleEvent?.lead_id ??
+      scheduleJob?.lead_id ??
+      null;
+    const resolvedJobId =
+      selectedJob?.id ?? selectedScheduleEvent?.job_id ?? selectedInvoice?.job_id ?? null;
+    const targetName =
+      selectedCustomer?.contact_name ??
+      selectedLead?.contact_name ??
+      resolvedCustomer?.contact_name ??
+      selectedJob?.title ??
+      selectedScheduleEvent?.title ??
+      selectedInvoice?.invoice_number ??
+      "there";
+    const toPhone =
+      toPhoneOverride ??
+      selectedCustomer?.phone ??
+      selectedLead?.phone ??
+      resolvedCustomer?.phone ??
+      null;
+
+    if (!toPhone) {
+      onError("Add a recipient phone number before saving the SMS.");
+      return;
+    }
+
+    const companyName = companyMap.get(companyId)?.name ?? "WeatherTech OS";
+    const body =
+      bodyOverride ??
+      buildDefaultSmsBody({
+        category,
+        companyName,
+        targetName,
+        event: selectedScheduleEvent,
+        invoice: selectedInvoice,
+        job: selectedJob ?? scheduleJob,
+      });
+
+    try {
+      await createSmsMessage(client, {
+        company_id: companyId,
+        customer_id: resolvedCustomerId,
+        lead_id: resolvedLeadId,
+        job_id: resolvedJobId,
+        schedule_event_id: selectedScheduleEvent?.id ?? null,
+        invoice_id: selectedInvoice?.id ?? null,
+        integration_connection_id: primaryTwilioConnection?.id ?? null,
+        category,
+        status: intent === "queue" ? "queued" : "draft",
+        to_phone: toPhone,
+        from_phone: primaryTwilioFromNumber,
+        body,
+      });
+      onNotice(intent === "queue" ? "SMS queued for Twilio." : "SMS draft saved.");
+      await onReload();
+      form.reset();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not save SMS message.");
+    }
+  };
+
   const handleCreateGoogleConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -8185,6 +8852,14 @@ function IntegrationsView({
 
   const toggleConnectionStatus = async (connection: IntegrationConnectionRecord) => {
     const nextStatus = connection.status === "paused" ? "connected" : "paused";
+    const providerLabel =
+      connection.provider === "gmail"
+        ? "Gmail"
+        : connection.provider === "twilio_sms"
+          ? "Twilio SMS"
+          : connection.provider === "google_maps"
+            ? "Google Maps"
+            : "Google Calendar";
 
     try {
       await updateIntegrationConnection(client, connection.id, {
@@ -8193,8 +8868,8 @@ function IntegrationsView({
       });
       onNotice(
         nextStatus === "paused"
-          ? "Google Calendar sync paused."
-          : "Google Calendar sync resumed.",
+          ? `${providerLabel} connection paused.`
+          : `${providerLabel} connection resumed.`,
       );
       await onReload();
     } catch (error) {
@@ -8290,6 +8965,37 @@ function IntegrationsView({
       await onReload();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update email.");
+    }
+  };
+
+  const queueSmsMessage = async (message: SmsMessageRecord) => {
+    try {
+      await updateSmsMessage(client, message.id, {
+        status: "queued",
+        queued_at: new Date().toISOString(),
+        last_error: null,
+      });
+      onNotice("SMS queued for Twilio.");
+      await onReload();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not queue SMS.");
+    }
+  };
+
+  const markSmsSent = async (message: SmsMessageRecord) => {
+    const now = new Date().toISOString();
+
+    try {
+      await updateSmsMessage(client, message.id, {
+        status: "sent",
+        sent_at: now,
+        twilio_message_sid: message.twilio_message_sid ?? `twilio-${message.id}`,
+        last_error: null,
+      });
+      onNotice("SMS marked sent.");
+      await onReload();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not update SMS.");
     }
   };
 
@@ -8772,6 +9478,294 @@ function IntegrationsView({
             ) : (
               <div className="mt-4">
                 <EmptyState label="Create an email to preview Gmail send payload." />
+              </div>
+            )}
+          </section>
+        </aside>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(360px,0.75fr)]">
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase text-sky-700">
+                Phase 5 - Twilio SMS
+              </p>
+              <h3 className="mt-1 text-xl font-bold text-slate-950">
+                Customer and field text outbox
+              </h3>
+              <p className="mt-2 max-w-2xl text-sm text-slate-500">
+                Draft and queue appointment reminders, estimate follow-ups, invoice
+                nudges, job updates, and weather-delay texts for a secure Twilio worker.
+              </p>
+            </div>
+            {primaryTwilioConnection ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  label={integrationStatusLabel(primaryTwilioConnection.status)}
+                  tone={getIntegrationStatusTone(primaryTwilioConnection.status)}
+                />
+                <button
+                  type="button"
+                  onClick={() => void toggleConnectionStatus(primaryTwilioConnection)}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  {primaryTwilioConnection.status === "paused" ? "Resume" : "Pause"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
+            <ProfileStat label="Drafts" value={smsSummary.draft} />
+            <ProfileStat label="Queued" value={smsSummary.queued} />
+            <ProfileStat label="Sent" value={smsSummary.sent} />
+            <ProfileStat label="Failed" value={smsSummary.failed} />
+          </div>
+
+          <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-sm font-bold text-slate-950">Twilio SMS outbox</p>
+            </div>
+            <div className="divide-y divide-slate-200">
+              {snapshot.smsMessages.map((message) => (
+                <article
+                  key={message.id}
+                  className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto]"
+                >
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="font-bold text-slate-950">
+                        {getSmsTargetName(snapshot, message)}
+                      </h4>
+                      <Badge
+                        label={smsMessageStatusLabel(message.status)}
+                        tone={
+                          message.status === "sent"
+                            ? "green"
+                            : message.status === "failed"
+                              ? "amber"
+                              : "blue"
+                        }
+                      />
+                      <Badge label={smsCategoryLabel(message.category)} tone="blue" />
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      To {message.to_phone} · {countSmsSegments(message.body)} segment
+                      {countSmsSegments(message.body) === 1 ? "" : "s"} ·{" "}
+                      {companyMap.get(message.company_id)?.name ?? "Company"}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-sm text-slate-500">
+                      {message.body}
+                    </p>
+                    {message.last_error ? (
+                      <p className="mt-2 text-sm font-semibold text-amber-700">
+                        {message.last_error}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                    {message.status !== "queued" && message.status !== "sent" ? (
+                      <button
+                        type="button"
+                        onClick={() => void queueSmsMessage(message)}
+                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                        Queue
+                      </button>
+                    ) : null}
+                    {message.status !== "sent" ? (
+                      <button
+                        type="button"
+                        onClick={() => void markSmsSent(message)}
+                        className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        Mark sent
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+              {!snapshot.smsMessages.length ? (
+                <div className="p-4">
+                  <EmptyState label="No SMS drafts or queued texts yet." />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <aside className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Twilio connection</h3>
+            {primaryTwilioConnection ? (
+              <div className="mt-4 space-y-3 text-sm">
+                <ProfileStat
+                  label="Account"
+                  value={primaryTwilioConnection.external_account_id ?? "Vault credential"}
+                />
+                <ProfileStat
+                  label="From"
+                  value={primaryTwilioFromNumber ?? "Messaging service"}
+                />
+                <ProfileStat
+                  label="Last SMS sync"
+                  value={
+                    primaryTwilioConnection.last_sync_at
+                      ? formatDateTime(primaryTwilioConnection.last_sync_at)
+                      : "Not synced yet"
+                  }
+                />
+              </div>
+            ) : (
+              <form onSubmit={handleCreateTwilioConnection} className="mt-4 grid gap-3">
+                <select
+                  name="company_id"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {snapshot.companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  required
+                  name="display_name"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Connection name"
+                />
+                <input
+                  name="account_label"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Twilio account label"
+                />
+                <input
+                  name="messaging_service_sid"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Messaging service SID"
+                />
+                <input
+                  name="from_phone"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Fallback from number"
+                />
+                <button
+                  type="submit"
+                  className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Save Twilio connection
+                </button>
+              </form>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Create SMS</h3>
+            <form onSubmit={handleCreateSmsMessage} className="mt-4 grid gap-3">
+              <select
+                name="company_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="target_key"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="general:none">General message</option>
+                {snapshot.customers.map((customer) => (
+                  <option key={customer.id} value={`customer:${customer.id}`}>
+                    Customer · {customer.display_name}
+                  </option>
+                ))}
+                {snapshot.leads.map((lead) => (
+                  <option key={lead.id} value={`lead:${lead.id}`}>
+                    Lead · {lead.contact_name}
+                  </option>
+                ))}
+                {snapshot.jobs.map((job) => (
+                  <option key={job.id} value={`job:${job.id}`}>
+                    Job · {job.title}
+                  </option>
+                ))}
+                {snapshot.scheduleEvents.map((scheduleEvent) => (
+                  <option key={scheduleEvent.id} value={`schedule:${scheduleEvent.id}`}>
+                    Appointment · {scheduleEvent.title}
+                  </option>
+                ))}
+                {snapshot.invoices.map((invoice) => (
+                  <option key={invoice.id} value={`invoice:${invoice.id}`}>
+                    Invoice · {invoice.invoice_number}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="category"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {smsCategories.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                name="to_phone"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Recipient phone override"
+              />
+              <textarea
+                name="body"
+                className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Message override"
+              />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="submit"
+                  name="intent"
+                  value="draft"
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Save draft
+                </button>
+                <button
+                  type="submit"
+                  name="intent"
+                  value="queue"
+                  className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Queue SMS
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Twilio readiness</h3>
+            <div className="mt-4 grid gap-3 text-sm">
+              <ProfileStat label="Account SID" value={twilioEnvVars.accountSid} />
+              <ProfileStat label="Messaging service" value={twilioEnvVars.messagingServiceSid} />
+              <ProfileStat label="Fallback sender" value={twilioEnvVars.fromNumber} />
+              <ProfileStat label="Endpoint" value="Messages API" />
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Twilio payload preview</h3>
+            {smsPreviewPayload ? (
+              <pre className="mt-4 max-h-80 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
+                {JSON.stringify(smsPreviewPayload, null, 2)}
+              </pre>
+            ) : (
+              <div className="mt-4">
+                <EmptyState label="Create an SMS to preview Twilio send payload." />
               </div>
             )}
           </section>

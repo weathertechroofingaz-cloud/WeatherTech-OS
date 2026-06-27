@@ -65,7 +65,11 @@ export type DocumentCategory =
 export type PaymentStatus = "pending" | "posted" | "failed" | "refunded";
 export type NotificationChannel = "email" | "sms" | "in_app";
 export type NotificationStatus = "queued" | "sent" | "read" | "dismissed";
-export type IntegrationProvider = "google_calendar" | "gmail" | "google_maps";
+export type IntegrationProvider =
+  | "google_calendar"
+  | "gmail"
+  | "google_maps"
+  | "twilio_sms";
 export type IntegrationConnectionStatus =
   | "connected"
   | "needs_reauth"
@@ -88,6 +92,14 @@ export type EmailMessageCategory =
   | "job_update"
   | "general";
 export type EmailMessageStatus = "draft" | "queued" | "sent" | "failed";
+export type SmsMessageCategory =
+  | "appointment_reminder"
+  | "estimate_follow_up"
+  | "invoice_reminder"
+  | "job_update"
+  | "weather_delay"
+  | "general";
+export type SmsMessageStatus = "draft" | "queued" | "sent" | "failed";
 export type RoutePlanStatus = "draft" | "optimized" | "dispatched";
 export type RouteStopType = "lead" | "job";
 export type RouteTravelMode = "driving";
@@ -549,6 +561,29 @@ export type EmailMessageRecord = {
   updated_at: string;
 };
 
+export type SmsMessageRecord = {
+  id: string;
+  company_id: string;
+  customer_id: string | null;
+  lead_id: string | null;
+  job_id: string | null;
+  schedule_event_id: string | null;
+  invoice_id: string | null;
+  integration_connection_id: string | null;
+  provider: Extract<IntegrationProvider, "twilio_sms">;
+  category: SmsMessageCategory;
+  status: SmsMessageStatus;
+  to_phone: string;
+  from_phone: string | null;
+  body: string;
+  twilio_message_sid: string | null;
+  queued_at: string | null;
+  sent_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type RoutePlanRecord = {
   id: string;
   company_id: string;
@@ -932,6 +967,26 @@ export type EmailMessageInput = {
   last_error?: string | null;
 };
 
+export type SmsMessageInput = {
+  company_id: string;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  schedule_event_id?: string | null;
+  invoice_id?: string | null;
+  integration_connection_id?: string | null;
+  provider?: Extract<IntegrationProvider, "twilio_sms">;
+  category: SmsMessageCategory;
+  status?: SmsMessageStatus;
+  to_phone: string;
+  from_phone?: string | null;
+  body: string;
+  twilio_message_sid?: string | null;
+  queued_at?: string | null;
+  sent_at?: string | null;
+  last_error?: string | null;
+};
+
 export type RoutePlanInput = {
   company_id: string;
   name: string;
@@ -1165,6 +1220,12 @@ export type EmailMessageInsert = EmailMessageInput & {
   updated_at?: string;
 };
 
+export type SmsMessageInsert = SmsMessageInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type RoutePlanInsert = RoutePlanInput & {
   id?: string;
   created_at?: string;
@@ -1206,6 +1267,7 @@ export type CrmSnapshot = {
   integrationConnections: IntegrationConnectionRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
   emailMessages: EmailMessageRecord[];
+  smsMessages: SmsMessageRecord[];
   routePlans: RoutePlanRecord[];
   routePlanStops: RoutePlanStopRecord[];
 };
@@ -1400,6 +1462,12 @@ export type Database = {
         Row: EmailMessageRecord;
         Insert: EmailMessageInsert;
         Update: Partial<Database["public"]["Tables"]["email_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      sms_messages: {
+        Row: SmsMessageRecord;
+        Insert: SmsMessageInsert;
+        Update: Partial<Database["public"]["Tables"]["sms_messages"]["Insert"]>;
         Relationships: [];
       };
       route_plans: {

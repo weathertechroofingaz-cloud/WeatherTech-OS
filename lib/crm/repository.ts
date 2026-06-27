@@ -59,6 +59,7 @@ import type {
   ScheduleEventRecord,
   SignatureInput,
   SignatureRecord,
+  SmsMessageInput,
   ScopeInput,
   ScopeRecord,
   TimeEntryInput,
@@ -98,6 +99,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     integrationConnections,
     calendarEventSyncs,
     emailMessages,
+    smsMessages,
     routePlans,
     routePlanStops,
   ] = await Promise.all([
@@ -156,6 +158,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("updated_at", { ascending: false }),
     client.from("email_messages").select("*").order("updated_at", { ascending: false }),
+    client.from("sms_messages").select("*").order("updated_at", { ascending: false }),
     client.from("route_plans").select("*").order("route_date", { ascending: false }),
     client
       .from("route_plan_stops")
@@ -271,6 +274,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     throw emailMessages.error;
   }
 
+  if (smsMessages.error) {
+    throw smsMessages.error;
+  }
+
   if (routePlans.error) {
     throw routePlans.error;
   }
@@ -307,6 +314,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     integrationConnections: integrationConnections.data,
     calendarEventSyncs: calendarEventSyncs.data,
     emailMessages: emailMessages.data,
+    smsMessages: smsMessages.data,
     routePlans: routePlans.data,
     routePlanStops: routePlanStops.data,
   };
@@ -1358,6 +1366,55 @@ export async function updateEmailMessage(
 
   const { data, error } = await client
     .from("email_messages")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function createSmsMessage(client: CrmClient, input: SmsMessageInput) {
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from("sms_messages")
+    .insert({
+      ...input,
+      customer_id: input.customer_id ?? null,
+      lead_id: input.lead_id ?? null,
+      job_id: input.job_id ?? null,
+      schedule_event_id: input.schedule_event_id ?? null,
+      invoice_id: input.invoice_id ?? null,
+      integration_connection_id: input.integration_connection_id ?? null,
+      provider: input.provider ?? "twilio_sms",
+      status: input.status ?? "draft",
+      from_phone: input.from_phone ?? null,
+      twilio_message_sid: input.twilio_message_sid ?? null,
+      queued_at: input.queued_at ?? (input.status === "queued" ? now : null),
+      sent_at: input.sent_at ?? null,
+      last_error: input.last_error ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateSmsMessage(
+  client: CrmClient,
+  id: string,
+  input: Partial<SmsMessageInput>,
+) {
+  const { data, error } = await client
+    .from("sms_messages")
     .update(input)
     .eq("id", id)
     .select("*")
