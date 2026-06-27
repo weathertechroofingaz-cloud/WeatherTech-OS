@@ -27,6 +27,7 @@ import {
   Printer,
   ReceiptText,
   RefreshCcw,
+  Save,
   Search,
   ShieldCheck,
   Sun,
@@ -67,6 +68,7 @@ import {
   createSignature,
   createSmsMessage,
   createScope,
+  createScopeTemplate,
   createTimeEntry,
   fetchCrmSnapshot,
   updateIntegrationConnection,
@@ -85,6 +87,7 @@ import {
   updateSmsMessage,
   updateTimeEntry,
   updateScope,
+  updateScopeTemplate,
   upsertCalendarEventSync,
 } from "../lib/crm/repository";
 import {
@@ -196,6 +199,7 @@ import type {
   ScopeInput,
   ScopeRecord,
   ScopeStatus,
+  ScopeTemplateInput,
   ScopeTemplateRecord,
   ServiceType,
   TimeEntryRecord,
@@ -673,6 +677,55 @@ function getPaymentTargetName(snapshot: CrmSnapshot, payment: PaymentRecord) {
     getCustomerName(snapshot, payment.customer_id) ??
     "Payment"
   );
+}
+
+function getAssociationSummary(
+  snapshot: CrmSnapshot,
+  {
+    customerId,
+    leadId,
+    estimateId,
+  }: {
+    customerId?: string | null;
+    leadId?: string | null;
+    estimateId?: string | null;
+  },
+) {
+  const estimate = estimateId
+    ? snapshot.estimates.find((item) => item.id === estimateId)
+    : null;
+  const customer =
+    (customerId
+      ? snapshot.customers.find((item) => item.id === customerId)
+      : null) ??
+    (estimate?.customer_id
+      ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+      : null);
+  const lead =
+    (leadId ? snapshot.leads.find((item) => item.id === leadId) : null) ??
+    (estimate?.lead_id
+      ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+      : null);
+  const addressParts = customer
+    ? [
+        customer.property_address,
+        customer.city,
+        customer.state,
+        customer.postal_code,
+      ]
+    : lead
+      ? [lead.property_address, lead.city, lead.state, lead.postal_code]
+      : [];
+  const address = addressParts.filter(Boolean).join(", ");
+
+  return {
+    name: customer?.display_name ?? lead?.contact_name ?? "Unassigned",
+    contact: customer?.contact_name ?? lead?.contact_name ?? "No contact",
+    phone: customer?.phone ?? lead?.phone ?? "No phone",
+    email: customer?.email ?? lead?.email ?? "No email",
+    address: address || "No property linked",
+    source: customer ? "Customer" : lead ? "Lead" : estimate ? "Estimate" : "Unassigned",
+  };
 }
 
 function getSmsTargetName(snapshot: CrmSnapshot, message: SmsMessageRecord) {
@@ -3089,6 +3142,27 @@ function EstimatesView({
     }
   };
 
+  const handleSaveEstimateDocument = async (estimate: EstimateRecord) => {
+    const documentDraft = buildGeneratedDocumentDraft(snapshot, `estimate:${estimate.id}`);
+
+    if (!documentDraft) {
+      onError("Unable to generate an estimate packet for this record.");
+      return;
+    }
+
+    try {
+      await createDocument(client, documentDraft);
+      await onReload();
+      onNotice("Estimate packet saved to documents.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to save estimate packet.",
+      );
+    }
+  };
+
   return (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -3203,6 +3277,7 @@ function EstimatesView({
           company={selectedEstimate ? companyMap.get(selectedEstimate.company_id) : undefined}
         />
         <EstimateWorkflowPanel
+          snapshot={snapshot}
           estimate={selectedEstimate}
           linkedJob={selectedEstimateJob}
           linkedScope={selectedEstimateScope}
@@ -3210,6 +3285,7 @@ function EstimatesView({
             (document) => document.estimate_id === selectedEstimate?.id,
           )}
           onCreateJob={handleCreateJobFromEstimate}
+          onSaveDocument={handleSaveEstimateDocument}
         />
       </aside>
     </div>
@@ -3771,17 +3847,21 @@ function EstimatePdfPreview({
 }
 
 function EstimateWorkflowPanel({
+  snapshot,
   estimate,
   linkedJob,
   linkedScope,
   documents,
   onCreateJob,
+  onSaveDocument,
 }: {
+  snapshot: CrmSnapshot;
   estimate: EstimateRecord | null;
   linkedJob: JobRecord | null;
   linkedScope: ScopeRecord | null;
   documents: DocumentRecord[];
   onCreateJob: (estimate: EstimateRecord) => Promise<void>;
+  onSaveDocument: (estimate: EstimateRecord) => Promise<void>;
 }) {
   if (!estimate) {
     return (
@@ -3793,6 +3873,11 @@ function EstimateWorkflowPanel({
   }
 
   const canCreateJob = estimate.status === "approved" && linkedJob === null;
+  const association = getAssociationSummary(snapshot, {
+    customerId: estimate.customer_id,
+    leadId: estimate.lead_id,
+    estimateId: estimate.id,
+  });
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -3815,6 +3900,9 @@ function EstimateWorkflowPanel({
         />
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <ProfileStat label="Customer" value={association.name} />
+        <ProfileStat label="Property" value={association.address} />
+        <ProfileStat label="Contact" value={association.phone} />
         <ProfileStat
           label="Scope"
           value={linkedScope ? scopeStatusLabel(linkedScope.status) : "Not linked"}
@@ -3833,19 +3921,29 @@ function EstimateWorkflowPanel({
           </p>
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={() => void onCreateJob(estimate)}
-        disabled={!canCreateJob}
-        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-      >
-        <CalendarClock className="h-4 w-4" />
-        {linkedJob
-          ? "Production job already exists"
-          : estimate.status === "approved"
-            ? "Create production job"
-            : "Approve estimate before job creation"}
-      </button>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => void onSaveDocument(estimate)}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <FileText className="h-4 w-4" />
+          Save PDF-ready packet
+        </button>
+        <button
+          type="button"
+          onClick={() => void onCreateJob(estimate)}
+          disabled={!canCreateJob}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          <CalendarClock className="h-4 w-4" />
+          {linkedJob
+            ? "Job exists"
+            : estimate.status === "approved"
+              ? "Create job"
+              : "Needs approval"}
+        </button>
+      </div>
     </section>
   );
 }
@@ -3934,10 +4032,23 @@ function ScopeGeneratorView({
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<ScopeStatus | "all">("all");
   const [isSaving, setIsSaving] = useState(false);
+  const [templateEditorId, setTemplateEditorId] = useState(
+    snapshot.scopeTemplates[0]?.id ?? "new",
+  );
 
   const selectedTemplate =
     snapshot.scopeTemplates.find((template) => template.id === draft.template_id) ??
     null;
+  const templateEditorRecord =
+    templateEditorId === "new"
+      ? null
+      : snapshot.scopeTemplates.find((template) => template.id === templateEditorId) ??
+        null;
+  const draftAssociation = getAssociationSummary(snapshot, {
+    customerId: draft.customer_id === "none" ? null : draft.customer_id,
+    leadId: draft.lead_id === "none" ? null : draft.lead_id,
+    estimateId: draft.estimate_id === "none" ? null : draft.estimate_id,
+  });
   const filteredScopes = snapshot.scopes.filter((scope) => {
     const query = search.toLowerCase();
     const matchesSearch =
@@ -3996,6 +4107,68 @@ function ScopeGeneratorView({
       onNotice("Scope copied.");
     } catch {
       onError("Unable to copy the scope.");
+    }
+  };
+
+  const handleSaveScopeDocument = async () => {
+    if (!draft.id) {
+      onError("Save the scope draft before creating a PDF-ready document.");
+      return;
+    }
+
+    const documentDraft = buildGeneratedDocumentDraft(snapshot, `scope:${draft.id}`);
+
+    if (!documentDraft) {
+      onError("Unable to generate a scope packet for this record.");
+      return;
+    }
+
+    try {
+      await createDocument(client, documentDraft);
+      await onReload();
+      onNotice("Scope packet saved to documents.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to save scope packet.",
+      );
+    }
+  };
+
+  const handleSaveTemplate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onError("");
+
+    const formData = new FormData(event.currentTarget);
+    const input: ScopeTemplateInput = {
+      title: getFormString(formData, "title"),
+      category: getFormString(formData, "category", "custom") as ScopeCategory,
+      description: getFormString(formData, "description"),
+      template_body: getFormString(formData, "template_body"),
+      ai_prompt: getFormString(formData, "ai_prompt"),
+      is_active: formData.get("is_active") === "on",
+    };
+
+    if (!input.title || !input.template_body) {
+      onError("Template title and body are required.");
+      return;
+    }
+
+    try {
+      const savedTemplate = templateEditorRecord
+        ? await updateScopeTemplate(client, templateEditorRecord.id, input)
+        : await createScopeTemplate(client, input);
+
+      setTemplateEditorId(savedTemplate.id);
+      await onReload();
+      onNotice(templateEditorRecord ? "Scope template updated." : "Scope template created.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to save scope template.",
+      );
     }
   };
 
@@ -4310,6 +4483,26 @@ function ScopeGeneratorView({
               </select>
             </div>
 
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-950">
+                    Customer/property association
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    This context carries into scope packets and production documents.
+                  </p>
+                </div>
+                <Badge label={draftAssociation.source} tone="blue" />
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <ProfileStat label="Name" value={draftAssociation.name} />
+                <ProfileStat label="Contact" value={draftAssociation.phone} />
+                <ProfileStat label="Email" value={draftAssociation.email} />
+                <ProfileStat label="Property" value={draftAssociation.address} />
+              </div>
+            </div>
+
             {selectedTemplate ? (
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -4363,9 +4556,136 @@ function ScopeGeneratorView({
                 <Copy className="h-4 w-4" />
                 Copy scope
               </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveScopeDocument()}
+                disabled={!draft.id}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <FileText className="h-4 w-4" />
+                Save PDF-ready packet
+              </button>
             </div>
           </div>
         </form>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">
+                Reusable templates
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Maintain AI-ready scope language for repeatable WeatherTech jobs.
+              </p>
+            </div>
+            <FileText className="h-5 w-5 text-sky-600" />
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Template library
+              <select
+                value={templateEditorRecord?.id ?? "new"}
+                onChange={(event) => setTemplateEditorId(event.target.value)}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                <option value="new">New template from current draft</option>
+                {snapshot.scopeTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <form
+              key={templateEditorRecord?.id ?? `new-${draft.id ?? draft.title}`}
+              onSubmit={handleSaveTemplate}
+              className="grid gap-3"
+            >
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Template title
+                <input
+                  name="title"
+                  defaultValue={
+                    templateEditorRecord?.title ??
+                    `${draft.title || "Custom scope"} Template`
+                  }
+                  className="rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Category
+                <select
+                  name="category"
+                  defaultValue={templateEditorRecord?.category ?? draft.category}
+                  className="rounded-md border border-slate-300 px-3 py-2"
+                >
+                  {scopeCategories.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Description
+                <textarea
+                  name="description"
+                  defaultValue={
+                    templateEditorRecord?.description ??
+                    `Reusable ${scopeCategoryLabels[draft.category]} scope template.`
+                  }
+                  className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Template body
+                <textarea
+                  name="template_body"
+                  defaultValue={templateEditorRecord?.template_body ?? draft.scope_body}
+                  className="min-h-56 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                AI prompt
+                <textarea
+                  name="ai_prompt"
+                  defaultValue={
+                    templateEditorRecord?.ai_prompt ??
+                    `Generate a professional ${scopeCategoryLabels[
+                      draft.category
+                    ].toLowerCase()} scope of work using WeatherTech OS standards.`
+                  }
+                  className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  name="is_active"
+                  type="checkbox"
+                  defaultChecked={templateEditorRecord?.is_active ?? true}
+                  className="h-4 w-4 rounded border-slate-300 text-sky-600"
+                />
+                Active template
+              </label>
+
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+              >
+                <Save className="h-4 w-4" />
+                {templateEditorRecord ? "Save template" : "Create template"}
+              </button>
+            </form>
+          </div>
+        </section>
       </aside>
     </div>
   );

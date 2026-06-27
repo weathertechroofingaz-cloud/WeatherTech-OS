@@ -707,6 +707,15 @@ export type ScopeInput = {
   notes?: string | null;
 };
 
+export type ScopeTemplateInput = {
+  title: string;
+  category: ScopeCategory;
+  description: string;
+  template_body: string;
+  ai_prompt: string;
+  is_active?: boolean;
+};
+
 export type JobInput = {
   company_id: string;
   customer_id?: string | null;
@@ -1069,14 +1078,8 @@ export type EstimateLineItemInsert = EstimateLineItemInput & {
   updated_at?: string;
 };
 
-export type ScopeTemplateInsert = {
+export type ScopeTemplateInsert = ScopeTemplateInput & {
   id?: string;
-  title: string;
-  category: ScopeCategory;
-  description: string;
-  template_body: string;
-  ai_prompt: string;
-  is_active?: boolean;
   created_at?: string;
   updated_at?: string;
 };

@@ -16,7 +16,8 @@ WeatherTech OS is a production-focused roofing and painting operations platform 
 - Lead intake, lead list/detail workflow, customer management, and conversion from lead to customer.
 - Estimates with line items, labor, materials, tax, discounts, margin, totals, and PDF-style preview.
 - Estimate-to-job production handoff for approved estimates.
-- Scope of work generator using WeatherTech templates for roofing, exterior painting, interior painting, cabinet refinishing, roof repairs, tile underlayment, and custom scopes.
+- Scope of work generator using reusable WeatherTech templates for roofing, exterior painting, interior painting, cabinet refinishing, roof repairs, tile underlayment, and custom scopes.
+- PDF-ready estimate and scope packets can be saved directly into document management from the estimating workflow.
 - Jobs, scheduling calendar, material orders, invoices, payments, photo records, customer portal, employee portal, change orders, signatures, document management, notifications, weather dashboard, and route planner.
 - Document generation for estimate packets, invoice packets, scope packets, change orders, job production packets, and customer profile packets.
 - Dashboard action center for overdue invoices, scheduling gaps, missing documents, blocked jobs, pending change orders, and queued communications.

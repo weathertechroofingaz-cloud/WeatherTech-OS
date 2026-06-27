@@ -62,6 +62,7 @@ import type {
   SmsMessageInput,
   ScopeInput,
   ScopeRecord,
+  ScopeTemplateInput,
   TimeEntryInput,
   TimeEntryRecord,
 } from "./types";
@@ -555,6 +556,48 @@ export async function updateScope(client: CrmClient, id: string, input: ScopeInp
   const { data, error } = await client
     .from("scopes")
     .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function createScopeTemplate(
+  client: CrmClient,
+  input: ScopeTemplateInput,
+) {
+  const { data, error } = await client
+    .from("scope_templates")
+    .insert({
+      ...input,
+      is_active: input.is_active ?? true,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateScopeTemplate(
+  client: CrmClient,
+  id: string,
+  input: ScopeTemplateInput,
+) {
+  const { data, error } = await client
+    .from("scope_templates")
+    .update({
+      ...input,
+      is_active: input.is_active ?? true,
+    })
     .eq("id", id)
     .select("*")
     .single();
