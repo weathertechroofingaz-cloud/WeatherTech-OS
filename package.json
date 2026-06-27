@@ -6,11 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
-    "type-check": "next typegen && tsc --noEmit"
+    "lint": "next lint",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "16.2.9",
+    "@supabase/supabase-js": "^2.108.2",
+    "next": "14.2.5",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
@@ -19,15 +20,10 @@
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
     "autoprefixer": "10.4.19",
-    "eslint": "9.39.4",
-    "eslint-config-next": "16.2.9",
-    "postcss": "8.5.15",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5",
+    "postcss": "8.4.40",
     "tailwindcss": "3.4.4",
     "typescript": "5.6.2"
-  },
-  "overrides": {
-    "next": {
-      "postcss": "8.5.15"
-    }
   }
 }
