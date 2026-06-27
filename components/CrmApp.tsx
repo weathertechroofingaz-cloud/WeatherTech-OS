@@ -639,6 +639,127 @@ function getJobName(snapshot: CrmSnapshot, jobId: string | null) {
   return snapshot.jobs.find((job) => job.id === jobId)?.title ?? null;
 }
 
+function getJobScheduleEvents(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.scheduleEvents
+    .filter((event) => event.job_id === jobId)
+    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+}
+
+function getJobAssignments(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.jobAssignments
+    .filter((assignment) => assignment.job_id === jobId)
+    .sort((a, b) => a.assigned_date.localeCompare(b.assigned_date));
+}
+
+function getJobDocuments(snapshot: CrmSnapshot, job: JobRecord) {
+  return snapshot.documents.filter(
+    (document) =>
+      document.job_id === job.id ||
+      (job.estimate_id !== null && document.estimate_id === job.estimate_id),
+  );
+}
+
+function getJobInvoices(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.invoices.filter((invoice) => invoice.job_id === jobId);
+}
+
+function getJobMaterialOrders(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.materialOrders.filter((order) => order.job_id === jobId);
+}
+
+function getJobChangeOrders(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.changeOrders.filter((changeOrder) => changeOrder.job_id === jobId);
+}
+
+function getJobPhotos(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.jobPhotos.filter((photo) => photo.job_id === jobId);
+}
+
+function hasUpcomingScheduledEvent(events: ScheduleEventRecord[]) {
+  const today = todayIsoDate();
+  return events.some(
+    (event) => event.status === "scheduled" && event.start_at.slice(0, 10) >= today,
+  );
+}
+
+function calculateProductionKpis(snapshot: CrmSnapshot) {
+  const activeJobs = snapshot.jobs.filter(
+    (job) =>
+      job.status === "scheduled" ||
+      job.status === "in_progress" ||
+      job.status === "blocked",
+  );
+  const jobsWithUpcomingSchedule = activeJobs.filter((job) =>
+    hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+  );
+  const jobsWithCrew = activeJobs.filter(
+    (job) => job.crew_name || getJobAssignments(snapshot, job.id).length > 0,
+  );
+  const activeEmployees = snapshot.employees.filter((employee) => employee.is_active);
+  const assignedEmployeeIds = new Set(
+    snapshot.jobAssignments
+      .filter(
+        (assignment) =>
+          assignment.status === "assigned" || assignment.status === "accepted",
+      )
+      .map((assignment) => assignment.employee_id),
+  );
+  const completedAssignments = snapshot.jobAssignments.filter(
+    (assignment) => assignment.status === "completed",
+  );
+  const activeProductionValue = activeJobs.reduce((total, job) => {
+    const estimate = job.estimate_id
+      ? snapshot.estimates.find((item) => item.id === job.estimate_id)
+      : null;
+
+    return total + (estimate?.total ?? 0);
+  }, 0);
+  const productionInvoiceTotal = snapshot.invoices
+    .filter((invoice) => invoice.job_id !== null)
+    .reduce((total, invoice) => total + invoice.total, 0);
+  const productionMaterialSpend = snapshot.materialOrders
+    .filter((order) => order.job_id !== null)
+    .reduce((total, order) => total + order.total, 0);
+  const jobsMissingSchedule = activeJobs.filter(
+    (job) => !hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+  );
+  const jobsMissingCrew = activeJobs.filter(
+    (job) => !job.crew_name && getJobAssignments(snapshot, job.id).length === 0,
+  );
+  const atRiskJobIds = new Set([
+    ...activeJobs.filter((job) => job.status === "blocked").map((job) => job.id),
+    ...jobsMissingSchedule.map((job) => job.id),
+    ...jobsMissingCrew.map((job) => job.id),
+  ]);
+
+  return {
+    activeJobs,
+    scheduledJobs: snapshot.jobs.filter((job) => job.status === "scheduled"),
+    inProgressJobs: snapshot.jobs.filter((job) => job.status === "in_progress"),
+    blockedJobs: snapshot.jobs.filter((job) => job.status === "blocked"),
+    completedJobs: snapshot.jobs.filter(
+      (job) => job.status === "completed" || job.status === "closed",
+    ),
+    scheduleCoverage: activeJobs.length
+      ? Math.round((jobsWithUpcomingSchedule.length / activeJobs.length) * 100)
+      : 100,
+    crewCoverage: activeJobs.length
+      ? Math.round((jobsWithCrew.length / activeJobs.length) * 100)
+      : 100,
+    crewUtilization: activeEmployees.length
+      ? Math.round((assignedEmployeeIds.size / activeEmployees.length) * 100)
+      : 0,
+    assignmentCompletion: snapshot.jobAssignments.length
+      ? Math.round((completedAssignments.length / snapshot.jobAssignments.length) * 100)
+      : 0,
+    activeProductionValue,
+    productionProfit: productionInvoiceTotal - productionMaterialSpend,
+    jobsMissingSchedule,
+    jobsMissingCrew,
+    atRiskJobs: activeJobs.filter((job) => atRiskJobIds.has(job.id)),
+  };
+}
+
 function getChangeOrderTargetName(snapshot: CrmSnapshot, changeOrder: ChangeOrderRecord) {
   return (
     getJobName(snapshot, changeOrder.job_id) ??
@@ -1725,6 +1846,7 @@ function DashboardView({
   onCreateLead,
 }: DashboardViewProps) {
   const today = todayIsoDate();
+  const productionKpis = calculateProductionKpis(snapshot);
   const urgentLeads = snapshot.leads.filter(
     (lead) => lead.priority === "urgent" || lead.next_follow_up === today,
   );
@@ -1778,6 +1900,14 @@ function DashboardView({
     estimatesMissingDocuments.length +
     invoicesMissingDocuments.length +
     scopesMissingDocuments.length;
+  const actionCount =
+    overdueInvoices.length +
+    jobsNeedingSchedule.length +
+    productionKpis.jobsMissingCrew.length +
+    documentsToGenerate +
+    productionKpis.atRiskJobs.length +
+    pendingChangeOrders.length +
+    queuedCommunications;
 
   return (
     <div className="space-y-5">
@@ -1840,6 +1970,26 @@ function DashboardView({
           icon={CalendarClock}
         />
         <MetricCard
+          label="Schedule coverage"
+          value={`${productionKpis.scheduleCoverage}%`}
+          icon={CalendarClock}
+        />
+        <MetricCard
+          label="Crew coverage"
+          value={`${productionKpis.crewCoverage}%`}
+          icon={Users}
+        />
+        <MetricCard
+          label="Production profit"
+          value={formatMoney(productionKpis.productionProfit)}
+          icon={DollarSign}
+        />
+        <MetricCard
+          label="At-risk jobs"
+          value={productionKpis.atRiskJobs.length}
+          icon={ShieldCheck}
+        />
+        <MetricCard
           label="Reminders"
           value={metrics.unreadNotifications}
           icon={Mail}
@@ -1869,6 +2019,31 @@ function DashboardView({
             { label: "Reminders", value: metrics.unreadNotifications, valueLabel: String(metrics.unreadNotifications) },
           ]}
         />
+        <ChartPanel
+          title="Production readiness"
+          rows={[
+            {
+              label: "Schedule coverage",
+              value: productionKpis.scheduleCoverage,
+              valueLabel: `${productionKpis.scheduleCoverage}%`,
+            },
+            {
+              label: "Crew coverage",
+              value: productionKpis.crewCoverage,
+              valueLabel: `${productionKpis.crewCoverage}%`,
+            },
+            {
+              label: "Crew utilization",
+              value: productionKpis.crewUtilization,
+              valueLabel: `${productionKpis.crewUtilization}%`,
+            },
+            {
+              label: "Assignment completion",
+              value: productionKpis.assignmentCompletion,
+              valueLabel: `${productionKpis.assignmentCompletion}%`,
+            },
+          ]}
+        />
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1882,7 +2057,7 @@ function DashboardView({
             </p>
           </div>
           <Badge
-            label={`${overdueInvoices.length + jobsNeedingSchedule.length + documentsToGenerate + blockedJobs.length + pendingChangeOrders.length + queuedCommunications} active`}
+            label={`${actionCount} active`}
             tone="amber"
           />
         </div>
@@ -1904,6 +2079,13 @@ function DashboardView({
             items={jobsNeedingSchedule.slice(0, 3).map((job) => job.title)}
           />
           <ActionCenterCard
+            icon={Users}
+            label="Crew gaps"
+            value={productionKpis.jobsMissingCrew.length}
+            detail="Active jobs without crew coverage"
+            items={productionKpis.jobsMissingCrew.slice(0, 3).map((job) => job.title)}
+          />
+          <ActionCenterCard
             icon={FileText}
             label="Documents to generate"
             value={documentsToGenerate}
@@ -1920,6 +2102,13 @@ function DashboardView({
             value={blockedJobs.length}
             detail="Needs operational review"
             items={blockedJobs.slice(0, 3).map((job) => job.title)}
+          />
+          <ActionCenterCard
+            icon={ShieldCheck}
+            label="At-risk jobs"
+            value={productionKpis.atRiskJobs.length}
+            detail="Blocked, unscheduled, or unassigned"
+            items={productionKpis.atRiskJobs.slice(0, 3).map((job) => job.title)}
           />
           <ActionCenterCard
             icon={ReceiptText}
@@ -4713,6 +4902,7 @@ function JobsView({
   const [statusFilter, setStatusFilter] = useState<JobStatus | "all">("all");
   const [isSaving, setIsSaving] = useState(false);
 
+  const productionKpis = calculateProductionKpis(snapshot);
   const selectedJob =
     snapshot.jobs.find((job) => job.id === selectedJobId) ?? null;
   const filteredJobs = snapshot.jobs.filter((job) => {
@@ -4721,6 +4911,8 @@ function JobsView({
       !query ||
       job.title.toLowerCase().includes(query) ||
       job.property_address.toLowerCase().includes(query) ||
+      (job.crew_name ?? "").toLowerCase().includes(query) ||
+      (job.project_manager ?? "").toLowerCase().includes(query) ||
       getJobTargetName(snapshot, job).toLowerCase().includes(query);
     const matchesStatus = statusFilter === "all" || job.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -4731,6 +4923,75 @@ function JobsView({
     setPage: setJobPage,
     pagedItems: pagedJobs,
   } = usePagination(filteredJobs);
+  const selectedJobEvents = selectedJob
+    ? getJobScheduleEvents(snapshot, selectedJob.id)
+    : [];
+  const selectedJobAssignments = selectedJob
+    ? getJobAssignments(snapshot, selectedJob.id)
+    : [];
+  const selectedJobInvoices = selectedJob ? getJobInvoices(snapshot, selectedJob.id) : [];
+  const selectedJobOrders = selectedJob
+    ? getJobMaterialOrders(snapshot, selectedJob.id)
+    : [];
+  const selectedJobDocuments = selectedJob
+    ? getJobDocuments(snapshot, selectedJob)
+    : [];
+  const selectedJobChangeOrders = selectedJob
+    ? getJobChangeOrders(snapshot, selectedJob.id)
+    : [];
+  const selectedJobPhotos = selectedJob ? getJobPhotos(snapshot, selectedJob.id) : [];
+  const selectedJobScheduleReady = hasUpcomingScheduledEvent(selectedJobEvents);
+  const selectedJobCrewReady =
+    Boolean(selectedJob?.crew_name) || selectedJobAssignments.length > 0;
+  const selectedJobFinancials = {
+    invoiced: selectedJobInvoices.reduce((total, invoice) => total + invoice.total, 0),
+    balance: selectedJobInvoices.reduce(
+      (total, invoice) => total + invoice.balance_due,
+      0,
+    ),
+    materials: selectedJobOrders.reduce((total, order) => total + order.total, 0),
+    changeOrders: selectedJobChangeOrders.reduce(
+      (total, changeOrder) => total + changeOrder.total,
+      0,
+    ),
+  };
+  const selectedJobReadiness = selectedJob
+    ? [
+        {
+          label: "Schedule",
+          ready: selectedJobScheduleReady,
+          detail: selectedJobScheduleReady
+            ? "Upcoming production event"
+            : "Needs an upcoming event",
+        },
+        {
+          label: "Crew",
+          ready: selectedJobCrewReady,
+          detail: selectedJobCrewReady ? "Crew assigned" : "Crew assignment needed",
+        },
+        {
+          label: "Documents",
+          ready: selectedJobDocuments.length > 0,
+          detail: `${selectedJobDocuments.length} linked document${
+            selectedJobDocuments.length === 1 ? "" : "s"
+          }`,
+        },
+        {
+          label: "Materials",
+          ready: selectedJobOrders.some((order) => order.status === "ordered") ||
+            selectedJobOrders.some((order) => order.status === "received"),
+          detail: selectedJobOrders.length
+            ? `${selectedJobOrders.length} material order${
+                selectedJobOrders.length === 1 ? "" : "s"
+              }`
+            : "No material orders yet",
+        },
+      ]
+    : [];
+  const defaultJobEventStart = new Date();
+  defaultJobEventStart.setDate(defaultJobEventStart.getDate() + 1);
+  defaultJobEventStart.setHours(8, 0, 0, 0);
+  const defaultJobEventEnd = new Date(defaultJobEventStart.getTime() + 4 * 60 * 60 * 1000);
 
   const handleSaveJob = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -4764,6 +5025,123 @@ function JobsView({
       onError(currentError instanceof Error ? currentError.message : "Unable to save job.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleUpdateJobStatus = async (status: JobStatus) => {
+    if (!selectedJob) {
+      return;
+    }
+
+    try {
+      await updateJob(client, selectedJob.id, { status });
+      await onReload();
+      onNotice(`Job moved to ${jobStatusLabel(status)}.`);
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update job status.",
+      );
+    }
+  };
+
+  const handleCreateAssignment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before assigning crew.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const employeeId = getFormString(formData, "employee_id");
+
+    if (!employeeId) {
+      onError("Choose an employee for the assignment.");
+      return;
+    }
+
+    const input: JobAssignmentInput = {
+      company_id: selectedJob.company_id,
+      employee_id: employeeId,
+      job_id: selectedJob.id,
+      schedule_event_id: getOptionalRelation(formData, "schedule_event_id"),
+      title: getFormString(formData, "title", `${selectedJob.title} assignment`),
+      status: getFormString(formData, "status", "assigned") as AssignmentStatus,
+      assigned_date: getFormString(formData, "assigned_date", todayIsoDate()),
+      notes: getOptionalFormString(formData, "notes"),
+    };
+
+    try {
+      await createJobAssignment(client, input);
+      event.currentTarget.reset();
+      await onReload();
+      onNotice("Crew assignment created.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to create crew assignment.",
+      );
+    }
+  };
+
+  const handleUpdateAssignmentStatus = async (
+    assignment: JobAssignmentRecord,
+    status: AssignmentStatus,
+  ) => {
+    try {
+      await updateJobAssignment(client, assignment.id, { status });
+      await onReload();
+      onNotice("Crew assignment updated.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update crew assignment.",
+      );
+    }
+  };
+
+  const handleCreateJobEvent = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before scheduling production.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const input: ScheduleEventInput = {
+      company_id: selectedJob.company_id,
+      customer_id: selectedJob.customer_id,
+      lead_id: selectedJob.lead_id,
+      job_id: selectedJob.id,
+      title: getFormString(formData, "title", selectedJob.title),
+      event_type: getFormString(formData, "event_type", "job") as ScheduleEventType,
+      status: getFormString(
+        formData,
+        "status",
+        "scheduled",
+      ) as ScheduleEventStatus,
+      start_at: fromDateTimeInputValue(getFormString(formData, "start_at")),
+      end_at: fromDateTimeInputValue(getFormString(formData, "end_at")),
+      location: getOptionalFormString(formData, "location") ?? selectedJob.property_address,
+      notes: getOptionalFormString(formData, "notes"),
+    };
+
+    try {
+      await createScheduleEvent(client, input);
+      event.currentTarget.reset();
+      await onReload();
+      onNotice("Job scheduled.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to schedule job.",
+      );
     }
   };
 
@@ -4814,23 +5192,74 @@ function JobsView({
           </div>
         </div>
 
+        <div className="border-b border-slate-200 p-5">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <ProfileStat label="Active jobs" value={productionKpis.activeJobs.length} />
+            <ProfileStat label="Scheduled" value={productionKpis.scheduledJobs.length} />
+            <ProfileStat label="In progress" value={productionKpis.inProgressJobs.length} />
+            <ProfileStat label="Crew coverage" value={`${productionKpis.crewCoverage}%`} />
+            <ProfileStat label="At risk" value={productionKpis.atRiskJobs.length} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setStatusFilter("all")}
+              className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                statusFilter === "all"
+                  ? "border-sky-300 bg-sky-50 text-sky-800"
+                  : "border-slate-300 text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              All jobs
+            </button>
+            {jobStatuses.map((status) => {
+              const count = snapshot.jobs.filter(
+                (job) => job.status === status.value,
+              ).length;
+
+              return (
+                <button
+                  key={status.value}
+                  type="button"
+                  onClick={() => setStatusFilter(status.value)}
+                  className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                    statusFilter === status.value
+                      ? "border-sky-300 bg-sky-50 text-sky-800"
+                      : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {status.label} ({count})
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="divide-y divide-slate-100">
           {pagedJobs.map((job) => (
             <button
               key={job.id}
               type="button"
               onClick={() => setSelectedJobId(job.id)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[1fr_130px_150px_120px] xl:items-center ${
+              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_130px_150px_150px_120px] xl:items-center ${
                 selectedJob?.id === job.id ? "bg-sky-50" : "bg-white"
               }`}
             >
               <div>
                 <p className="font-semibold text-slate-950">{job.title}</p>
                 <p className="mt-1 text-sm text-slate-500">{job.property_address}</p>
+                <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
+                  {getJobTargetName(snapshot, job)} - {serviceLabel(job.service_type)}
+                </p>
               </div>
               <Badge label={jobStatusLabel(job.status)} tone={job.status === "blocked" ? "amber" : "blue"} />
               <span className="text-sm text-slate-600">
                 {companyMap.get(job.company_id)?.name ?? "Company"}
+              </span>
+              <span className="text-sm text-slate-600">
+                {job.crew_name ?? getJobAssignments(snapshot, job.id).length
+                  ? `${job.crew_name ?? "Assigned crew"}`
+                  : "Crew needed"}
               </span>
               <span className="text-sm font-semibold text-slate-950">
                 {formatDate(job.start_date)}
@@ -5009,6 +5438,325 @@ function JobsView({
             </button>
           </form>
         </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Job workflow</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Move production through the operating lifecycle.
+              </p>
+            </div>
+            {selectedJob ? (
+              <Badge
+                label={jobStatusLabel(selectedJob.status)}
+                tone={selectedJob.status === "blocked" ? "amber" : "blue"}
+              />
+            ) : null}
+          </div>
+
+          {selectedJob ? (
+            <div className="mt-4 grid gap-2">
+              <div className="grid gap-2 sm:grid-cols-2">
+                {jobStatuses.map((status) => (
+                  <button
+                    key={status.value}
+                    type="button"
+                    onClick={() => void handleUpdateJobStatus(status.value)}
+                    disabled={selectedJob.status === status.value}
+                    className={`rounded-md border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                      selectedJob.status === status.value
+                        ? "border-sky-300 bg-sky-50 text-sky-800"
+                        : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {status.label}
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-semibold text-slate-700">
+                  {selectedJob.project_manager ?? "No project manager assigned"}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedJob.crew_name ?? "No crew label"} -{" "}
+                  {formatDate(selectedJob.start_date)} to {formatDate(selectedJob.end_date)}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <EmptyState label="Save or select a job to manage workflow." />
+          )}
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Production readiness</h3>
+          {selectedJob ? (
+            <>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <ProfileStat label="Invoices" value={formatMoney(selectedJobFinancials.invoiced)} />
+                <ProfileStat label="Balance" value={formatMoney(selectedJobFinancials.balance)} />
+                <ProfileStat label="Materials" value={formatMoney(selectedJobFinancials.materials)} />
+                <ProfileStat label="Photos" value={selectedJobPhotos.length} />
+              </div>
+              <div className="mt-4 grid gap-2">
+                {selectedJobReadiness.map((item) => (
+                  <div
+                    key={item.label}
+                    className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <div>
+                      <p className="text-sm font-bold text-slate-950">{item.label}</p>
+                      <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
+                    </div>
+                    <Badge label={item.ready ? "Ready" : "Needs work"} tone={item.ready ? "green" : "amber"} />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Change orders</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedJobChangeOrders.length} linked -{" "}
+                  {formatMoney(selectedJobFinancials.changeOrders)}
+                </p>
+              </div>
+            </>
+          ) : (
+            <EmptyState label="Select a job to review readiness." />
+          )}
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Crew assignments</h3>
+          {selectedJob ? (
+            <>
+              <div className="mt-4 grid gap-3">
+                {selectedJobAssignments.map((assignment) => (
+                  <div
+                    key={assignment.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-950">
+                          {assignment.title}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {getEmployeeName(snapshot, assignment.employee_id) ??
+                            "Employee"}{" "}
+                          - {formatDate(assignment.assigned_date)}
+                        </p>
+                      </div>
+                      <Badge
+                        label={assignmentStatusLabel(assignment.status)}
+                        tone={assignment.status === "completed" ? "green" : "blue"}
+                      />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {assignmentStatuses.map((status) => (
+                        <button
+                          key={status.value}
+                          type="button"
+                          onClick={() =>
+                            void handleUpdateAssignmentStatus(assignment, status.value)
+                          }
+                          disabled={assignment.status === status.value}
+                          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {status.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {!selectedJobAssignments.length ? (
+                  <EmptyState label="No crew assignments yet." />
+                ) : null}
+              </div>
+
+              <form
+                key={`assignment-${selectedJob.id}`}
+                onSubmit={handleCreateAssignment}
+                className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select
+                    required
+                    name="employee_id"
+                    defaultValue={snapshot.employees[0]?.id ?? ""}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {!snapshot.employees.length ? (
+                      <option value="">No employees</option>
+                    ) : null}
+                    {snapshot.employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>
+                        {employee.full_name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    name="status"
+                    defaultValue="assigned"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {assignmentStatuses.map((status) => (
+                      <option key={status.value} value={status.value}>
+                        {status.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <input
+                  name="title"
+                  defaultValue={`${selectedJob.title} assignment`}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Assignment title"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    name="assigned_date"
+                    type="date"
+                    defaultValue={selectedJob.start_date ?? todayIsoDate()}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  />
+                  <select
+                    name="schedule_event_id"
+                    defaultValue="none"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="none">No schedule event</option>
+                    {selectedJobEvents.map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <textarea
+                  name="notes"
+                  className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Crew notes"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                >
+                  <Users className="h-4 w-4" />
+                  Assign crew
+                </button>
+              </form>
+            </>
+          ) : (
+            <EmptyState label="Select a job to assign crew." />
+          )}
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Schedule job</h3>
+          {selectedJob ? (
+            <>
+              <div className="mt-4 grid gap-3">
+                {selectedJobEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-950">{event.title}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {formatDateTime(event.start_at)}
+                        </p>
+                      </div>
+                      <Badge
+                        label={scheduleEventStatusLabel(event.status)}
+                        tone={event.status === "completed" ? "green" : "blue"}
+                      />
+                    </div>
+                    <ContactLine icon={MapPin} value={event.location} />
+                  </div>
+                ))}
+                {!selectedJobEvents.length ? (
+                  <EmptyState label="No scheduled events for this job." />
+                ) : null}
+              </div>
+
+              <form
+                key={`schedule-${selectedJob.id}`}
+                onSubmit={handleCreateJobEvent}
+                className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
+                <input
+                  name="title"
+                  defaultValue={`${selectedJob.title} production`}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Event title"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select
+                    name="event_type"
+                    defaultValue="job"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {scheduleEventTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    name="status"
+                    defaultValue="scheduled"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {scheduleEventStatuses.map((status) => (
+                      <option key={status.value} value={status.value}>
+                        {status.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    required
+                    name="start_at"
+                    type="datetime-local"
+                    defaultValue={toDateTimeInputValue(defaultJobEventStart.toISOString())}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  />
+                  <input
+                    required
+                    name="end_at"
+                    type="datetime-local"
+                    defaultValue={toDateTimeInputValue(defaultJobEventEnd.toISOString())}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  />
+                </div>
+                <input
+                  name="location"
+                  defaultValue={selectedJob.property_address}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Location"
+                />
+                <textarea
+                  name="notes"
+                  className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Schedule notes"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  <CalendarClock className="h-4 w-4" />
+                  Add schedule
+                </button>
+              </form>
+            </>
+          ) : (
+            <EmptyState label="Select a job to schedule production." />
+          )}
+        </section>
       </aside>
     </div>
   );
@@ -5034,17 +5782,82 @@ function CalendarView({
   const [selectedEventId, setSelectedEventId] = useState(
     snapshot.scheduleEvents[0]?.id ?? "new",
   );
+  const [calendarSearch, setCalendarSearch] = useState("");
+  const [eventTypeFilter, setEventTypeFilter] = useState<ScheduleEventType | "all">(
+    "all",
+  );
+  const [eventStatusFilter, setEventStatusFilter] = useState<
+    ScheduleEventStatus | "all"
+  >("all");
   const [isSaving, setIsSaving] = useState(false);
+  const productionKpis = calculateProductionKpis(snapshot);
   const selectedEvent =
     snapshot.scheduleEvents.find((event) => event.id === selectedEventId) ?? null;
-  const upcomingEvents = [...snapshot.scheduleEvents].sort(
+  const sortedEvents = [...snapshot.scheduleEvents].sort(
     (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime(),
   );
+  const filteredEvents = sortedEvents.filter((event) => {
+    const job = event.job_id
+      ? snapshot.jobs.find((item) => item.id === event.job_id)
+      : null;
+    const query = calendarSearch.toLowerCase();
+    const searchableText = [
+      event.title,
+      event.location,
+      event.notes,
+      job?.title,
+      getScheduleTargetName(snapshot, event),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const matchesSearch = !query || searchableText.includes(query);
+    const matchesType =
+      eventTypeFilter === "all" || event.event_type === eventTypeFilter;
+    const matchesStatus =
+      eventStatusFilter === "all" || event.status === eventStatusFilter;
+
+    return matchesSearch && matchesType && matchesStatus;
+  });
   const weekDays = Array.from({ length: 7 }, (_item, index) => {
     const date = new Date();
     date.setDate(date.getDate() + index);
     return date.toISOString().slice(0, 10);
   });
+  const weekDaySet = new Set(weekDays);
+  const weekEvents = sortedEvents.filter((event) =>
+    weekDaySet.has(event.start_at.slice(0, 10)),
+  );
+  const conflictEventIds = new Set<string>();
+
+  sortedEvents.forEach((event, index) => {
+    sortedEvents.slice(index + 1).forEach((otherEvent) => {
+      const sameJob =
+        event.job_id !== null &&
+        otherEvent.job_id !== null &&
+        event.job_id === otherEvent.job_id;
+      const sameLocation =
+        event.location !== null &&
+        otherEvent.location !== null &&
+        event.location === otherEvent.location;
+      const startsBeforeOtherEnds =
+        new Date(event.start_at).getTime() < new Date(otherEvent.end_at).getTime();
+      const otherStartsBeforeEnd =
+        new Date(otherEvent.start_at).getTime() < new Date(event.end_at).getTime();
+
+      if ((sameJob || sameLocation) && startsBeforeOtherEnds && otherStartsBeforeEnd) {
+        conflictEventIds.add(event.id);
+        conflictEventIds.add(otherEvent.id);
+      }
+    });
+  });
+  const selectedEventAssignments = selectedEvent
+    ? snapshot.jobAssignments.filter(
+        (assignment) =>
+          assignment.schedule_event_id === selectedEvent.id ||
+          (selectedEvent.job_id !== null && assignment.job_id === selectedEvent.job_id),
+      )
+    : [];
 
   const moveEventToDate = async (eventId: string, dateValue: string) => {
     const event = snapshot.scheduleEvents.find((item) => item.id === eventId);
@@ -5142,9 +5955,67 @@ function CalendarView({
         </div>
 
         <div className="border-b border-slate-200 p-5">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <ProfileStat label="This week" value={weekEvents.length} />
+            <ProfileStat
+              label="Scheduled"
+              value={weekEvents.filter((event) => event.status === "scheduled").length}
+            />
+            <ProfileStat
+              label="Completed"
+              value={weekEvents.filter((event) => event.status === "completed").length}
+            />
+            <ProfileStat label="Conflicts" value={conflictEventIds.size} />
+            <ProfileStat
+              label="Unscheduled jobs"
+              value={productionKpis.jobsMissingSchedule.length}
+            />
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                value={calendarSearch}
+                onChange={(event) => setCalendarSearch(event.target.value)}
+                className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                placeholder="Search schedule"
+              />
+            </div>
+            <select
+              value={eventTypeFilter}
+              onChange={(event) =>
+                setEventTypeFilter(event.target.value as ScheduleEventType | "all")
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="all">All event types</option>
+              {scheduleEventTypes.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {type.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={eventStatusFilter}
+              onChange={(event) =>
+                setEventStatusFilter(event.target.value as ScheduleEventStatus | "all")
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="all">All statuses</option>
+              {scheduleEventStatuses.map((status) => (
+                <option key={status.value} value={status.value}>
+                  {status.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="border-b border-slate-200 p-5">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
             {weekDays.map((dateValue) => {
-              const dayEvents = upcomingEvents.filter(
+              const dayEvents = filteredEvents.filter(
                 (event) => event.start_at.slice(0, 10) === dateValue,
               );
 
@@ -5174,12 +6045,19 @@ function CalendarView({
                           dragEvent.dataTransfer.setData("text/plain", event.id)
                         }
                         onClick={() => setSelectedEventId(event.id)}
-                        className="rounded-md border border-slate-200 bg-white p-2 text-left text-xs font-semibold text-slate-700 shadow-sm hover:border-sky-300"
+                        className={`rounded-md border bg-white p-2 text-left text-xs font-semibold text-slate-700 shadow-sm hover:border-sky-300 ${
+                          conflictEventIds.has(event.id)
+                            ? "border-amber-300"
+                            : "border-slate-200"
+                        }`}
                       >
                         {event.title}
                         <span className="mt-1 block font-normal text-slate-500">
                           {formatDateTime(event.start_at)}
                         </span>
+                        {conflictEventIds.has(event.id) ? (
+                          <span className="mt-1 block text-amber-700">Conflict</span>
+                        ) : null}
                       </button>
                     ))}
                   </div>
@@ -5190,40 +6068,61 @@ function CalendarView({
         </div>
 
         <div className="grid gap-4 p-5 xl:grid-cols-2">
-          {upcomingEvents.map((event) => (
-            <button
-              key={event.id}
-              type="button"
-              onClick={() => setSelectedEventId(event.id)}
-              className={`rounded-lg border p-4 text-left transition hover:border-sky-300 hover:bg-sky-50 ${
-                selectedEvent?.id === event.id
-                  ? "border-sky-300 bg-sky-50"
-                  : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-slate-950">{event.title}</p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {getScheduleTargetName(snapshot, event)}
-                  </p>
+          {filteredEvents.map((event) => {
+            const eventAssignments = snapshot.jobAssignments.filter(
+              (assignment) =>
+                assignment.schedule_event_id === event.id ||
+                (event.job_id !== null && assignment.job_id === event.job_id),
+            );
+
+            return (
+              <button
+                key={event.id}
+                type="button"
+                onClick={() => setSelectedEventId(event.id)}
+                className={`rounded-lg border p-4 text-left transition hover:border-sky-300 hover:bg-sky-50 ${
+                  selectedEvent?.id === event.id
+                    ? "border-sky-300 bg-sky-50"
+                    : conflictEventIds.has(event.id)
+                      ? "border-amber-300 bg-amber-50"
+                      : "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-950">{event.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {getScheduleTargetName(snapshot, event)}
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <Badge
+                      label={scheduleEventStatusLabel(event.status)}
+                      tone={event.status === "completed" ? "green" : "blue"}
+                    />
+                    {conflictEventIds.has(event.id) ? (
+                      <Badge label="Conflict" tone="amber" />
+                    ) : null}
+                  </div>
                 </div>
-                <Badge
-                  label={scheduleEventStatusLabel(event.status)}
-                  tone={event.status === "completed" ? "green" : "blue"}
-                />
-              </div>
-              <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                <ContactLine icon={CalendarClock} value={formatDateTime(event.start_at)} />
-                <ContactLine icon={MapPin} value={event.location} />
-              </div>
-              <p className="mt-3 text-xs font-semibold uppercase text-sky-700">
-                {scheduleEventTypeLabel(event.event_type)} -{" "}
-                {companyMap.get(event.company_id)?.name ?? "Company"}
-              </p>
-            </button>
-          ))}
-          {!upcomingEvents.length ? <EmptyState label="No scheduled events yet." /> : null}
+                <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                  <ContactLine icon={CalendarClock} value={formatDateTime(event.start_at)} />
+                  <ContactLine icon={MapPin} value={event.location} />
+                  <ContactLine
+                    icon={Users}
+                    value={`${eventAssignments.length} crew assignment${
+                      eventAssignments.length === 1 ? "" : "s"
+                    }`}
+                  />
+                </div>
+                <p className="mt-3 text-xs font-semibold uppercase text-sky-700">
+                  {scheduleEventTypeLabel(event.event_type)} -{" "}
+                  {companyMap.get(event.company_id)?.name ?? "Company"}
+                </p>
+              </button>
+            );
+          })}
+          {!filteredEvents.length ? <EmptyState label="No scheduled events match this view." /> : null}
         </div>
       </section>
 
@@ -5231,6 +6130,49 @@ function CalendarView({
         <h3 className="text-lg font-bold text-slate-950">
           {selectedEvent ? "Edit event" : "Schedule event"}
         </h3>
+        {selectedEvent ? (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  {getScheduleTargetName(snapshot, selectedEvent)}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {scheduleEventTypeLabel(selectedEvent.event_type)} -{" "}
+                  {formatDateTime(selectedEvent.start_at)}
+                </p>
+              </div>
+              {conflictEventIds.has(selectedEvent.id) ? (
+                <Badge label="Conflict" tone="amber" />
+              ) : (
+                <Badge label="Clear" tone="green" />
+              )}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <ProfileStat label="Assignments" value={selectedEventAssignments.length} />
+              <ProfileStat
+                label="Job"
+                value={selectedEvent.job_id ? "Linked" : "Not linked"}
+              />
+            </div>
+            <div className="mt-3 grid gap-2">
+              {selectedEventAssignments.slice(0, 3).map((assignment) => (
+                <div
+                  key={assignment.id}
+                  className="flex items-center justify-between gap-3 rounded-md bg-white px-3 py-2 text-sm"
+                >
+                  <span className="font-semibold text-slate-700">
+                    {getEmployeeName(snapshot, assignment.employee_id) ?? "Employee"}
+                  </span>
+                  <Badge
+                    label={assignmentStatusLabel(assignment.status)}
+                    tone={assignment.status === "completed" ? "green" : "blue"}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <form
           key={selectedEvent?.id ?? "new-event"}
           onSubmit={handleSaveEvent}
