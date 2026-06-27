@@ -1,4 +1,10 @@
-import type { FollowUp } from '../lib/mockData';
+type FollowUp = {
+  id: string;
+  customer: string;
+  type: string;
+  dueDate: string;
+  status: string;
+};
 
 type FollowUpsPanelProps = {
   followUps: FollowUp[];

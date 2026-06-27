@@ -1,4 +1,11 @@
-import type { Estimate } from '../lib/mockData';
+type Estimate = {
+  id: string;
+  customer: string;
+  company: string;
+  estimateDate: string;
+  amount: string;
+  status: string;
+};
 
 type EstimatesPanelProps = {
   estimates: Estimate[];

@@ -1,4 +1,10 @@
-import type { Scope } from '../lib/mockData';
+type Scope = {
+  id: string;
+  title: string;
+  projectType: string;
+  assignedTo: string;
+  status: string;
+};
 
 type ScopesPanelProps = {
   scopes: Scope[];

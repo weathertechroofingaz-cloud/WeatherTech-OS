@@ -1,4 +1,11 @@
-import type { Lead } from "../lib/mockData";
+type Lead = {
+  id: string;
+  name: string;
+  status: string;
+  projectType: string;
+  source: string;
+  value: string;
+};
 
 type LeadsPanelProps = {
   leads: Lead[];
