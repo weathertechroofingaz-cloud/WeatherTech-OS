@@ -60,8 +60,11 @@ export type DocumentCategory =
   | "invoice"
   | "change_order"
   | "contract"
+  | "completion_certificate"
+  | "warranty"
   | "photo"
   | "other";
+export type DocumentStatus = "draft" | "ready" | "sent" | "signed" | "archived";
 export type PaymentStatus = "pending" | "posted" | "failed" | "refunded";
 export type NotificationChannel = "email" | "sms" | "in_app";
 export type NotificationStatus = "queued" | "sent" | "read" | "dismissed";
@@ -463,6 +466,8 @@ export type DocumentRecord = {
   change_order_id: string | null;
   title: string;
   category: DocumentCategory;
+  status: DocumentStatus;
+  template_key: string | null;
   file_url: string | null;
   body: string | null;
   created_at: string;
@@ -895,6 +900,8 @@ export type DocumentInput = {
   change_order_id?: string | null;
   title: string;
   category: DocumentCategory;
+  status?: DocumentStatus;
+  template_key?: string | null;
   file_url?: string | null;
   body?: string | null;
 };

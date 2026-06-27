@@ -86,6 +86,7 @@ import {
   updateSignature,
   updateSmsMessage,
   updateTimeEntry,
+  updateDocument,
   updateScope,
   updateScopeTemplate,
   upsertCalendarEventSync,
@@ -93,6 +94,7 @@ import {
 import {
   buildDocumentSourceOptions,
   buildGeneratedDocumentDraft,
+  weatherTechDocumentTemplates,
 } from "../lib/crm/documents";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
@@ -149,6 +151,7 @@ import type {
   DocumentCategory,
   DocumentInput,
   DocumentRecord,
+  DocumentStatus,
   EmployeeInput,
   EmployeeRecord,
   EmployeeRole,
@@ -367,8 +370,18 @@ const documentCategories: { value: DocumentCategory; label: string }[] = [
   { value: "invoice", label: "Invoice" },
   { value: "change_order", label: "Change order" },
   { value: "contract", label: "Contract" },
+  { value: "completion_certificate", label: "Completion certificate" },
+  { value: "warranty", label: "Warranty" },
   { value: "photo", label: "Photo" },
   { value: "other", label: "Other" },
+];
+
+const documentStatuses: { value: DocumentStatus; label: string }[] = [
+  { value: "draft", label: "Draft" },
+  { value: "ready", label: "Ready" },
+  { value: "sent", label: "Sent" },
+  { value: "signed", label: "Signed" },
+  { value: "archived", label: "Archived" },
 ];
 
 const notificationChannels: { value: NotificationChannel; label: string }[] = [
@@ -493,6 +506,10 @@ function signatureStatusLabel(status: SignatureStatus) {
 
 function documentCategoryLabel(category: DocumentCategory) {
   return documentCategories.find((item) => item.value === category)?.label ?? category;
+}
+
+function documentStatusLabel(status: DocumentStatus) {
+  return documentStatuses.find((item) => item.value === status)?.label ?? status;
 }
 
 function notificationStatusLabel(status: NotificationStatus) {
@@ -773,10 +790,81 @@ function getDocumentTargetName(snapshot: CrmSnapshot, document: DocumentRecord) 
   return (
     getCustomerName(snapshot, document.customer_id) ??
     getJobName(snapshot, document.job_id) ??
+    snapshot.estimates.find((estimate) => estimate.id === document.estimate_id)?.title ??
     snapshot.invoices.find((invoice) => invoice.id === document.invoice_id)
       ?.invoice_number ??
+    snapshot.changeOrders.find((changeOrder) => changeOrder.id === document.change_order_id)
+      ?.title ??
     "General"
   );
+}
+
+function getDocumentAssociationSummary(snapshot: CrmSnapshot, document: DocumentRecord) {
+  const job = document.job_id
+    ? snapshot.jobs.find((item) => item.id === document.job_id) ?? null
+    : null;
+  const invoice = document.invoice_id
+    ? snapshot.invoices.find((item) => item.id === document.invoice_id) ?? null
+    : null;
+  const estimate = document.estimate_id
+    ? snapshot.estimates.find((item) => item.id === document.estimate_id) ?? null
+    : job?.estimate_id
+      ? snapshot.estimates.find((item) => item.id === job.estimate_id) ?? null
+      : invoice?.estimate_id
+        ? snapshot.estimates.find((item) => item.id === invoice.estimate_id) ?? null
+        : null;
+  const customer =
+    (document.customer_id
+      ? snapshot.customers.find((item) => item.id === document.customer_id)
+      : null) ??
+    (job?.customer_id
+      ? snapshot.customers.find((item) => item.id === job.customer_id)
+      : null) ??
+    (estimate?.customer_id
+      ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+      : null) ??
+    (invoice?.customer_id
+      ? snapshot.customers.find((item) => item.id === invoice.customer_id)
+      : null) ??
+    null;
+  const lead =
+    (job?.lead_id ? snapshot.leads.find((item) => item.id === job.lead_id) : null) ??
+    (estimate?.lead_id
+      ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+      : null);
+  const addressParts = customer
+    ? [
+        customer.property_address,
+        customer.city,
+        customer.state,
+        customer.postal_code,
+      ]
+    : lead
+      ? [lead.property_address, lead.city, lead.state, lead.postal_code]
+      : [];
+
+  return {
+    customerName: customer?.display_name ?? lead?.contact_name ?? "Unassigned",
+    contact: customer?.contact_name ?? lead?.contact_name ?? "No contact",
+    email: customer?.email ?? lead?.email ?? "No email",
+    phone: customer?.phone ?? lead?.phone ?? "No phone",
+    property:
+      job?.property_address || addressParts.filter(Boolean).join(", ") || "No property linked",
+    jobTitle: job?.title ?? "No job linked",
+    source: getDocumentTargetName(snapshot, document),
+  };
+}
+
+function documentStatusTone(status: DocumentStatus) {
+  if (status === "signed") {
+    return "green";
+  }
+
+  if (status === "ready" || status === "sent") {
+    return "blue";
+  }
+
+  return "amber";
 }
 
 function getSignatureTargetName(snapshot: CrmSnapshot, signature: SignatureRecord) {
@@ -9429,8 +9517,34 @@ function DocumentsAndSignaturesView({
     () => buildDocumentSourceOptions(snapshot),
     [snapshot],
   );
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState(
+    weatherTechDocumentTemplates[0]?.key ?? "",
+  );
   const [generatedSourceId, setGeneratedSourceId] = useState(
     documentSourceOptions[0]?.value ?? "",
+  );
+  const [selectedDocumentId, setSelectedDocumentId] = useState(
+    snapshot.documents[0]?.id ?? "",
+  );
+  const [documentSearch, setDocumentSearch] = useState("");
+  const [documentStatusFilter, setDocumentStatusFilter] = useState<
+    DocumentStatus | "all"
+  >("all");
+  const [documentCategoryFilter, setDocumentCategoryFilter] = useState<
+    DocumentCategory | "all"
+  >("all");
+  const selectedTemplate =
+    weatherTechDocumentTemplates.find(
+      (template) => template.key === selectedTemplateKey,
+    ) ?? weatherTechDocumentTemplates[0];
+  const templateSourceOptions = useMemo(
+    () =>
+      selectedTemplate
+        ? documentSourceOptions.filter(
+            (option) => option.templateKey === selectedTemplate.key,
+          )
+        : [],
+    [documentSourceOptions, selectedTemplate],
   );
   const generatedDraft = useMemo(
     () =>
@@ -9439,17 +9553,71 @@ function DocumentsAndSignaturesView({
         : null,
     [generatedSourceId, snapshot],
   );
+  const selectedDocument =
+    snapshot.documents.find((document) => document.id === selectedDocumentId) ??
+    null;
+  const selectedAssociation = selectedDocument
+    ? getDocumentAssociationSummary(snapshot, selectedDocument)
+    : null;
+  const filteredDocuments = snapshot.documents.filter((document) => {
+    const query = documentSearch.toLowerCase();
+    const association = getDocumentAssociationSummary(snapshot, document);
+    const searchableText = [
+      document.title,
+      document.body,
+      document.file_url,
+      association.customerName,
+      association.property,
+      association.jobTitle,
+      association.source,
+      document.template_key,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const matchesSearch = !query || searchableText.includes(query);
+    const matchesStatus =
+      documentStatusFilter === "all" || document.status === documentStatusFilter;
+    const matchesCategory =
+      documentCategoryFilter === "all" || document.category === documentCategoryFilter;
+
+    return matchesSearch && matchesStatus && matchesCategory;
+  });
+  const {
+    page: documentPage,
+    pageCount: documentPageCount,
+    setPage: setDocumentPage,
+    pagedItems: pagedDocuments,
+  } = usePagination(filteredDocuments, 10);
+  const documentStats = {
+    total: snapshot.documents.length,
+    draft: snapshot.documents.filter((document) => document.status === "draft").length,
+    ready: snapshot.documents.filter((document) => document.status === "ready").length,
+    sent: snapshot.documents.filter((document) => document.status === "sent").length,
+    signed: snapshot.documents.filter((document) => document.status === "signed").length,
+  };
 
   useEffect(() => {
-    if (!documentSourceOptions.length) {
+    if (!templateSourceOptions.length) {
       setGeneratedSourceId("");
       return;
     }
 
-    if (!documentSourceOptions.some((option) => option.value === generatedSourceId)) {
-      setGeneratedSourceId(documentSourceOptions[0].value);
+    if (!templateSourceOptions.some((option) => option.value === generatedSourceId)) {
+      setGeneratedSourceId(templateSourceOptions[0].value);
     }
-  }, [documentSourceOptions, generatedSourceId]);
+  }, [templateSourceOptions, generatedSourceId]);
+
+  useEffect(() => {
+    if (!snapshot.documents.length) {
+      setSelectedDocumentId("");
+      return;
+    }
+
+    if (!snapshot.documents.some((document) => document.id === selectedDocumentId)) {
+      setSelectedDocumentId(snapshot.documents[0].id);
+    }
+  }, [selectedDocumentId, snapshot.documents]);
 
   const signDocument = async (signature: SignatureRecord, form: HTMLFormElement) => {
     const formData = new FormData(form);
@@ -9467,14 +9635,14 @@ function DocumentsAndSignaturesView({
     }
   };
 
-  const handleSaveGeneratedDocument = async () => {
+  const handleSaveGeneratedDocument = async (status: DocumentStatus) => {
     if (!generatedDraft) {
       onError("Choose a CRM record before generating a document.");
       return;
     }
 
     try {
-      await createDocument(client, {
+      const savedDocument = await createDocument(client, {
         company_id: generatedDraft.company_id,
         customer_id: generatedDraft.customer_id,
         job_id: generatedDraft.job_id,
@@ -9483,16 +9651,73 @@ function DocumentsAndSignaturesView({
         change_order_id: generatedDraft.change_order_id,
         title: generatedDraft.title,
         category: generatedDraft.category,
+        status,
+        template_key: generatedDraft.template_key ?? generatedDraft.templateKey,
         file_url: generatedDraft.file_url,
         body: generatedDraft.body,
       });
+      setSelectedDocumentId(savedDocument.id);
       await onReload();
-      onNotice("Generated document saved.");
+      onNotice(status === "draft" ? "Document draft saved." : "Document marked ready.");
     } catch (currentError) {
       onError(
         currentError instanceof Error
           ? currentError.message
           : "Unable to save generated document.",
+      );
+    }
+  };
+
+  const handleUpdateDocumentStatus = async (
+    document: DocumentRecord,
+    status: DocumentStatus,
+  ) => {
+    try {
+      await updateDocument(client, document.id, { status });
+      await onReload();
+      onNotice(`Document marked ${documentStatusLabel(status)}.`);
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update document status.",
+      );
+    }
+  };
+
+  const handleUpdateSelectedDocument = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedDocument) {
+      onError("Select a document before saving changes.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const input: Partial<DocumentInput> = {
+      company_id: getFormString(formData, "company_id", selectedDocument.company_id),
+      customer_id: getOptionalRelation(formData, "customer_id"),
+      job_id: getOptionalRelation(formData, "job_id"),
+      estimate_id: getOptionalRelation(formData, "estimate_id"),
+      invoice_id: getOptionalRelation(formData, "invoice_id"),
+      change_order_id: getOptionalRelation(formData, "change_order_id"),
+      title: getFormString(formData, "title", selectedDocument.title),
+      category: getFormString(formData, "category", selectedDocument.category) as DocumentCategory,
+      status: getFormString(formData, "status", selectedDocument.status) as DocumentStatus,
+      template_key: getOptionalFormString(formData, "template_key"),
+      file_url: getOptionalFormString(formData, "file_url"),
+      body: getOptionalFormString(formData, "body"),
+    };
+
+    try {
+      await updateDocument(client, selectedDocument.id, input);
+      await onReload();
+      onNotice("Document draft updated.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update document.",
       );
     }
   };
@@ -9509,15 +9734,18 @@ function DocumentsAndSignaturesView({
       change_order_id: getOptionalRelation(formData, "change_order_id"),
       title: getFormString(formData, "title"),
       category: getFormString(formData, "category", "other") as DocumentCategory,
+      status: getFormString(formData, "status", "draft") as DocumentStatus,
+      template_key: getOptionalFormString(formData, "template_key"),
       file_url: getOptionalFormString(formData, "file_url"),
       body: getOptionalFormString(formData, "body"),
     };
 
     try {
-      await createDocument(client, input);
+      const savedDocument = await createDocument(client, input);
+      setSelectedDocumentId(savedDocument.id);
       event.currentTarget.reset();
       await onReload();
-      onNotice("Document saved.");
+      onNotice("Document draft saved.");
     } catch (currentError) {
       onError(
         currentError instanceof Error ? currentError.message : "Unable to save document.",
@@ -9526,55 +9754,199 @@ function DocumentsAndSignaturesView({
   };
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
       <section className="space-y-5">
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 p-5">
-            <h2 className="text-xl font-bold text-slate-950">Document management</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Manage estimates, scopes, invoices, contracts, change orders, and files.
-            </p>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Document Center</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Generate PDF-ready WeatherTech Roofing packets, track drafts, and manage signatures.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                <Printer className="h-4 w-4" />
+                Print center
+              </button>
+            </div>
           </div>
-          <div className="divide-y divide-slate-100">
-            {snapshot.documents.map((document) => (
-              <article key={document.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_130px_160px] lg:items-center">
-                <div>
-                  <p className="font-semibold text-slate-950">{document.title}</p>
-                  <p className="mt-1 text-sm text-slate-500">{getDocumentTargetName(snapshot, document)}</p>
-                </div>
-                <Badge label={documentCategoryLabel(document.category)} tone="blue" />
-                <span className="text-sm text-slate-600">{companyMap.get(document.company_id)?.name ?? "Company"}</span>
-              </article>
+
+          <div className="border-b border-slate-200 p-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <ProfileStat label="Documents" value={documentStats.total} />
+              <ProfileStat label="Drafts" value={documentStats.draft} />
+              <ProfileStat label="Ready" value={documentStats.ready} />
+              <ProfileStat label="Sent" value={documentStats.sent} />
+              <ProfileStat label="Signed" value={documentStats.signed} />
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  value={documentSearch}
+                  onChange={(event) => {
+                    setDocumentSearch(event.target.value);
+                    setDocumentPage(1);
+                  }}
+                  className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  placeholder="Search documents"
+                />
+              </div>
+              <select
+                value={documentStatusFilter}
+                onChange={(event) => {
+                  setDocumentStatusFilter(event.target.value as DocumentStatus | "all");
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All statuses</option>
+                {documentStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={documentCategoryFilter}
+                onChange={(event) => {
+                  setDocumentCategoryFilter(event.target.value as DocumentCategory | "all");
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All categories</option>
+                {documentCategories.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-2 xl:grid-cols-5">
+            {weatherTechDocumentTemplates.map((template) => (
+              <button
+                key={template.key}
+                type="button"
+                onClick={() => setSelectedTemplateKey(template.key)}
+                className={`rounded-lg border p-4 text-left transition hover:border-sky-300 hover:bg-sky-50 ${
+                  selectedTemplate?.key === template.key
+                    ? "border-sky-300 bg-sky-50"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <p className="font-semibold text-slate-950">{template.name}</p>
+                <p className="mt-2 text-xs font-semibold uppercase text-sky-700">
+                  {documentCategoryLabel(template.category)}
+                </p>
+                <p className="mt-3 text-sm text-slate-500">{template.description}</p>
+              </button>
             ))}
-            {!snapshot.documents.length ? <EmptyState label="No documents yet." /> : null}
           </div>
+
+          <div className="divide-y divide-slate-100">
+            {pagedDocuments.map((document) => {
+              const association = getDocumentAssociationSummary(snapshot, document);
+
+              return (
+                <button
+                  key={document.id}
+                  type="button"
+                  onClick={() => setSelectedDocumentId(document.id)}
+                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_120px_160px] xl:items-center ${
+                    selectedDocument?.id === document.id ? "bg-sky-50" : "bg-white"
+                  }`}
+                >
+                  <div>
+                    <p className="font-semibold text-slate-950">{document.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {association.customerName} - {association.property}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
+                      {association.jobTitle}
+                    </p>
+                  </div>
+                  <Badge
+                    label={documentCategoryLabel(document.category)}
+                    tone="blue"
+                  />
+                  <Badge
+                    label={documentStatusLabel(document.status)}
+                    tone={documentStatusTone(document.status)}
+                  />
+                  <span className="text-sm text-slate-600">
+                    {companyMap.get(document.company_id)?.name ?? "Company"}
+                  </span>
+                </button>
+              );
+            })}
+            {!filteredDocuments.length ? (
+              <EmptyState label="No documents match this view." />
+            ) : null}
+          </div>
+          <PaginationControls
+            page={documentPage}
+            pageCount={documentPageCount}
+            total={filteredDocuments.length}
+            onPageChange={setDocumentPage}
+          />
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-950">Digital signatures</h3>
           <div className="mt-4 grid gap-3">
             {snapshot.signatures.map((signature) => (
-              <form key={signature.id} onSubmit={(event) => {
-                event.preventDefault();
-                void signDocument(signature, event.currentTarget);
-              }} className="rounded-lg border border-slate-200 p-4">
+              <form
+                key={signature.id}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void signDocument(signature, event.currentTarget);
+                }}
+                className="rounded-lg border border-slate-200 p-4"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-semibold text-slate-950">{getSignatureTargetName(snapshot, signature)}</p>
+                    <p className="font-semibold text-slate-950">
+                      {getSignatureTargetName(snapshot, signature)}
+                    </p>
                     <p className="mt-1 text-sm text-slate-500">{signature.signer_name}</p>
                   </div>
-                  <Badge label={signatureStatusLabel(signature.status)} tone={signature.status === "signed" ? "green" : "amber"} />
+                  <Badge
+                    label={signatureStatusLabel(signature.status)}
+                    tone={signature.status === "signed" ? "green" : "amber"}
+                  />
                 </div>
                 {signature.status !== "signed" ? (
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <input name="signature_data" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Type signature" />
-                    <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Sign</button>
+                    <input
+                      name="signature_data"
+                      className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Type signature"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                    >
+                      Sign
+                    </button>
                   </div>
                 ) : (
-                  <p className="mt-3 text-sm font-semibold text-emerald-700">Signed {signature.signed_at ? formatDateTime(signature.signed_at) : ""}</p>
+                  <p className="mt-3 text-sm font-semibold text-emerald-700">
+                    Signed {signature.signed_at ? formatDateTime(signature.signed_at) : ""}
+                  </p>
                 )}
               </form>
             ))}
+            {!snapshot.signatures.length ? (
+              <EmptyState label="No signatures requested yet." />
+            ) : null}
           </div>
         </div>
       </section>
@@ -9583,16 +9955,28 @@ function DocumentsAndSignaturesView({
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-950">Generate document</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Create a customer-ready packet from existing CRM records.
+            Create a PDF-ready draft from reusable WeatherTech templates.
           </p>
           <div className="mt-4 grid gap-3">
+            <select
+              value={selectedTemplate?.key ?? ""}
+              onChange={(event) => setSelectedTemplateKey(event.target.value)}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              disabled={!weatherTechDocumentTemplates.length}
+            >
+              {weatherTechDocumentTemplates.map((template) => (
+                <option key={template.key} value={template.key}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
             <select
               value={generatedSourceId}
               onChange={(event) => setGeneratedSourceId(event.target.value)}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              disabled={!documentSourceOptions.length}
+              disabled={!templateSourceOptions.length}
             >
-              {documentSourceOptions.map((option) => (
+              {templateSourceOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -9607,7 +9991,10 @@ function DocumentsAndSignaturesView({
                         {generatedDraft.title}
                       </p>
                       <p className="mt-1 text-sm text-slate-500">
-                        {generatedDraft.sourceLabel} · {generatedDraft.summary}
+                        {generatedDraft.sourceLabel} - {generatedDraft.summary}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
+                        {generatedDraft.templateName}
                       </p>
                     </div>
                     <Badge
@@ -9616,10 +10003,14 @@ function DocumentsAndSignaturesView({
                     />
                   </div>
                 </div>
-                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
-                  {generatedDraft.body}
-                </pre>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <DocumentPdfPreview
+                  title={generatedDraft.title}
+                  category={generatedDraft.category}
+                  status="draft"
+                  templateName={generatedDraft.templateName}
+                  body={generatedDraft.body}
+                />
+                <div className="grid gap-2 sm:grid-cols-3">
                   <button
                     type="button"
                     onClick={() => window.print()}
@@ -9630,72 +10021,402 @@ function DocumentsAndSignaturesView({
                   </button>
                   <button
                     type="button"
-                    onClick={() => void handleSaveGeneratedDocument()}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                    onClick={() => void handleSaveGeneratedDocument("draft")}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     <FileText className="h-4 w-4" />
-                    Save document
+                    Save draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveGeneratedDocument("ready")}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    Mark ready
                   </button>
                 </div>
               </>
             ) : (
-              <EmptyState label="Create an estimate, invoice, scope, job, or customer to generate documents." />
+              <EmptyState label="Create a matching CRM record to generate this template." />
             )}
           </div>
         </section>
 
+        {selectedDocument ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">
+                  Selected document
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Edit draft metadata, association, status, and body.
+                </p>
+              </div>
+              <Badge
+                label={documentStatusLabel(selectedDocument.status)}
+                tone={documentStatusTone(selectedDocument.status)}
+              />
+            </div>
+
+            {selectedAssociation ? (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">
+                  {selectedAssociation.customerName}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedAssociation.property}
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <ProfileStat label="Job" value={selectedAssociation.jobTitle} />
+                  <ProfileStat label="Contact" value={selectedAssociation.phone} />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {documentStatuses.map((status) => (
+                <button
+                  key={status.value}
+                  type="button"
+                  onClick={() =>
+                    void handleUpdateDocumentStatus(selectedDocument, status.value)
+                  }
+                  disabled={selectedDocument.status === status.value}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {status.label}
+                </button>
+              ))}
+            </div>
+
+            <DocumentPdfPreview
+              title={selectedDocument.title}
+              category={selectedDocument.category}
+              status={selectedDocument.status}
+              templateName={
+                weatherTechDocumentTemplates.find(
+                  (template) => template.key === selectedDocument.template_key,
+                )?.name ?? "Custom document"
+              }
+              body={selectedDocument.body}
+            />
+
+            <form
+              key={selectedDocument.id}
+              onSubmit={handleUpdateSelectedDocument}
+              className="mt-4 grid gap-3"
+            >
+              <select
+                name="company_id"
+                defaultValue={selectedDocument.company_id}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                required
+                name="title"
+                defaultValue={selectedDocument.title}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Document title"
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select
+                  name="category"
+                  defaultValue={selectedDocument.category}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {documentCategories.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  name="status"
+                  defaultValue={selectedDocument.status}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {documentStatuses.map((status) => (
+                    <option key={status.value} value={status.value}>
+                      {status.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <select
+                name="template_key"
+                defaultValue={selectedDocument.template_key ?? ""}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Custom document</option>
+                {weatherTechDocumentTemplates.map((template) => (
+                  <option key={template.key} value={template.key}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select
+                  name="customer_id"
+                  defaultValue={selectedDocument.customer_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No customer</option>
+                  {snapshot.customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.display_name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  name="job_id"
+                  defaultValue={selectedDocument.job_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No job</option>
+                  {snapshot.jobs.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {job.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select
+                  name="estimate_id"
+                  defaultValue={selectedDocument.estimate_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No estimate</option>
+                  {snapshot.estimates.map((estimate) => (
+                    <option key={estimate.id} value={estimate.id}>
+                      {estimate.title}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  name="invoice_id"
+                  defaultValue={selectedDocument.invoice_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No invoice</option>
+                  {snapshot.invoices.map((invoice) => (
+                    <option key={invoice.id} value={invoice.id}>
+                      {invoice.invoice_number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <select
+                name="change_order_id"
+                defaultValue={selectedDocument.change_order_id ?? "none"}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No change order</option>
+                {snapshot.changeOrders.map((changeOrder) => (
+                  <option key={changeOrder.id} value={changeOrder.id}>
+                    {changeOrder.title}
+                  </option>
+                ))}
+              </select>
+              <input
+                name="file_url"
+                defaultValue={selectedDocument.file_url ?? ""}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="File URL"
+              />
+              <textarea
+                name="body"
+                defaultValue={selectedDocument.body ?? ""}
+                className="min-h-56 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6"
+                placeholder="Document body"
+              />
+              <button
+                type="submit"
+                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                Save draft
+              </button>
+            </form>
+          </section>
+        ) : null}
+
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-950">New document</h3>
-        <form onSubmit={handleCreateDocument} className="mt-4 grid gap-3">
-          <select name="company_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-            {snapshot.companies.map((company) => (
-              <option key={company.id} value={company.id}>{company.name}</option>
-            ))}
-          </select>
-          <input required name="title" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Document title" />
-          <select name="category" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-            {documentCategories.map((category) => (
-              <option key={category.value} value={category.value}>{category.label}</option>
-            ))}
-          </select>
-          <select name="customer_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-            <option value="none">No customer</option>
-            {snapshot.customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>{customer.display_name}</option>
-            ))}
-          </select>
-          <select name="job_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-            <option value="none">No job</option>
-            {snapshot.jobs.map((job) => (
-              <option key={job.id} value={job.id}>{job.title}</option>
-            ))}
-          </select>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <select name="estimate_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-              <option value="none">No estimate</option>
-              {snapshot.estimates.map((estimate) => (
-                <option key={estimate.id} value={estimate.id}>{estimate.title}</option>
+          <h3 className="text-lg font-bold text-slate-950">New custom draft</h3>
+          <form onSubmit={handleCreateDocument} className="mt-4 grid gap-3">
+            <select
+              name="company_id"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              {snapshot.companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
               ))}
             </select>
-            <select name="invoice_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-              <option value="none">No invoice</option>
-              {snapshot.invoices.map((invoice) => (
-                <option key={invoice.id} value={invoice.id}>{invoice.invoice_number}</option>
+            <input
+              required
+              name="title"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Document title"
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select
+                name="category"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentCategories.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="status"
+                defaultValue="draft"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <select
+              name="template_key"
+              defaultValue=""
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">Custom document</option>
+              {weatherTechDocumentTemplates.map((template) => (
+                <option key={template.key} value={template.key}>
+                  {template.name}
+                </option>
               ))}
             </select>
-          </div>
-          <select name="change_order_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-            <option value="none">No change order</option>
-            {snapshot.changeOrders.map((changeOrder) => (
-              <option key={changeOrder.id} value={changeOrder.id}>{changeOrder.title}</option>
-            ))}
-          </select>
-          <input name="file_url" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="File URL" />
-          <textarea name="body" className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Document body or notes" />
-          <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save document</button>
-        </form>
+            <select
+              name="customer_id"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="none">No customer</option>
+              {snapshot.customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.display_name}
+                </option>
+              ))}
+            </select>
+            <select
+              name="job_id"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="none">No job</option>
+              {snapshot.jobs.map((job) => (
+                <option key={job.id} value={job.id}>
+                  {job.title}
+                </option>
+              ))}
+            </select>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select
+                name="estimate_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No estimate</option>
+                {snapshot.estimates.map((estimate) => (
+                  <option key={estimate.id} value={estimate.id}>
+                    {estimate.title}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="invoice_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No invoice</option>
+                {snapshot.invoices.map((invoice) => (
+                  <option key={invoice.id} value={invoice.id}>
+                    {invoice.invoice_number}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <select
+              name="change_order_id"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="none">No change order</option>
+              {snapshot.changeOrders.map((changeOrder) => (
+                <option key={changeOrder.id} value={changeOrder.id}>
+                  {changeOrder.title}
+                </option>
+              ))}
+            </select>
+            <input
+              name="file_url"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="File URL"
+            />
+            <textarea
+              name="body"
+              className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Document body or notes"
+            />
+            <button
+              type="submit"
+              className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+            >
+              Save draft
+            </button>
+          </form>
         </section>
       </aside>
+    </div>
+  );
+}
+
+function DocumentPdfPreview({
+  title,
+  category,
+  status,
+  templateName,
+  body,
+}: {
+  title: string;
+  category: DocumentCategory;
+  status: DocumentStatus;
+  templateName: string;
+  body: string | null | undefined;
+}) {
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-100 p-3">
+      <div className="mx-auto max-h-[560px] overflow-auto rounded-md bg-white p-6 shadow-sm">
+        <div className="border-b border-slate-200 pb-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase text-sky-700">
+                WeatherTech Roofing
+              </p>
+              <h4 className="mt-1 text-xl font-bold text-slate-950">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">{templateName}</p>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <Badge label={documentCategoryLabel(category)} tone="blue" />
+              <Badge label={documentStatusLabel(status)} tone={documentStatusTone(status)} />
+            </div>
+          </div>
+        </div>
+        <pre className="mt-5 whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700">
+          {body || "No document body yet."}
+        </pre>
+      </div>
     </div>
   );
 }

@@ -1182,11 +1182,60 @@ export async function updateSignature(
 }
 
 export async function createDocument(client: CrmClient, input: DocumentInput) {
-  
+  const documentInput = {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    job_id: input.job_id ?? null,
+    estimate_id: input.estimate_id ?? null,
+    invoice_id: input.invoice_id ?? null,
+    change_order_id: input.change_order_id ?? null,
+    title: input.title,
+    category: input.category,
+    status: input.status ?? "draft",
+    template_key: input.template_key ?? null,
+    file_url: input.file_url ?? null,
+    body: input.body ?? null,
+  };
 
   const { data, error } = await client
     .from("documents")
-    .insert(input)
+    .insert(documentInput)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateDocument(
+  client: CrmClient,
+  id: string,
+  input: Partial<DocumentInput>,
+) {
+  const documentInput = {
+    ...(input.company_id !== undefined ? { company_id: input.company_id } : {}),
+    ...(input.customer_id !== undefined ? { customer_id: input.customer_id } : {}),
+    ...(input.job_id !== undefined ? { job_id: input.job_id } : {}),
+    ...(input.estimate_id !== undefined ? { estimate_id: input.estimate_id } : {}),
+    ...(input.invoice_id !== undefined ? { invoice_id: input.invoice_id } : {}),
+    ...(input.change_order_id !== undefined
+      ? { change_order_id: input.change_order_id }
+      : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.category !== undefined ? { category: input.category } : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
+    ...(input.template_key !== undefined ? { template_key: input.template_key } : {}),
+    ...(input.file_url !== undefined ? { file_url: input.file_url } : {}),
+    ...(input.body !== undefined ? { body: input.body } : {}),
+  };
+
+  const { data, error } = await client
+    .from("documents")
+    .update(documentInput)
+    .eq("id", id)
     .select("*")
     .single();
 

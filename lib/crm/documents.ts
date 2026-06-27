@@ -16,18 +16,83 @@ type DocumentSourceType =
   | "scope"
   | "change_order"
   | "job"
+  | "completion_certificate"
+  | "warranty"
   | "customer";
 
 export type DocumentSourceOption = {
   value: string;
   label: string;
   type: DocumentSourceType;
+  category: DocumentCategory;
+  templateKey: string;
 };
 
 export type GeneratedDocumentDraft = DocumentInput & {
   sourceLabel: string;
   summary: string;
+  templateKey: string;
+  templateName: string;
 };
+
+export type WeatherTechDocumentTemplate = {
+  key: string;
+  name: string;
+  category: DocumentCategory;
+  sourceType: DocumentSourceType;
+  description: string;
+  aiPrompt: string;
+};
+
+export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
+  {
+    key: "weathertech_estimate",
+    name: "WeatherTech Roofing Estimate",
+    category: "estimate",
+    sourceType: "estimate",
+    description: "Customer-facing proposal with line items, totals, exclusions, and approval language.",
+    aiPrompt: "Create a professional roofing estimate document using the selected estimate, property details, line items, exclusions, warranty notes, tax, discounts, and profit-aware totals.",
+  },
+  {
+    key: "weathertech_scope_of_work",
+    name: "WeatherTech Scope of Work",
+    category: "scope",
+    sourceType: "scope",
+    description: "Detailed work plan for roofing, repairs, painting, underlayment, and custom production scopes.",
+    aiPrompt: "Create a detailed WeatherTech scope of work from the selected scope record with project sequence, customer expectations, cleanup, exclusions, safety notes, and warranty boundaries.",
+  },
+  {
+    key: "weathertech_invoice",
+    name: "WeatherTech Invoice",
+    category: "invoice",
+    sourceType: "invoice",
+    description: "Payment-ready invoice packet with charges, payments, balance, and remittance notes.",
+    aiPrompt: "Create a clean invoice packet with customer billing details, invoice line items, balance due, payment terms, and service summary.",
+  },
+  {
+    key: "weathertech_completion_certificate",
+    name: "WeatherTech Completion Certificate",
+    category: "completion_certificate",
+    sourceType: "completion_certificate",
+    description: "Closeout certificate confirming job completion, walkthrough, photos, and open balances.",
+    aiPrompt: "Create a completion certificate for the selected job with property details, completion date, final walkthrough notes, photo/document references, and customer acknowledgement language.",
+  },
+  {
+    key: "weathertech_workmanship_warranty",
+    name: "WeatherTech Workmanship Warranty",
+    category: "warranty",
+    sourceType: "warranty",
+    description: "Roofing warranty packet with workmanship terms, exclusions, registration, and maintenance guidance.",
+    aiPrompt: "Create a workmanship warranty document for the selected roofing job with coverage terms, exclusions, claim process, maintenance requirements, and transferable limitations.",
+  },
+];
+
+function templateByKey(key: string) {
+  return (
+    weatherTechDocumentTemplates.find((template) => template.key === key) ??
+    weatherTechDocumentTemplates[0]
+  );
+}
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -194,6 +259,8 @@ function buildEstimateDraft(
     change_order_id: null,
     title: `${estimate.title} - Estimate Packet`,
     category: "estimate",
+    status: "draft",
+    template_key: "weathertech_estimate",
     file_url: null,
     body: packet({
       title: `${estimate.title} Estimate`,
@@ -241,6 +308,8 @@ function buildEstimateDraft(
     }),
     sourceLabel: `Estimate - ${estimate.title}`,
     summary: `${lineItems.length} line items, ${formatMoney(estimate.total)} total`,
+    templateKey: "weathertech_estimate",
+    templateName: templateByKey("weathertech_estimate").name,
   };
 }
 
@@ -263,6 +332,8 @@ function buildInvoiceDraft(
     change_order_id: null,
     title: `${invoice.invoice_number} - Invoice Packet`,
     category: "invoice",
+    status: "draft",
+    template_key: "weathertech_invoice",
     file_url: null,
     body: packet({
       title: `${invoice.invoice_number} Invoice`,
@@ -308,6 +379,8 @@ function buildInvoiceDraft(
     }),
     sourceLabel: `Invoice - ${invoice.invoice_number}`,
     summary: `${lineItems.length} line items, ${formatMoney(invoice.balance_due)} balance due`,
+    templateKey: "weathertech_invoice",
+    templateName: templateByKey("weathertech_invoice").name,
   };
 }
 
@@ -326,6 +399,8 @@ function buildScopeDraft(
     change_order_id: null,
     title: `${scope.title} - Scope Packet`,
     category: "scope",
+    status: "draft",
+    template_key: "weathertech_scope_of_work",
     file_url: null,
     body: packet({
       title: scope.title,
@@ -351,6 +426,8 @@ function buildScopeDraft(
     }),
     sourceLabel: `Scope - ${scope.title}`,
     summary: `${scope.category.replace(/_/g, " ")} scope`,
+    templateKey: "weathertech_scope_of_work",
+    templateName: templateByKey("weathertech_scope_of_work").name,
   };
 }
 
@@ -369,6 +446,8 @@ function buildChangeOrderDraft(
     change_order_id: changeOrder.id,
     title: `${changeOrder.title} - Change Order Packet`,
     category: "change_order",
+    status: "draft",
+    template_key: "weathertech_change_order",
     file_url: null,
     body: packet({
       title: changeOrder.title,
@@ -397,6 +476,8 @@ function buildChangeOrderDraft(
     }),
     sourceLabel: `Change order - ${changeOrder.title}`,
     summary: `${formatMoney(changeOrder.total)} ${changeOrder.status}`,
+    templateKey: "weathertech_change_order",
+    templateName: "WeatherTech Change Order",
   };
 }
 
@@ -423,6 +504,8 @@ function buildJobDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDocument
     change_order_id: null,
     title: `${job.title} - Production Packet`,
     category: "contract",
+    status: "draft",
+    template_key: "weathertech_job_packet",
     file_url: null,
     body: packet({
       title: `${job.title} Production Packet`,
@@ -484,6 +567,146 @@ function buildJobDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDocument
     }),
     sourceLabel: `Job - ${job.title}`,
     summary: `${scheduleEvents.length} schedule events, ${materialOrders.length} material orders`,
+    templateKey: "weathertech_job_packet",
+    templateName: "WeatherTech Job Packet",
+  };
+}
+
+function buildCompletionCertificateDraft(
+  snapshot: CrmSnapshot,
+  job: JobRecord,
+): GeneratedDocumentDraft {
+  const company = companyName(snapshot, job.company_id);
+  const customer = customerById(snapshot, job.customer_id);
+  const invoices = snapshot.invoices.filter((invoice) => invoice.job_id === job.id);
+  const photos = snapshot.jobPhotos.filter((photo) => photo.job_id === job.id);
+  const documents = snapshot.documents.filter((document) => document.job_id === job.id);
+  const inspections = snapshot.inspections.filter(
+    (inspection) => inspection.job_id === job.id,
+  );
+  const finalInspection = inspections.find(
+    (inspection) => inspection.status === "passed",
+  );
+
+  return {
+    company_id: job.company_id,
+    customer_id: job.customer_id,
+    job_id: job.id,
+    estimate_id: job.estimate_id,
+    invoice_id: invoices[0]?.id ?? null,
+    change_order_id: null,
+    title: `${job.title} - Completion Certificate`,
+    category: "completion_certificate",
+    status: "draft",
+    template_key: "weathertech_completion_certificate",
+    file_url: null,
+    body: packet({
+      title: `${job.title} Completion Certificate`,
+      company,
+      sections: [
+        {
+          title: "Certificate Summary",
+          body: keyValueRows([
+            ["Customer", jobLabel(snapshot, job)],
+            ["Property", customerAddress(customer) || job.property_address],
+            ["Service", job.service_type],
+            ["Job status", job.status],
+            ["Completion date", formatDate(job.end_date ?? new Date().toISOString())],
+            ["Project manager", job.project_manager],
+            ["Crew", job.crew_name],
+          ]),
+        },
+        {
+          title: "Completion Confirmation",
+          body: "WeatherTech Roofing confirms that the contracted work described in the associated scope and job packet has been completed at the property listed above, subject to any open punch-list items or approved change orders documented in WeatherTech OS.",
+        },
+        {
+          title: "Quality Review",
+          body: keyValueRows([
+            ["Final inspection", finalInspection ? finalInspection.title : "Not recorded"],
+            ["Inspection status", finalInspection?.status],
+            ["Photo records", photos.length],
+            ["Linked documents", documents.length],
+            ["Open invoice balance", formatMoney(invoices.reduce((total, invoice) => total + invoice.balance_due, 0))],
+          ]),
+        },
+        {
+          title: "Customer Acknowledgement",
+          body: "Customer acknowledges receipt of completion documentation and understands that warranty coverage, maintenance requirements, and exclusions are governed by the signed contract and warranty packet.",
+        },
+      ],
+    }),
+    sourceLabel: `Job - ${job.title}`,
+    summary: `${photos.length} photos, ${documents.length} linked documents`,
+    templateKey: "weathertech_completion_certificate",
+    templateName: templateByKey("weathertech_completion_certificate").name,
+  };
+}
+
+function buildWarrantyDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDocumentDraft {
+  const company = companyName(snapshot, job.company_id);
+  const customer = customerById(snapshot, job.customer_id);
+  const estimate = job.estimate_id
+    ? snapshot.estimates.find((item) => item.id === job.estimate_id) ?? null
+    : null;
+  const scope = job.scope_id
+    ? snapshot.scopes.find((item) => item.id === job.scope_id) ?? null
+    : null;
+
+  return {
+    company_id: job.company_id,
+    customer_id: job.customer_id,
+    job_id: job.id,
+    estimate_id: job.estimate_id,
+    invoice_id: null,
+    change_order_id: null,
+    title: `${job.title} - Workmanship Warranty`,
+    category: "warranty",
+    status: "draft",
+    template_key: "weathertech_workmanship_warranty",
+    file_url: null,
+    body: packet({
+      title: `${job.title} Workmanship Warranty`,
+      company,
+      sections: [
+        {
+          title: "Warranty Registration",
+          body: keyValueRows([
+            ["Customer", jobLabel(snapshot, job)],
+            ["Property", customerAddress(customer) || job.property_address],
+            ["Service", job.service_type],
+            ["Completion date", formatDate(job.end_date ?? new Date().toISOString())],
+            ["Estimate", estimate?.title],
+            ["Scope", scope?.title],
+          ]),
+        },
+        {
+          title: "Coverage",
+          body: "WeatherTech Roofing workmanship warranty covers defects in WeatherTech-installed workmanship for the warranty period stated in the signed agreement. Manufacturer materials remain subject to manufacturer terms and registration requirements.",
+        },
+        {
+          title: "Exclusions",
+          body: list([
+            "Damage from storms, wind, hail, impact, structural movement, trades, pests, or customer modifications.",
+            "Leaks or failures caused by pre-existing decking, framing, ventilation, drainage, or hidden conditions not included in the approved scope.",
+            "Maintenance items including debris removal, sealant aging, clogged drains, or neglect of recommended inspections.",
+            "Unapproved repairs, penetrations, coatings, attachments, or alterations performed after completion.",
+          ]),
+        },
+        {
+          title: "Claim Process",
+          body: "Customer must notify WeatherTech Roofing promptly, provide photos when available, and allow reasonable access for inspection. Approved workmanship claims will be scheduled according to urgency, weather, material availability, and production capacity.",
+        },
+        {
+          title: "Maintenance Guidance",
+          body: "Keep roof surfaces, gutters, valleys, drains, and penetrations clear of debris. Schedule inspections after major weather events and before monsoon or storm seasons when applicable.",
+        },
+      ],
+    }),
+    sourceLabel: `Job - ${job.title}`,
+    summary: `${job.service_type.replace(/_/g, " ")} warranty packet`,
+    templateKey: "weathertech_workmanship_warranty",
+    templateName: templateByKey("weathertech_workmanship_warranty").name,
   };
 }
 
@@ -510,6 +733,8 @@ function buildCustomerDraft(
     change_order_id: null,
     title: `${customer.display_name} - Customer Packet`,
     category: "other",
+    status: "draft",
+    template_key: "weathertech_customer_packet",
     file_url: null,
     body: packet({
       title: `${customer.display_name} Customer Packet`,
@@ -566,6 +791,8 @@ function buildCustomerDraft(
     }),
     sourceLabel: `Customer - ${customer.display_name}`,
     summary: `${jobs.length} jobs, ${estimates.length} estimates, ${invoices.length} invoices`,
+    templateKey: "weathertech_customer_packet",
+    templateName: "WeatherTech Customer Packet",
   };
 }
 
@@ -575,31 +802,57 @@ export function buildDocumentSourceOptions(snapshot: CrmSnapshot): DocumentSourc
       value: `estimate:${estimate.id}`,
       label: `Estimate - ${estimate.title}`,
       type: "estimate" as const,
+      category: "estimate" as const,
+      templateKey: "weathertech_estimate",
     })),
     ...snapshot.invoices.map((invoice) => ({
       value: `invoice:${invoice.id}`,
       label: `Invoice - ${invoice.invoice_number}`,
       type: "invoice" as const,
+      category: "invoice" as const,
+      templateKey: "weathertech_invoice",
     })),
     ...snapshot.scopes.map((scope) => ({
       value: `scope:${scope.id}`,
       label: `Scope - ${scope.title}`,
       type: "scope" as const,
+      category: "scope" as const,
+      templateKey: "weathertech_scope_of_work",
+    })),
+    ...snapshot.jobs.map((job) => ({
+      value: `completion_certificate:${job.id}`,
+      label: `Completion certificate - ${job.title}`,
+      type: "completion_certificate" as const,
+      category: "completion_certificate" as const,
+      templateKey: "weathertech_completion_certificate",
+    })),
+    ...snapshot.jobs.map((job) => ({
+      value: `warranty:${job.id}`,
+      label: `Warranty - ${job.title}`,
+      type: "warranty" as const,
+      category: "warranty" as const,
+      templateKey: "weathertech_workmanship_warranty",
     })),
     ...snapshot.changeOrders.map((changeOrder) => ({
       value: `change_order:${changeOrder.id}`,
       label: `Change order - ${changeOrder.title}`,
       type: "change_order" as const,
+      category: "change_order" as const,
+      templateKey: "weathertech_change_order",
     })),
     ...snapshot.jobs.map((job) => ({
       value: `job:${job.id}`,
       label: `Job packet - ${job.title}`,
       type: "job" as const,
+      category: "contract" as const,
+      templateKey: "weathertech_job_packet",
     })),
     ...snapshot.customers.map((customer) => ({
       value: `customer:${customer.id}`,
       label: `Customer packet - ${customer.display_name}`,
       type: "customer" as const,
+      category: "other" as const,
+      templateKey: "weathertech_customer_packet",
     })),
   ];
 }
@@ -628,6 +881,16 @@ export function buildGeneratedDocumentDraft(
   if (type === "change_order") {
     const changeOrder = snapshot.changeOrders.find((item) => item.id === id);
     return changeOrder ? buildChangeOrderDraft(snapshot, changeOrder) : null;
+  }
+
+  if (type === "completion_certificate") {
+    const job = snapshot.jobs.find((item) => item.id === id);
+    return job ? buildCompletionCertificateDraft(snapshot, job) : null;
+  }
+
+  if (type === "warranty") {
+    const job = snapshot.jobs.find((item) => item.id === id);
+    return job ? buildWarrantyDraft(snapshot, job) : null;
   }
 
   if (type === "job") {
