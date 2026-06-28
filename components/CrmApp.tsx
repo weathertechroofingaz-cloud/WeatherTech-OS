@@ -104,6 +104,10 @@ import {
 } from "../lib/crm/companyScope";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
+  getEstimateTemplatesForTrade,
+  type EstimateTemplate,
+} from "../lib/crm/estimateTemplates";
+import {
   buildGoogleCalendarEventPayload,
   buildGmailSendPreview,
   buildRouteCandidates,
@@ -4349,6 +4353,16 @@ function EstimatesView({
   const selectedEstimateScope = selectedEstimate
     ? snapshot.scopes.find((scope) => scope.estimate_id === selectedEstimate.id) ?? null
     : null;
+  const selectedEstimateDocuments = selectedEstimate
+    ? snapshot.documents.filter((document) => document.estimate_id === selectedEstimate.id)
+    : [];
+  const selectedEstimateDocumentIds = new Set(
+    selectedEstimateDocuments.map((document) => document.id),
+  );
+  const selectedEstimateSignatures = snapshot.signatures.filter(
+    (signature) =>
+      signature.document_id !== null && selectedEstimateDocumentIds.has(signature.document_id),
+  );
 
   const handleSaveEstimate = async (
     input: EstimateInput,
@@ -4437,6 +4451,130 @@ function EstimatesView({
         currentError instanceof Error
           ? currentError.message
           : "Unable to save estimate packet.",
+      );
+    }
+  };
+
+  const handleGenerateScopeFromEstimate = async (estimate: EstimateRecord) => {
+    if (selectedEstimateScope) {
+      onNotice("This estimate already has a linked scope of work.");
+      return;
+    }
+
+    const template = selectScopeTemplateForEstimate(snapshot, estimate);
+    const lineItems = getEstimateLineItems(snapshot, estimate.id);
+    const category = template?.category ?? getEstimateScopeCategory(estimate);
+    const company = companyMap.get(estimate.company_id);
+    const scopeBody = buildScopeBodyFromEstimate(snapshot, estimate, lineItems, template);
+
+    try {
+      const savedScope = await createScope(client, {
+        company_id: estimate.company_id,
+        customer_id: estimate.customer_id,
+        lead_id: estimate.lead_id,
+        estimate_id: estimate.id,
+        template_id: template?.id ?? null,
+        title: `${estimate.title} Scope of Work`,
+        category,
+        status: "ready",
+        scope_body: scopeBody,
+        notes: template
+          ? `Automatically generated from ${template.title} for estimate ${estimate.title}.`
+          : `Automatically generated from estimate ${estimate.title}.`,
+      });
+
+      await createDocument(client, {
+        company_id: estimate.company_id,
+        customer_id: estimate.customer_id,
+        estimate_id: estimate.id,
+        title: `${savedScope.title} - PDF Ready`,
+        category: "scope",
+        status: "draft",
+        template_key:
+          estimate.service_type === "painting" || isPaintingCompany(company)
+            ? "ihc_scope_of_work"
+            : "weathertech_scope_of_work",
+        body: `# ${savedScope.title}\n\nPrepared by ${
+          company?.name ?? "WeatherTech OS"
+        }\n\n${savedScope.scope_body}`,
+      });
+
+      await onReload();
+      onNotice("Scope of Work generated and saved to documents.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to generate scope of work.",
+      );
+    }
+  };
+
+  const handleRequestEstimateSignature = async (estimate: EstimateRecord) => {
+    const existingDocument =
+      snapshot.documents.find(
+        (document) =>
+          document.estimate_id === estimate.id && document.category === "estimate",
+      ) ?? null;
+    const document =
+      existingDocument ??
+      (() => {
+        const documentDraft = buildGeneratedDocumentDraft(
+          snapshot,
+          `estimate:${estimate.id}`,
+        );
+        return documentDraft;
+      })();
+
+    if (!document) {
+      onError("Generate or save the estimate packet before requesting a signature.");
+      return;
+    }
+
+    try {
+      const savedDocument =
+        "id" in document ? document : await createDocument(client, document);
+      const existingSignature = snapshot.signatures.find(
+        (signature) =>
+          signature.document_id === savedDocument.id && signature.status !== "declined",
+      );
+
+      if (existingSignature) {
+        onNotice("This estimate packet already has an active signature request.");
+        return;
+      }
+
+      const association = getAssociationSummary(snapshot, {
+        customerId: estimate.customer_id,
+        leadId: estimate.lead_id,
+        estimateId: estimate.id,
+      });
+      const customer = estimate.customer_id
+        ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+        : null;
+      const lead = estimate.lead_id
+        ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+        : null;
+
+      await createSignature(client, {
+        company_id: estimate.company_id,
+        customer_id: estimate.customer_id,
+        document_id: savedDocument.id,
+        signer_name:
+          association.name && association.name !== "Unassigned"
+            ? association.name
+            : "Customer signer",
+        signer_email: customer?.email ?? lead?.email ?? null,
+        status: "pending",
+      });
+
+      await onReload();
+      onNotice("Customer signature requested for the estimate packet.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to request customer signature.",
       );
     }
   };
@@ -4559,11 +4697,12 @@ function EstimatesView({
           estimate={selectedEstimate}
           linkedJob={selectedEstimateJob}
           linkedScope={selectedEstimateScope}
-          documents={snapshot.documents.filter(
-            (document) => document.estimate_id === selectedEstimate?.id,
-          )}
+          documents={selectedEstimateDocuments}
+          signatures={selectedEstimateSignatures}
           onCreateJob={handleCreateJobFromEstimate}
           onSaveDocument={handleSaveEstimateDocument}
+          onGenerateScope={handleGenerateScopeFromEstimate}
+          onRequestSignature={handleRequestEstimateSignature}
         />
       </aside>
     </div>
@@ -4628,6 +4767,132 @@ function buildDefaultEstimateLineItems(
   ];
 }
 
+function cloneEstimateTemplateLineItems(template: EstimateTemplate) {
+  return template.lineItems.map((item, index) => ({
+    ...item,
+    description: item.description ?? "",
+    unit: item.unit ?? "each",
+    markup_rate: item.markup_rate ?? 0,
+    taxable: item.taxable ?? true,
+    sort_order: index,
+  }));
+}
+
+function getTemplateDefaultTitle(template: EstimateTemplate) {
+  return `${template.name} Proposal`;
+}
+
+function getEstimateScopeCategory(estimate: EstimateRecord): ScopeCategory {
+  if (estimate.service_type === "painting") {
+    if (estimate.painting_area_type === "interior") {
+      return "interior_painting";
+    }
+
+    if (estimate.painting_area_type === "cabinet") {
+      return "cabinet_refinishing";
+    }
+
+    return "exterior_painting";
+  }
+
+  if (/repair/i.test(estimate.title)) {
+    return "roof_repairs";
+  }
+
+  if (/tile|underlayment/i.test(estimate.title)) {
+    return "tile_underlayment";
+  }
+
+  return "roofing";
+}
+
+function selectScopeTemplateForEstimate(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+) {
+  const category = getEstimateScopeCategory(estimate);
+
+  return (
+    snapshot.scopeTemplates.find(
+      (template) =>
+        template.category === category && template.company_id === estimate.company_id,
+    ) ??
+    snapshot.scopeTemplates.find(
+      (template) => template.category === category && template.company_id === null,
+    ) ??
+    snapshot.scopeTemplates.find((template) => template.company_id === estimate.company_id) ??
+    null
+  );
+}
+
+function buildScopeBodyFromEstimate(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+  lineItems: EstimateLineItemRecord[],
+  template: ScopeTemplateRecord | null,
+) {
+  const customer = estimate.customer_id
+    ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+    : null;
+  const lead = estimate.lead_id
+    ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+    : null;
+  const propertyAddress =
+    customer?.property_address ?? lead?.property_address ?? "Property address to confirm";
+  const company = snapshot.companies.find((item) => item.id === estimate.company_id);
+  const templateBody =
+    template?.template_body ??
+    "1. Confirm customer expectations, access, and approved proposal details.\n2. Protect property and prepare work areas before production.\n3. Complete approved work according to company standards and documented scope.\n4. Clean work areas, capture final photos, and complete customer walkthrough.";
+  const itemList = lineItems.length
+    ? lineItems
+        .map(
+          (item) =>
+            `- ${item.name}: ${item.quantity} ${item.unit} at ${formatMoney(item.unit_cost)} (${formatMoney(item.total)})`,
+        )
+        .join("\n")
+    : "- Estimate line items to be confirmed.";
+  const paintingSpecs =
+    estimate.service_type === "painting"
+      ? [
+          "",
+          "Painting specifications:",
+          `- Product: ${estimate.paint_product_line ?? estimate.paint_brand}`,
+          `- Finish / sheen: ${paintFinishLabel(estimate.paint_finish)}`,
+          `- Surface prep: ${surfacePrepLabel(estimate.surface_prep_level)}`,
+          `- Color status: ${colorSelectionStatusLabel(estimate.color_selection_status)}`,
+          `- Body / wall color: ${estimate.paint_color_body ?? "Not set"}`,
+          `- Trim color: ${estimate.paint_color_trim ?? "Not set"}`,
+          `- Accent / cabinet color: ${estimate.paint_color_accent ?? "Not set"}`,
+          `- Coats / primer: ${estimate.coats} coats / ${
+            estimate.primer_required ? "primer required" : "primer not required"
+          }`,
+        ].join("\n")
+      : "";
+
+  return [
+    templateBody,
+    "",
+    "Project-specific details:",
+    `- Company: ${company?.name ?? "WeatherTech OS"}`,
+    `- Estimate: ${estimate.title}`,
+    `- Customer: ${getEstimateTargetName(snapshot, estimate)}`,
+    `- Property: ${propertyAddress}`,
+    `- Approved total: ${formatMoney(estimate.total)}`,
+    `- Service type: ${serviceLabel(estimate.service_type)}`,
+    paintingSpecs,
+    "",
+    "Included estimate line items:",
+    itemList,
+    "",
+    "Customer expectations:",
+    "- Scope is based on the approved estimate, selected materials, approved colors where applicable, and documented site conditions.",
+    "- Changes to hidden conditions, material selections, colors, or access requirements require written approval before production.",
+    "- Final walkthrough, cleanup, and document/photos closeout are included in the production handoff.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function EstimateEditor({
   estimate,
   lineItems,
@@ -4663,10 +4928,36 @@ function EstimateEditor({
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId);
   const [selectedServiceType, setSelectedServiceType] =
     useState<ServiceType>(initialServiceType);
+  const [draftTitle, setDraftTitle] = useState(estimate?.title ?? "");
+  const [draftStatus, setDraftStatus] = useState<EstimateStatus>(
+    estimate?.status ?? "draft",
+  );
+  const [draftCustomerId, setDraftCustomerId] = useState(
+    estimate?.customer_id ?? "none",
+  );
+  const [draftLeadId, setDraftLeadId] = useState(estimate?.lead_id ?? "none");
+  const [draftIssueDate, setDraftIssueDate] = useState(
+    estimate?.issue_date ?? todayIsoDate(),
+  );
+  const [draftExpirationDate, setDraftExpirationDate] = useState(
+    estimate?.expiration_date ?? addDaysIsoDate(30),
+  );
+  const [draftNotes, setDraftNotes] = useState(estimate?.notes ?? "");
   const [selectedColorStatus, setSelectedColorStatus] =
     useState<ColorSelectionStatus>(
       estimate?.color_selection_status ?? "not_started",
     );
+  const [paintingFields, setPaintingFields] = useState({
+    painting_area_type: estimate?.painting_area_type ?? "exterior",
+    paint_product_line: estimate?.paint_product_line ?? dunnEdwardsProductLines[0],
+    paint_finish: estimate?.paint_finish ?? "satin",
+    paint_color_body: estimate?.paint_color_body ?? "",
+    paint_color_trim: estimate?.paint_color_trim ?? "",
+    paint_color_accent: estimate?.paint_color_accent ?? "",
+    surface_prep_level: estimate?.surface_prep_level ?? "standard",
+    coats: estimate?.coats ?? 2,
+    primer_required: estimate?.primer_required ?? false,
+  });
   const [estimateControls, setEstimateControls] = useState({
     tax_rate: estimate?.tax_rate ?? 8.6,
     discount_type: estimate?.discount_type ?? "fixed",
@@ -4679,6 +4970,29 @@ function EstimateEditor({
     snapshot.companies.find((company) => company.id === selectedCompanyId) ?? null;
   const showPaintingWorkflow =
     selectedServiceType === "painting" || isPaintingCompany(selectedCompany);
+  const availableEstimateTemplates = useMemo(
+    () =>
+      getEstimateTemplatesForTrade(
+        selectedCompany?.workflow_profile ?? selectedCompany?.trade,
+      ),
+    [selectedCompany?.trade, selectedCompany?.workflow_profile],
+  );
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState(
+    availableEstimateTemplates[0]?.key ?? "",
+  );
+  const selectedTemplate =
+    availableEstimateTemplates.find((template) => template.key === selectedTemplateKey) ??
+    availableEstimateTemplates[0] ??
+    null;
+
+  useEffect(() => {
+    if (
+      availableEstimateTemplates.length &&
+      !availableEstimateTemplates.some((template) => template.key === selectedTemplateKey)
+    ) {
+      setSelectedTemplateKey(availableEstimateTemplates[0].key);
+    }
+  }, [availableEstimateTemplates, selectedTemplateKey]);
 
   const updateLineItem = (
     index: number,
@@ -4718,9 +5032,45 @@ function EstimateEditor({
     ]);
   };
 
+  const applyEstimateTemplate = (template: EstimateTemplate) => {
+    setSelectedServiceType(template.serviceType);
+    setDraftTitle((current) =>
+      estimate && current.trim() ? current : getTemplateDefaultTitle(template),
+    );
+    setDraftNotes(template.notes);
+    setDraftLineItems(cloneEstimateTemplateLineItems(template));
+    setEstimateControls({
+      tax_rate: template.taxRate,
+      discount_type: template.discountType,
+      discount_value: template.discountValue,
+      profit_margin_rate: template.profitMarginRate,
+    });
+
+    if (template.painting) {
+      setSelectedColorStatus("not_started");
+      setPaintingFields((current) => ({
+        ...current,
+        painting_area_type: template.painting?.areaType ?? current.painting_area_type,
+        paint_product_line: template.painting?.productLine ?? current.paint_product_line,
+        paint_finish: template.painting?.finish ?? current.paint_finish,
+        surface_prep_level:
+          template.painting?.surfacePrepLevel ?? current.surface_prep_level,
+        coats: template.painting?.coats ?? current.coats,
+        primer_required: template.painting?.primerRequired ?? current.primer_required,
+      }));
+    }
+  };
+
   const handleCompanyChange = (companyId: string) => {
     setSelectedCompanyId(companyId);
     const company = snapshot.companies.find((item) => item.id === companyId);
+    const nextTemplates = getEstimateTemplatesForTrade(
+      company?.workflow_profile ?? company?.trade,
+    );
+
+    if (nextTemplates[0]) {
+      setSelectedTemplateKey(nextTemplates[0].key);
+    }
 
     if (isPaintingCompany(company)) {
       setSelectedServiceType("painting");
@@ -4738,7 +5088,6 @@ function EstimateEditor({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
     const cleanLineItems = draftLineItems
       .filter((item) => item.name.trim())
       .map((item, index) => ({ ...item, sort_order: index }));
@@ -4747,62 +5096,48 @@ function EstimateEditor({
       setIsSaving(true);
       await onSave(
         {
-          company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-          customer_id: getOptionalRelation(formData, "customer_id"),
-          lead_id: getOptionalRelation(formData, "lead_id"),
-          title: getFormString(formData, "title", "New estimate"),
-          status: getFormString(formData, "status", "draft") as EstimateStatus,
-          service_type: getFormString(
-            formData,
-            "service_type",
-            selectedServiceType,
-          ) as ServiceType,
-          issue_date: getFormString(formData, "issue_date", todayIsoDate()),
-          expiration_date: getOptionalFormString(formData, "expiration_date"),
+          company_id: selectedCompanyId || snapshot.companies[0]?.id || "",
+          customer_id: draftCustomerId === "none" ? null : draftCustomerId,
+          lead_id: draftLeadId === "none" ? null : draftLeadId,
+          title: draftTitle.trim() || "New estimate",
+          status: draftStatus,
+          service_type: selectedServiceType,
+          issue_date: draftIssueDate || todayIsoDate(),
+          expiration_date: draftExpirationDate || null,
           tax_rate: estimateControls.tax_rate,
           discount_type: estimateControls.discount_type,
           discount_value: estimateControls.discount_value,
           profit_margin_rate: estimateControls.profit_margin_rate,
-          notes: getOptionalFormString(formData, "notes"),
+          notes: draftNotes.trim() || null,
           painting_area_type: showPaintingWorkflow
-            ? (getOptionalFormString(
-                formData,
-                "painting_area_type",
-              ) as PaintingAreaType | null)
+            ? (paintingFields.painting_area_type as PaintingAreaType)
             : null,
-          paint_brand: showPaintingWorkflow
-            ? getFormString(formData, "paint_brand", "Dunn-Edwards")
-            : "Dunn-Edwards",
+          paint_brand: "Dunn-Edwards",
           paint_product_line: showPaintingWorkflow
-            ? getOptionalFormString(formData, "paint_product_line")
+            ? paintingFields.paint_product_line || null
             : null,
           paint_finish: showPaintingWorkflow
-            ? (getOptionalFormString(formData, "paint_finish") as PaintFinish | null)
+            ? (paintingFields.paint_finish as PaintFinish)
             : null,
           color_selection_status: showPaintingWorkflow
             ? selectedColorStatus
             : "not_started",
           paint_color_body: showPaintingWorkflow
-            ? getOptionalFormString(formData, "paint_color_body")
+            ? paintingFields.paint_color_body.trim() || null
             : null,
           paint_color_trim: showPaintingWorkflow
-            ? getOptionalFormString(formData, "paint_color_trim")
+            ? paintingFields.paint_color_trim.trim() || null
             : null,
           paint_color_accent: showPaintingWorkflow
-            ? getOptionalFormString(formData, "paint_color_accent")
+            ? paintingFields.paint_color_accent.trim() || null
             : null,
           surface_prep_level: showPaintingWorkflow
-            ? (getOptionalFormString(
-                formData,
-                "surface_prep_level",
-              ) as SurfacePrepLevel | null)
+            ? (paintingFields.surface_prep_level as SurfacePrepLevel)
             : null,
           coats: showPaintingWorkflow
-            ? Math.min(4, Math.max(1, Math.round(getFormNumber(formData, "coats") || 2)))
+            ? Math.min(4, Math.max(1, Math.round(paintingFields.coats || 2)))
             : 2,
-          primer_required: showPaintingWorkflow
-            ? formData.get("primer_required") === "on"
-            : false,
+          primer_required: showPaintingWorkflow ? paintingFields.primer_required : false,
         },
         cleanLineItems,
       );
@@ -4834,7 +5169,8 @@ function EstimateEditor({
           Status
           <select
             name="status"
-            defaultValue={estimate?.status ?? "draft"}
+            value={draftStatus}
+            onChange={(event) => setDraftStatus(event.target.value as EstimateStatus)}
             className="rounded-md border border-slate-300 px-3 py-2"
           >
             {estimateStatuses.map((status) => (
@@ -4849,7 +5185,8 @@ function EstimateEditor({
       <input
         required
         name="title"
-        defaultValue={estimate?.title ?? ""}
+        value={draftTitle}
+        onChange={(event) => setDraftTitle(event.target.value)}
         className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         placeholder="Estimate title"
       />
@@ -4857,7 +5194,8 @@ function EstimateEditor({
       <div className="grid gap-3 sm:grid-cols-3">
         <select
           name="customer_id"
-          defaultValue={estimate?.customer_id ?? "none"}
+          value={draftCustomerId}
+          onChange={(event) => setDraftCustomerId(event.target.value)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No customer</option>
@@ -4869,7 +5207,8 @@ function EstimateEditor({
         </select>
         <select
           name="lead_id"
-          defaultValue={estimate?.lead_id ?? "none"}
+          value={draftLeadId}
+          onChange={(event) => setDraftLeadId(event.target.value)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No lead</option>
@@ -4899,7 +5238,8 @@ function EstimateEditor({
           <input
             name="issue_date"
             type="date"
-            defaultValue={estimate?.issue_date ?? todayIsoDate()}
+            value={draftIssueDate}
+            onChange={(event) => setDraftIssueDate(event.target.value)}
             className="rounded-md border border-slate-300 px-3 py-2"
           />
         </label>
@@ -4908,11 +5248,58 @@ function EstimateEditor({
           <input
             name="expiration_date"
             type="date"
-            defaultValue={estimate?.expiration_date ?? addDaysIsoDate(30)}
+            value={draftExpirationDate}
+            onChange={(event) => setDraftExpirationDate(event.target.value)}
             className="rounded-md border border-slate-300 px-3 py-2"
           />
         </label>
       </div>
+
+      <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-950">Reusable estimate template</p>
+            <p className="mt-1 text-sm text-slate-500">
+              Load company-specific proposal structure, line items, financial defaults, and scope category.
+            </p>
+          </div>
+          <Badge
+            label={selectedCompany?.short_name ?? selectedCompany?.name ?? "Company"}
+            tone="blue"
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <select
+            value={selectedTemplateKey}
+            onChange={(event) => setSelectedTemplateKey(event.target.value)}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {availableEstimateTemplates.map((template) => (
+              <option key={template.key} value={template.key}>
+                {template.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => selectedTemplate && applyEstimateTemplate(selectedTemplate)}
+            disabled={!selectedTemplate}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            <Copy className="h-4 w-4" />
+            Apply template
+          </button>
+        </div>
+        {selectedTemplate ? (
+          <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+            <p className="font-semibold text-slate-800">{selectedTemplate.description}</p>
+            <p className="mt-1">
+              Scope: {scopeCategoryLabels[selectedTemplate.scopeCategory]} · Margin{" "}
+              {selectedTemplate.profitMarginRate}% · Tax {selectedTemplate.taxRate}%
+            </p>
+          </div>
+        ) : null}
+      </section>
 
       {showPaintingWorkflow ? (
         <section className="grid gap-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
@@ -4934,7 +5321,13 @@ function EstimateEditor({
               Project area
               <select
                 name="painting_area_type"
-                defaultValue={estimate?.painting_area_type ?? "exterior"}
+                value={paintingFields.painting_area_type}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    painting_area_type: event.target.value as PaintingAreaType,
+                  }))
+                }
                 className="rounded-md border border-slate-300 px-3 py-2"
               >
                 {paintingAreaTypes.map((area) => (
@@ -4948,7 +5341,13 @@ function EstimateEditor({
               Product line
               <select
                 name="paint_product_line"
-                defaultValue={estimate?.paint_product_line ?? dunnEdwardsProductLines[0]}
+                value={paintingFields.paint_product_line}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    paint_product_line: event.target.value,
+                  }))
+                }
                 className="rounded-md border border-slate-300 px-3 py-2"
               >
                 {dunnEdwardsProductLines.map((product) => (
@@ -4962,7 +5361,13 @@ function EstimateEditor({
               Finish / sheen
               <select
                 name="paint_finish"
-                defaultValue={estimate?.paint_finish ?? "satin"}
+                value={paintingFields.paint_finish}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    paint_finish: event.target.value as PaintFinish,
+                  }))
+                }
                 className="rounded-md border border-slate-300 px-3 py-2"
               >
                 {paintFinishOptions.map((finish) => (
@@ -4992,7 +5397,13 @@ function EstimateEditor({
               Surface prep
               <select
                 name="surface_prep_level"
-                defaultValue={estimate?.surface_prep_level ?? "standard"}
+                value={paintingFields.surface_prep_level}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    surface_prep_level: event.target.value as SurfacePrepLevel,
+                  }))
+                }
                 className="rounded-md border border-slate-300 px-3 py-2"
               >
                 {surfacePrepLevels.map((level) => (
@@ -5009,7 +5420,13 @@ function EstimateEditor({
                 type="number"
                 min="1"
                 max="4"
-                defaultValue={estimate?.coats ?? 2}
+                value={paintingFields.coats}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    coats: Number(event.target.value) || 2,
+                  }))
+                }
                 className="rounded-md border border-slate-300 px-3 py-2"
               />
             </label>
@@ -5019,19 +5436,37 @@ function EstimateEditor({
           <div className="grid gap-3 md:grid-cols-3">
             <input
               name="paint_color_body"
-              defaultValue={estimate?.paint_color_body ?? ""}
+              value={paintingFields.paint_color_body}
+              onChange={(event) =>
+                setPaintingFields((current) => ({
+                  ...current,
+                  paint_color_body: event.target.value,
+                }))
+              }
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="Body / wall color"
             />
             <input
               name="paint_color_trim"
-              defaultValue={estimate?.paint_color_trim ?? ""}
+              value={paintingFields.paint_color_trim}
+              onChange={(event) =>
+                setPaintingFields((current) => ({
+                  ...current,
+                  paint_color_trim: event.target.value,
+                }))
+              }
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="Trim color"
             />
             <input
               name="paint_color_accent"
-              defaultValue={estimate?.paint_color_accent ?? ""}
+              value={paintingFields.paint_color_accent}
+              onChange={(event) =>
+                setPaintingFields((current) => ({
+                  ...current,
+                  paint_color_accent: event.target.value,
+                }))
+              }
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="Accent / cabinet color"
             />
@@ -5066,7 +5501,13 @@ function EstimateEditor({
               <input
                 name="primer_required"
                 type="checkbox"
-                defaultChecked={estimate?.primer_required ?? false}
+                checked={paintingFields.primer_required}
+                onChange={(event) =>
+                  setPaintingFields((current) => ({
+                    ...current,
+                    primer_required: event.target.checked,
+                  }))
+                }
               />
               Primer required
             </label>
@@ -5240,7 +5681,8 @@ function EstimateEditor({
 
       <textarea
         name="notes"
-        defaultValue={estimate?.notes ?? ""}
+        value={draftNotes}
+        onChange={(event) => setDraftNotes(event.target.value)}
         className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
         placeholder="Estimate notes"
       />
@@ -5321,6 +5763,15 @@ function EstimatePdfPreview({
   }
 
   const showPaintingSpecs = estimate.service_type === "painting" || isPaintingCompany(company);
+  const customer = estimate.customer_id
+    ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+    : null;
+  const lead = estimate.lead_id
+    ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+    : null;
+  const propertyAddress =
+    customer?.property_address ?? lead?.property_address ?? "Property address to confirm";
+  const brandColor = company?.brand_color ?? "#0284c7";
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -5339,8 +5790,9 @@ function EstimatePdfPreview({
         </button>
       </div>
 
-      <div className="mt-5 rounded-lg border border-slate-200 bg-white p-5 text-sm">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+      <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm">
+        <div className="h-2" style={{ backgroundColor: brandColor }} />
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
             <p className="text-xs font-semibold uppercase text-sky-700">
               Estimate
@@ -5353,17 +5805,27 @@ function EstimatePdfPreview({
             </p>
           </div>
           <div className="text-right text-slate-600">
+            <div
+              className="ml-auto grid h-10 w-10 place-items-center rounded-md text-sm font-bold text-white"
+              style={{ backgroundColor: brandColor }}
+            >
+              {companyInitials(company)}
+            </div>
             <p>{estimate.issue_date}</p>
             <p>{estimate.expiration_date ? `Valid until ${estimate.expiration_date}` : ""}</p>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 p-5 sm:grid-cols-3">
           <div>
             <p className="text-xs font-semibold uppercase text-slate-500">Customer</p>
             <p className="mt-1 font-semibold text-slate-950">
               {getEstimateTargetName(snapshot, estimate)}
             </p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase text-slate-500">Property</p>
+            <p className="mt-1 font-semibold text-slate-950">{propertyAddress}</p>
           </div>
           <div className="sm:text-right">
             <p className="text-xs font-semibold uppercase text-slate-500">Status</p>
@@ -5374,7 +5836,7 @@ function EstimatePdfPreview({
         </div>
 
         {showPaintingSpecs ? (
-          <div className="mt-5 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+          <div className="mx-5 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
             <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-violet-900">
               <Paintbrush className="h-4 w-4" />
               Painting specifications
@@ -5410,7 +5872,7 @@ function EstimatePdfPreview({
           </div>
         ) : null}
 
-        <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+        <div className="mx-5 mt-5 overflow-hidden rounded-lg border border-slate-200">
           <div className="grid grid-cols-[1fr_80px_90px] bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
             <span>Description</span>
             <span>Qty</span>
@@ -5435,7 +5897,7 @@ function EstimatePdfPreview({
           ))}
         </div>
 
-        <div className="ml-auto mt-5 grid max-w-xs gap-2 text-sm">
+        <div className="ml-auto mt-5 grid max-w-xs gap-2 px-5 text-sm">
           <TotalRow label="Subtotal" value={estimate.subtotal} />
           <TotalRow label="Discount" value={-estimate.discount_total} />
           <TotalRow label="Tax" value={estimate.tax_total} />
@@ -5444,10 +5906,24 @@ function EstimatePdfPreview({
         </div>
 
         {estimate.notes ? (
-          <div className="mt-5 rounded-lg bg-slate-50 p-3 text-slate-600">
+          <div className="mx-5 mt-5 rounded-lg bg-slate-50 p-3 text-slate-600">
             {estimate.notes}
           </div>
         ) : null}
+        <div className="m-5 grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-bold uppercase text-slate-500">
+              Customer acceptance
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              Signature authorizes the selected scope, line items, totals, and company terms.
+            </p>
+          </div>
+          <div className="grid gap-3 text-sm text-slate-600">
+            <div className="border-b border-slate-300 pb-2">Signature</div>
+            <div className="border-b border-slate-300 pb-2">Date</div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -5459,16 +5935,22 @@ function EstimateWorkflowPanel({
   linkedJob,
   linkedScope,
   documents,
+  signatures,
   onCreateJob,
   onSaveDocument,
+  onGenerateScope,
+  onRequestSignature,
 }: {
   snapshot: CrmSnapshot;
   estimate: EstimateRecord | null;
   linkedJob: JobRecord | null;
   linkedScope: ScopeRecord | null;
   documents: DocumentRecord[];
+  signatures: SignatureRecord[];
   onCreateJob: (estimate: EstimateRecord) => Promise<void>;
   onSaveDocument: (estimate: EstimateRecord) => Promise<void>;
+  onGenerateScope: (estimate: EstimateRecord) => Promise<void>;
+  onRequestSignature: (estimate: EstimateRecord) => Promise<void>;
 }) {
   if (!estimate) {
     return (
@@ -5488,6 +5970,24 @@ function EstimateWorkflowPanel({
   const company = snapshot.companies.find((item) => item.id === estimate.company_id);
   const showPaintingHandoff =
     estimate.service_type === "painting" || isPaintingCompany(company);
+  const hasEstimateDocument = documents.some(
+    (document) => document.category === "estimate",
+  );
+  const activeSignature = signatures.find((signature) => signature.status !== "declined");
+  const readinessItems = [
+    {
+      label: "Customer",
+      ready: estimate.customer_id !== null || estimate.lead_id !== null,
+    },
+    {
+      label: "Line items",
+      ready: snapshot.estimateLineItems.some((item) => item.estimate_id === estimate.id),
+    },
+    { label: "Scope", ready: linkedScope !== null },
+    { label: "PDF packet", ready: hasEstimateDocument },
+    { label: "Signature", ready: activeSignature?.status === "signed" },
+    { label: "Job", ready: linkedJob !== null },
+  ];
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -5522,6 +6022,28 @@ function EstimateWorkflowPanel({
           label="Job"
           value={linkedJob ? jobStatusLabel(linkedJob.status) : "Not created"}
         />
+      </div>
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <p className="text-sm font-bold text-slate-950">Estimate workflow readiness</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {readinessItems.map((item) => (
+            <div
+              key={item.label}
+              className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+                item.ready
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}
+            >
+              {item.label}: {item.ready ? "Ready" : "Needed"}
+            </div>
+          ))}
+        </div>
+        {activeSignature ? (
+          <p className="mt-3 text-sm font-semibold text-slate-700">
+            Signature: {activeSignature.signer_name} · {activeSignature.status}
+          </p>
+        ) : null}
       </div>
       {showPaintingHandoff ? (
         <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
@@ -5574,11 +6096,29 @@ function EstimateWorkflowPanel({
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <button
           type="button"
+          onClick={() => void onGenerateScope(estimate)}
+          disabled={linkedScope !== null}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <WandSparkles className="h-4 w-4" />
+          {linkedScope ? "Scope linked" : "Generate scope"}
+        </button>
+        <button
+          type="button"
           onClick={() => void onSaveDocument(estimate)}
           className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
         >
           <FileText className="h-4 w-4" />
           Save PDF-ready packet
+        </button>
+        <button
+          type="button"
+          onClick={() => void onRequestSignature(estimate)}
+          disabled={activeSignature?.status === "signed"}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Save className="h-4 w-4" />
+          {activeSignature ? "Signature requested" : "Request signature"}
         </button>
         <button
           type="button"

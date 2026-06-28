@@ -431,6 +431,18 @@ function buildEstimateDraft(
           ),
         },
         {
+          title: "Customer Approval",
+          body: keyValueRows([
+            ["Accepted total", formatMoney(estimate.total)],
+            ["Approval status", estimate.status],
+            ["Signature", "Customer signature required before production scheduling."],
+            [
+              "Terms",
+              "Approval authorizes the selected scope, listed line items, taxes, discounts, margins, and company terms. Changes to hidden conditions, selections, colors, or access requirements require written approval.",
+            ],
+          ]),
+        },
+        {
           title: "Notes",
           body: estimate.notes ?? "No notes recorded.",
         },
