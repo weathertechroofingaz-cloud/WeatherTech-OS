@@ -1499,6 +1499,17 @@ function CrmWorkspace({
     () => calculateDashboardMetrics(scopedSnapshot),
     [scopedSnapshot],
   );
+  const totalMetrics = useMemo(
+    () => calculateDashboardMetrics(snapshot),
+    [snapshot],
+  );
+  const companySummaries = useMemo(
+    () =>
+      snapshot.companies.map((company) =>
+        buildCompanyDashboardSummary(snapshot, company),
+      ),
+    [snapshot],
+  );
   const shortcuts = useMemo(
     () =>
       [
@@ -1721,67 +1732,59 @@ function CrmWorkspace({
         </aside>
 
         <section className="min-w-0 space-y-5">
-          <header className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase text-sky-700">
-                WeatherTech OS
-              </p>
-              <h1 className="mt-1 text-2xl font-bold text-slate-950">
-                {activeCompany?.name ?? "Roofing and painting CRM"}
-              </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                {activeCompany
-                  ? `${companyTradeLabel(activeCompany)} dashboard`
-                  : "All-company dashboard across WeatherTech Roofing and IHC Painting"}
-              </p>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2 sm:mt-0">
-              <label className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
-                <Building2 className="h-4 w-4 text-sky-600" />
-                <select
-                  value={selectedCompanyId}
-                  onChange={(event) => setSelectedCompanyId(event.target.value)}
-                  className="bg-transparent outline-none"
-                  aria-label="Switch company workspace"
+          <header className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase text-sky-700">
+                  WeatherTech OS
+                </p>
+                <h1 className="mt-1 text-2xl font-bold text-slate-950">
+                  {activeCompany?.name ?? "Owner dashboard"}
+                </h1>
+                <p className="mt-1 text-sm text-slate-500">
+                  {activeCompany
+                    ? `${companyTradeLabel(activeCompany)} command center`
+                    : "Combined owner view across WeatherTech Roofing and IHC Painting"}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
+                  aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  <option value="all">All companies</option>
-                  {snapshot.companies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.short_name ?? company.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
-                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                {theme === "dark" ? (
-                  <Sun className="h-4 w-4" />
-                ) : (
-                  <Moon className="h-4 w-4" />
-                )}
-                {theme === "dark" ? "Light" : "Dark"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void onReload()}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <RefreshCcw className="h-4 w-4" />
-                Refresh
-              </button>
-              <button
-                type="button"
-                onClick={() => void onSignOut()}
-                className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                <LogOut className="h-4 w-4" />
-                Sign out
-              </button>
+                  {theme === "dark" ? (
+                    <Sun className="h-4 w-4" />
+                  ) : (
+                    <Moon className="h-4 w-4" />
+                  )}
+                  {theme === "dark" ? "Light" : "Dark"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onReload()}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onSignOut()}
+                  className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </button>
+              </div>
             </div>
+            <CompanyScopeSwitcher
+              summaries={companySummaries}
+              activeCompanyId={selectedCompanyId}
+              onChange={setSelectedCompanyId}
+              totalMetrics={totalMetrics}
+            />
           </header>
 
           {notice ? <Message tone="success" message={notice} /> : null}
@@ -1792,6 +1795,9 @@ function CrmWorkspace({
               metrics={metrics}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              activeCompanyId={selectedCompanyId}
+              onCompanyScopeChange={setSelectedCompanyId}
+              onViewChange={onViewChange}
               onCreateLead={() => onViewChange("leads")}
             />
           ) : null}
@@ -2022,21 +2028,303 @@ function NavButton({ icon: Icon, label, isActive, onClick }: NavButtonProps) {
   );
 }
 
+function CompanyScopeSwitcher({
+  summaries,
+  activeCompanyId,
+  onChange,
+  totalMetrics,
+}: {
+  summaries: CompanyDashboardSummary[];
+  activeCompanyId: CompanyScopeId;
+  onChange: (companyId: CompanyScopeId) => void;
+  totalMetrics: ReturnType<typeof calculateDashboardMetrics>;
+}) {
+  const totalActiveJobs = summaries.reduce(
+    (total, summary) => total + summary.activeJobs,
+    0,
+  );
+  const totalPendingDocuments = summaries.reduce(
+    (total, summary) => total + summary.pendingDocuments,
+    0,
+  );
+
+  return (
+    <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,0.8fr)_repeat(2,minmax(220px,1fr))]">
+      <button
+        type="button"
+        onClick={() => onChange("all")}
+        aria-pressed={activeCompanyId === "all"}
+        className={`rounded-lg border p-4 text-left transition ${
+          activeCompanyId === "all"
+            ? "border-sky-400 bg-sky-50 shadow-sm"
+            : "border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase text-sky-700">Owner view</p>
+            <p className="mt-1 text-base font-bold text-slate-950">All companies</p>
+          </div>
+          <Building2 className="h-5 w-5 text-sky-600" />
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Revenue</p>
+            <p className="font-bold text-slate-950">
+              {formatMoney(totalMetrics.revenueCollected)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Jobs</p>
+            <p className="font-bold text-slate-950">{totalActiveJobs}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Docs</p>
+            <p className="font-bold text-slate-950">{totalPendingDocuments}</p>
+          </div>
+        </div>
+      </button>
+
+      {summaries.map((summary) => {
+        const isActive = activeCompanyId === summary.company.id;
+        const brandColor = summary.company.brand_color ?? "#0284c7";
+
+        return (
+          <button
+            key={summary.company.id}
+            type="button"
+            onClick={() => onChange(summary.company.id)}
+            aria-pressed={isActive}
+            className={`relative overflow-hidden rounded-lg border p-4 text-left transition ${
+              isActive
+                ? "border-slate-400 bg-white shadow-sm"
+                : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+            }`}
+          >
+            <span
+              className="absolute inset-x-0 top-0 h-1"
+              style={{ backgroundColor: brandColor }}
+            />
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase text-slate-500">
+                  {summary.company.trade === "painting" ? "Painting" : "Roofing"}
+                </p>
+                <p className="mt-1 text-base font-bold text-slate-950">
+                  {summary.company.name}
+                </p>
+              </div>
+              <div
+                className="grid h-9 w-9 place-items-center rounded-md text-sm font-bold text-white"
+                style={{ backgroundColor: brandColor }}
+              >
+                {companyInitials(summary.company)}
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+              <div>
+                <p className="text-xs font-semibold text-slate-500">Estimates</p>
+                <p className="font-bold text-slate-950">{summary.openEstimates}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-500">Jobs</p>
+                <p className="font-bold text-slate-950">{summary.activeJobs}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-500">Revenue</p>
+                <p className="font-bold text-slate-950">
+                  {formatMoney(summary.revenue)}
+                </p>
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 type DashboardViewProps = {
   metrics: ReturnType<typeof calculateDashboardMetrics>;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  activeCompanyId: CompanyScopeId;
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onViewChange: (view: WorkspaceView) => void;
   onCreateLead: () => void;
 };
+
+type CompanyDashboardSummary = {
+  company: CompanyRecord;
+  metrics: ReturnType<typeof calculateDashboardMetrics>;
+  openEstimates: number;
+  activeJobs: number;
+  scheduledWork: number;
+  revenue: number;
+  pendingDocuments: number;
+  pendingScopes: number;
+  roofingScopes: number;
+  paintingScopes: number;
+  pendingColorSelections: number;
+  nextScheduledWork: ScheduleEventRecord | null;
+};
+
+type RecentActivityItem = {
+  id: string;
+  companyId: string;
+  title: string;
+  detail: string;
+  timestamp: string;
+  kind: "lead" | "estimate" | "job" | "schedule" | "document" | "invoice";
+};
+
+function buildCompanyDashboardSummary(
+  snapshot: CrmSnapshot,
+  company: CompanyRecord,
+): CompanyDashboardSummary {
+  const companySnapshot = scopeCrmSnapshotByCompany(snapshot, company.id);
+  const metrics = calculateDashboardMetrics(companySnapshot);
+  const today = todayIsoDate();
+  const pendingEstimateDocuments = companySnapshot.estimates.filter(
+    (estimate) =>
+      (estimate.status === "sent" || estimate.status === "approved") &&
+      !companySnapshot.documents.some((document) => document.estimate_id === estimate.id),
+  ).length;
+  const pendingInvoiceDocuments = companySnapshot.invoices.filter(
+    (invoice) =>
+      invoice.status !== "draft" &&
+      !companySnapshot.documents.some((document) => document.invoice_id === invoice.id),
+  ).length;
+  const pendingScopeDocuments = companySnapshot.scopes.filter(
+    (scope) =>
+      (scope.status === "ready" || scope.status === "approved") &&
+      !companySnapshot.documents.some(
+        (document) => document.estimate_id === scope.estimate_id,
+      ),
+  ).length;
+  const upcomingScheduledWork = companySnapshot.scheduleEvents
+    .filter(
+      (event) => event.status === "scheduled" && event.start_at.slice(0, 10) >= today,
+    )
+    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+
+  return {
+    company,
+    metrics,
+    openEstimates: companySnapshot.estimates.filter(
+      (estimate) => estimate.status === "draft" || estimate.status === "sent",
+    ).length,
+    activeJobs: companySnapshot.jobs.filter(
+      (job) =>
+        job.status === "scheduled" ||
+        job.status === "in_progress" ||
+        job.status === "blocked",
+    ).length,
+    scheduledWork: upcomingScheduledWork.length,
+    revenue: metrics.revenueCollected,
+    pendingDocuments:
+      pendingEstimateDocuments + pendingInvoiceDocuments + pendingScopeDocuments,
+    pendingScopes: pendingScopeDocuments,
+    roofingScopes: companySnapshot.scopes.filter((scope) =>
+      ["roofing", "roof_repairs", "tile_underlayment"].includes(scope.category),
+    ).length,
+    paintingScopes: companySnapshot.scopes.filter((scope) =>
+      ["exterior_painting", "interior_painting", "cabinet_refinishing"].includes(
+        scope.category,
+      ),
+    ).length,
+    pendingColorSelections: companySnapshot.estimates.filter(
+      (estimate) =>
+        estimate.service_type === "painting" &&
+        estimate.status !== "rejected" &&
+        estimate.color_selection_status !== "approved",
+    ).length,
+    nextScheduledWork: upcomingScheduledWork[0] ?? null,
+  };
+}
+
+function buildRecentActivity(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+) {
+  const items: RecentActivityItem[] = [
+    ...snapshot.leads.map((lead) => ({
+      id: `lead-${lead.id}`,
+      companyId: lead.company_id,
+      title: lead.contact_name,
+      detail: `Lead ${statusLabel(lead.status)} - ${
+        companyMap.get(lead.company_id)?.short_name ?? "Company"
+      }`,
+      timestamp: lead.updated_at,
+      kind: "lead" as const,
+    })),
+    ...snapshot.estimates.map((estimate) => ({
+      id: `estimate-${estimate.id}`,
+      companyId: estimate.company_id,
+      title: estimate.title,
+      detail: `Estimate ${estimateStatusLabel(estimate.status)} - ${formatMoney(
+        estimate.total,
+      )}`,
+      timestamp: estimate.updated_at,
+      kind: "estimate" as const,
+    })),
+    ...snapshot.jobs.map((job) => ({
+      id: `job-${job.id}`,
+      companyId: job.company_id,
+      title: job.title,
+      detail: `Job ${jobStatusLabel(job.status)} - ${job.property_address}`,
+      timestamp: job.updated_at,
+      kind: "job" as const,
+    })),
+    ...snapshot.scheduleEvents.map((event) => ({
+      id: `schedule-${event.id}`,
+      companyId: event.company_id,
+      title: event.title,
+      detail: `${scheduleEventTypeLabel(event.event_type)} - ${formatDateTime(
+        event.start_at,
+      )}`,
+      timestamp: event.updated_at,
+      kind: "schedule" as const,
+    })),
+    ...snapshot.documents.map((document) => ({
+      id: `document-${document.id}`,
+      companyId: document.company_id,
+      title: document.title,
+      detail: `Document ${document.status} - ${document.category}`,
+      timestamp: document.updated_at,
+      kind: "document" as const,
+    })),
+    ...snapshot.invoices.map((invoice) => ({
+      id: `invoice-${invoice.id}`,
+      companyId: invoice.company_id,
+      title: invoice.invoice_number,
+      detail: `Invoice ${invoice.status} - ${formatMoney(invoice.balance_due)} due`,
+      timestamp: invoice.updated_at,
+      kind: "invoice" as const,
+    })),
+  ];
+
+  return items
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 8);
+}
 
 function DashboardView({
   metrics,
   snapshot,
   companyMap,
+  activeCompanyId,
+  onCompanyScopeChange,
+  onViewChange,
   onCreateLead,
 }: DashboardViewProps) {
   const today = todayIsoDate();
   const productionKpis = calculateProductionKpis(snapshot);
+  const companySummaries = snapshot.companies.map((company) =>
+    buildCompanyDashboardSummary(snapshot, company),
+  );
+  const recentActivity = buildRecentActivity(snapshot, companyMap);
+  const isOwnerDashboard = activeCompanyId === "all" && snapshot.companies.length > 1;
   const urgentLeads = snapshot.leads.filter(
     (lead) => lead.priority === "urgent" || lead.next_follow_up === today,
   );
@@ -2145,9 +2433,77 @@ function DashboardView({
         .length,
     },
   ];
+  const roofingCompanyIds = new Set(
+    snapshot.companies
+      .filter(
+        (company) =>
+          company.trade === "roofing" || company.workflow_profile === "roofing",
+      )
+      .map((company) => company.id),
+  );
+  const roofingEstimates = snapshot.estimates.filter(
+    (estimate) =>
+      estimate.service_type === "roofing" || roofingCompanyIds.has(estimate.company_id),
+  );
+  const roofingScopes = snapshot.scopes.filter((scope) =>
+    ["roofing", "roof_repairs", "tile_underlayment"].includes(scope.category),
+  );
+  const activeRoofingJobs = snapshot.jobs.filter(
+    (job) =>
+      roofingCompanyIds.has(job.company_id) &&
+      job.status !== "completed" &&
+      job.status !== "closed",
+  );
+  const roofingEstimateValue = roofingEstimates.reduce(
+    (total, estimate) => total + estimate.total,
+    0,
+  );
+  const approvedRoofingValue = roofingEstimates
+    .filter((estimate) => estimate.status === "approved")
+    .reduce((total, estimate) => total + estimate.total, 0);
+  const roofingScopeMix = [
+    {
+      label: "Replacement",
+      value: roofingScopes.filter((scope) => scope.category === "roofing").length,
+    },
+    {
+      label: "Repairs",
+      value: roofingScopes.filter((scope) => scope.category === "roof_repairs").length,
+    },
+    {
+      label: "Underlayment",
+      value: roofingScopes.filter((scope) => scope.category === "tile_underlayment")
+        .length,
+    },
+  ];
 
   return (
     <div className="space-y-5">
+      {isOwnerDashboard ? (
+        <OwnerDashboardPanel
+          summaries={companySummaries}
+          recentActivity={recentActivity}
+          companyMap={companyMap}
+          onCompanyScopeChange={onCompanyScopeChange}
+          onViewChange={onViewChange}
+        />
+      ) : null}
+
+      {!isOwnerDashboard && companySummaries[0] ? (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+          <CompanyDashboardPanel
+            summary={companySummaries[0]}
+            onViewChange={onViewChange}
+          />
+          <RecentActivityFeed
+            items={recentActivity}
+            companyMap={companyMap}
+            onCompanyScopeChange={onCompanyScopeChange}
+            onViewChange={onViewChange}
+          />
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Open leads" value={metrics.openLeads} icon={ClipboardList} />
         <MetricCard
@@ -2232,6 +2588,81 @@ function DashboardView({
           icon={Mail}
         />
       </div>
+
+      {roofingCompanyIds.size ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Roofing estimate value"
+              value={formatMoney(roofingEstimateValue)}
+              icon={Home}
+            />
+            <MetricCard
+              label="Approved roofing"
+              value={formatMoney(approvedRoofingValue)}
+              icon={DollarSign}
+            />
+            <MetricCard
+              label="Roofing scopes"
+              value={roofingScopes.length}
+              icon={WandSparkles}
+            />
+            <MetricCard
+              label="Active roof jobs"
+              value={activeRoofingJobs.length}
+              icon={CalendarClock}
+            />
+          </div>
+
+          <section className="rounded-lg border border-sky-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  WeatherTech Roofing workflow
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Roof replacement, repair, underlayment, and production readiness.
+                </p>
+              </div>
+              <Badge label="Roofing" tone="blue" />
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <ActionCenterCard
+                icon={Home}
+                label="Scope mix"
+                value={roofingScopes.length}
+                detail={roofingScopeMix
+                  .map((scope) => `${scope.label}: ${scope.value}`)
+                  .join(" / ")}
+                items={roofingScopeMix.map(
+                  (scope) => `${scope.label} scopes: ${scope.value}`,
+                )}
+              />
+              <ActionCenterCard
+                icon={CalendarClock}
+                label="Roofing jobs"
+                value={activeRoofingJobs.length}
+                detail="Scheduled or in production"
+                items={activeRoofingJobs.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={FileText}
+                label="Roofing documents"
+                value={
+                  estimatesMissingDocuments.filter((estimate) =>
+                    roofingCompanyIds.has(estimate.company_id),
+                  ).length
+                }
+                detail="Approved or sent estimates needing packets"
+                items={estimatesMissingDocuments
+                  .filter((estimate) => roofingCompanyIds.has(estimate.company_id))
+                  .slice(0, 3)
+                  .map((estimate) => estimate.title)}
+              />
+            </div>
+          </section>
+        </>
+      ) : null}
 
       {paintingCompanyIds.size ? (
         <>
@@ -2504,6 +2935,359 @@ function DashboardView({
         </section>
       </div>
     </div>
+  );
+}
+
+function OwnerDashboardPanel({
+  summaries,
+  recentActivity,
+  companyMap,
+  onCompanyScopeChange,
+  onViewChange,
+}: {
+  summaries: CompanyDashboardSummary[];
+  recentActivity: RecentActivityItem[];
+  companyMap: Map<string, CompanyRecord>;
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const revenue = summaries.reduce((total, summary) => total + summary.revenue, 0);
+  const openEstimates = summaries.reduce(
+    (total, summary) => total + summary.openEstimates,
+    0,
+  );
+  const activeJobs = summaries.reduce((total, summary) => total + summary.activeJobs, 0);
+  const scheduledWork = summaries.reduce(
+    (total, summary) => total + summary.scheduledWork,
+    0,
+  );
+  const pendingDocuments = summaries.reduce(
+    (total, summary) => total + summary.pendingDocuments,
+    0,
+  );
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Combined owner dashboard
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              WeatherTech Roofing and IHC Painting
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              One operating view for pipeline, production, documents, and cash flow.
+            </p>
+          </div>
+          <Badge label="Owner view" tone="blue" />
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <ProfileStat label="Revenue" value={formatMoney(revenue)} />
+          <ProfileStat label="Open estimates" value={openEstimates} />
+          <ProfileStat label="Active jobs" value={activeJobs} />
+          <ProfileStat label="Scheduled work" value={scheduledWork} />
+          <ProfileStat label="Pending docs" value={pendingDocuments} />
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {summaries.map((summary) => (
+            <CompanyPerformanceCard
+              key={summary.company.id}
+              summary={summary}
+              onCompanyScopeChange={onCompanyScopeChange}
+              onViewChange={onViewChange}
+            />
+          ))}
+        </div>
+      </div>
+
+      <RecentActivityFeed
+        items={recentActivity}
+        companyMap={companyMap}
+        onCompanyScopeChange={onCompanyScopeChange}
+        onViewChange={onViewChange}
+      />
+    </section>
+  );
+}
+
+function CompanyDashboardPanel({
+  summary,
+  onViewChange,
+}: {
+  summary: CompanyDashboardSummary;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const isPainting = isPaintingCompany(summary.company);
+  const brandColor = summary.company.brand_color ?? "#0284c7";
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex items-start gap-3">
+          <div
+            className="grid h-12 w-12 place-items-center rounded-md text-base font-bold text-white"
+            style={{ backgroundColor: brandColor }}
+          >
+            {companyInitials(summary.company)}
+          </div>
+          <div>
+            <p className="text-sm font-semibold uppercase text-slate-500">
+              {isPainting ? "IHC Painting dashboard" : "WeatherTech Roofing dashboard"}
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              {summary.company.name}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {isPainting
+                ? "Color approvals, coating scopes, scheduled crews, and painting revenue."
+                : "Roofing scopes, production schedule, documents, and revenue health."}
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-4">
+          <CompanyQuickAction
+            label="Leads"
+            icon={ClipboardList}
+            onClick={() => onViewChange("leads")}
+          />
+          <CompanyQuickAction
+            label="Estimates"
+            icon={FileText}
+            onClick={() => onViewChange("estimates")}
+          />
+          <CompanyQuickAction
+            label="Calendar"
+            icon={CalendarClock}
+            onClick={() => onViewChange("calendar")}
+          />
+          <CompanyQuickAction
+            label="Documents"
+            icon={FileText}
+            onClick={() => onViewChange("documents")}
+          />
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Open estimates" value={summary.openEstimates} />
+        <ProfileStat label="Active jobs" value={summary.activeJobs} />
+        <ProfileStat label="Scheduled work" value={summary.scheduledWork} />
+        <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-950">
+              {isPainting ? "Painting workflow focus" : "Roofing workflow focus"}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              {isPainting
+                ? `${summary.pendingColorSelections} color approvals, ${summary.paintingScopes} painting scopes, ${summary.pendingDocuments} document tasks.`
+                : `${summary.roofingScopes} roofing scopes, ${summary.pendingDocuments} document tasks, ${summary.scheduledWork} scheduled events.`}
+            </p>
+          </div>
+          <Badge
+            label={summary.nextScheduledWork ? "Work scheduled" : "Needs schedule"}
+            tone={summary.nextScheduledWork ? "green" : "amber"}
+          />
+        </div>
+        {summary.nextScheduledWork ? (
+          <p className="mt-3 text-sm font-semibold text-slate-700">
+            Next: {summary.nextScheduledWork.title} on{" "}
+            {formatDateTime(summary.nextScheduledWork.start_at)}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function CompanyPerformanceCard({
+  summary,
+  onCompanyScopeChange,
+  onViewChange,
+}: {
+  summary: CompanyDashboardSummary;
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const brandColor = summary.company.brand_color ?? "#0284c7";
+  const isPainting = isPaintingCompany(summary.company);
+  const goTo = (view: WorkspaceView) => {
+    onCompanyScopeChange(summary.company.id);
+    onViewChange(view);
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <span
+        className="absolute inset-x-0 top-0 h-1"
+        style={{ backgroundColor: brandColor }}
+      />
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase text-slate-500">
+            {isPainting ? "Painting operations" : "Roofing operations"}
+          </p>
+          <h3 className="mt-1 text-lg font-bold text-slate-950">
+            {summary.company.name}
+          </h3>
+        </div>
+        {isPainting ? (
+          <Paintbrush className="h-5 w-5 text-violet-700" />
+        ) : (
+          <Home className="h-5 w-5 text-sky-700" />
+        )}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <ProfileStat label="Open estimates" value={summary.openEstimates} />
+        <ProfileStat label="Active jobs" value={summary.activeJobs} />
+        <ProfileStat label="Revenue" value={formatMoney(summary.revenue)} />
+        <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-4">
+        <CompanyQuickAction
+          label="Leads"
+          icon={ClipboardList}
+          onClick={() => goTo("leads")}
+        />
+        <CompanyQuickAction
+          label="Estimate"
+          icon={FileText}
+          onClick={() => goTo("estimates")}
+        />
+        <CompanyQuickAction
+          label="Schedule"
+          icon={CalendarClock}
+          onClick={() => goTo("calendar")}
+        />
+        <CompanyQuickAction
+          label="Docs"
+          icon={FileText}
+          onClick={() => goTo("documents")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CompanyQuickAction({
+  label,
+  icon: Icon,
+  onClick,
+}: {
+  label: string;
+  icon: typeof Home;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+}
+
+function RecentActivityFeed({
+  items,
+  companyMap,
+  onCompanyScopeChange,
+  onViewChange,
+}: {
+  items: RecentActivityItem[];
+  companyMap: Map<string, CompanyRecord>;
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const goToActivity = (item: RecentActivityItem) => {
+    onCompanyScopeChange(item.companyId);
+    onViewChange(
+      item.kind === "lead"
+        ? "leads"
+        : item.kind === "estimate"
+          ? "estimates"
+          : item.kind === "job"
+            ? "jobs"
+            : item.kind === "schedule"
+              ? "calendar"
+              : item.kind === "invoice"
+                ? "invoices"
+                : "documents",
+    );
+  };
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-950">Recent activity</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Live CRM movement across companies.
+          </p>
+        </div>
+        <Badge label={`${items.length} latest`} tone="blue" />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {items.length ? (
+          items.map((item) => {
+            const company = companyMap.get(item.companyId);
+            const Icon =
+              item.kind === "lead"
+                ? ClipboardList
+                : item.kind === "estimate"
+                  ? FileText
+                  : item.kind === "job"
+                    ? CalendarClock
+                    : item.kind === "schedule"
+                      ? CalendarClock
+                      : item.kind === "invoice"
+                        ? ReceiptText
+                        : FileText;
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => goToActivity(item)}
+                className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white"
+              >
+                <div
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-white"
+                  style={{ backgroundColor: company?.brand_color ?? "#0284c7" }}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="truncate text-sm font-bold text-slate-950">
+                      {item.title}
+                    </p>
+                    <p className="shrink-0 text-xs font-semibold text-slate-400">
+                      {formatDate(item.timestamp)}
+                    </p>
+                  </div>
+                  <p className="mt-1 truncate text-sm text-slate-500">{item.detail}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">
+                    {company?.short_name ?? company?.name ?? "Company"}
+                  </p>
+                </div>
+              </button>
+            );
+          })
+        ) : (
+          <EmptyState label="No recent CRM activity yet." />
+        )}
+      </div>
+    </section>
   );
 }
 
