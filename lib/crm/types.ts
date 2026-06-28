@@ -21,6 +21,27 @@ export type CustomerStatus = "active" | "inactive" | "prospect";
 export type EstimateStatus = "draft" | "sent" | "approved" | "rejected" | "expired";
 export type EstimateLineItemCategory = "labor" | "material" | "other";
 export type DiscountType = "fixed" | "percent";
+export type PaintingAreaType =
+  | "interior"
+  | "exterior"
+  | "cabinet"
+  | "multi_area"
+  | "touch_up";
+export type PaintFinish =
+  | "flat"
+  | "velvet"
+  | "eggshell"
+  | "low_sheen"
+  | "satin"
+  | "semi_gloss"
+  | "gloss"
+  | "cabinet_finish";
+export type ColorSelectionStatus =
+  | "not_started"
+  | "in_review"
+  | "approved"
+  | "change_requested";
+export type SurfacePrepLevel = "standard" | "enhanced" | "restoration";
 export type ScopeCategory =
   | "roofing"
   | "exterior_painting"
@@ -195,6 +216,17 @@ export type EstimateRecord = {
   profit_margin_total: number;
   total: number;
   notes: string | null;
+  painting_area_type: PaintingAreaType | null;
+  paint_brand: string;
+  paint_product_line: string | null;
+  paint_finish: PaintFinish | null;
+  color_selection_status: ColorSelectionStatus;
+  paint_color_body: string | null;
+  paint_color_trim: string | null;
+  paint_color_accent: string | null;
+  surface_prep_level: SurfacePrepLevel | null;
+  coats: number;
+  primer_required: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -709,6 +741,17 @@ export type EstimateInput = {
   discount_value?: number;
   profit_margin_rate?: number;
   notes?: string | null;
+  painting_area_type?: PaintingAreaType | null;
+  paint_brand?: string;
+  paint_product_line?: string | null;
+  paint_finish?: PaintFinish | null;
+  color_selection_status?: ColorSelectionStatus;
+  paint_color_body?: string | null;
+  paint_color_trim?: string | null;
+  paint_color_accent?: string | null;
+  surface_prep_level?: SurfacePrepLevel | null;
+  coats?: number;
+  primer_required?: boolean;
 };
 
 export type ScopeInput = {

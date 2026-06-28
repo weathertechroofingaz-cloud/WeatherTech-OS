@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Moon,
   Package,
+  Palette,
   Paintbrush,
   Phone,
   Plus,
@@ -137,8 +138,21 @@ import {
   calculateMaterialOrderItemTotal,
   calculateMaterialOrderTotal,
 } from "../lib/crm/operations";
+import {
+  colorSelectionStatusLabel,
+  colorSelectionStatuses,
+  dunnEdwardsProductLines,
+  isPaintingCompany,
+  paintFinishLabel,
+  paintFinishOptions,
+  paintingAreaLabel,
+  paintingAreaTypes,
+  surfacePrepLabel,
+  surfacePrepLevels,
+} from "../lib/crm/painting";
 import { scopeCategoryLabels } from "../lib/crm/scopeTemplates";
 import type {
+  ColorSelectionStatus,
   CompanyRecord,
   CrmSnapshot,
   EmailMessageRecord,
@@ -194,6 +208,8 @@ import type {
   NotificationStatus,
   PaymentInput,
   PaymentRecord,
+  PaintFinish,
+  PaintingAreaType,
   ScheduleEventInput,
   ScheduleEventRecord,
   ScheduleEventStatus,
@@ -210,6 +226,7 @@ import type {
   ScopeTemplateInput,
   ScopeTemplateRecord,
   ServiceType,
+  SurfacePrepLevel,
   TimeEntryRecord,
 } from "../lib/crm/types";
 import { getSupabaseBrowserClient } from "../lib/supabase/client";
@@ -2081,6 +2098,53 @@ function DashboardView({
     productionKpis.atRiskJobs.length +
     pendingChangeOrders.length +
     queuedCommunications;
+  const paintingCompanyIds = new Set(
+    snapshot.companies.filter((company) => isPaintingCompany(company)).map((company) => company.id),
+  );
+  const paintingEstimates = snapshot.estimates.filter(
+    (estimate) =>
+      estimate.service_type === "painting" || paintingCompanyIds.has(estimate.company_id),
+  );
+  const paintingScopes = snapshot.scopes.filter((scope) =>
+    ["exterior_painting", "interior_painting", "cabinet_refinishing"].includes(
+      scope.category,
+    ),
+  );
+  const pendingColorSelections = paintingEstimates.filter(
+    (estimate) =>
+      estimate.status !== "rejected" &&
+      estimate.color_selection_status !== "approved",
+  );
+  const activePaintingJobs = snapshot.jobs.filter(
+    (job) =>
+      paintingCompanyIds.has(job.company_id) &&
+      job.status !== "completed" &&
+      job.status !== "closed",
+  );
+  const paintingEstimateValue = paintingEstimates.reduce(
+    (total, estimate) => total + estimate.total,
+    0,
+  );
+  const approvedPaintingValue = paintingEstimates
+    .filter((estimate) => estimate.status === "approved")
+    .reduce((total, estimate) => total + estimate.total, 0);
+  const paintingScopeMix = [
+    {
+      label: "Exterior",
+      value: paintingScopes.filter((scope) => scope.category === "exterior_painting")
+        .length,
+    },
+    {
+      label: "Interior",
+      value: paintingScopes.filter((scope) => scope.category === "interior_painting")
+        .length,
+    },
+    {
+      label: "Cabinets",
+      value: paintingScopes.filter((scope) => scope.category === "cabinet_refinishing")
+        .length,
+    },
+  ];
 
   return (
     <div className="space-y-5">
@@ -2168,6 +2232,74 @@ function DashboardView({
           icon={Mail}
         />
       </div>
+
+      {paintingCompanyIds.size ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="IHC estimate value"
+              value={formatMoney(paintingEstimateValue)}
+              icon={Paintbrush}
+            />
+            <MetricCard
+              label="Approved painting"
+              value={formatMoney(approvedPaintingValue)}
+              icon={DollarSign}
+            />
+            <MetricCard
+              label="Color approvals"
+              value={pendingColorSelections.length}
+              icon={Palette}
+            />
+            <MetricCard
+              label="Active IHC jobs"
+              value={activePaintingJobs.length}
+              icon={CalendarClock}
+            />
+          </div>
+
+          <section className="rounded-lg border border-violet-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  IHC Painting workflow
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Color approvals, coating scopes, and painting production readiness.
+                </p>
+              </div>
+              <Badge label="Painting" tone="blue" />
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <ActionCenterCard
+                icon={Palette}
+                label="Color selections"
+                value={pendingColorSelections.length}
+                detail="Not approved yet"
+                items={pendingColorSelections.slice(0, 3).map((estimate) => estimate.title)}
+              />
+              <ActionCenterCard
+                icon={Paintbrush}
+                label="Scope mix"
+                value={paintingScopes.length}
+                detail={paintingScopeMix
+                  .map((scope) => `${scope.label}: ${scope.value}`)
+                  .join(" / ")}
+                items={paintingScopeMix.map(
+                  (scope) => `${scope.label} scopes: ${scope.value}`,
+                )}
+              />
+              <ActionCenterCard
+                icon={CalendarClock}
+                label="Painting jobs"
+                value={activePaintingJobs.length}
+                detail="Scheduled or in production"
+                items={activePaintingJobs.slice(0, 3).map((job) => job.title)}
+              />
+            </div>
+          </section>
+        </>
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
         <ChartPanel
@@ -3654,6 +3786,64 @@ function EstimatesView({
   );
 }
 
+function buildDefaultEstimateLineItems(
+  serviceType: ServiceType,
+): EstimateLineItemInput[] {
+  if (serviceType === "painting") {
+    return [
+      {
+        category: "labor",
+        name: "Painting prep and application labor",
+        description:
+          "Masking, surface preparation, application, cleanup, and touch-up labor.",
+        quantity: 1,
+        unit: "project",
+        unit_cost: 0,
+        markup_rate: 0,
+        taxable: false,
+        sort_order: 0,
+      },
+      {
+        category: "material",
+        name: "Dunn-Edwards coating system and sundries",
+        description:
+          "Primer, finish paint, masking supplies, caulk, rollers, and sprayer consumables.",
+        quantity: 1,
+        unit: "package",
+        unit_cost: 0,
+        markup_rate: 15,
+        taxable: true,
+        sort_order: 1,
+      },
+    ];
+  }
+
+  return [
+    {
+      category: "labor",
+      name: "Labor",
+      description: "",
+      quantity: 1,
+      unit: "project",
+      unit_cost: 0,
+      markup_rate: 0,
+      taxable: false,
+      sort_order: 0,
+    },
+    {
+      category: "material",
+      name: "Materials",
+      description: "",
+      quantity: 1,
+      unit: "package",
+      unit_cost: 0,
+      markup_rate: 0,
+      taxable: true,
+      sort_order: 1,
+    },
+  ];
+}
+
 function EstimateEditor({
   estimate,
   lineItems,
@@ -3665,6 +3855,11 @@ function EstimateEditor({
   snapshot: CrmSnapshot;
   onSave: (input: EstimateInput, lineItems: EstimateLineItemInput[]) => Promise<void>;
 }) {
+  const initialCompanyId = estimate?.company_id ?? snapshot.companies[0]?.id ?? "";
+  const initialCompany =
+    snapshot.companies.find((company) => company.id === initialCompanyId) ?? null;
+  const initialServiceType =
+    estimate?.service_type ?? (isPaintingCompany(initialCompany) ? "painting" : "roofing");
   const [draftLineItems, setDraftLineItems] = useState<EstimateLineItemInput[]>(
     lineItems.length
       ? lineItems.map((item) => ({
@@ -3679,31 +3874,15 @@ function EstimateEditor({
           taxable: item.taxable,
           sort_order: item.sort_order,
         }))
-      : [
-          {
-            category: "labor",
-            name: "Labor",
-            description: "",
-            quantity: 1,
-            unit: "project",
-            unit_cost: 0,
-            markup_rate: 0,
-            taxable: false,
-            sort_order: 0,
-          },
-          {
-            category: "material",
-            name: "Materials",
-            description: "",
-            quantity: 1,
-            unit: "package",
-            unit_cost: 0,
-            markup_rate: 0,
-            taxable: true,
-            sort_order: 1,
-          },
-        ],
+      : buildDefaultEstimateLineItems(initialServiceType),
   );
+  const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId);
+  const [selectedServiceType, setSelectedServiceType] =
+    useState<ServiceType>(initialServiceType);
+  const [selectedColorStatus, setSelectedColorStatus] =
+    useState<ColorSelectionStatus>(
+      estimate?.color_selection_status ?? "not_started",
+    );
   const [estimateControls, setEstimateControls] = useState({
     tax_rate: estimate?.tax_rate ?? 8.6,
     discount_type: estimate?.discount_type ?? "fixed",
@@ -3712,6 +3891,10 @@ function EstimateEditor({
   });
   const [isSaving, setIsSaving] = useState(false);
   const liveTotals = calculateEstimateTotals(estimateControls, draftLineItems);
+  const selectedCompany =
+    snapshot.companies.find((company) => company.id === selectedCompanyId) ?? null;
+  const showPaintingWorkflow =
+    selectedServiceType === "painting" || isPaintingCompany(selectedCompany);
 
   const updateLineItem = (
     index: number,
@@ -3741,6 +3924,30 @@ function EstimateEditor({
     ]);
   };
 
+  const addPaintingPackage = () => {
+    setDraftLineItems((items) => [
+      ...items,
+      ...buildDefaultEstimateLineItems("painting").map((item, index) => ({
+        ...item,
+        sort_order: items.length + index,
+      })),
+    ]);
+  };
+
+  const handleCompanyChange = (companyId: string) => {
+    setSelectedCompanyId(companyId);
+    const company = snapshot.companies.find((item) => item.id === companyId);
+
+    if (isPaintingCompany(company)) {
+      setSelectedServiceType("painting");
+      return;
+    }
+
+    if (company?.workflow_profile === "roofing" || company?.trade === "roofing") {
+      setSelectedServiceType("roofing");
+    }
+  };
+
   const removeLineItem = (index: number) => {
     setDraftLineItems((items) => items.filter((_item, itemIndex) => itemIndex !== index));
   };
@@ -3761,7 +3968,11 @@ function EstimateEditor({
           lead_id: getOptionalRelation(formData, "lead_id"),
           title: getFormString(formData, "title", "New estimate"),
           status: getFormString(formData, "status", "draft") as EstimateStatus,
-          service_type: getFormString(formData, "service_type", "roofing") as ServiceType,
+          service_type: getFormString(
+            formData,
+            "service_type",
+            selectedServiceType,
+          ) as ServiceType,
           issue_date: getFormString(formData, "issue_date", todayIsoDate()),
           expiration_date: getOptionalFormString(formData, "expiration_date"),
           tax_rate: estimateControls.tax_rate,
@@ -3769,6 +3980,45 @@ function EstimateEditor({
           discount_value: estimateControls.discount_value,
           profit_margin_rate: estimateControls.profit_margin_rate,
           notes: getOptionalFormString(formData, "notes"),
+          painting_area_type: showPaintingWorkflow
+            ? (getOptionalFormString(
+                formData,
+                "painting_area_type",
+              ) as PaintingAreaType | null)
+            : null,
+          paint_brand: showPaintingWorkflow
+            ? getFormString(formData, "paint_brand", "Dunn-Edwards")
+            : "Dunn-Edwards",
+          paint_product_line: showPaintingWorkflow
+            ? getOptionalFormString(formData, "paint_product_line")
+            : null,
+          paint_finish: showPaintingWorkflow
+            ? (getOptionalFormString(formData, "paint_finish") as PaintFinish | null)
+            : null,
+          color_selection_status: showPaintingWorkflow
+            ? selectedColorStatus
+            : "not_started",
+          paint_color_body: showPaintingWorkflow
+            ? getOptionalFormString(formData, "paint_color_body")
+            : null,
+          paint_color_trim: showPaintingWorkflow
+            ? getOptionalFormString(formData, "paint_color_trim")
+            : null,
+          paint_color_accent: showPaintingWorkflow
+            ? getOptionalFormString(formData, "paint_color_accent")
+            : null,
+          surface_prep_level: showPaintingWorkflow
+            ? (getOptionalFormString(
+                formData,
+                "surface_prep_level",
+              ) as SurfacePrepLevel | null)
+            : null,
+          coats: showPaintingWorkflow
+            ? Math.min(4, Math.max(1, Math.round(getFormNumber(formData, "coats") || 2)))
+            : 2,
+          primer_required: showPaintingWorkflow
+            ? formData.get("primer_required") === "on"
+            : false,
         },
         cleanLineItems,
       );
@@ -3785,7 +4035,8 @@ function EstimateEditor({
           <select
             name="company_id"
             required
-            defaultValue={estimate?.company_id ?? snapshot.companies[0]?.id}
+            value={selectedCompanyId}
+            onChange={(event) => handleCompanyChange(event.target.value)}
             className="rounded-md border border-slate-300 px-3 py-2"
           >
             {snapshot.companies.map((company) => (
@@ -3846,7 +4097,8 @@ function EstimateEditor({
         </select>
         <select
           name="service_type"
-          defaultValue={estimate?.service_type ?? "roofing"}
+          value={selectedServiceType}
+          onChange={(event) => setSelectedServiceType(event.target.value as ServiceType)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           {serviceTypes.map((service) => (
@@ -3877,6 +4129,166 @@ function EstimateEditor({
           />
         </label>
       </div>
+
+      {showPaintingWorkflow ? (
+        <section className="grid gap-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="inline-flex items-center gap-2 text-sm font-bold text-slate-950">
+                <Paintbrush className="h-4 w-4 text-violet-700" />
+                IHC painting details
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                Dunn-Edwards products, finish schedule, color approvals, and prep requirements.
+              </p>
+            </div>
+            <Badge label={colorSelectionStatusLabel(selectedColorStatus)} tone="blue" />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Project area
+              <select
+                name="painting_area_type"
+                defaultValue={estimate?.painting_area_type ?? "exterior"}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                {paintingAreaTypes.map((area) => (
+                  <option key={area.value} value={area.value}>
+                    {area.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Product line
+              <select
+                name="paint_product_line"
+                defaultValue={estimate?.paint_product_line ?? dunnEdwardsProductLines[0]}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                {dunnEdwardsProductLines.map((product) => (
+                  <option key={product} value={product}>
+                    {product}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Finish / sheen
+              <select
+                name="paint_finish"
+                defaultValue={estimate?.paint_finish ?? "satin"}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                {paintFinishOptions.map((finish) => (
+                  <option key={finish.value} value={finish.value}>
+                    {finish.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Color status
+              <select
+                value={selectedColorStatus}
+                onChange={(event) =>
+                  setSelectedColorStatus(event.target.value as ColorSelectionStatus)
+                }
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                {colorSelectionStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Surface prep
+              <select
+                name="surface_prep_level"
+                defaultValue={estimate?.surface_prep_level ?? "standard"}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              >
+                {surfacePrepLevels.map((level) => (
+                  <option key={level.value} value={level.value}>
+                    {level.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Coats
+              <input
+                name="coats"
+                type="number"
+                min="1"
+                max="4"
+                defaultValue={estimate?.coats ?? 2}
+                className="rounded-md border border-slate-300 px-3 py-2"
+              />
+            </label>
+          </div>
+
+          <input type="hidden" name="paint_brand" value="Dunn-Edwards" />
+          <div className="grid gap-3 md:grid-cols-3">
+            <input
+              name="paint_color_body"
+              defaultValue={estimate?.paint_color_body ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Body / wall color"
+            />
+            <input
+              name="paint_color_trim"
+              defaultValue={estimate?.paint_color_trim ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Trim color"
+            />
+            <input
+              name="paint_color_accent"
+              defaultValue={estimate?.paint_color_accent ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Accent / cabinet color"
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+            <div className="grid gap-2 rounded-md border border-violet-100 bg-white p-3">
+              <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                <Palette className="h-4 w-4 text-violet-700" />
+                Color workflow
+              </p>
+              <div className="grid gap-2 sm:grid-cols-4">
+                {colorSelectionStatuses.map((status) => {
+                  const isActive = status.value === selectedColorStatus;
+
+                  return (
+                    <div
+                      key={status.value}
+                      className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                        isActive
+                          ? "border-violet-300 bg-violet-100 text-violet-900"
+                          : "border-slate-200 bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      {status.label}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <label className="flex items-center justify-center gap-2 rounded-md border border-violet-100 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
+              <input
+                name="primer_required"
+                type="checkbox"
+                defaultChecked={estimate?.primer_required ?? false}
+              />
+              Primer required
+            </label>
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-4">
         <NumberControl
@@ -3925,6 +4337,16 @@ function EstimateEditor({
         <div className="flex items-center justify-between border-b border-slate-200 p-3">
           <p className="text-sm font-bold text-slate-950">Line items</p>
           <div className="flex flex-wrap gap-2">
+            {showPaintingWorkflow ? (
+              <button
+                type="button"
+                onClick={addPaintingPackage}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100"
+              >
+                <Paintbrush className="h-3.5 w-3.5" />
+                Painting package
+              </button>
+            ) : null}
             {lineItemCategories.map((category) => (
               <button
                 key={category.value}
@@ -4114,6 +4536,8 @@ function EstimatePdfPreview({
     );
   }
 
+  const showPaintingSpecs = estimate.service_type === "painting" || isPaintingCompany(company);
+
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-4">
@@ -4164,6 +4588,43 @@ function EstimatePdfPreview({
             </p>
           </div>
         </div>
+
+        {showPaintingSpecs ? (
+          <div className="mt-5 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-violet-900">
+              <Paintbrush className="h-4 w-4" />
+              Painting specifications
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <ProfileStat
+                label="Area"
+                value={paintingAreaLabel(estimate.painting_area_type)}
+              />
+              <ProfileStat
+                label="Product"
+                value={estimate.paint_product_line ?? estimate.paint_brand}
+              />
+              <ProfileStat
+                label="Sheen"
+                value={paintFinishLabel(estimate.paint_finish)}
+              />
+              <ProfileStat
+                label="Color status"
+                value={colorSelectionStatusLabel(estimate.color_selection_status)}
+              />
+              <ProfileStat
+                label="Surface prep"
+                value={surfacePrepLabel(estimate.surface_prep_level)}
+              />
+              <ProfileStat
+                label="Coats / primer"
+                value={`${estimate.coats ?? 2} coats / ${
+                  estimate.primer_required ? "primer" : "no primer"
+                }`}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
           <div className="grid grid-cols-[1fr_80px_90px] bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
@@ -4240,6 +4701,9 @@ function EstimateWorkflowPanel({
     leadId: estimate.lead_id,
     estimateId: estimate.id,
   });
+  const company = snapshot.companies.find((item) => item.id === estimate.company_id);
+  const showPaintingHandoff =
+    estimate.service_type === "painting" || isPaintingCompany(company);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -4275,6 +4739,46 @@ function EstimateWorkflowPanel({
           value={linkedJob ? jobStatusLabel(linkedJob.status) : "Not created"}
         />
       </div>
+      {showPaintingHandoff ? (
+        <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="inline-flex items-center gap-2 text-sm font-bold text-violet-950">
+                <Palette className="h-4 w-4" />
+                IHC color and coating readiness
+              </p>
+              <p className="mt-1 text-sm text-violet-800">
+                {estimate.paint_product_line ?? estimate.paint_brand} -{" "}
+                {paintFinishLabel(estimate.paint_finish)}
+              </p>
+            </div>
+            <Badge
+              label={colorSelectionStatusLabel(estimate.color_selection_status)}
+              tone={
+                estimate.color_selection_status === "approved"
+                  ? "green"
+                  : estimate.color_selection_status === "change_requested"
+                    ? "amber"
+                    : "blue"
+              }
+            />
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <ProfileStat
+              label="Body / wall"
+              value={estimate.paint_color_body ?? "Not set"}
+            />
+            <ProfileStat
+              label="Trim"
+              value={estimate.paint_color_trim ?? "Not set"}
+            />
+            <ProfileStat
+              label="Accent / cabinet"
+              value={estimate.paint_color_accent ?? "Not set"}
+            />
+          </div>
+        </div>
+      ) : null}
       {linkedJob ? (
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
           <p className="text-sm font-bold text-emerald-900">{linkedJob.title}</p>

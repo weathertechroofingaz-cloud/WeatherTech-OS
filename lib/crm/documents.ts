@@ -11,6 +11,12 @@ import type {
   ScopeRecord,
   Trade,
 } from "./types";
+import {
+  colorSelectionStatusLabel,
+  paintFinishLabel,
+  paintingAreaLabel,
+  surfacePrepLabel,
+} from "./painting";
 
 type DocumentSourceType =
   | "estimate"
@@ -99,8 +105,10 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     category: "estimate",
     sourceType: "estimate",
     trade: "painting",
-    description: "Painting proposal with prep, surfaces, coatings, colors, labor, materials, and customer approval.",
-    aiPrompt: "Create a professional IHC Painting estimate using the selected estimate, property details, surface prep, coating system, color notes, line items, exclusions, tax, discounts, and totals.",
+    description:
+      "IHC proposal with prep level, Dunn-Edwards coating system, sheen, colors, labor, materials, and customer approval.",
+    aiPrompt:
+      "Create a professional IHC Painting estimate using the selected estimate, property details, surface prep, Dunn-Edwards product line, sheen, color approval status, line items, exclusions, tax, discounts, and totals.",
   },
   {
     key: "ihc_scope_of_work",
@@ -108,8 +116,10 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     category: "scope",
     sourceType: "scope",
     trade: "painting",
-    description: "Interior, exterior, and cabinet refinishing work plan with prep and finish requirements.",
-    aiPrompt: "Create a detailed IHC Painting scope of work from the selected scope with room/surface schedule, prep expectations, masking, color placement, cleanup, exclusions, and final walkthrough.",
+    description:
+      "Interior, exterior, and cabinet refinishing work plan with prep, masking, color placement, and finish requirements.",
+    aiPrompt:
+      "Create a detailed IHC Painting scope of work from the selected scope with room/surface schedule, prep expectations, masking, Dunn-Edwards product details, sheen, color placement, cleanup, exclusions, and final walkthrough.",
   },
   {
     key: "ihc_invoice",
@@ -126,8 +136,10 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     category: "completion_certificate",
     sourceType: "completion_certificate",
     trade: "painting",
-    description: "Painting closeout certificate confirming completed surfaces, touch-ups, photos, and walkthrough.",
-    aiPrompt: "Create a painting completion certificate for the selected job with property details, completion date, finished areas, touch-up review, photo references, and customer acknowledgement language.",
+    description:
+      "Painting closeout certificate confirming completed surfaces, touch-ups, photos, color placement, and walkthrough.",
+    aiPrompt:
+      "Create an IHC Painting completion certificate for the selected job with property details, completion date, finished areas, Dunn-Edwards product/color references, touch-up review, photo references, and customer acknowledgement language.",
   },
   {
     key: "ihc_workmanship_warranty",
@@ -135,8 +147,10 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     category: "warranty",
     sourceType: "warranty",
     trade: "painting",
-    description: "Painting workmanship warranty with surface prep terms, coating exclusions, and maintenance guidance.",
-    aiPrompt: "Create a painting workmanship warranty document for the selected job with coverage terms, exclusions, claim process, coating manufacturer limits, maintenance requirements, and care instructions.",
+    description:
+      "IHC painting workmanship warranty with prep terms, coating exclusions, maintenance guidance, and product limits.",
+    aiPrompt:
+      "Create an IHC Painting workmanship warranty document for the selected job with coverage terms, exclusions, claim process, Dunn-Edwards coating manufacturer limits, maintenance requirements, and care instructions.",
   },
 ];
 
@@ -338,6 +352,32 @@ function buildEstimateDraft(
   const customer = customerById(snapshot, estimate.customer_id);
   const company = companyName(snapshot, estimate.company_id);
   const template = templateForSource(snapshot, estimate.company_id, "estimate");
+  const companyRecord = companyById(snapshot, estimate.company_id);
+  const shouldIncludePaintingSpecs =
+    estimate.service_type === "painting" || companyRecord?.trade === "painting";
+  const paintingSpecSection = shouldIncludePaintingSpecs
+    ? [
+        {
+          title: "Painting Specifications",
+          body: keyValueRows([
+            ["Area type", paintingAreaLabel(estimate.painting_area_type)],
+            ["Paint brand", estimate.paint_brand],
+            ["Product line", estimate.paint_product_line],
+            ["Finish / sheen", paintFinishLabel(estimate.paint_finish)],
+            [
+              "Color approval",
+              colorSelectionStatusLabel(estimate.color_selection_status),
+            ],
+            ["Body / wall color", estimate.paint_color_body],
+            ["Trim color", estimate.paint_color_trim],
+            ["Accent / cabinet color", estimate.paint_color_accent],
+            ["Surface prep", surfacePrepLabel(estimate.surface_prep_level)],
+            ["Coats", estimate.coats],
+            ["Primer required", estimate.primer_required ? "Yes" : "No"],
+          ]),
+        },
+      ]
+    : [];
 
   return {
     company_id: estimate.company_id,
@@ -380,6 +420,7 @@ function buildEstimateDraft(
             ["Total", formatMoney(estimate.total)],
           ]),
         },
+        ...paintingSpecSection,
         {
           title: "Line Items",
           body: list(
