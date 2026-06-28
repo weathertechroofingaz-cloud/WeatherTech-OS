@@ -103,6 +103,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     smsMessages,
     routePlans,
     routePlanStops,
+    companyMemberships,
+    companyWorkflowSettings,
   ] = await Promise.all([
     client.from("companies").select("*").order("name", { ascending: true }),
     client.from("leads").select("*").order("updated_at", { ascending: false }),
@@ -165,6 +167,11 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .from("route_plan_stops")
       .select("*")
       .order("sort_order", { ascending: true }),
+    client.from("company_memberships").select("*").order("created_at", { ascending: true }),
+    client
+      .from("company_workflow_settings")
+      .select("*")
+      .order("workflow_profile", { ascending: true }),
   ]);
 
   if (companies.error) {
@@ -287,6 +294,14 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     throw routePlanStops.error;
   }
 
+  if (companyMemberships.error) {
+    throw companyMemberships.error;
+  }
+
+  if (companyWorkflowSettings.error) {
+    throw companyWorkflowSettings.error;
+  }
+
   return {
     companies: companies.data,
     leads: leads.data,
@@ -318,6 +333,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     smsMessages: smsMessages.data,
     routePlans: routePlans.data,
     routePlanStops: routePlanStops.data,
+    companyMemberships: companyMemberships.data,
+    companyWorkflowSettings: companyWorkflowSettings.data,
   };
 }
 

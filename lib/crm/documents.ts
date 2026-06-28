@@ -1,5 +1,6 @@
 import type {
   ChangeOrderRecord,
+  CompanyRecord,
   CrmSnapshot,
   CustomerRecord,
   DocumentCategory,
@@ -8,6 +9,7 @@ import type {
   InvoiceRecord,
   JobRecord,
   ScopeRecord,
+  Trade,
 } from "./types";
 
 type DocumentSourceType =
@@ -40,6 +42,7 @@ export type WeatherTechDocumentTemplate = {
   name: string;
   category: DocumentCategory;
   sourceType: DocumentSourceType;
+  trade: Trade;
   description: string;
   aiPrompt: string;
 };
@@ -50,6 +53,7 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     name: "WeatherTech Roofing Estimate",
     category: "estimate",
     sourceType: "estimate",
+    trade: "roofing",
     description: "Customer-facing proposal with line items, totals, exclusions, and approval language.",
     aiPrompt: "Create a professional roofing estimate document using the selected estimate, property details, line items, exclusions, warranty notes, tax, discounts, and profit-aware totals.",
   },
@@ -58,6 +62,7 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     name: "WeatherTech Scope of Work",
     category: "scope",
     sourceType: "scope",
+    trade: "roofing",
     description: "Detailed work plan for roofing, repairs, painting, underlayment, and custom production scopes.",
     aiPrompt: "Create a detailed WeatherTech scope of work from the selected scope record with project sequence, customer expectations, cleanup, exclusions, safety notes, and warranty boundaries.",
   },
@@ -66,6 +71,7 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     name: "WeatherTech Invoice",
     category: "invoice",
     sourceType: "invoice",
+    trade: "roofing",
     description: "Payment-ready invoice packet with charges, payments, balance, and remittance notes.",
     aiPrompt: "Create a clean invoice packet with customer billing details, invoice line items, balance due, payment terms, and service summary.",
   },
@@ -74,6 +80,7 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     name: "WeatherTech Completion Certificate",
     category: "completion_certificate",
     sourceType: "completion_certificate",
+    trade: "roofing",
     description: "Closeout certificate confirming job completion, walkthrough, photos, and open balances.",
     aiPrompt: "Create a completion certificate for the selected job with property details, completion date, final walkthrough notes, photo/document references, and customer acknowledgement language.",
   },
@@ -82,14 +89,95 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     name: "WeatherTech Workmanship Warranty",
     category: "warranty",
     sourceType: "warranty",
+    trade: "roofing",
     description: "Roofing warranty packet with workmanship terms, exclusions, registration, and maintenance guidance.",
     aiPrompt: "Create a workmanship warranty document for the selected roofing job with coverage terms, exclusions, claim process, maintenance requirements, and transferable limitations.",
+  },
+  {
+    key: "ihc_painting_estimate",
+    name: "IHC Painting Estimate",
+    category: "estimate",
+    sourceType: "estimate",
+    trade: "painting",
+    description: "Painting proposal with prep, surfaces, coatings, colors, labor, materials, and customer approval.",
+    aiPrompt: "Create a professional IHC Painting estimate using the selected estimate, property details, surface prep, coating system, color notes, line items, exclusions, tax, discounts, and totals.",
+  },
+  {
+    key: "ihc_scope_of_work",
+    name: "IHC Painting Scope of Work",
+    category: "scope",
+    sourceType: "scope",
+    trade: "painting",
+    description: "Interior, exterior, and cabinet refinishing work plan with prep and finish requirements.",
+    aiPrompt: "Create a detailed IHC Painting scope of work from the selected scope with room/surface schedule, prep expectations, masking, color placement, cleanup, exclusions, and final walkthrough.",
+  },
+  {
+    key: "ihc_invoice",
+    name: "IHC Painting Invoice",
+    category: "invoice",
+    sourceType: "invoice",
+    trade: "painting",
+    description: "Payment-ready invoice packet for painting work, progress payments, balances, and terms.",
+    aiPrompt: "Create a clean IHC Painting invoice packet with customer billing details, line items, service summary, payment terms, paid amount, and balance due.",
+  },
+  {
+    key: "ihc_completion_certificate",
+    name: "IHC Painting Completion Certificate",
+    category: "completion_certificate",
+    sourceType: "completion_certificate",
+    trade: "painting",
+    description: "Painting closeout certificate confirming completed surfaces, touch-ups, photos, and walkthrough.",
+    aiPrompt: "Create a painting completion certificate for the selected job with property details, completion date, finished areas, touch-up review, photo references, and customer acknowledgement language.",
+  },
+  {
+    key: "ihc_workmanship_warranty",
+    name: "IHC Painting Workmanship Warranty",
+    category: "warranty",
+    sourceType: "warranty",
+    trade: "painting",
+    description: "Painting workmanship warranty with surface prep terms, coating exclusions, and maintenance guidance.",
+    aiPrompt: "Create a painting workmanship warranty document for the selected job with coverage terms, exclusions, claim process, coating manufacturer limits, maintenance requirements, and care instructions.",
   },
 ];
 
 function templateByKey(key: string) {
   return (
     weatherTechDocumentTemplates.find((template) => template.key === key) ??
+    weatherTechDocumentTemplates[0]
+  );
+}
+
+function templateMatchesCompany(
+  template: WeatherTechDocumentTemplate,
+  company: CompanyRecord | null | undefined,
+) {
+  return !company || company.trade === "both" || template.trade === company.trade;
+}
+
+export function getDocumentTemplatesForCompany(
+  company?: CompanyRecord | null,
+) {
+  return weatherTechDocumentTemplates.filter((template) =>
+    templateMatchesCompany(template, company),
+  );
+}
+
+function companyById(snapshot: CrmSnapshot, companyId: string) {
+  return snapshot.companies.find((company) => company.id === companyId) ?? null;
+}
+
+function templateForSource(
+  snapshot: CrmSnapshot,
+  companyId: string,
+  sourceType: DocumentSourceType,
+) {
+  const company = companyById(snapshot, companyId);
+  return (
+    weatherTechDocumentTemplates.find(
+      (template) =>
+        template.sourceType === sourceType && templateMatchesCompany(template, company),
+    ) ??
+    weatherTechDocumentTemplates.find((template) => template.sourceType === sourceType) ??
     weatherTechDocumentTemplates[0]
   );
 }
@@ -249,6 +337,7 @@ function buildEstimateDraft(
     .sort((a, b) => a.sort_order - b.sort_order);
   const customer = customerById(snapshot, estimate.customer_id);
   const company = companyName(snapshot, estimate.company_id);
+  const template = templateForSource(snapshot, estimate.company_id, "estimate");
 
   return {
     company_id: estimate.company_id,
@@ -260,7 +349,7 @@ function buildEstimateDraft(
     title: `${estimate.title} - Estimate Packet`,
     category: "estimate",
     status: "draft",
-    template_key: "weathertech_estimate",
+    template_key: template.key,
     file_url: null,
     body: packet({
       title: `${estimate.title} Estimate`,
@@ -308,8 +397,8 @@ function buildEstimateDraft(
     }),
     sourceLabel: `Estimate - ${estimate.title}`,
     summary: `${lineItems.length} line items, ${formatMoney(estimate.total)} total`,
-    templateKey: "weathertech_estimate",
-    templateName: templateByKey("weathertech_estimate").name,
+    templateKey: template.key,
+    templateName: template.name,
   };
 }
 
@@ -322,6 +411,7 @@ function buildInvoiceDraft(
     .sort((a, b) => a.sort_order - b.sort_order);
   const customer = customerById(snapshot, invoice.customer_id);
   const company = companyName(snapshot, invoice.company_id);
+  const template = templateForSource(snapshot, invoice.company_id, "invoice");
 
   return {
     company_id: invoice.company_id,
@@ -333,7 +423,7 @@ function buildInvoiceDraft(
     title: `${invoice.invoice_number} - Invoice Packet`,
     category: "invoice",
     status: "draft",
-    template_key: "weathertech_invoice",
+    template_key: template.key,
     file_url: null,
     body: packet({
       title: `${invoice.invoice_number} Invoice`,
@@ -379,8 +469,8 @@ function buildInvoiceDraft(
     }),
     sourceLabel: `Invoice - ${invoice.invoice_number}`,
     summary: `${lineItems.length} line items, ${formatMoney(invoice.balance_due)} balance due`,
-    templateKey: "weathertech_invoice",
-    templateName: templateByKey("weathertech_invoice").name,
+    templateKey: template.key,
+    templateName: template.name,
   };
 }
 
@@ -389,6 +479,7 @@ function buildScopeDraft(
   scope: ScopeRecord,
 ): GeneratedDocumentDraft {
   const company = companyName(snapshot, scope.company_id);
+  const template = templateForSource(snapshot, scope.company_id, "scope");
 
   return {
     company_id: scope.company_id,
@@ -400,7 +491,7 @@ function buildScopeDraft(
     title: `${scope.title} - Scope Packet`,
     category: "scope",
     status: "draft",
-    template_key: "weathertech_scope_of_work",
+    template_key: template.key,
     file_url: null,
     body: packet({
       title: scope.title,
@@ -426,8 +517,8 @@ function buildScopeDraft(
     }),
     sourceLabel: `Scope - ${scope.title}`,
     summary: `${scope.category.replace(/_/g, " ")} scope`,
-    templateKey: "weathertech_scope_of_work",
-    templateName: templateByKey("weathertech_scope_of_work").name,
+    templateKey: template.key,
+    templateName: template.name,
   };
 }
 
@@ -584,6 +675,11 @@ function buildCompletionCertificateDraft(
   const inspections = snapshot.inspections.filter(
     (inspection) => inspection.job_id === job.id,
   );
+  const template = templateForSource(
+    snapshot,
+    job.company_id,
+    "completion_certificate",
+  );
   const finalInspection = inspections.find(
     (inspection) => inspection.status === "passed",
   );
@@ -598,7 +694,7 @@ function buildCompletionCertificateDraft(
     title: `${job.title} - Completion Certificate`,
     category: "completion_certificate",
     status: "draft",
-    template_key: "weathertech_completion_certificate",
+    template_key: template.key,
     file_url: null,
     body: packet({
       title: `${job.title} Completion Certificate`,
@@ -638,13 +734,14 @@ function buildCompletionCertificateDraft(
     }),
     sourceLabel: `Job - ${job.title}`,
     summary: `${photos.length} photos, ${documents.length} linked documents`,
-    templateKey: "weathertech_completion_certificate",
-    templateName: templateByKey("weathertech_completion_certificate").name,
+    templateKey: template.key,
+    templateName: template.name,
   };
 }
 
 function buildWarrantyDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDocumentDraft {
   const company = companyName(snapshot, job.company_id);
+  const template = templateForSource(snapshot, job.company_id, "warranty");
   const customer = customerById(snapshot, job.customer_id);
   const estimate = job.estimate_id
     ? snapshot.estimates.find((item) => item.id === job.estimate_id) ?? null
@@ -663,7 +760,7 @@ function buildWarrantyDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDoc
     title: `${job.title} - Workmanship Warranty`,
     category: "warranty",
     status: "draft",
-    template_key: "weathertech_workmanship_warranty",
+    template_key: template.key,
     file_url: null,
     body: packet({
       title: `${job.title} Workmanship Warranty`,
@@ -705,8 +802,8 @@ function buildWarrantyDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDoc
     }),
     sourceLabel: `Job - ${job.title}`,
     summary: `${job.service_type.replace(/_/g, " ")} warranty packet`,
-    templateKey: "weathertech_workmanship_warranty",
-    templateName: templateByKey("weathertech_workmanship_warranty").name,
+    templateKey: template.key,
+    templateName: template.name,
   };
 }
 
@@ -803,35 +900,35 @@ export function buildDocumentSourceOptions(snapshot: CrmSnapshot): DocumentSourc
       label: `Estimate - ${estimate.title}`,
       type: "estimate" as const,
       category: "estimate" as const,
-      templateKey: "weathertech_estimate",
+      templateKey: templateForSource(snapshot, estimate.company_id, "estimate").key,
     })),
     ...snapshot.invoices.map((invoice) => ({
       value: `invoice:${invoice.id}`,
       label: `Invoice - ${invoice.invoice_number}`,
       type: "invoice" as const,
       category: "invoice" as const,
-      templateKey: "weathertech_invoice",
+      templateKey: templateForSource(snapshot, invoice.company_id, "invoice").key,
     })),
     ...snapshot.scopes.map((scope) => ({
       value: `scope:${scope.id}`,
       label: `Scope - ${scope.title}`,
       type: "scope" as const,
       category: "scope" as const,
-      templateKey: "weathertech_scope_of_work",
+      templateKey: templateForSource(snapshot, scope.company_id, "scope").key,
     })),
     ...snapshot.jobs.map((job) => ({
       value: `completion_certificate:${job.id}`,
       label: `Completion certificate - ${job.title}`,
       type: "completion_certificate" as const,
       category: "completion_certificate" as const,
-      templateKey: "weathertech_completion_certificate",
+      templateKey: templateForSource(snapshot, job.company_id, "completion_certificate").key,
     })),
     ...snapshot.jobs.map((job) => ({
       value: `warranty:${job.id}`,
       label: `Warranty - ${job.title}`,
       type: "warranty" as const,
       category: "warranty" as const,
-      templateKey: "weathertech_workmanship_warranty",
+      templateKey: templateForSource(snapshot, job.company_id, "warranty").key,
     })),
     ...snapshot.changeOrders.map((changeOrder) => ({
       value: `change_order:${changeOrder.id}`,

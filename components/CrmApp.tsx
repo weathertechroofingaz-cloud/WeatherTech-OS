@@ -94,8 +94,13 @@ import {
 import {
   buildDocumentSourceOptions,
   buildGeneratedDocumentDraft,
+  getDocumentTemplatesForCompany,
   weatherTechDocumentTemplates,
 } from "../lib/crm/documents";
+import {
+  scopeCrmSnapshotByCompany,
+  type CompanyScopeId,
+} from "../lib/crm/companyScope";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
   buildGoogleCalendarEventPayload,
@@ -442,6 +447,28 @@ function getFormNumber(formData: FormData, key: string) {
   const value = getFormString(formData, key).replace(/[^0-9.]/g, "");
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function companyInitials(company: CompanyRecord | null | undefined) {
+  if (!company) {
+    return "OS";
+  }
+
+  return company.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function companyTradeLabel(company: CompanyRecord | null | undefined) {
+  if (!company) {
+    return "All-company workspace";
+  }
+
+  return `${company.trade === "both" ? "Shared" : company.trade} workflow`;
 }
 
 function statusLabel(status: LeadStatus) {
@@ -1434,10 +1461,26 @@ function CrmWorkspace({
   onNotice,
   onError,
 }: CrmWorkspaceProps) {
-  const metrics = useMemo(() => calculateDashboardMetrics(snapshot), [snapshot]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>(() => {
+    if (typeof window === "undefined") {
+      return "all";
+    }
+
+    return window.localStorage.getItem("weathertech-company-scope") ?? "all";
+  });
   const companyMap = useMemo(
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
+  );
+  const activeCompany =
+    selectedCompanyId === "all" ? null : companyMap.get(selectedCompanyId) ?? null;
+  const scopedSnapshot = useMemo(
+    () => scopeCrmSnapshotByCompany(snapshot, selectedCompanyId),
+    [selectedCompanyId, snapshot],
+  );
+  const metrics = useMemo(
+    () => calculateDashboardMetrics(scopedSnapshot),
+    [scopedSnapshot],
   );
   const shortcuts = useMemo(
     () =>
@@ -1452,6 +1495,19 @@ function CrmWorkspace({
       ] satisfies { key: string; view: WorkspaceView; label: string }[],
     [],
   );
+
+  useEffect(() => {
+    if (
+      selectedCompanyId !== "all" &&
+      !snapshot.companies.some((company) => company.id === selectedCompanyId)
+    ) {
+      setSelectedCompanyId("all");
+    }
+  }, [selectedCompanyId, snapshot.companies]);
+
+  useEffect(() => {
+    window.localStorage.setItem("weathertech-company-scope", selectedCompanyId);
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1489,14 +1545,19 @@ function CrmWorkspace({
       <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:min-h-[calc(100vh-48px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
-            <div className="grid h-11 w-11 place-items-center rounded-md bg-sky-500 font-bold">
-              WT
+            <div
+              className="grid h-11 w-11 place-items-center rounded-md font-bold text-white"
+              style={{ backgroundColor: activeCompany?.brand_color ?? "#0284c7" }}
+            >
+              {companyInitials(activeCompany)}
             </div>
             <div>
               <p className="text-sm font-semibold uppercase text-sky-300">
-                WeatherTech
+                {activeCompany?.short_name ?? activeCompany?.name ?? "WeatherTech OS"}
               </p>
-              <p className="text-sm text-slate-300">Operations CRM</p>
+              <p className="text-sm capitalize text-slate-300">
+                {companyTradeLabel(activeCompany)}
+              </p>
             </div>
           </div>
 
@@ -1630,11 +1691,14 @@ function CrmWorkspace({
           </nav>
 
           <div className="mt-6 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
-            <p className="font-semibold text-white">
-              Supabase connected
+              <p className="font-semibold text-white">
+              Shared platform
             </p>
             <p className="mt-2">
               {user?.email}
+            </p>
+            <p className="mt-2 text-xs text-slate-400">
+              {activeCompany ? activeCompany.name : "All companies"}
             </p>
           </div>
         </aside>
@@ -1646,10 +1710,31 @@ function CrmWorkspace({
                 WeatherTech OS
               </p>
               <h1 className="mt-1 text-2xl font-bold text-slate-950">
-                Roofing and painting CRM
+                {activeCompany?.name ?? "Roofing and painting CRM"}
               </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                {activeCompany
+                  ? `${companyTradeLabel(activeCompany)} dashboard`
+                  : "All-company dashboard across WeatherTech Roofing and IHC Painting"}
+              </p>
             </div>
             <div className="mt-4 flex flex-wrap gap-2 sm:mt-0">
+              <label className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                <Building2 className="h-4 w-4 text-sky-600" />
+                <select
+                  value={selectedCompanyId}
+                  onChange={(event) => setSelectedCompanyId(event.target.value)}
+                  className="bg-transparent outline-none"
+                  aria-label="Switch company workspace"
+                >
+                  <option value="all">All companies</option>
+                  {snapshot.companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.short_name ?? company.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
@@ -1688,7 +1773,7 @@ function CrmWorkspace({
           {view === "dashboard" ? (
             <DashboardView
               metrics={metrics}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onCreateLead={() => onViewChange("leads")}
             />
@@ -1697,7 +1782,7 @@ function CrmWorkspace({
           {view === "leads" ? (
             <LeadsView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1708,7 +1793,7 @@ function CrmWorkspace({
           {view === "customers" ? (
             <CustomersView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1719,7 +1804,7 @@ function CrmWorkspace({
           {view === "estimates" ? (
             <EstimatesView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1730,7 +1815,7 @@ function CrmWorkspace({
           {view === "scopes" ? (
             <ScopeGeneratorView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1741,7 +1826,7 @@ function CrmWorkspace({
           {view === "jobs" ? (
             <JobsView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1752,7 +1837,7 @@ function CrmWorkspace({
           {view === "calendar" ? (
             <CalendarView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1763,7 +1848,7 @@ function CrmWorkspace({
           {view === "photos" ? (
             <PhotosView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1774,7 +1859,7 @@ function CrmWorkspace({
           {view === "invoices" ? (
             <InvoicesView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1785,7 +1870,7 @@ function CrmWorkspace({
           {view === "orders" ? (
             <MaterialOrdersView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1796,19 +1881,19 @@ function CrmWorkspace({
           {view === "ai" ? (
             <AiToolsView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
             />
           ) : null}
 
-          {view === "weather" ? <WeatherDashboardView snapshot={snapshot} /> : null}
+          {view === "weather" ? <WeatherDashboardView snapshot={scopedSnapshot} /> : null}
 
           {view === "customerPortal" ? (
             <CustomerPortalView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -1818,7 +1903,7 @@ function CrmWorkspace({
           {view === "employeePortal" ? (
             <EmployeePortalView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1829,7 +1914,7 @@ function CrmWorkspace({
           {view === "routes" ? (
             <RoutePlannerView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -1839,7 +1924,7 @@ function CrmWorkspace({
           {view === "changeOrders" ? (
             <ChangeOrdersView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1850,7 +1935,7 @@ function CrmWorkspace({
           {view === "documents" ? (
             <DocumentsAndSignaturesView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1859,13 +1944,13 @@ function CrmWorkspace({
           ) : null}
 
           {view === "analytics" ? (
-            <AnalyticsView metrics={metrics} snapshot={snapshot} />
+            <AnalyticsView metrics={metrics} snapshot={scopedSnapshot} />
           ) : null}
 
           {view === "notifications" ? (
             <NotificationsView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -1876,7 +1961,7 @@ function CrmWorkspace({
           {view === "integrations" ? (
             <IntegrationsView
               client={client}
-              snapshot={snapshot}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
               onNotice={onNotice}
@@ -4419,6 +4504,7 @@ function ScopeGeneratorView({
 
     const formData = new FormData(event.currentTarget);
     const input: ScopeTemplateInput = {
+      company_id: draft.company_id || snapshot.companies[0]?.id || null,
       title: getFormString(formData, "title"),
       category: getFormString(formData, "category", "custom") as ScopeCategory,
       description: getFormString(formData, "description"),
@@ -9517,6 +9603,12 @@ function DocumentsAndSignaturesView({
     () => buildDocumentSourceOptions(snapshot),
     [snapshot],
   );
+  const activeDocumentCompany =
+    snapshot.companies.length === 1 ? snapshot.companies[0] : null;
+  const documentTemplates = useMemo(
+    () => getDocumentTemplatesForCompany(activeDocumentCompany),
+    [activeDocumentCompany],
+  );
   const [selectedTemplateKey, setSelectedTemplateKey] = useState(
     weatherTechDocumentTemplates[0]?.key ?? "",
   );
@@ -9534,9 +9626,9 @@ function DocumentsAndSignaturesView({
     DocumentCategory | "all"
   >("all");
   const selectedTemplate =
-    weatherTechDocumentTemplates.find(
+    documentTemplates.find(
       (template) => template.key === selectedTemplateKey,
-    ) ?? weatherTechDocumentTemplates[0];
+    ) ?? documentTemplates[0];
   const templateSourceOptions = useMemo(
     () =>
       selectedTemplate
@@ -9596,6 +9688,16 @@ function DocumentsAndSignaturesView({
     sent: snapshot.documents.filter((document) => document.status === "sent").length,
     signed: snapshot.documents.filter((document) => document.status === "signed").length,
   };
+
+  useEffect(() => {
+    if (!documentTemplates.length) {
+      return;
+    }
+
+    if (!documentTemplates.some((template) => template.key === selectedTemplateKey)) {
+      setSelectedTemplateKey(documentTemplates[0].key);
+    }
+  }, [documentTemplates, selectedTemplateKey]);
 
   useEffect(() => {
     if (!templateSourceOptions.length) {
@@ -9831,7 +9933,7 @@ function DocumentsAndSignaturesView({
           </div>
 
           <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-2 xl:grid-cols-5">
-            {weatherTechDocumentTemplates.map((template) => (
+            {documentTemplates.map((template) => (
               <button
                 key={template.key}
                 type="button"
@@ -9962,9 +10064,9 @@ function DocumentsAndSignaturesView({
               value={selectedTemplate?.key ?? ""}
               onChange={(event) => setSelectedTemplateKey(event.target.value)}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              disabled={!weatherTechDocumentTemplates.length}
+                disabled={!documentTemplates.length}
             >
-              {weatherTechDocumentTemplates.map((template) => (
+              {documentTemplates.map((template) => (
                 <option key={template.key} value={template.key}>
                   {template.name}
                 </option>
@@ -10156,7 +10258,7 @@ function DocumentsAndSignaturesView({
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
                 <option value="">Custom document</option>
-                {weatherTechDocumentTemplates.map((template) => (
+                {documentTemplates.map((template) => (
                   <option key={template.key} value={template.key}>
                     {template.name}
                   </option>
@@ -10296,7 +10398,7 @@ function DocumentsAndSignaturesView({
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Custom document</option>
-              {weatherTechDocumentTemplates.map((template) => (
+              {documentTemplates.map((template) => (
                 <option key={template.key} value={template.key}>
                   {template.name}
                 </option>
@@ -11994,34 +12096,96 @@ function IntegrationsView({
 }
 
 function SettingsView({ snapshot }: { snapshot: CrmSnapshot }) {
+  const workflowSettingsByCompany = new Map(
+    snapshot.companyWorkflowSettings.map((settings) => [settings.company_id, settings]),
+  );
+
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-xl font-bold text-slate-950">Settings</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Company records and environment status.
-      </p>
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        {snapshot.companies.map((company) => (
-          <div key={company.id} className="rounded-lg border border-slate-200 p-4">
-            <div className="flex items-center gap-3">
-              {company.trade === "painting" ? (
-                <Paintbrush className="h-5 w-5 text-sky-600" />
-              ) : (
-                <Home className="h-5 w-5 text-sky-600" />
-              )}
-              <div>
-                <p className="font-semibold text-slate-950">{company.name}</p>
-                <p className="text-sm capitalize text-slate-500">{company.trade}</p>
+    <div className="space-y-5">
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-950">Multi-company settings</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          One shared platform with company-specific workflows for WeatherTech Roofing and IHC Painting.
+        </p>
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {snapshot.companies.map((company) => {
+            const workflow = workflowSettingsByCompany.get(company.id);
+            const memberships = snapshot.companyMemberships.filter(
+              (membership) => membership.company_id === company.id,
+            );
+            const templateCount = snapshot.scopeTemplates.filter(
+              (template) => template.company_id === company.id,
+            ).length;
+
+            return (
+              <div key={company.id} className="rounded-lg border border-slate-200 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="grid h-10 w-10 place-items-center rounded-md font-bold text-white"
+                      style={{ backgroundColor: company.brand_color ?? "#0284c7" }}
+                    >
+                      {companyInitials(company)}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-slate-950">{company.name}</p>
+                      <p className="text-sm capitalize text-slate-500">
+                        {company.short_name ?? company.trade}
+                      </p>
+                    </div>
+                  </div>
+                  {company.trade === "painting" ? (
+                    <Paintbrush className="h-5 w-5 text-sky-600" />
+                  ) : (
+                    <Home className="h-5 w-5 text-sky-600" />
+                  )}
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <ProfileStat
+                    label="Workflow"
+                    value={workflow?.workflow_profile ?? company.workflow_profile}
+                  />
+                  <ProfileStat label="Users" value={memberships.length} />
+                  <ProfileStat label="Templates" value={templateCount} />
+                </div>
+
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-bold text-slate-950">Workflow terms</p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {workflow?.estimate_terms ?? "No estimate terms configured."}
+                  </p>
+                  <div className="mt-3 grid gap-1">
+                    {(workflow?.production_checklist ?? []).slice(0, 5).map((item) => (
+                      <p key={item} className="text-sm text-slate-500">
+                        - {item}
+                      </p>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        Supabase environment variables are configured. CRM records are read from
-        and written to the live database.
-      </div>
-    </section>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-950">Shared access model</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Users authenticate once and can receive company-level permissions through memberships.
+        </p>
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <ProfileStat label="Companies" value={snapshot.companies.length} />
+          <ProfileStat label="Memberships" value={snapshot.companyMemberships.length} />
+          <ProfileStat label="Workflow profiles" value={snapshot.companyWorkflowSettings.length} />
+        </div>
+        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          Supabase environment variables are configured. CRM, calendar, photos,
+          documents, integrations, users, and permission records share the same
+          database while company context scopes each workflow.
+        </div>
+      </section>
+    </div>
   );
 }
 

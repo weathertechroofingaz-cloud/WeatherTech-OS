@@ -1,4 +1,12 @@
 export type Trade = "roofing" | "painting" | "both";
+export type CompanyMembershipRole =
+  | "owner"
+  | "admin"
+  | "sales"
+  | "production"
+  | "field"
+  | "viewer"
+  | "team_member";
 export type ServiceType = "roofing" | "painting" | "both";
 export type LeadStatus =
   | "new"
@@ -111,6 +119,9 @@ export type CompanyRecord = {
   id: string;
   name: string;
   trade: Trade;
+  short_name: string | null;
+  brand_color: string | null;
+  workflow_profile: Trade;
   phone: string | null;
   email: string | null;
   created_at: string;
@@ -207,6 +218,7 @@ export type EstimateLineItemRecord = {
 
 export type ScopeTemplateRecord = {
   id: string;
+  company_id: string | null;
   title: string;
   category: ScopeCategory;
   description: string;
@@ -713,6 +725,7 @@ export type ScopeInput = {
 };
 
 export type ScopeTemplateInput = {
+  company_id?: string | null;
   title: string;
   category: ScopeCategory;
   description: string;
@@ -1040,10 +1053,35 @@ export type RoutePlanStopInput = {
   notes?: string | null;
 };
 
+export type CompanyMembershipRecord = {
+  user_id: string;
+  company_id: string;
+  role: CompanyMembershipRole;
+  can_manage_settings: boolean;
+  can_manage_financials: boolean;
+  can_manage_production: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyWorkflowSettingsRecord = {
+  company_id: string;
+  workflow_profile: Trade;
+  estimate_terms: string | null;
+  invoice_terms: string | null;
+  warranty_terms: string | null;
+  production_checklist: string[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type CompanyInsert = {
   id?: string;
   name: string;
   trade: Trade;
+  short_name?: string | null;
+  brand_color?: string | null;
+  workflow_profile?: Trade;
   phone?: string | null;
   email?: string | null;
   created_at?: string;
@@ -1249,6 +1287,28 @@ export type RoutePlanStopInsert = RoutePlanStopInput & {
   updated_at?: string;
 };
 
+export type CompanyMembershipInsert = {
+  user_id: string;
+  company_id: string;
+  role?: CompanyMembershipRole;
+  can_manage_settings?: boolean;
+  can_manage_financials?: boolean;
+  can_manage_production?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CompanyWorkflowSettingsInsert = {
+  company_id: string;
+  workflow_profile?: Trade;
+  estimate_terms?: string | null;
+  invoice_terms?: string | null;
+  warranty_terms?: string | null;
+  production_checklist?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type CrmSnapshot = {
   companies: CompanyRecord[];
   leads: LeadRecord[];
@@ -1280,6 +1340,8 @@ export type CrmSnapshot = {
   smsMessages: SmsMessageRecord[];
   routePlans: RoutePlanRecord[];
   routePlanStops: RoutePlanStopRecord[];
+  companyMemberships: CompanyMembershipRecord[];
+  companyWorkflowSettings: CompanyWorkflowSettingsRecord[];
 };
 
 export type DashboardMetrics = {
@@ -1490,6 +1552,20 @@ export type Database = {
         Row: RoutePlanStopRecord;
         Insert: RoutePlanStopInsert;
         Update: Partial<Database["public"]["Tables"]["route_plan_stops"]["Insert"]>;
+        Relationships: [];
+      };
+      company_memberships: {
+        Row: CompanyMembershipRecord;
+        Insert: CompanyMembershipInsert;
+        Update: Partial<Database["public"]["Tables"]["company_memberships"]["Insert"]>;
+        Relationships: [];
+      };
+      company_workflow_settings: {
+        Row: CompanyWorkflowSettingsRecord;
+        Insert: CompanyWorkflowSettingsInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["company_workflow_settings"]["Insert"]
+        >;
         Relationships: [];
       };
       profiles: {
