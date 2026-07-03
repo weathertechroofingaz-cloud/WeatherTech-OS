@@ -12797,6 +12797,38 @@ type GoHighLevelConnectionTestResult = {
   nextStep: string;
 };
 
+type GoHighLevelLeadDryRunResult = {
+  ok: boolean;
+  dryRun: boolean;
+  communicationsSent: boolean;
+  automationTriggered: boolean;
+  status:
+    | "validated"
+    | "missing_config"
+    | "validation_failed"
+    | "not_found"
+    | "log_failed"
+    | "error";
+  message: string;
+  tokenConfigured: boolean;
+  requiredFields: string[];
+  missingFields: string[];
+  location: {
+    key: "weathertech" | "ihc";
+    label: string;
+    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
+    locationId: string | null;
+    configured: boolean;
+  } | null;
+  payload: Record<string, unknown> | null;
+  requestFingerprint: string | null;
+  checkedAt: string;
+  nextStep: string;
+  leadId: string | null;
+  companyId: string | null;
+  syncLogId: string | null;
+};
+
 function getStringSetting(
   settings: Record<string, unknown> | undefined,
   key: string,
@@ -12873,6 +12905,12 @@ function goHighLevelSyncDirectionLabel(direction: IntegrationSyncDirection) {
   return labels[direction];
 }
 
+function getGoHighLevelDryRunStatusTone(
+  status: GoHighLevelLeadDryRunResult["status"] | IntegrationSyncLogStatus,
+): "blue" | "green" | "amber" {
+  return status === "validated" || status === "succeeded" ? "green" : "amber";
+}
+
 function IntegrationsView({
   client,
   snapshot,
@@ -12925,12 +12963,16 @@ function IntegrationsView({
   const goHighLevelSyncLogs = snapshot.integrationSyncLogs.filter(
     (log) => log.provider === "gohighlevel",
   );
+  const goHighLevelLeadDryRunLogs = goHighLevelSyncLogs.filter(
+    (log) => log.event_type === goHighLevelEnvVars.leadDryRunEventType,
+  );
   const goHighLevelSyncSummary = getIntegrationSyncLogSummary(goHighLevelSyncLogs);
   const failedGoHighLevelSyncLogs = getFailedIntegrationSyncLogs(goHighLevelSyncLogs);
   const retryableGoHighLevelSyncLogs =
     getRetryableIntegrationSyncLogs(goHighLevelSyncLogs);
   const recentFailedGoHighLevelSyncLogs = failedGoHighLevelSyncLogs.slice(0, 4);
   const recentGoHighLevelSyncLogs = goHighLevelSyncLogs.slice(0, 5);
+  const latestGoHighLevelLeadDryRunLog = goHighLevelLeadDryRunLogs[0];
   const latestGoHighLevelSyncLog = goHighLevelSyncLogs[0];
   const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
     ? getIntegrationSyncLogTimestamp(latestGoHighLevelSyncLog)
@@ -12938,10 +12980,33 @@ function IntegrationsView({
   const [goHighLevelTestResult, setGoHighLevelTestResult] =
     useState<GoHighLevelConnectionTestResult | null>(null);
   const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
+  const [goHighLevelLeadDryRunResult, setGoHighLevelLeadDryRunResult] =
+    useState<GoHighLevelLeadDryRunResult | null>(null);
+  const [isRunningGoHighLevelLeadDryRun, setIsRunningGoHighLevelLeadDryRun] =
+    useState(false);
+  const [goHighLevelLeadDryRunLeadId, setGoHighLevelLeadDryRunLeadId] = useState(
+    snapshot.leads[0]?.id ?? "",
+  );
+  const selectedGoHighLevelLead =
+    snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
+    snapshot.leads[0] ??
+    null;
   const goHighLevelLocationIds = getGoHighLevelLocationIds(
     primaryGoHighLevelConnection,
     goHighLevelTestResult,
   );
+  const goHighLevelLeadDryRunStatusLabel = goHighLevelLeadDryRunResult
+    ? goHighLevelLeadDryRunResult.ok
+      ? "Validated"
+      : "Needs attention"
+    : latestGoHighLevelLeadDryRunLog
+      ? integrationSyncLogStatusLabel(latestGoHighLevelLeadDryRunLog.status)
+      : "Not run";
+  const goHighLevelLeadDryRunStatusTone = goHighLevelLeadDryRunResult
+    ? getGoHighLevelDryRunStatusTone(goHighLevelLeadDryRunResult.status)
+    : latestGoHighLevelLeadDryRunLog
+      ? getGoHighLevelDryRunStatusTone(latestGoHighLevelLeadDryRunLog.status)
+      : "blue";
   const goHighLevelStatusLabel = primaryGoHighLevelConnection
     ? integrationStatusLabel(primaryGoHighLevelConnection.status)
     : goHighLevelTestResult?.ok
@@ -12968,6 +13033,22 @@ function IntegrationsView({
           ? "Server config ready"
           : "Configuration incomplete"
         : "Not synced yet";
+
+  useEffect(() => {
+    if (!snapshot.leads.length) {
+      setGoHighLevelLeadDryRunLeadId("");
+      return;
+    }
+
+    if (
+      goHighLevelLeadDryRunLeadId &&
+      snapshot.leads.some((lead) => lead.id === goHighLevelLeadDryRunLeadId)
+    ) {
+      return;
+    }
+
+    setGoHighLevelLeadDryRunLeadId(snapshot.leads[0].id);
+  }, [goHighLevelLeadDryRunLeadId, snapshot.leads]);
 
   const handleTestGoHighLevelConnection = async () => {
     setIsTestingGoHighLevel(true);
@@ -12996,6 +13077,45 @@ function IntegrationsView({
       );
     } finally {
       setIsTestingGoHighLevel(false);
+    }
+  };
+
+  const handleRunGoHighLevelLeadDryRun = async () => {
+    if (!selectedGoHighLevelLead) {
+      onError("Create or select a lead before running the dry run.");
+      return;
+    }
+
+    setIsRunningGoHighLevelLeadDryRun(true);
+    setGoHighLevelLeadDryRunResult(null);
+
+    try {
+      const response = await fetch(goHighLevelEnvVars.leadDryRunEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ leadId: selectedGoHighLevelLead.id }),
+      });
+      const result = (await response.json()) as GoHighLevelLeadDryRunResult;
+      setGoHighLevelLeadDryRunResult(result);
+
+      if (response.ok && result.ok) {
+        onNotice("GoHighLevel dry run validated. No communications were sent.");
+      } else {
+        onError(result.message);
+      }
+
+      await onReload();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not run the GoHighLevel lead dry run.",
+      );
+    } finally {
+      setIsRunningGoHighLevelLeadDryRun(false);
     }
   };
 
@@ -14249,13 +14369,17 @@ function IntegrationsView({
             <Badge label={goHighLevelStatusLabel} tone={goHighLevelStatusTone} />
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
             <ProfileStat label="Connection" value={goHighLevelStatusLabel} />
             <ProfileStat
               label="Location IDs"
               value={goHighLevelLocationIds.length || "None"}
             />
             <ProfileStat label="Last sync" value={goHighLevelLastSyncLabel} />
+            <ProfileStat
+              label="Dry run lead sync"
+              value={goHighLevelLeadDryRunStatusLabel}
+            />
           </div>
 
           <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -14333,6 +14457,135 @@ function IntegrationsView({
                     </div>
                   ))}
                 </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-slate-950">
+                    Dry run lead sync
+                  </p>
+                  <Badge
+                    label={goHighLevelLeadDryRunStatusLabel}
+                    tone={goHighLevelLeadDryRunStatusTone}
+                  />
+                </div>
+                <p className="mt-1 text-sm text-slate-600">
+                  Validates the GoHighLevel contact payload and stores a dry-run sync log.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleRunGoHighLevelLeadDryRun()}
+                disabled={!selectedGoHighLevelLead || isRunningGoHighLevelLeadDryRun}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                {isRunningGoHighLevelLeadDryRun ? "Running dry run" : "Run dry run"}
+              </button>
+            </div>
+
+            {snapshot.leads.length ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.6fr)]">
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Lead
+                  <select
+                    value={goHighLevelLeadDryRunLeadId}
+                    onChange={(event) =>
+                      setGoHighLevelLeadDryRunLeadId(event.target.value)
+                    }
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950"
+                  >
+                    {snapshot.leads.map((lead) => (
+                      <option key={lead.id} value={lead.id}>
+                        {lead.contact_name} -{" "}
+                        {companyMap.get(lead.company_id)?.name ?? "Company"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid gap-2 text-sm">
+                  <ProfileStat
+                    label="Selected lead"
+                    value={selectedGoHighLevelLead?.contact_name ?? "None"}
+                  />
+                  <ProfileStat
+                    label="Last dry run"
+                    value={
+                      goHighLevelLeadDryRunResult
+                        ? formatDateTime(goHighLevelLeadDryRunResult.checkedAt)
+                        : latestGoHighLevelLeadDryRunLog
+                          ? formatDateTime(
+                              getIntegrationSyncLogTimestamp(
+                                latestGoHighLevelLeadDryRunLog,
+                              ),
+                            )
+                          : "Not run"
+                    }
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4">
+                <EmptyState label="No leads available for a GoHighLevel dry run." />
+              </div>
+            )}
+
+            {goHighLevelLeadDryRunResult ? (
+              <div className="mt-4 rounded-lg border border-sky-200 bg-white p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="font-semibold text-slate-950">
+                      {goHighLevelLeadDryRunResult.message}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Communications sent:{" "}
+                      {goHighLevelLeadDryRunResult.communicationsSent ? "yes" : "no"} ·
+                      Automations triggered:{" "}
+                      {goHighLevelLeadDryRunResult.automationTriggered ? "yes" : "no"}
+                    </p>
+                  </div>
+                  <Badge
+                    label={goHighLevelLeadDryRunResult.status.replace("_", " ")}
+                    tone={getGoHighLevelDryRunStatusTone(
+                      goHighLevelLeadDryRunResult.status,
+                    )}
+                  />
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <ProfileStat
+                    label="Location"
+                    value={goHighLevelLeadDryRunResult.location?.label ?? "None"}
+                  />
+                  <ProfileStat
+                    label="Missing fields"
+                    value={goHighLevelLeadDryRunResult.missingFields.length || "None"}
+                  />
+                  <ProfileStat
+                    label="Sync log"
+                    value={goHighLevelLeadDryRunResult.syncLogId ?? "Not saved"}
+                  />
+                </div>
+                {goHighLevelLeadDryRunResult.missingFields.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {goHighLevelLeadDryRunResult.missingFields.map((field) => (
+                      <span
+                        key={field}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+                      >
+                        {field}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {goHighLevelLeadDryRunResult.payload ? (
+                  <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
+                    {JSON.stringify(goHighLevelLeadDryRunResult.payload, null, 2)}
+                  </pre>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -14559,6 +14812,10 @@ function IntegrationsView({
                 },
                 { label: "API base", value: goHighLevelEnvVars.apiBaseUrl },
                 { label: "Test route", value: goHighLevelEnvVars.testEndpoint },
+                {
+                  label: "Lead dry run",
+                  value: goHighLevelEnvVars.leadDryRunEndpoint,
+                },
               ].map((item) => (
                 <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase text-slate-500">
@@ -14586,6 +14843,10 @@ function IntegrationsView({
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
                 <p>The test endpoint is a dry run and does not send SMS, email, or customer messages.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                <p>Lead sync dry runs prepare payloads and sync logs without triggering workflows or campaigns.</p>
               </div>
             </div>
           </section>
