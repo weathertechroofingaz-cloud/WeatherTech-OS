@@ -73,6 +73,7 @@ export function scopeCrmSnapshotByCompany(
     payments: byCompany(snapshot.payments, companyId),
     notifications: byCompany(snapshot.notifications, companyId),
     integrationConnections: byCompany(snapshot.integrationConnections, companyId),
+    integrationSyncLogs: byCompany(snapshot.integrationSyncLogs, companyId),
     calendarEventSyncs: byCompany(snapshot.calendarEventSyncs, companyId),
     emailMessages: byCompany(snapshot.emailMessages, companyId),
     smsMessages: byCompany(snapshot.smsMessages, companyId),

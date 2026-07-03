@@ -7,6 +7,8 @@ import type {
   IntegrationConnectionRecord,
   IntegrationConnectionStatus,
   IntegrationSyncDirection,
+  IntegrationSyncLogRecord,
+  IntegrationSyncLogStatus,
   JobRecord,
   LeadRecord,
   RoutePlanStopInput,
@@ -224,6 +226,33 @@ export function syncDirectionLabel(direction: IntegrationSyncDirection) {
   };
 
   return labels[direction];
+}
+
+export function integrationSyncLogStatusLabel(status: IntegrationSyncLogStatus) {
+  const labels: Record<IntegrationSyncLogStatus, string> = {
+    queued: "Queued",
+    running: "Running",
+    succeeded: "Succeeded",
+    failed: "Failed",
+    skipped: "Skipped",
+    retrying: "Retrying",
+  };
+
+  return labels[status];
+}
+
+export function getIntegrationSyncLogSummary(logs: IntegrationSyncLogRecord[]) {
+  return {
+    total: logs.length,
+    queued: logs.filter((log) => log.status === "queued").length,
+    running: logs.filter((log) => log.status === "running").length,
+    succeeded: logs.filter((log) => log.status === "succeeded").length,
+    failed: logs.filter((log) => log.status === "failed").length,
+    skipped: logs.filter((log) => log.status === "skipped").length,
+    retrying: logs.filter((log) => log.status === "retrying").length,
+    outbound: logs.filter((log) => log.direction === "weathertech_to_provider").length,
+    inbound: logs.filter((log) => log.direction === "provider_to_weathertech").length,
+  };
 }
 
 export function calendarSyncStatusLabel(status: CalendarEventSyncStatus) {

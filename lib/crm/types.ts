@@ -112,6 +112,13 @@ export type IntegrationSyncDirection =
   | "two_way"
   | "weathertech_to_provider"
   | "provider_to_weathertech";
+export type IntegrationSyncLogStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "retrying";
 export type CalendarEventSyncStatus =
   | "queued"
   | "synced"
@@ -570,6 +577,31 @@ export type IntegrationConnectionRecord = {
   updated_at: string;
 };
 
+export type IntegrationSyncLogRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string | null;
+  provider: IntegrationProvider;
+  direction: IntegrationSyncDirection;
+  event_type: string;
+  status: IntegrationSyncLogStatus;
+  related_table: string | null;
+  related_record_id: string | null;
+  external_id: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  next_retry_at: string | null;
+  last_attempted_at: string | null;
+  completed_at: string | null;
+  request_fingerprint: string | null;
+  request_summary: Record<string, unknown>;
+  response_summary: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CalendarEventSyncRecord = {
   id: string;
   company_id: string;
@@ -1005,6 +1037,28 @@ export type IntegrationConnectionInput = {
   settings?: Record<string, unknown>;
 };
 
+export type IntegrationSyncLogInput = {
+  company_id: string;
+  integration_connection_id?: string | null;
+  provider: IntegrationProvider;
+  direction?: IntegrationSyncDirection;
+  event_type: string;
+  status?: IntegrationSyncLogStatus;
+  related_table?: string | null;
+  related_record_id?: string | null;
+  external_id?: string | null;
+  attempt_count?: number;
+  max_attempts?: number;
+  next_retry_at?: string | null;
+  last_attempted_at?: string | null;
+  completed_at?: string | null;
+  request_fingerprint?: string | null;
+  request_summary?: Record<string, unknown>;
+  response_summary?: Record<string, unknown>;
+  error_code?: string | null;
+  error_message?: string | null;
+};
+
 export type CalendarEventSyncInput = {
   company_id: string;
   schedule_event_id: string;
@@ -1300,6 +1354,12 @@ export type IntegrationConnectionInsert = IntegrationConnectionInput & {
   updated_at?: string;
 };
 
+export type IntegrationSyncLogInsert = IntegrationSyncLogInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type CalendarEventSyncInsert = CalendarEventSyncInput & {
   id?: string;
   created_at?: string;
@@ -1379,6 +1439,7 @@ export type CrmSnapshot = {
   payments: PaymentRecord[];
   notifications: NotificationRecord[];
   integrationConnections: IntegrationConnectionRecord[];
+  integrationSyncLogs: IntegrationSyncLogRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
   emailMessages: EmailMessageRecord[];
   smsMessages: SmsMessageRecord[];
@@ -1563,6 +1624,14 @@ export type Database = {
         Insert: IntegrationConnectionInsert;
         Update: Partial<
           Database["public"]["Tables"]["integration_connections"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      integration_sync_logs: {
+        Row: IntegrationSyncLogRecord;
+        Insert: IntegrationSyncLogInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["integration_sync_logs"]["Insert"]
         >;
         Relationships: [];
       };

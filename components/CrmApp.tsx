@@ -123,12 +123,14 @@ import {
   getCalendarSyncRecord,
   getCalendarSyncSummary,
   getEmailOutboxSummary,
+  getIntegrationSyncLogSummary,
   getSmsOutboxSummary,
   goHighLevelEnvVars,
   googleMapsEnvVars,
   gmailScopes,
   googleCalendarScopes,
   hasGoogleMapsBrowserKey,
+  integrationSyncLogStatusLabel,
   integrationStatusLabel,
   smsCategoryLabel,
   smsMessageStatusLabel,
@@ -164,6 +166,8 @@ import type {
   IntegrationConnectionRecord,
   IntegrationConnectionStatus,
   IntegrationSyncDirection,
+  IntegrationSyncLogRecord,
+  IntegrationSyncLogStatus,
   ChangeOrderInput,
   ChangeOrderRecord,
   ChangeOrderStatus,
@@ -12831,6 +12835,38 @@ function getGoHighLevelLocationIds(
   return Array.from(new Set(locationIds));
 }
 
+function getIntegrationSyncLogStatusTone(
+  status: IntegrationSyncLogStatus,
+): "blue" | "green" | "amber" {
+  if (status === "succeeded") {
+    return "green";
+  }
+
+  if (status === "failed" || status === "retrying") {
+    return "amber";
+  }
+
+  return "blue";
+}
+
+function getIntegrationSyncLogTimestamp(log: IntegrationSyncLogRecord) {
+  return log.completed_at ?? log.last_attempted_at ?? log.created_at;
+}
+
+function formatSyncLogEventType(eventType: string) {
+  return eventType.replace(/[_.:]+/g, " ");
+}
+
+function goHighLevelSyncDirectionLabel(direction: IntegrationSyncDirection) {
+  const labels: Record<IntegrationSyncDirection, string> = {
+    two_way: "Two-way",
+    weathertech_to_provider: "WeatherTech to GoHighLevel",
+    provider_to_weathertech: "GoHighLevel to WeatherTech",
+  };
+
+  return labels[direction];
+}
+
 function IntegrationsView({
   client,
   snapshot,
@@ -12880,6 +12916,15 @@ function IntegrationsView({
     (connection) => connection.provider === "gohighlevel",
   );
   const primaryGoHighLevelConnection = goHighLevelConnections[0];
+  const goHighLevelSyncLogs = snapshot.integrationSyncLogs.filter(
+    (log) => log.provider === "gohighlevel",
+  );
+  const goHighLevelSyncSummary = getIntegrationSyncLogSummary(goHighLevelSyncLogs);
+  const recentGoHighLevelSyncLogs = goHighLevelSyncLogs.slice(0, 5);
+  const latestGoHighLevelSyncLog = goHighLevelSyncLogs[0];
+  const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
+    ? getIntegrationSyncLogTimestamp(latestGoHighLevelSyncLog)
+    : null;
   const [goHighLevelTestResult, setGoHighLevelTestResult] =
     useState<GoHighLevelConnectionTestResult | null>(null);
   const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
@@ -12891,17 +12936,23 @@ function IntegrationsView({
     ? integrationStatusLabel(primaryGoHighLevelConnection.status)
     : goHighLevelTestResult?.ok
       ? "Server ready"
+      : goHighLevelSyncSummary.total
+        ? "Logs active"
       : goHighLevelTestResult
         ? "Needs config"
         : "Not saved";
   const goHighLevelStatusTone =
-    primaryGoHighLevelConnection?.status === "connected" || goHighLevelTestResult?.ok
+    primaryGoHighLevelConnection?.status === "connected" ||
+    goHighLevelTestResult?.ok ||
+    (goHighLevelSyncSummary.total > 0 && goHighLevelSyncSummary.failed === 0)
       ? "green"
       : "amber";
   const goHighLevelLastSyncLabel = primaryGoHighLevelConnection?.last_error
     ? "Error"
     : primaryGoHighLevelConnection?.last_sync_at
       ? formatDateTime(primaryGoHighLevelConnection.last_sync_at)
+      : latestGoHighLevelLogAt
+        ? formatDateTime(latestGoHighLevelLogAt)
       : goHighLevelTestResult
         ? goHighLevelTestResult.ok
           ? "Server config ready"
@@ -14245,19 +14296,34 @@ function IntegrationsView({
             {[
               {
                 title: "Lead push log",
-                detail: "New WeatherTech OS leads will appear here before they are pushed.",
+                value: goHighLevelSyncSummary.queued + goHighLevelSyncSummary.running,
+                detail: "Queued or in-progress outbound lead syncs.",
+                badge: "Pending",
+                tone: "blue" as const,
               },
               {
                 title: "Retry queue",
-                detail: "Failed sync attempts will be held for safe review and retry.",
+                value: goHighLevelSyncSummary.failed + goHighLevelSyncSummary.retrying,
+                detail: "Failed or retrying sync attempts for review.",
+                badge: "Safe retry",
+                tone:
+                  goHighLevelSyncSummary.failed || goHighLevelSyncSummary.retrying
+                    ? ("amber" as const)
+                    : ("green" as const),
               },
               {
                 title: "Inbound webhooks",
-                detail: "GoHighLevel contact updates and workflow events will land here.",
+                value: goHighLevelSyncSummary.inbound,
+                detail: "Future provider-to-WeatherTech events.",
+                badge: "Tracked",
+                tone: "blue" as const,
               },
               {
                 title: "Audit trail",
-                detail: "Every future sync will keep timestamps, payload IDs, and errors.",
+                value: goHighLevelSyncSummary.total,
+                detail: "Stored sync attempts with timestamps and status.",
+                badge: "Logged",
+                tone: goHighLevelSyncSummary.total ? ("green" as const) : ("blue" as const),
               },
             ].map((item) => (
               <article
@@ -14268,12 +14334,87 @@ function IntegrationsView({
                   <ClipboardList className="mt-0.5 h-4 w-4 text-sky-600" />
                   <div>
                     <p className="font-bold text-slate-950">{item.title}</p>
+                    <p className="mt-2 text-2xl font-bold text-slate-950">
+                      {item.value}
+                    </p>
                     <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
-                    <Badge label="Placeholder" tone="blue" />
+                    <div className="mt-3">
+                      <Badge label={item.badge} tone={item.tone} />
+                    </div>
                   </div>
                 </div>
               </article>
             ))}
+          </div>
+
+          <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  Recent GoHighLevel sync logs
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Future lead pushes, webhook events, retries, and failures will appear
+                  here after the server workers are approved.
+                </p>
+              </div>
+              <Badge
+                label={`${goHighLevelSyncSummary.total} record${
+                  goHighLevelSyncSummary.total === 1 ? "" : "s"
+                }`}
+                tone={goHighLevelSyncSummary.failed ? "amber" : "blue"}
+              />
+            </div>
+            {recentGoHighLevelSyncLogs.length ? (
+              <div className="mt-4 divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200">
+                {recentGoHighLevelSyncLogs.map((log) => (
+                  <article key={log.id} className="bg-slate-50 p-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold capitalize text-slate-950">
+                            {formatSyncLogEventType(log.event_type)}
+                          </p>
+                          <Badge
+                            label={integrationSyncLogStatusLabel(log.status)}
+                            tone={getIntegrationSyncLogStatusTone(log.status)}
+                          />
+                        </div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {goHighLevelSyncDirectionLabel(log.direction)} ·{" "}
+                          {companyMap.get(log.company_id)?.name ?? "Company"} ·{" "}
+                          {formatDateTime(getIntegrationSyncLogTimestamp(log))}
+                        </p>
+                        {log.related_table ? (
+                          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                            {log.related_table}
+                            {log.related_record_id ? ` · ${log.related_record_id}` : ""}
+                          </p>
+                        ) : null}
+                        {log.error_message ? (
+                          <p className="mt-2 text-sm font-semibold text-amber-700">
+                            {log.error_message}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="text-sm text-slate-500 lg:text-right">
+                        <p>
+                          Attempt {log.attempt_count} of {log.max_attempts}
+                        </p>
+                        {log.next_retry_at ? (
+                          <p>Retry {formatDateTime(log.next_retry_at)}</p>
+                        ) : null}
+                        {log.external_id ? <p>External ID {log.external_id}</p> : null}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4">
+                <EmptyState label="No GoHighLevel sync logs yet." />
+              </div>
+            )}
           </div>
         </div>
 

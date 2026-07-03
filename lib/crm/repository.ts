@@ -31,6 +31,8 @@ import type {
   InspectionRecord,
   IntegrationConnectionInput,
   IntegrationConnectionRecord,
+  IntegrationSyncLogInput,
+  IntegrationSyncLogRecord,
   InvoiceInput,
   InvoiceLineItemInput,
   InvoiceLineItemRecord,
@@ -161,6 +163,7 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     payments: [],
     notifications: [],
     integrationConnections: [],
+    integrationSyncLogs: [],
     calendarEventSyncs: [],
     emailMessages: [],
     smsMessages: [],
@@ -231,6 +234,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     payments,
     notifications,
     integrationConnections,
+    integrationSyncLogs,
     calendarEventSyncs,
     emailMessages,
     smsMessages,
@@ -290,6 +294,11 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("updated_at", { ascending: false }),
     client
+      .from("integration_sync_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100),
+    client
       .from("calendar_event_syncs")
       .select("*")
       .order("updated_at", { ascending: false }),
@@ -333,6 +342,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["payments", payments],
     ["notifications", notifications],
     ["integration_connections", integrationConnections],
+    ["integration_sync_logs", integrationSyncLogs],
     ["calendar_event_syncs", calendarEventSyncs],
     ["email_messages", emailMessages],
     ["sms_messages", smsMessages],
@@ -368,6 +378,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     payments: requireRows("payments", payments),
     notifications: requireRows("notifications", notifications),
     integrationConnections: requireRows("integration_connections", integrationConnections),
+    integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
     calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
     emailMessages: requireRows("email_messages", emailMessages),
     smsMessages: requireRows("sms_messages", smsMessages),
@@ -1443,6 +1454,60 @@ export async function updateIntegrationConnection(
 
   const { data, error } = await client
     .from("integration_connections")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function createIntegrationSyncLog(
+  client: CrmClient,
+  input: IntegrationSyncLogInput,
+) {
+  const { data, error } = await client
+    .from("integration_sync_logs")
+    .insert({
+      ...input,
+      integration_connection_id: input.integration_connection_id ?? null,
+      direction: input.direction ?? "weathertech_to_provider",
+      status: input.status ?? "queued",
+      related_table: input.related_table ?? null,
+      related_record_id: input.related_record_id ?? null,
+      external_id: input.external_id ?? null,
+      attempt_count: input.attempt_count ?? 0,
+      max_attempts: input.max_attempts ?? 3,
+      next_retry_at: input.next_retry_at ?? null,
+      last_attempted_at: input.last_attempted_at ?? null,
+      completed_at: input.completed_at ?? null,
+      request_fingerprint: input.request_fingerprint ?? null,
+      request_summary: input.request_summary ?? {},
+      response_summary: input.response_summary ?? {},
+      error_code: input.error_code ?? null,
+      error_message: input.error_message ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateIntegrationSyncLog(
+  client: CrmClient,
+  id: string,
+  input: Partial<IntegrationSyncLogInput>,
+) {
+  const { data, error } = await client
+    .from("integration_sync_logs")
     .update(input)
     .eq("id", id)
     .select("*")
