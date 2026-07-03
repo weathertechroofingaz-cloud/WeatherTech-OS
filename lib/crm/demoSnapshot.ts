@@ -497,6 +497,7 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
       },
     ],
     integrationConnections: [],
+    integrationSyncLogs: [],
     calendarEventSyncs: [],
     emailMessages: [],
     smsMessages: [],
