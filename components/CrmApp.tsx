@@ -124,6 +124,7 @@ import {
   getCalendarSyncSummary,
   getEmailOutboxSummary,
   getSmsOutboxSummary,
+  goHighLevelEnvVars,
   googleMapsEnvVars,
   gmailScopes,
   googleCalendarScopes,
@@ -12712,6 +12713,11 @@ const integrationCards = [
     detail: "Connection records, SMS queueing, status tracking, and Twilio payload previews.",
   },
   {
+    name: "GoHighLevel",
+    status: "Settings ready",
+    detail: "Server-only token checks, location ID visibility, and sync-log placeholders.",
+  },
+  {
     name: "DocuSign / Native signatures",
     status: "Native active",
     detail: "Built-in signature capture now works; DocuSign can be added as a provider.",
@@ -12749,6 +12755,64 @@ type IntegrationsViewProps = {
 
 function getIntegrationStatusTone(status: IntegrationConnectionStatus) {
   return status === "connected" ? "green" : status === "paused" ? "amber" : "amber";
+}
+
+type GoHighLevelConnectionTestResult = {
+  ok: boolean;
+  dryRun: boolean;
+  communicationsSent: boolean;
+  status: "ready" | "missing_location" | "missing_token";
+  message: string;
+  configuredLocationIds: string[];
+  tokenConfigured: boolean;
+  tokenSource: string | null;
+  apiBaseUrl: string;
+  checkedAt: string;
+  nextStep: string;
+};
+
+function getStringSetting(
+  settings: Record<string, unknown> | undefined,
+  key: string,
+) {
+  const value = settings?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getStringListSetting(
+  settings: Record<string, unknown> | undefined,
+  key: string,
+) {
+  const value = settings?.[key];
+
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function getGoHighLevelLocationIds(
+  connection: IntegrationConnectionRecord | undefined,
+  testResult: GoHighLevelConnectionTestResult | null,
+) {
+  const settings = connection?.settings;
+  const connectionLocationIds = [
+    getStringSetting(settings, "locationId"),
+    ...getStringListSetting(settings, "locationIds"),
+  ].filter((locationId): locationId is string => Boolean(locationId));
+  const locationIds = connectionLocationIds.length
+    ? connectionLocationIds
+    : testResult?.configuredLocationIds ?? [];
+
+  return Array.from(new Set(locationIds));
 }
 
 function IntegrationsView({
@@ -12796,6 +12860,67 @@ function IntegrationsView({
     typeof primaryTwilioConnection?.settings.fromNumber === "string"
       ? primaryTwilioConnection.settings.fromNumber
       : null;
+  const goHighLevelConnections = snapshot.integrationConnections.filter(
+    (connection) => connection.provider === "gohighlevel",
+  );
+  const primaryGoHighLevelConnection = goHighLevelConnections[0];
+  const [goHighLevelTestResult, setGoHighLevelTestResult] =
+    useState<GoHighLevelConnectionTestResult | null>(null);
+  const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
+  const goHighLevelLocationIds = getGoHighLevelLocationIds(
+    primaryGoHighLevelConnection,
+    goHighLevelTestResult,
+  );
+  const goHighLevelStatusLabel = primaryGoHighLevelConnection
+    ? integrationStatusLabel(primaryGoHighLevelConnection.status)
+    : goHighLevelTestResult?.ok
+      ? "Server ready"
+      : goHighLevelTestResult
+        ? "Needs config"
+        : "Not saved";
+  const goHighLevelStatusTone =
+    primaryGoHighLevelConnection?.status === "connected" || goHighLevelTestResult?.ok
+      ? "green"
+      : "amber";
+  const goHighLevelLastSyncLabel = primaryGoHighLevelConnection?.last_error
+    ? "Error"
+    : primaryGoHighLevelConnection?.last_sync_at
+      ? formatDateTime(primaryGoHighLevelConnection.last_sync_at)
+      : goHighLevelTestResult
+        ? goHighLevelTestResult.ok
+          ? "Server config ready"
+          : "Configuration incomplete"
+        : "Not synced yet";
+
+  const handleTestGoHighLevelConnection = async () => {
+    setIsTestingGoHighLevel(true);
+    setGoHighLevelTestResult(null);
+
+    try {
+      const response = await fetch(goHighLevelEnvVars.testEndpoint, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      const result = (await response.json()) as GoHighLevelConnectionTestResult;
+      setGoHighLevelTestResult(result);
+
+      if (response.ok && result.ok) {
+        onNotice("GoHighLevel server configuration test passed. No messages were sent.");
+      } else {
+        onError(result.message);
+      }
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not test GoHighLevel configuration.",
+      );
+    } finally {
+      setIsTestingGoHighLevel(false);
+    }
+  };
 
   const handleCreateGmailConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -13989,6 +14114,169 @@ function IntegrationsView({
                 <EmptyState label="Create an SMS to preview Twilio send payload." />
               </div>
             )}
+          </section>
+        </aside>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(360px,0.75fr)]">
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase text-sky-700">
+                Settings / Integrations / GoHighLevel
+              </p>
+              <h3 className="mt-1 text-xl font-bold text-slate-950">
+                Automation bridge readiness
+              </h3>
+              <p className="mt-2 max-w-2xl text-sm text-slate-500">
+                GoHighLevel can receive lead and lifecycle events from WeatherTech OS
+                after the server-side client, sync logs, retry handling, and webhook
+                receiver are approved and wired.
+              </p>
+            </div>
+            <Badge label={goHighLevelStatusLabel} tone={goHighLevelStatusTone} />
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <ProfileStat label="Connection" value={goHighLevelStatusLabel} />
+            <ProfileStat
+              label="Location IDs"
+              value={goHighLevelLocationIds.length || "None"}
+            />
+            <ProfileStat label="Last sync" value={goHighLevelLastSyncLabel} />
+          </div>
+
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  Configured location IDs
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  These IDs are safe to display. Access tokens stay on the server.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleTestGoHighLevelConnection()}
+                disabled={isTestingGoHighLevel}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                {isTestingGoHighLevel ? "Testing" : "Test server config"}
+              </button>
+            </div>
+            {goHighLevelLocationIds.length ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {goHighLevelLocationIds.map((locationId) => (
+                  <span
+                    key={locationId}
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
+                  >
+                    {locationId}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4">
+                <EmptyState label="No GoHighLevel location IDs configured yet." />
+              </div>
+            )}
+            {goHighLevelTestResult ? (
+              <div className="mt-4 rounded-md border border-slate-200 bg-white p-3 text-sm">
+                <p className="font-semibold text-slate-950">
+                  {goHighLevelTestResult.message}
+                </p>
+                <p className="mt-1 text-slate-500">
+                  Dry run: {goHighLevelTestResult.dryRun ? "yes" : "no"} ·
+                  Communications sent:{" "}
+                  {goHighLevelTestResult.communicationsSent ? "yes" : "no"} ·
+                  Checked {formatDateTime(goHighLevelTestResult.checkedAt)}
+                </p>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {[
+              {
+                title: "Lead push log",
+                detail: "New WeatherTech OS leads will appear here before they are pushed.",
+              },
+              {
+                title: "Retry queue",
+                detail: "Failed sync attempts will be held for safe review and retry.",
+              },
+              {
+                title: "Inbound webhooks",
+                detail: "GoHighLevel contact updates and workflow events will land here.",
+              },
+              {
+                title: "Audit trail",
+                detail: "Every future sync will keep timestamps, payload IDs, and errors.",
+              },
+            ].map((item) => (
+              <article
+                key={item.title}
+                className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+              >
+                <div className="flex items-start gap-3">
+                  <ClipboardList className="mt-0.5 h-4 w-4 text-sky-600" />
+                  <div>
+                    <p className="font-bold text-slate-950">{item.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
+                    <Badge label="Placeholder" tone="blue" />
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <aside className="space-y-4">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Server-only config</h3>
+            <div className="mt-4 grid gap-3 text-sm">
+              {[
+                {
+                  label: "Token",
+                  value: `${goHighLevelEnvVars.privateIntegrationToken} or ${goHighLevelEnvVars.legacyApiKey}`,
+                },
+                {
+                  label: "Locations",
+                  value: `${goHighLevelEnvVars.locationId} / ${goHighLevelEnvVars.locationIds}`,
+                },
+                { label: "API base", value: goHighLevelEnvVars.apiBaseUrl },
+                { label: "Test route", value: goHighLevelEnvVars.testEndpoint },
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-500">
+                    {item.label}
+                  </p>
+                  <code className="mt-1 block break-all text-sm font-semibold text-slate-950">
+                    {item.value}
+                  </code>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Safety guardrails</h3>
+            <div className="mt-4 grid gap-3 text-sm text-slate-600">
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                <p>GoHighLevel tokens are read only in the server route.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                <p>No `NEXT_PUBLIC_` GoHighLevel secrets are required or referenced.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                <p>The test endpoint is a dry run and does not send SMS, email, or customer messages.</p>
+              </div>
+            </div>
           </section>
         </aside>
       </section>

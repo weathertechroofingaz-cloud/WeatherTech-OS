@@ -101,7 +101,8 @@ export type IntegrationProvider =
   | "google_calendar"
   | "gmail"
   | "google_maps"
-  | "twilio_sms";
+  | "twilio_sms"
+  | "gohighlevel";
 export type IntegrationConnectionStatus =
   | "connected"
   | "needs_reauth"

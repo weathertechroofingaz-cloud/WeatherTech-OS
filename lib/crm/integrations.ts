@@ -37,6 +37,15 @@ export const twilioEnvVars = {
   messagesEndpoint: "https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json",
 };
 
+export const goHighLevelEnvVars = {
+  privateIntegrationToken: "GOHIGHLEVEL_PRIVATE_INTEGRATION_TOKEN",
+  legacyApiKey: "GOHIGHLEVEL_API_KEY",
+  locationId: "GOHIGHLEVEL_LOCATION_ID",
+  locationIds: "GOHIGHLEVEL_LOCATION_IDS",
+  apiBaseUrl: "GOHIGHLEVEL_API_BASE_URL",
+  testEndpoint: "/api/integrations/gohighlevel/test",
+};
+
 export type RouteCoordinate = {
   latitude: number;
   longitude: number;
