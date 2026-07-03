@@ -83,6 +83,10 @@ export type GoHighLevelLeadContactPayload = {
     customerId: string | null;
     customerName: string | null;
     source: string;
+    division: string | null;
+    assignedTo: string | null;
+    appointmentDate: string | null;
+    goHighLevelContactId: string | null;
     nextFollowUp: string | null;
     notesIncluded: boolean;
   };
@@ -170,6 +174,31 @@ function serviceTag(value: LeadRecord["service_type"]) {
   return `service:${value}`;
 }
 
+function getLeadContactName(lead: LeadRecord) {
+  const fullName = [lead.first_name, lead.last_name]
+    .map((value) => getTrimmedValue(value))
+    .filter(Boolean)
+    .join(" ");
+
+  return fullName || getTrimmedValue(lead.contact_name) || "";
+}
+
+function getLeadPropertyAddress(lead: LeadRecord) {
+  return getTrimmedValue(lead.address) ?? getTrimmedValue(lead.property_address);
+}
+
+function getLeadPostalCode(lead: LeadRecord) {
+  return getTrimmedValue(lead.zip) ?? getTrimmedValue(lead.postal_code);
+}
+
+function getLeadSourceName(lead: LeadRecord) {
+  return getTrimmedValue(lead.lead_source) ?? getTrimmedValue(lead.source) ?? "WeatherTech OS";
+}
+
+function getLeadEstimatedValue(lead: LeadRecord) {
+  return lead.estimate_amount ?? lead.estimated_value ?? 0;
+}
+
 function createGoHighLevelPayloadFingerprint(payload: GoHighLevelLeadContactPayload) {
   const serialized = JSON.stringify(payload);
   let hash = 0;
@@ -237,11 +266,14 @@ export function buildGoHighLevelLeadContactPayload({
   customer?: CustomerRecord | null;
   location: GoHighLevelConfiguredLocation & { locationId: string };
 }): GoHighLevelLeadContactPayload {
-  const contactName = getTrimmedValue(lead.contact_name) ?? "Unknown lead";
-  const { firstName, lastName } = splitContactName(contactName);
+  const contactName = getLeadContactName(lead) || "Unknown lead";
+  const splitName = splitContactName(contactName);
+  const firstName = getTrimmedValue(lead.first_name) ?? splitName.firstName;
+  const lastName = getTrimmedValue(lead.last_name) ?? splitName.lastName;
   const companyTag = isIhcCompany(company)
     ? "weathertech-os:ihc-painting"
     : "weathertech-os:weathertech-roofing";
+  const source = getLeadSourceName(lead);
 
   return {
     intendedRequest: {
@@ -257,11 +289,11 @@ export function buildGoHighLevelLeadContactPayload({
       name: contactName,
       email: getOptionalPayloadValue(lead.email),
       phone: getOptionalPayloadValue(lead.phone),
-      address1: getTrimmedValue(lead.property_address) ?? "",
+      address1: getLeadPropertyAddress(lead) ?? "",
       city: getOptionalPayloadValue(lead.city),
       state: getTrimmedValue(lead.state) ?? "AZ",
-      postalCode: getOptionalPayloadValue(lead.postal_code),
-      source: getTrimmedValue(lead.source) ?? "WeatherTech OS",
+      postalCode: getOptionalPayloadValue(getLeadPostalCode(lead)),
+      source,
       tags: [
         "weathertech-os",
         companyTag,
@@ -272,7 +304,7 @@ export function buildGoHighLevelLeadContactPayload({
     },
     opportunityPreview: {
       title: `${contactName} - ${lead.service_type.replace(/_/g, " ")} lead`,
-      monetaryValue: lead.estimated_value,
+      monetaryValue: getLeadEstimatedValue(lead),
       status: lead.status,
       priority: lead.priority,
       serviceType: lead.service_type,
@@ -283,7 +315,11 @@ export function buildGoHighLevelLeadContactPayload({
       companyName: company.name,
       customerId: lead.customer_id,
       customerName: customer?.display_name ?? customer?.contact_name ?? null,
-      source: getTrimmedValue(lead.source) ?? "WeatherTech OS",
+      source,
+      division: getTrimmedValue(lead.division),
+      assignedTo: getTrimmedValue(lead.assigned_to),
+      appointmentDate: lead.appointment_date,
+      goHighLevelContactId: getTrimmedValue(lead.gohighlevel_contact_id),
       nextFollowUp: lead.next_follow_up,
       notesIncluded: Boolean(getTrimmedValue(lead.notes)),
     },
@@ -312,10 +348,12 @@ export function prepareGoHighLevelLeadContactDryRun({
     location.envVar,
     "contact_name",
     "phone_or_email",
-    "property_address",
+    "address",
     "state",
   ];
   const missingFields: string[] = [];
+  const contactName = getLeadContactName(lead);
+  const propertyAddress = getLeadPropertyAddress(lead);
 
   if (!config.tokenConfigured) {
     missingFields.push("GHL_PRIVATE_INTEGRATION_TOKEN");
@@ -325,7 +363,7 @@ export function prepareGoHighLevelLeadContactDryRun({
     missingFields.push(location.envVar);
   }
 
-  if (!getTrimmedValue(lead.contact_name)) {
+  if (!getTrimmedValue(contactName)) {
     missingFields.push("contact_name");
   }
 
@@ -333,8 +371,8 @@ export function prepareGoHighLevelLeadContactDryRun({
     missingFields.push("phone_or_email");
   }
 
-  if (!getTrimmedValue(lead.property_address)) {
-    missingFields.push("property_address");
+  if (!propertyAddress) {
+    missingFields.push("address");
   }
 
   if (!getTrimmedValue(lead.state)) {
@@ -343,9 +381,9 @@ export function prepareGoHighLevelLeadContactDryRun({
 
   const payload =
     location.locationId &&
-    getTrimmedValue(lead.contact_name) &&
+    getTrimmedValue(contactName) &&
     (getTrimmedValue(lead.phone) || getTrimmedValue(lead.email)) &&
-    getTrimmedValue(lead.property_address) &&
+    propertyAddress &&
     getTrimmedValue(lead.state)
       ? buildGoHighLevelLeadContactPayload({
           lead,

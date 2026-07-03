@@ -25,9 +25,12 @@ type DryRunLeadRequestBody = {
 
 type DryRunLeadResponse = GoHighLevelLeadContactDryRunPreview & {
   leadId: string | null;
+  leadLabel: string | null;
   companyId: string | null;
   syncLogId: string | null;
 };
+
+type CrmServerClient = NonNullable<Awaited<ReturnType<typeof getSupabaseServerClient>>>;
 
 function getRequestString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -83,6 +86,7 @@ function createFailureResponse({
       checkedAt: new Date().toISOString(),
       nextStep: "Select a valid lead and rerun the dry-run check.",
       leadId,
+      leadLabel: null,
       companyId,
       syncLogId: null,
     },
@@ -104,6 +108,98 @@ async function getJsonBody(request: NextRequest): Promise<DryRunLeadRequestBody>
   return {};
 }
 
+function isWeatherTechCompany(company: CompanyRecord) {
+  const companyName = [company.name, company.short_name]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return company.trade === "roofing" || companyName.includes("weathertech");
+}
+
+function getLeadLabel(lead: LeadRecord) {
+  const fullName = [lead.first_name, lead.last_name]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return fullName || lead.contact_name;
+}
+
+function weatherTechCompanySort(left: CompanyRecord, right: CompanyRecord) {
+  const leftName = left.name.toLowerCase();
+  const rightName = right.name.toLowerCase();
+  const leftExact = leftName.includes("weathertech") ? 0 : 1;
+  const rightExact = rightName.includes("weathertech") ? 0 : 1;
+
+  return leftExact - rightExact || left.created_at.localeCompare(right.created_at);
+}
+
+async function loadNewestWeatherTechLead(client: CrmServerClient) {
+  const { data: companyRows, error: companiesError } = await client
+    .from("companies")
+    .select("*")
+    .order("created_at", { ascending: true });
+
+  if (companiesError) {
+    return {
+      lead: null,
+      company: null,
+      message: `WeatherTech company lookup failed: ${describeSafeError(companiesError)}`,
+      httpStatus: 500,
+    };
+  }
+
+  const weatherTechCompany =
+    ((companyRows ?? []) as CompanyRecord[])
+      .filter(isWeatherTechCompany)
+      .sort(weatherTechCompanySort)[0] ?? null;
+
+  if (!weatherTechCompany) {
+    return {
+      lead: null,
+      company: null,
+      message: "WeatherTech Roofing company could not be found for the dry run.",
+      httpStatus: 404,
+    };
+  }
+
+  const { data: leadRows, error: leadError } = await client
+    .from("leads")
+    .select("*")
+    .eq("company_id", weatherTechCompany.id)
+    .order("created_at", { ascending: false })
+    .limit(25);
+
+  if (leadError) {
+    return {
+      lead: null,
+      company: weatherTechCompany,
+      message: `Newest WeatherTech lead lookup failed: ${describeSafeError(leadError)}`,
+      httpStatus: 500,
+    };
+  }
+
+  const newestLead =
+    ((leadRows ?? []) as LeadRecord[]).find((lead) => !lead.archived) ?? null;
+
+  if (!newestLead) {
+    return {
+      lead: null,
+      company: weatherTechCompany,
+      message: "No non-archived WeatherTech Roofing lead is available for the dry run.",
+      httpStatus: 404,
+    };
+  }
+
+  return {
+    lead: newestLead,
+    company: weatherTechCompany,
+    message: null,
+    httpStatus: 200,
+  };
+}
+
 export async function POST(request: NextRequest) {
   const client = await getSupabaseServerClient();
 
@@ -117,37 +213,61 @@ export async function POST(request: NextRequest) {
 
   const body = await getJsonBody(request);
   const leadId = getRequestString(body.leadId);
+  let lead: LeadRecord | null = null;
+  let company: CompanyRecord | null = null;
 
-  if (!leadId) {
-    return createFailureResponse({
-      status: "validation_failed",
-      message: "Select a lead before running the GoHighLevel dry run.",
-      httpStatus: 400,
-    });
+  if (leadId) {
+    const { data: selectedLead, error: leadError } = await client
+      .from("leads")
+      .select("*")
+      .eq("id", leadId)
+      .single();
+
+    if (leadError || !selectedLead) {
+      return createFailureResponse({
+        status: "not_found",
+        message: "The selected lead could not be loaded for the dry run.",
+        leadId,
+        httpStatus: 404,
+      });
+    }
+
+    lead = selectedLead as LeadRecord;
+  } else {
+    const defaultLead = await loadNewestWeatherTechLead(client);
+
+    if (!defaultLead.lead) {
+      return createFailureResponse({
+        status: "not_found",
+        message:
+          defaultLead.message ??
+          "No non-archived WeatherTech Roofing lead is available for the dry run.",
+        companyId: defaultLead.company?.id ?? null,
+        httpStatus: defaultLead.httpStatus,
+      });
+    }
+
+    lead = defaultLead.lead;
+    company = defaultLead.company;
   }
 
-  const { data: lead, error: leadError } = await client
-    .from("leads")
-    .select("*")
-    .eq("id", leadId)
-    .single();
-
-  if (leadError || !lead) {
+  if (!lead) {
     return createFailureResponse({
       status: "not_found",
-      message: "The selected lead could not be loaded for the dry run.",
-      leadId,
+      message: "No lead could be loaded for the GoHighLevel dry run.",
       httpStatus: 404,
     });
   }
 
-  const { data: company, error: companyError } = await client
-    .from("companies")
-    .select("*")
-    .eq("id", lead.company_id)
-    .single();
+  const { data: companyRecord, error: companyError } = company
+    ? { data: company, error: null }
+    : await client
+        .from("companies")
+        .select("*")
+        .eq("id", lead.company_id)
+        .single();
 
-  if (companyError || !company) {
+  if (companyError || !companyRecord) {
     return createFailureResponse({
       status: "not_found",
       message: "The selected lead's company could not be loaded for the dry run.",
@@ -178,7 +298,7 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
   const preview = prepareGoHighLevelLeadContactDryRun({
     lead: lead as LeadRecord,
-    company: company as CompanyRecord,
+    company: companyRecord as CompanyRecord,
     customer,
   });
 
@@ -220,6 +340,7 @@ export async function POST(request: NextRequest) {
     const responseBody: DryRunLeadResponse = {
       ...preview,
       leadId: lead.id,
+      leadLabel: getLeadLabel(lead),
       companyId: lead.company_id,
       syncLogId: syncLog.id,
     };
