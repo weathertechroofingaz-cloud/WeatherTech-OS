@@ -1,6 +1,15 @@
 import type { CrmSnapshot, DashboardMetrics } from "./types";
 
-const openLeadStatuses = new Set(["new", "contacted", "qualified", "estimate_sent"]);
+const openLeadStatuses = new Set([
+  "new",
+  "contacted",
+  "qualified",
+  "estimate_sent",
+  "New Lead",
+  "Contacted",
+  "Estimate Scheduled",
+  "Proposal Sent",
+]);
 const activeJobStatuses = new Set(["scheduled", "in_progress", "blocked"]);
 const openInvoiceStatuses = new Set(["draft", "sent", "overdue"]);
 const pendingOrderStatuses = new Set(["draft", "ordered", "partial"]);
@@ -10,7 +19,11 @@ export function calculateDashboardMetrics(snapshot: CrmSnapshot): DashboardMetri
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const closedLeads = snapshot.leads.filter(
-    (lead) => lead.status === "won" || lead.status === "lost",
+    (lead) =>
+      lead.status === "won" ||
+      lead.status === "Won" ||
+      lead.status === "lost" ||
+      lead.status === "Lost",
   );
   const completedJobs = snapshot.jobs.filter(
     (job) => job.status === "completed" || job.status === "closed",
@@ -25,8 +38,13 @@ export function calculateDashboardMetrics(snapshot: CrmSnapshot): DashboardMetri
 
   return {
     openLeads: openLeads.length,
-    newLeads: snapshot.leads.filter((lead) => lead.status === "new").length,
-    qualifiedLeads: snapshot.leads.filter((lead) => lead.status === "qualified").length,
+    newLeads: snapshot.leads.filter(
+      (lead) => lead.status === "new" || lead.status === "New Lead",
+    ).length,
+    qualifiedLeads: snapshot.leads.filter(
+      (lead) =>
+        lead.status === "qualified" || lead.status === "Estimate Scheduled",
+    ).length,
     customers: snapshot.customers.length,
     urgentFollowUps: openLeads.filter((lead) => {
       if (lead.priority === "urgent") {
@@ -40,10 +58,16 @@ export function calculateDashboardMetrics(snapshot: CrmSnapshot): DashboardMetri
       const followUpDate = new Date(`${lead.next_follow_up}T00:00:00`);
       return followUpDate <= today;
     }).length,
-    pipelineValue: openLeads.reduce((total, lead) => total + lead.estimated_value, 0),
+    pipelineValue: openLeads.reduce(
+      (total, lead) => total + (lead.estimate_amount ?? lead.estimated_value),
+      0,
+    ),
     wonValue: snapshot.leads
-      .filter((lead) => lead.status === "won")
-      .reduce((total, lead) => total + lead.estimated_value, 0),
+      .filter((lead) => lead.status === "won" || lead.status === "Won")
+      .reduce(
+        (total, lead) => total + (lead.estimate_amount ?? lead.estimated_value),
+        0,
+      ),
     openEstimates: snapshot.estimates.filter(
       (estimate) => estimate.status === "draft" || estimate.status === "sent",
     ).length,
@@ -66,7 +90,9 @@ export function calculateDashboardMetrics(snapshot: CrmSnapshot): DashboardMetri
       .reduce((total, payment) => total + payment.amount, 0),
     closeRate: closedLeads.length
       ? Math.round(
-          (snapshot.leads.filter((lead) => lead.status === "won").length /
+          (snapshot.leads.filter(
+            (lead) => lead.status === "won" || lead.status === "Won",
+          ).length /
             closedLeads.length) *
             100,
         )

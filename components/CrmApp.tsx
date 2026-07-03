@@ -209,8 +209,10 @@ import type {
   JobPhotoRecord,
   JobRecord,
   JobStatus,
+  LeadInput,
   LeadPriority,
   LeadRecord,
+  LeadServiceType,
   LeadStatus,
   MaterialOrderInput,
   MaterialOrderItemInput,
@@ -273,12 +275,12 @@ type WorkspaceView =
   | "settings";
 
 const leadStatuses: { value: LeadStatus; label: string }[] = [
-  { value: "new", label: "New" },
-  { value: "contacted", label: "Contacted" },
-  { value: "qualified", label: "Qualified" },
-  { value: "estimate_sent", label: "Estimate sent" },
-  { value: "won", label: "Won" },
-  { value: "lost", label: "Lost" },
+  { value: "New Lead", label: "New Lead" },
+  { value: "Contacted", label: "Contacted" },
+  { value: "Estimate Scheduled", label: "Estimate Scheduled" },
+  { value: "Proposal Sent", label: "Proposal Sent" },
+  { value: "Won", label: "Won" },
+  { value: "Lost", label: "Lost" },
 ];
 
 const leadPriorities: { value: LeadPriority; label: string }[] = [
@@ -293,6 +295,38 @@ const serviceTypes: { value: ServiceType; label: string }[] = [
   { value: "painting", label: "Painting" },
   { value: "both", label: "Both" },
 ];
+
+const legacyLeadStatusLabels: Record<string, string> = {
+  new: "New Lead",
+  contacted: "Contacted",
+  qualified: "Estimate Scheduled",
+  estimate_sent: "Proposal Sent",
+  won: "Won",
+  lost: "Lost",
+};
+
+const leadServiceTypes: { value: LeadServiceType; label: string }[] = [
+  { value: "Roof Repair", label: "Roof Repair" },
+  { value: "Roof Replacement", label: "Roof Replacement" },
+  { value: "Exterior Painting", label: "Exterior Painting" },
+  { value: "Stucco Repair", label: "Stucco Repair" },
+  { value: "Gutter Work", label: "Gutter Work" },
+  { value: "Inspection", label: "Inspection" },
+  { value: "Other", label: "Other" },
+];
+
+const leadSources = [
+  "Yelp",
+  "Website",
+  "Google",
+  "Referral",
+  "Phone Call",
+  "Facebook",
+  "GoHighLevel",
+  "Other",
+];
+
+const leadDivisions = ["WeatherTech Roofing", "IHC Painting"];
 
 const customerTypes: { value: CustomerType; label: string }[] = [
   { value: "homeowner", label: "Homeowner" },
@@ -505,7 +539,11 @@ function companyTradeLabel(company: CompanyRecord | null | undefined) {
 }
 
 function statusLabel(status: LeadStatus) {
-  return leadStatuses.find((item) => item.value === status)?.label ?? status;
+  return (
+    leadStatuses.find((item) => item.value === status)?.label ??
+    legacyLeadStatusLabels[status] ??
+    status
+  );
 }
 
 function customerStatusLabel(status: CustomerStatus) {
@@ -518,6 +556,85 @@ function estimateStatusLabel(status: EstimateStatus) {
 
 function serviceLabel(service: ServiceType) {
   return serviceTypes.find((item) => item.value === service)?.label ?? service;
+}
+
+function leadServiceLabel(service: LeadServiceType) {
+  return (
+    leadServiceTypes.find((item) => item.value === service)?.label ??
+    serviceTypes.find((item) => item.value === service)?.label ??
+    service
+  );
+}
+
+function getLeadStatusGroup(status: LeadStatus) {
+  if (status === "new" || status === "New Lead") {
+    return "New Lead";
+  }
+
+  if (status === "qualified" || status === "Estimate Scheduled") {
+    return "Estimate Scheduled";
+  }
+
+  if (status === "estimate_sent" || status === "Proposal Sent") {
+    return "Proposal Sent";
+  }
+
+  if (status === "won" || status === "Won") {
+    return "Won";
+  }
+
+  if (status === "lost" || status === "Lost") {
+    return "Lost";
+  }
+
+  return "Contacted";
+}
+
+function getLeadFullName(lead: LeadRecord) {
+  const fullName = [lead.first_name, lead.last_name]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return fullName || lead.contact_name;
+}
+
+function getLeadAddress(lead: LeadRecord) {
+  return lead.address ?? lead.property_address;
+}
+
+function getLeadZip(lead: LeadRecord) {
+  return lead.zip ?? lead.postal_code ?? "";
+}
+
+function getLeadSource(lead: LeadRecord) {
+  return lead.lead_source ?? lead.source;
+}
+
+function getLeadDivision(
+  lead: LeadRecord,
+  companyMap: Map<string, CompanyRecord>,
+) {
+  if (lead.division) {
+    return lead.division;
+  }
+
+  const company = companyMap.get(lead.company_id);
+  const companyName = [company?.name, company?.short_name]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return company?.trade === "painting" || companyName.includes("ihc")
+    ? "IHC Painting"
+    : "WeatherTech Roofing";
+}
+
+function getLeadEstimateAmount(lead: LeadRecord) {
+  return lead.estimate_amount ?? lead.estimated_value;
+}
+
+function getLeadAppointmentDate(lead: LeadRecord) {
+  return lead.appointment_date ?? lead.next_follow_up;
 }
 
 function scopeStatusLabel(status: ScopeStatus) {
@@ -3019,8 +3136,13 @@ function DashboardView({
 
           <div className="mt-5 grid gap-3 md:grid-cols-2">
             {leadStatuses.slice(0, 4).map((status) => {
-              const leads = snapshot.leads.filter((lead) => lead.status === status.value);
-              const value = leads.reduce((total, lead) => total + lead.estimated_value, 0);
+              const leads = snapshot.leads.filter(
+                (lead) => getLeadStatusGroup(lead.status) === status.label,
+              );
+              const value = leads.reduce(
+                (total, lead) => total + getLeadEstimateAmount(lead),
+                0,
+              );
 
               return (
                 <div
@@ -3524,6 +3646,112 @@ type LeadsViewProps = {
   onError: (message: string) => void;
 };
 
+type LeadFormProps = {
+  companies: CompanyRecord[];
+  defaultLead?: LeadRecord | null;
+  isSubmitting: boolean;
+  submitLabel: string;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCancel?: () => void;
+};
+
+function getCompanyIdForDivision(
+  companies: CompanyRecord[],
+  division: string,
+  fallbackCompanyId?: string,
+) {
+  const matchedCompany = companies.find((company) => {
+    const companyName = [company.name, company.short_name]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    if (division === "IHC Painting") {
+      return company.trade === "painting" || companyName.includes("ihc");
+    }
+
+    return company.trade === "roofing" || companyName.includes("weathertech");
+  });
+
+  return matchedCompany?.id ?? fallbackCompanyId ?? companies[0]?.id ?? "";
+}
+
+function getLeadFormInput(
+  formData: FormData,
+  companies: CompanyRecord[],
+  fallbackLead?: LeadRecord | null,
+): LeadInput {
+  const firstName = getFormString(formData, "first_name", fallbackLead?.first_name ?? "");
+  const lastName = getFormString(formData, "last_name", fallbackLead?.last_name ?? "");
+  const contactName =
+    [firstName, lastName].filter(Boolean).join(" ").trim() ||
+    fallbackLead?.contact_name ||
+    "New Lead";
+  const address = getFormString(
+    formData,
+    "address",
+    fallbackLead ? getLeadAddress(fallbackLead) : "",
+  );
+  const zip = getFormString(formData, "zip", fallbackLead ? getLeadZip(fallbackLead) : "");
+  const leadSource = getFormString(
+    formData,
+    "lead_source",
+    fallbackLead ? getLeadSource(fallbackLead) : "Website",
+  );
+  const division = getFormString(
+    formData,
+    "division",
+    fallbackLead ? fallbackLead.division ?? "" : "WeatherTech Roofing",
+  );
+  const estimateAmount = getFormNumber(formData, "estimate_amount");
+  const appointmentInput = getOptionalFormString(formData, "appointment_date");
+  const appointmentDate = appointmentInput
+    ? new Date(appointmentInput).toISOString()
+    : null;
+
+  return {
+    company_id: getCompanyIdForDivision(companies, division, fallbackLead?.company_id),
+    first_name: firstName || null,
+    last_name: lastName || null,
+    company: getOptionalFormString(formData, "company"),
+    contact_name: contactName,
+    phone: getOptionalFormString(formData, "phone"),
+    email: getOptionalFormString(formData, "email"),
+    address,
+    property_address: address,
+    city: getOptionalFormString(formData, "city"),
+    state: getFormString(formData, "state", fallbackLead?.state ?? "AZ"),
+    zip: zip || null,
+    postal_code: zip || null,
+    lead_source: leadSource,
+    source: leadSource,
+    service_type: getFormString(
+      formData,
+      "service_type",
+      fallbackLead?.service_type ?? "Roof Repair",
+    ) as LeadServiceType,
+    division,
+    status: getFormString(
+      formData,
+      "status",
+      fallbackLead?.status ?? "New Lead",
+    ) as LeadStatus,
+    priority: getFormString(
+      formData,
+      "priority",
+      fallbackLead?.priority ?? "normal",
+    ) as LeadPriority,
+    assigned_to: getOptionalFormString(formData, "assigned_to"),
+    estimate_amount: estimateAmount,
+    estimated_value: estimateAmount,
+    appointment_date: appointmentDate,
+    gohighlevel_contact_id: getOptionalFormString(formData, "gohighlevel_contact_id"),
+    archived: false,
+    next_follow_up: appointmentInput ? appointmentInput.slice(0, 10) : null,
+    notes: getOptionalFormString(formData, "notes"),
+  };
+}
+
 function LeadsView({
   client,
   snapshot,
@@ -3532,23 +3760,82 @@ function LeadsView({
   onNotice,
   onError,
 }: LeadsViewProps) {
-  const [selectedLeadId, setSelectedLeadId] = useState(snapshot.leads[0]?.id ?? "");
+  const activeLeads = useMemo(
+    () =>
+      snapshot.leads
+        .filter((lead) => !lead.archived)
+        .sort(
+          (left, right) =>
+            Date.parse(right.created_at) - Date.parse(left.created_at),
+        ),
+    [snapshot.leads],
+  );
+  const [selectedLeadId, setSelectedLeadId] = useState(activeLeads[0]?.id ?? "");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<LeadStatus | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [divisionFilter, setDivisionFilter] = useState("all");
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const selectedLead =
-    snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? snapshot.leads[0];
+    activeLeads.find((lead) => lead.id === selectedLeadId) ?? activeLeads[0];
+  const leadSourceOptions = Array.from(
+    new Set([...leadSources, ...activeLeads.map((lead) => getLeadSource(lead))]),
+  ).filter(Boolean);
+  const divisionOptions = Array.from(
+    new Set([
+      ...leadDivisions,
+      ...activeLeads.map((lead) => getLeadDivision(lead, companyMap)),
+    ]),
+  ).filter(Boolean);
+  const leadSummary = {
+    total: activeLeads.length,
+    newLeads: activeLeads.filter(
+      (lead) => getLeadStatusGroup(lead.status) === "New Lead",
+    ).length,
+    estimatesScheduled: activeLeads.filter(
+      (lead) => getLeadStatusGroup(lead.status) === "Estimate Scheduled",
+    ).length,
+    wonJobs: activeLeads.filter((lead) => getLeadStatusGroup(lead.status) === "Won")
+      .length,
+    lostJobs: activeLeads.filter((lead) => getLeadStatusGroup(lead.status) === "Lost")
+      .length,
+  };
 
-  const filteredLeads = snapshot.leads.filter((lead) => {
+  useEffect(() => {
+    if (!activeLeads.length) {
+      if (selectedLeadId) {
+        setSelectedLeadId("");
+      }
+      return;
+    }
+
+    if (!selectedLeadId || !activeLeads.some((lead) => lead.id === selectedLeadId)) {
+      setSelectedLeadId(activeLeads[0].id);
+    }
+  }, [activeLeads, selectedLeadId]);
+
+  const filteredLeads = activeLeads.filter((lead) => {
     const query = search.toLowerCase();
+    const division = getLeadDivision(lead, companyMap);
+    const leadSource = getLeadSource(lead);
     const matchesSearch =
       !query ||
-      lead.contact_name.toLowerCase().includes(query) ||
-      lead.property_address.toLowerCase().includes(query) ||
-      lead.source.toLowerCase().includes(query);
-    const matchesStatus = statusFilter === "all" || lead.status === statusFilter;
-    return matchesSearch && matchesStatus;
+      getLeadFullName(lead).toLowerCase().includes(query) ||
+      (lead.company ?? "").toLowerCase().includes(query) ||
+      (lead.phone ?? "").toLowerCase().includes(query) ||
+      (lead.email ?? "").toLowerCase().includes(query) ||
+      getLeadAddress(lead).toLowerCase().includes(query) ||
+      leadSource.toLowerCase().includes(query) ||
+      leadServiceLabel(lead.service_type).toLowerCase().includes(query);
+    const matchesStatus =
+      statusFilter === "all" || getLeadStatusGroup(lead.status) === statusFilter;
+    const matchesSource = sourceFilter === "all" || leadSource === sourceFilter;
+    const matchesDivision = divisionFilter === "all" || division === divisionFilter;
+    return matchesSearch && matchesStatus && matchesSource && matchesDivision;
   });
   const {
     page: leadPage,
@@ -3565,25 +3852,11 @@ function LeadsView({
 
     try {
       const formData = new FormData(form);
-      await createLead(client, {
-        company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-        contact_name: getFormString(formData, "contact_name"),
-        phone: getOptionalFormString(formData, "phone"),
-        email: getOptionalFormString(formData, "email"),
-        property_address: getFormString(formData, "property_address"),
-        city: getOptionalFormString(formData, "city"),
-        state: getFormString(formData, "state", "AZ"),
-        postal_code: getOptionalFormString(formData, "postal_code"),
-        service_type: getFormString(formData, "service_type", "roofing") as ServiceType,
-        source: getFormString(formData, "source", "Website"),
-        priority: getFormString(formData, "priority", "normal") as LeadPriority,
-        estimated_value: getFormNumber(formData, "estimated_value"),
-        next_follow_up: getOptionalFormString(formData, "next_follow_up"),
-        notes: getOptionalFormString(formData, "notes"),
-      });
+      await createLead(client, getLeadFormInput(formData, snapshot.companies));
       form.reset();
       await onReload();
       onNotice("Lead created.");
+      setIsCreateOpen(false);
     } catch (currentError) {
       onError(
         currentError instanceof Error ? currentError.message : "Unable to create lead.",
@@ -3600,25 +3873,25 @@ function LeadsView({
       return;
     }
 
+    setIsUpdating(true);
+    onError("");
+
     try {
       const formData = new FormData(event.currentTarget);
-      await updateLead(client, selectedLead.id, {
-        status: getFormString(formData, "status", selectedLead.status) as LeadStatus,
-        priority: getFormString(
-          formData,
-          "priority",
-          selectedLead.priority,
-        ) as LeadPriority,
-        estimated_value: getFormNumber(formData, "estimated_value"),
-        next_follow_up: getOptionalFormString(formData, "next_follow_up"),
-        notes: getOptionalFormString(formData, "notes"),
-      });
+      await updateLead(
+        client,
+        selectedLead.id,
+        getLeadFormInput(formData, snapshot.companies, selectedLead),
+      );
       await onReload();
       onNotice("Lead updated.");
+      setIsDetailOpen(false);
     } catch (currentError) {
       onError(
         currentError instanceof Error ? currentError.message : "Unable to update lead.",
       );
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -3641,7 +3914,25 @@ function LeadsView({
   };
 
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="space-y-5">
+      <section className="grid gap-3 md:grid-cols-5">
+        {[
+          { label: "Total Leads", value: leadSummary.total },
+          { label: "New Leads", value: leadSummary.newLeads },
+          { label: "Estimates Scheduled", value: leadSummary.estimatesScheduled },
+          { label: "Won Jobs", value: leadSummary.wonJobs },
+          { label: "Lost Jobs", value: leadSummary.lostJobs },
+        ].map((card) => (
+          <div
+            key={card.label}
+            className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+          >
+            <p className="text-sm font-semibold text-slate-500">{card.label}</p>
+            <p className="mt-2 text-3xl font-bold text-slate-950">{card.value}</p>
+          </div>
+        ))}
+      </section>
+
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -3651,13 +3942,23 @@ function LeadsView({
                 Intake, qualify, follow up, and convert opportunities.
               </p>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+            >
+              <Plus className="h-4 w-4" />
+              New Lead
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_180px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-72"
+                  className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                   placeholder="Search leads"
                 />
               </div>
@@ -3671,40 +3972,108 @@ function LeadsView({
                 <option value="all">All statuses</option>
                 {leadStatuses.map((status) => (
                   <option key={status.value} value={status.value}>
-                    {status.label}
+                  {status.label}
                   </option>
                 ))}
               </select>
-            </div>
+              <select
+                value={sourceFilter}
+                onChange={(event) => setSourceFilter(event.target.value)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="all">All sources</option>
+                {leadSourceOptions.map((source) => (
+                  <option key={source} value={source}>
+                    {source}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={divisionFilter}
+                onChange={(event) => setDivisionFilter(event.target.value)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="all">All divisions</option>
+                {divisionOptions.map((division) => (
+                  <option key={division} value={division}>
+                    {division}
+                  </option>
+                ))}
+              </select>
           </div>
         </div>
 
-        <div className="divide-y divide-slate-100">
-          {pagedLeads.map((lead) => (
-            <button
-              key={lead.id}
-              type="button"
-              onClick={() => setSelectedLeadId(lead.id)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 lg:grid-cols-[1fr_120px_130px_120px] lg:items-center ${
-                selectedLead?.id === lead.id ? "bg-sky-50" : "bg-white"
-              }`}
-            >
-              <div>
-                <p className="font-semibold text-slate-950">{lead.contact_name}</p>
-                <p className="mt-1 text-sm text-slate-500">{lead.property_address}</p>
-              </div>
-              <Badge label={statusLabel(lead.status)} tone="blue" />
-              <span className="text-sm text-slate-600">
-                {companyMap.get(lead.company_id)?.name ?? "Company"}
-              </span>
-              <span className="text-sm font-semibold text-slate-950">
-                {formatMoney(lead.estimated_value)}
-              </span>
-            </button>
-          ))}
-
-          {!filteredLeads.length ? <EmptyState label="No leads match this view." /> : null}
+        <div className="overflow-x-auto">
+          <table className="min-w-[980px] divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+              <tr>
+                <th className="px-5 py-3">Customer</th>
+                <th className="px-5 py-3">Phone</th>
+                <th className="px-5 py-3">Address</th>
+                <th className="px-5 py-3">Lead Source</th>
+                <th className="px-5 py-3">Service</th>
+                <th className="px-5 py-3">Status</th>
+                <th className="px-5 py-3">Assigned To</th>
+                <th className="px-5 py-3">Created</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {pagedLeads.map((lead) => (
+                <tr
+                  key={lead.id}
+                  tabIndex={0}
+                  role="button"
+                  onClick={() => {
+                    setSelectedLeadId(lead.id);
+                    setIsDetailOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      setSelectedLeadId(lead.id);
+                      setIsDetailOpen(true);
+                    }
+                  }}
+                  className="cursor-pointer transition hover:bg-sky-50 focus:bg-sky-50 focus:outline-none"
+                >
+                  <td className="px-5 py-4">
+                    <p className="font-semibold text-slate-950">
+                      {getLeadFullName(lead)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {lead.company || lead.email || "Residential lead"}
+                    </p>
+                  </td>
+                  <td className="px-5 py-4 text-slate-700">{lead.phone ?? "None"}</td>
+                  <td className="px-5 py-4 text-slate-700">
+                    <p>{getLeadAddress(lead)}</p>
+                    <p className="text-xs text-slate-500">
+                      {[lead.city, lead.state, getLeadZip(lead)].filter(Boolean).join(", ")}
+                    </p>
+                  </td>
+                  <td className="px-5 py-4 text-slate-700">{getLeadSource(lead)}</td>
+                  <td className="px-5 py-4 text-slate-700">
+                    {leadServiceLabel(lead.service_type)}
+                  </td>
+                  <td className="px-5 py-4">
+                    <Badge label={statusLabel(lead.status)} tone="blue" />
+                  </td>
+                  <td className="px-5 py-4 text-slate-700">
+                    {lead.assigned_to ?? "Unassigned"}
+                  </td>
+                  <td className="px-5 py-4 text-slate-700">
+                    {formatDateTime(lead.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+
+        {!activeLeads.length ? (
+          <EmptyState label="No leads yet. Create the first WeatherTech OS lead." />
+        ) : !filteredLeads.length ? (
+          <EmptyState label="No leads match this view." />
+        ) : null}
         <PaginationControls
           page={leadPage}
           pageCount={leadPageCount}
@@ -3713,101 +4082,70 @@ function LeadsView({
         />
       </section>
 
-      <aside className="space-y-5">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-950">New lead</h3>
-          <LeadCreateForm
-            companies={snapshot.companies}
-            isSubmitting={isCreating}
-            onSubmit={handleCreateLead}
-          />
-        </section>
-
-        {selectedLead ? (
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
+      {isCreateOpen ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/40 p-4">
+          <section className="max-h-[calc(100vh-2rem)] w-full max-w-4xl overflow-auto rounded-lg bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
               <div>
-                <h3 className="text-lg font-bold text-slate-950">
-                  {selectedLead.contact_name}
-                </h3>
+                <h3 className="text-lg font-bold text-slate-950">New Lead</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  {serviceLabel(selectedLead.service_type)} lead from {selectedLead.source}
+                  Save a WeatherTech OS lead directly to Supabase.
                 </p>
               </div>
-              <Badge label={selectedLead.priority} tone="amber" />
+              <button
+                type="button"
+                onClick={() => setIsCreateOpen(false)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
             </div>
+            <LeadForm
+            companies={snapshot.companies}
+            isSubmitting={isCreating}
+              submitLabel="Save Lead"
+            onSubmit={handleCreateLead}
+              onCancel={() => setIsCreateOpen(false)}
+          />
+          </section>
+        </div>
+      ) : null}
 
-            <div className="mt-4 grid gap-2 text-sm text-slate-600">
-              <ContactLine icon={Phone} value={selectedLead.phone} />
-              <ContactLine icon={Mail} value={selectedLead.email} />
-              <ContactLine icon={Building2} value={selectedLead.property_address} />
+      {isDetailOpen && selectedLead ? (
+        <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/40">
+          <section className="h-full w-full max-w-3xl overflow-auto bg-white shadow-xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">
+                  {getLeadFullName(selectedLead)}
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {leadServiceLabel(selectedLead.service_type)} from{" "}
+                  {getLeadSource(selectedLead)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDetailOpen(false)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
             </div>
-
-            <form onSubmit={handleUpdateLead} className="mt-5 grid gap-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-sm font-medium text-slate-700">
-                  Status
-                  <select
-                    name="status"
-                    defaultValue={selectedLead.status}
-                    className="rounded-md border border-slate-300 px-3 py-2"
-                  >
-                    {leadStatuses.map((status) => (
-                      <option key={status.value} value={status.value}>
-                        {status.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="grid gap-1 text-sm font-medium text-slate-700">
-                  Priority
-                  <select
-                    name="priority"
-                    defaultValue={selectedLead.priority}
-                    className="rounded-md border border-slate-300 px-3 py-2"
-                  >
-                    {leadPriorities.map((priority) => (
-                      <option key={priority.value} value={priority.value}>
-                        {priority.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-sm font-medium text-slate-700">
-                  Value
-                  <input
-                    name="estimated_value"
-                    defaultValue={selectedLead.estimated_value}
-                    className="rounded-md border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-medium text-slate-700">
-                  Follow-up
-                  <input
-                    name="next_follow_up"
-                    type="date"
-                    defaultValue={selectedLead.next_follow_up ?? ""}
-                    className="rounded-md border border-slate-300 px-3 py-2"
-                  />
-                </label>
-              </div>
-              <label className="grid gap-1 text-sm font-medium text-slate-700">
-                Notes
-                <textarea
-                  name="notes"
-                  defaultValue={selectedLead.notes ?? ""}
-                  className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="submit"
-                  className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  Save lead
-                </button>
+            <div className="grid gap-3 border-b border-slate-200 p-5 sm:grid-cols-3">
+              <ProfileStat label="Created" value={formatDateTime(selectedLead.created_at)} />
+              <ProfileStat label="Updated" value={formatDateTime(selectedLead.updated_at)} />
+              <ProfileStat label="Lead ID" value={selectedLead.id} />
+            </div>
+            <LeadForm
+              companies={snapshot.companies}
+              defaultLead={selectedLead}
+              isSubmitting={isUpdating}
+              submitLabel="Save Lead"
+              onSubmit={handleUpdateLead}
+              onCancel={() => setIsDetailOpen(false)}
+            />
+            <div className="border-t border-slate-200 p-5">
                 <button
                   type="button"
                   onClick={() => void handleConvertLead()}
@@ -3815,135 +4153,234 @@ function LeadsView({
                 >
                   Convert
                 </button>
-              </div>
-            </form>
+            </div>
           </section>
-        ) : null}
-      </aside>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-type LeadCreateFormProps = {
-  companies: CompanyRecord[];
-  isSubmitting: boolean;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-};
+function LeadForm({
+  defaultLead = null,
+  isSubmitting,
+  submitLabel,
+  onSubmit,
+  onCancel,
+}: LeadFormProps) {
+  const defaultDivision = defaultLead?.division ?? "WeatherTech Roofing";
 
-function LeadCreateForm({ companies, isSubmitting, onSubmit }: LeadCreateFormProps) {
   return (
-    <form onSubmit={onSubmit} className="mt-4 grid gap-3">
-      <label className="grid gap-1 text-sm font-medium text-slate-700">
-        Company
-        <select
-          name="company_id"
+    <form onSubmit={onSubmit} className="grid gap-5 p-5">
+      <fieldset className="grid gap-3">
+        <legend className="text-sm font-bold text-slate-950">Customer Information</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LeadTextField
+            name="first_name"
+            label="First Name"
+            required
+            defaultValue={defaultLead?.first_name ?? ""}
+          />
+          <LeadTextField
+            name="last_name"
+            label="Last Name"
+            required
+            defaultValue={defaultLead?.last_name ?? ""}
+          />
+        </div>
+        <LeadTextField
+          name="company"
+          label="Company"
+          defaultValue={defaultLead?.company ?? ""}
+        />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LeadTextField name="phone" label="Phone" defaultValue={defaultLead?.phone ?? ""} />
+          <LeadTextField
+            name="email"
+            label="Email"
+            type="email"
+            defaultValue={defaultLead?.email ?? ""}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="grid gap-3">
+        <legend className="text-sm font-bold text-slate-950">Address</legend>
+        <LeadTextField
+          name="address"
+          label="Address"
           required
-          className="rounded-md border border-slate-300 px-3 py-2"
+          defaultValue={defaultLead ? getLeadAddress(defaultLead) : ""}
+        />
+        <div className="grid gap-3 sm:grid-cols-3">
+          <LeadTextField name="city" label="City" defaultValue={defaultLead?.city ?? ""} />
+          <LeadTextField
+            name="state"
+            label="State"
+            defaultValue={defaultLead?.state ?? "AZ"}
+          />
+          <LeadTextField
+            name="zip"
+            label="Zip"
+            defaultValue={defaultLead ? getLeadZip(defaultLead) : ""}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="grid gap-3">
+        <legend className="text-sm font-bold text-slate-950">Lead Details</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LeadSelect
+            name="lead_source"
+            label="Lead Source"
+            defaultValue={defaultLead ? getLeadSource(defaultLead) : "Website"}
+            options={leadSources}
+          />
+          <LeadSelect
+            name="service_type"
+            label="Service Type"
+            defaultValue={defaultLead?.service_type ?? "Roof Repair"}
+            options={leadServiceTypes.map((service) => service.value)}
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LeadSelect
+            name="division"
+            label="Division"
+            defaultValue={defaultDivision}
+            options={leadDivisions}
+          />
+          <LeadSelect
+            name="status"
+            label="Status"
+            defaultValue={defaultLead?.status ?? "New Lead"}
+            options={leadStatuses.map((status) => status.value)}
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <LeadTextField
+            name="assigned_to"
+            label="Assigned To"
+            defaultValue={defaultLead?.assigned_to ?? ""}
+          />
+          <LeadTextField
+            name="estimate_amount"
+            label="Estimate Amount"
+            defaultValue={String(defaultLead ? getLeadEstimateAmount(defaultLead) : "")}
+          />
+          <label className="grid gap-1 text-sm font-medium text-slate-700">
+            Appointment Date
+            <input
+              name="appointment_date"
+              type="datetime-local"
+              defaultValue={
+                defaultLead && getLeadAppointmentDate(defaultLead)
+                  ? toDateTimeInputValue(getLeadAppointmentDate(defaultLead) ?? "")
+                  : ""
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LeadSelect
+            name="priority"
+            label="Priority"
+            defaultValue={defaultLead?.priority ?? "normal"}
+            options={leadPriorities.map((priority) => priority.value)}
+          />
+          <LeadTextField
+            name="gohighlevel_contact_id"
+            label="GoHighLevel Contact ID"
+            defaultValue={defaultLead?.gohighlevel_contact_id ?? ""}
+          />
+        </div>
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Notes
+          <textarea
+            name="notes"
+            defaultValue={defaultLead?.notes ?? ""}
+            className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+      </fieldset>
+
+      <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+        ) : null}
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
-          {companies.map((company) => (
-            <option key={company.id} value={company.id}>
-              {company.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <input
-        required
-        name="contact_name"
-        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-        placeholder="Lead or customer name"
-      />
-      <input
-        required
-        name="property_address"
-        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-        placeholder="Property address"
-      />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input
-          name="phone"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Phone"
-        />
-        <input
-          name="email"
-          type="email"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Email"
-        />
+          <Plus className="h-4 w-4" />
+          {isSubmitting ? "Saving" : submitLabel}
+        </button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <input
-          name="city"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="City"
-        />
-        <input
-          name="state"
-          defaultValue="AZ"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="State"
-        />
-        <input
-          name="postal_code"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="ZIP"
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <select
-          name="service_type"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
-          {serviceTypes.map((service) => (
-            <option key={service.value} value={service.value}>
-              {service.label}
-            </option>
-          ))}
-        </select>
-        <select
-          name="priority"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
-          {leadPriorities.map((priority) => (
-            <option key={priority.value} value={priority.value}>
-              {priority.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input
-          name="source"
-          defaultValue="Website"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Lead source"
-        />
-        <input
-          name="estimated_value"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Estimated value"
-        />
-      </div>
-      <input
-        name="next_follow_up"
-        type="date"
-        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-      />
-      <textarea
-        name="notes"
-        className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
-        placeholder="Notes"
-      />
-      <button
-        type="submit"
-        disabled={isSubmitting}
-        className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-      >
-        <Plus className="h-4 w-4" />
-        {isSubmitting ? "Saving" : "Create lead"}
-      </button>
     </form>
+  );
+}
+
+function LeadTextField({
+  name,
+  label,
+  defaultValue,
+  required = false,
+  type = "text",
+}: {
+  name: string;
+  label: string;
+  defaultValue: string;
+  required?: boolean;
+  type?: string;
+}) {
+  return (
+    <label className="grid gap-1 text-sm font-medium text-slate-700">
+      {label}
+      <input
+        name={name}
+        type={type}
+        required={required}
+        defaultValue={defaultValue}
+        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+      />
+    </label>
+  );
+}
+
+function LeadSelect({
+  name,
+  label,
+  defaultValue,
+  options,
+}: {
+  name: string;
+  label: string;
+  defaultValue: string;
+  options: string[];
+}) {
+  return (
+    <label className="grid gap-1 text-sm font-medium text-slate-700">
+      {label}
+      <select
+        name={name}
+        defaultValue={defaultValue}
+        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -12825,6 +13262,7 @@ type GoHighLevelLeadDryRunResult = {
   checkedAt: string;
   nextStep: string;
   leadId: string | null;
+  leadLabel: string | null;
   companyId: string | null;
   syncLogId: string | null;
 };
@@ -12977,6 +13415,25 @@ function IntegrationsView({
   const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
     ? getIntegrationSyncLogTimestamp(latestGoHighLevelSyncLog)
     : null;
+  const activeGoHighLevelLeads = useMemo(
+    () =>
+      snapshot.leads
+        .filter((lead) => !lead.archived)
+        .sort(
+          (left, right) =>
+            Date.parse(right.created_at) - Date.parse(left.created_at),
+        ),
+    [snapshot.leads],
+  );
+  const defaultGoHighLevelLead = useMemo(
+    () =>
+      activeGoHighLevelLeads.find(
+        (lead) => getLeadDivision(lead, companyMap) === "WeatherTech Roofing",
+      ) ??
+      activeGoHighLevelLeads[0] ??
+      null,
+    [activeGoHighLevelLeads, companyMap],
+  );
   const [goHighLevelTestResult, setGoHighLevelTestResult] =
     useState<GoHighLevelConnectionTestResult | null>(null);
   const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
@@ -12985,12 +13442,22 @@ function IntegrationsView({
   const [isRunningGoHighLevelLeadDryRun, setIsRunningGoHighLevelLeadDryRun] =
     useState(false);
   const [goHighLevelLeadDryRunLeadId, setGoHighLevelLeadDryRunLeadId] = useState(
-    snapshot.leads[0]?.id ?? "",
+    defaultGoHighLevelLead?.id ?? "",
   );
   const selectedGoHighLevelLead =
-    snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
-    snapshot.leads[0] ??
-    null;
+    activeGoHighLevelLeads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
+    defaultGoHighLevelLead;
+  const goHighLevelLeadDryRunResultLead =
+    goHighLevelLeadDryRunResult?.leadId
+      ? snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunResult.leadId)
+      : null;
+  const goHighLevelLeadDryRunLeadLabel =
+    goHighLevelLeadDryRunResult?.leadLabel ??
+    (goHighLevelLeadDryRunResultLead
+      ? getLeadFullName(goHighLevelLeadDryRunResultLead)
+      : goHighLevelLeadDryRunResult?.leadId
+        ? goHighLevelLeadDryRunResult.leadId
+        : "Server default");
   const goHighLevelLocationIds = getGoHighLevelLocationIds(
     primaryGoHighLevelConnection,
     goHighLevelTestResult,
@@ -13035,20 +13502,24 @@ function IntegrationsView({
         : "Not synced yet";
 
   useEffect(() => {
-    if (!snapshot.leads.length) {
+    if (!activeGoHighLevelLeads.length) {
       setGoHighLevelLeadDryRunLeadId("");
       return;
     }
 
     if (
       goHighLevelLeadDryRunLeadId &&
-      snapshot.leads.some((lead) => lead.id === goHighLevelLeadDryRunLeadId)
+      activeGoHighLevelLeads.some((lead) => lead.id === goHighLevelLeadDryRunLeadId)
     ) {
       return;
     }
 
-    setGoHighLevelLeadDryRunLeadId(snapshot.leads[0].id);
-  }, [goHighLevelLeadDryRunLeadId, snapshot.leads]);
+    setGoHighLevelLeadDryRunLeadId(defaultGoHighLevelLead?.id ?? "");
+  }, [
+    activeGoHighLevelLeads,
+    defaultGoHighLevelLead,
+    goHighLevelLeadDryRunLeadId,
+  ]);
 
   const handleTestGoHighLevelConnection = async () => {
     setIsTestingGoHighLevel(true);
@@ -13081,11 +13552,6 @@ function IntegrationsView({
   };
 
   const handleRunGoHighLevelLeadDryRun = async () => {
-    if (!selectedGoHighLevelLead) {
-      onError("Create or select a lead before running the dry run.");
-      return;
-    }
-
     setIsRunningGoHighLevelLeadDryRun(true);
     setGoHighLevelLeadDryRunResult(null);
 
@@ -13096,7 +13562,9 @@ function IntegrationsView({
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ leadId: selectedGoHighLevelLead.id }),
+        body: JSON.stringify(
+          selectedGoHighLevelLead ? { leadId: selectedGoHighLevelLead.id } : {},
+        ),
       });
       const result = (await response.json()) as GoHighLevelLeadDryRunResult;
       setGoHighLevelLeadDryRunResult(result);
@@ -14480,7 +14948,7 @@ function IntegrationsView({
               <button
                 type="button"
                 onClick={() => void handleRunGoHighLevelLeadDryRun()}
-                disabled={!selectedGoHighLevelLead || isRunningGoHighLevelLeadDryRun}
+                disabled={isRunningGoHighLevelLeadDryRun}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <RefreshCcw className="h-4 w-4" />
@@ -14488,7 +14956,7 @@ function IntegrationsView({
               </button>
             </div>
 
-            {snapshot.leads.length ? (
+            {activeGoHighLevelLeads.length ? (
               <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.6fr)]">
                 <label className="grid gap-2 text-sm font-semibold text-slate-700">
                   Lead
@@ -14499,9 +14967,9 @@ function IntegrationsView({
                     }
                     className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950"
                   >
-                    {snapshot.leads.map((lead) => (
+                    {activeGoHighLevelLeads.map((lead) => (
                       <option key={lead.id} value={lead.id}>
-                        {lead.contact_name} -{" "}
+                        {getLeadFullName(lead)} -{" "}
                         {companyMap.get(lead.company_id)?.name ?? "Company"}
                       </option>
                     ))}
@@ -14510,7 +14978,11 @@ function IntegrationsView({
                 <div className="grid gap-2 text-sm">
                   <ProfileStat
                     label="Selected lead"
-                    value={selectedGoHighLevelLead?.contact_name ?? "None"}
+                    value={
+                      selectedGoHighLevelLead
+                        ? getLeadFullName(selectedGoHighLevelLead)
+                        : "Server default"
+                    }
                   />
                   <ProfileStat
                     label="Last dry run"
@@ -14530,7 +15002,7 @@ function IntegrationsView({
               </div>
             ) : (
               <div className="mt-4">
-                <EmptyState label="No leads available for a GoHighLevel dry run." />
+                <EmptyState label="No active leads are loaded. The server will look for the newest WeatherTech Roofing lead." />
               </div>
             )}
 
@@ -14555,10 +15027,18 @@ function IntegrationsView({
                     )}
                   />
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <ProfileStat
+                    label="Lead used"
+                    value={goHighLevelLeadDryRunLeadLabel}
+                  />
                   <ProfileStat
                     label="Location"
                     value={goHighLevelLeadDryRunResult.location?.label ?? "None"}
+                  />
+                  <ProfileStat
+                    label="Checked"
+                    value={formatDateTime(goHighLevelLeadDryRunResult.checkedAt)}
                   />
                   <ProfileStat
                     label="Missing fields"
@@ -14582,9 +15062,14 @@ function IntegrationsView({
                   </div>
                 ) : null}
                 {goHighLevelLeadDryRunResult.payload ? (
-                  <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
-                    {JSON.stringify(goHighLevelLeadDryRunResult.payload, null, 2)}
-                  </pre>
+                  <div className="mt-4">
+                    <p className="text-sm font-semibold text-slate-700">
+                      Payload preview
+                    </p>
+                    <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
+                      {JSON.stringify(goHighLevelLeadDryRunResult.payload, null, 2)}
+                    </pre>
+                  </div>
                 ) : null}
               </div>
             ) : null}

@@ -134,6 +134,54 @@ function requireRows<T>(tableName: string, result: CrmListResult<T>): T[] {
 function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
   return leads.map((lead) => ({
     ...lead,
+    first_name:
+      typeof (lead as Partial<LeadRecord>).first_name === "string"
+        ? lead.first_name
+        : lead.contact_name.split(/\s+/)[0] ?? null,
+    last_name:
+      typeof (lead as Partial<LeadRecord>).last_name === "string"
+        ? lead.last_name
+        : lead.contact_name.split(/\s+/).slice(1).join(" ") || null,
+    company:
+      typeof (lead as Partial<LeadRecord>).company === "string"
+        ? lead.company
+        : null,
+    address:
+      typeof (lead as Partial<LeadRecord>).address === "string"
+        ? lead.address
+        : lead.property_address,
+    zip:
+      typeof (lead as Partial<LeadRecord>).zip === "string"
+        ? lead.zip
+        : lead.postal_code,
+    lead_source:
+      typeof (lead as Partial<LeadRecord>).lead_source === "string"
+        ? lead.lead_source
+        : lead.source,
+    division:
+      typeof (lead as Partial<LeadRecord>).division === "string"
+        ? lead.division
+        : null,
+    assigned_to:
+      typeof (lead as Partial<LeadRecord>).assigned_to === "string"
+        ? lead.assigned_to
+        : null,
+    estimate_amount:
+      typeof (lead as Partial<LeadRecord>).estimate_amount === "number"
+        ? lead.estimate_amount
+        : lead.estimated_value,
+    appointment_date:
+      typeof (lead as Partial<LeadRecord>).appointment_date === "string"
+        ? lead.appointment_date
+        : null,
+    gohighlevel_contact_id:
+      typeof (lead as Partial<LeadRecord>).gohighlevel_contact_id === "string"
+        ? lead.gohighlevel_contact_id
+        : null,
+    archived:
+      typeof (lead as Partial<LeadRecord>).archived === "boolean"
+        ? lead.archived
+        : false,
     updated_at:
       typeof (lead as Partial<LeadRecord>).updated_at === "string"
         ? lead.updated_at
@@ -461,17 +509,17 @@ export async function convertLeadToCustomer(client: CrmClient, lead: LeadRecord)
     contact_name: lead.contact_name,
     phone: lead.phone,
     email: lead.email,
-    property_address: lead.property_address,
+    property_address: lead.address ?? lead.property_address,
     city: lead.city,
     state: lead.state,
-    postal_code: lead.postal_code,
+    postal_code: lead.zip ?? lead.postal_code,
     customer_type: "homeowner",
     status: "active",
     notes: lead.notes,
   });
 
   await updateLead(client, lead.id, {
-    status: "won",
+    status: "Won",
   });
 
   const { error } = await client

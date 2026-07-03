@@ -14,7 +14,22 @@ export type LeadStatus =
   | "qualified"
   | "estimate_sent"
   | "won"
-  | "lost";
+  | "lost"
+  | "New Lead"
+  | "Contacted"
+  | "Estimate Scheduled"
+  | "Proposal Sent"
+  | "Won"
+  | "Lost";
+export type LeadServiceType =
+  | ServiceType
+  | "Roof Repair"
+  | "Roof Replacement"
+  | "Exterior Painting"
+  | "Stucco Repair"
+  | "Gutter Work"
+  | "Inspection"
+  | "Other";
 export type LeadPriority = "low" | "normal" | "high" | "urgent";
 export type CustomerType = "homeowner" | "commercial" | "hoa" | "property_manager";
 export type CustomerStatus = "active" | "inactive" | "prospect";
@@ -179,22 +194,34 @@ export type LeadRecord = {
   id: string;
   company_id: string;
   customer_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  company: string | null;
   contact_name: string;
   phone: string | null;
   email: string | null;
+  address: string | null;
   property_address: string;
   city: string | null;
   state: string;
+  zip: string | null;
   postal_code: string | null;
   latitude: number | null;
   longitude: number | null;
   google_place_id: string | null;
   address_verified_at: string | null;
-  service_type: ServiceType;
+  lead_source: string | null;
+  service_type: LeadServiceType;
+  division: string | null;
   source: string;
   status: LeadStatus;
   priority: LeadPriority;
+  assigned_to: string | null;
+  estimate_amount: number | null;
   estimated_value: number;
+  appointment_date: string | null;
+  gohighlevel_contact_id: string | null;
+  archived: boolean;
   next_follow_up: string | null;
   notes: string | null;
   created_by: string | null;
@@ -712,22 +739,34 @@ export type RoutePlanStopRecord = {
 
 export type LeadInput = {
   company_id: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  company?: string | null;
   contact_name: string;
   phone?: string | null;
   email?: string | null;
+  address?: string | null;
   property_address: string;
   city?: string | null;
   state?: string;
+  zip?: string | null;
   postal_code?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   google_place_id?: string | null;
   address_verified_at?: string | null;
-  service_type: ServiceType;
+  lead_source?: string | null;
+  service_type: LeadServiceType;
+  division?: string | null;
   source?: string;
   status?: LeadStatus;
   priority?: LeadPriority;
+  assigned_to?: string | null;
+  estimate_amount?: number | null;
   estimated_value?: number;
+  appointment_date?: string | null;
+  gohighlevel_contact_id?: string | null;
+  archived?: boolean;
   next_follow_up?: string | null;
   notes?: string | null;
 };
