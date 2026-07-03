@@ -73,6 +73,7 @@ import {
   createTimeEntry,
   fetchCrmSnapshot,
   updateIntegrationConnection,
+  updateIntegrationSyncLog,
   updateChangeOrder,
   updateInvoice,
   updateEstimate,
@@ -113,7 +114,9 @@ import {
   buildRouteCandidates,
   buildRoutePreview,
   buildTwilioSmsPreview,
+  buildIntegrationSyncRetryableUpdate,
   calendarSyncStatusLabel,
+  canRetryIntegrationSyncLog,
   countSmsSegments,
   createPayloadFingerprint,
   emailCategoryLabel,
@@ -123,7 +126,9 @@ import {
   getCalendarSyncRecord,
   getCalendarSyncSummary,
   getEmailOutboxSummary,
+  getFailedIntegrationSyncLogs,
   getIntegrationSyncLogSummary,
+  getRetryableIntegrationSyncLogs,
   getSmsOutboxSummary,
   goHighLevelEnvVars,
   googleMapsEnvVars,
@@ -132,6 +137,7 @@ import {
   hasGoogleMapsBrowserKey,
   integrationSyncLogStatusLabel,
   integrationStatusLabel,
+  sanitizeIntegrationSyncLogText,
   smsCategoryLabel,
   smsMessageStatusLabel,
   routePreviewToStopInputs,
@@ -12920,6 +12926,10 @@ function IntegrationsView({
     (log) => log.provider === "gohighlevel",
   );
   const goHighLevelSyncSummary = getIntegrationSyncLogSummary(goHighLevelSyncLogs);
+  const failedGoHighLevelSyncLogs = getFailedIntegrationSyncLogs(goHighLevelSyncLogs);
+  const retryableGoHighLevelSyncLogs =
+    getRetryableIntegrationSyncLogs(goHighLevelSyncLogs);
+  const recentFailedGoHighLevelSyncLogs = failedGoHighLevelSyncLogs.slice(0, 4);
   const recentGoHighLevelSyncLogs = goHighLevelSyncLogs.slice(0, 5);
   const latestGoHighLevelSyncLog = goHighLevelSyncLogs[0];
   const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
@@ -12986,6 +12996,41 @@ function IntegrationsView({
       );
     } finally {
       setIsTestingGoHighLevel(false);
+    }
+  };
+
+  const handleQueueGoHighLevelRetry = async (log: IntegrationSyncLogRecord) => {
+    if (!canRetryIntegrationSyncLog(log)) {
+      onError("This sync log is not retryable yet.");
+      return;
+    }
+
+    const now = new Date();
+
+    try {
+      await updateIntegrationSyncLog(
+        client,
+        log.id,
+        buildIntegrationSyncRetryableUpdate(log, {
+          now,
+          retryDelayMinutes: 0,
+          incrementAttempt: false,
+          errorMessage:
+            log.error_message ??
+            "Retry requested from WeatherTech OS. Worker dispatch is not enabled yet.",
+          responseSummary: {
+            ...log.response_summary,
+            dryRun: true,
+            communicationsSent: false,
+            retryRequestedAt: now.toISOString(),
+            retryRequestedFrom: "weathertech_os_integration_screen",
+          },
+        }),
+      );
+      onNotice("Retry marked for review. No customer communications were sent.");
+      await onReload();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not mark sync retry.");
     }
   };
 
@@ -14345,6 +14390,83 @@ function IntegrationsView({
                 </div>
               </article>
             ))}
+          </div>
+
+          <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  Failed and retryable activity
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  Retry buttons only mark sync logs for future worker handling. They do
+                  not call GoHighLevel or send customer communications.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  label={`${failedGoHighLevelSyncLogs.length} failed`}
+                  tone={failedGoHighLevelSyncLogs.length ? "amber" : "green"}
+                />
+                <Badge
+                  label={`${retryableGoHighLevelSyncLogs.length} retryable`}
+                  tone={retryableGoHighLevelSyncLogs.length ? "amber" : "blue"}
+                />
+              </div>
+            </div>
+            {recentFailedGoHighLevelSyncLogs.length ? (
+              <div className="mt-4 divide-y divide-amber-200 overflow-hidden rounded-lg border border-amber-200 bg-white">
+                {recentFailedGoHighLevelSyncLogs.map((log) => {
+                  const isRetryable = canRetryIntegrationSyncLog(log);
+                  const safeError =
+                    sanitizeIntegrationSyncLogText(log.error_message) ??
+                    "No error message captured.";
+
+                  return (
+                    <article key={log.id} className="p-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold capitalize text-slate-950">
+                              {formatSyncLogEventType(log.event_type)}
+                            </p>
+                            <Badge
+                              label={integrationSyncLogStatusLabel(log.status)}
+                              tone={getIntegrationSyncLogStatusTone(log.status)}
+                            />
+                          </div>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Attempt {log.attempt_count} of {log.max_attempts} ·{" "}
+                            {formatDateTime(getIntegrationSyncLogTimestamp(log))}
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-amber-800">
+                            {safeError}
+                          </p>
+                          {log.next_retry_at ? (
+                            <p className="mt-1 text-sm text-slate-500">
+                              Next retry window {formatDateTime(log.next_retry_at)}
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleQueueGoHighLevelRetry(log)}
+                          disabled={!isRetryable}
+                          className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <RefreshCcw className="h-4 w-4" />
+                          {isRetryable ? "Queue retry dry run" : "Retry held"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-4">
+                <EmptyState label="No failed GoHighLevel sync activity." />
+              </div>
+            )}
           </div>
 
           <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">

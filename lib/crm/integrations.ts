@@ -7,6 +7,7 @@ import type {
   IntegrationConnectionRecord,
   IntegrationConnectionStatus,
   IntegrationSyncDirection,
+  IntegrationSyncLogInput,
   IntegrationSyncLogRecord,
   IntegrationSyncLogStatus,
   JobRecord,
@@ -46,6 +47,9 @@ export const goHighLevelEnvVars = {
   apiBaseUrl: "https://services.leadconnectorhq.com",
   testEndpoint: "/api/integrations/gohighlevel/test",
 };
+
+const DEFAULT_RETRY_DELAY_MINUTES = 15;
+const REDACTED_VALUE = "[redacted]";
 
 export type RouteCoordinate = {
   latitude: number;
@@ -253,6 +257,222 @@ export function getIntegrationSyncLogSummary(logs: IntegrationSyncLogRecord[]) {
     outbound: logs.filter((log) => log.direction === "weathertech_to_provider").length,
     inbound: logs.filter((log) => log.direction === "provider_to_weathertech").length,
   };
+}
+
+type IntegrationSyncLogTransitionOptions = {
+  now?: Date;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  requestSummary?: Record<string, unknown>;
+  responseSummary?: Record<string, unknown>;
+};
+
+type IntegrationSyncRetryOptions = IntegrationSyncLogTransitionOptions & {
+  retryDelayMinutes?: number;
+  incrementAttempt?: boolean;
+};
+
+function getSyncTimestamp(now = new Date()) {
+  return now.toISOString();
+}
+
+function getNextRetryTimestamp(now: Date, retryDelayMinutes: number) {
+  return new Date(now.getTime() + retryDelayMinutes * 60 * 1000).toISOString();
+}
+
+function getCompletedAttemptCount(log: IntegrationSyncLogRecord) {
+  return log.status === "running"
+    ? Math.max(log.attempt_count, 1)
+    : log.attempt_count + 1;
+}
+
+export function sanitizeIntegrationSyncLogText(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .replace(/(bearer\s+)[a-z0-9._~+/=-]+/gi, `$1${REDACTED_VALUE}`)
+    .replace(
+      /(authorization|token|api[_-]?key|secret)(\s*[:=]\s*)["']?[^"',\s]+/gi,
+      `$1$2${REDACTED_VALUE}`,
+    );
+}
+
+export function sanitizeIntegrationSyncLogSummary(
+  summary: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!summary) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(summary).map(([key, value]) => {
+      if (/authorization|token|api[_-]?key|secret|password/i.test(key)) {
+        return [key, REDACTED_VALUE];
+      }
+
+      if (typeof value === "string") {
+        return [key, sanitizeIntegrationSyncLogText(value) ?? ""];
+      }
+
+      if (Array.isArray(value)) {
+        return [
+          key,
+          value.map((item) =>
+            typeof item === "string" ? sanitizeIntegrationSyncLogText(item) ?? "" : item,
+          ),
+        ];
+      }
+
+      if (value && typeof value === "object") {
+        return [
+          key,
+          sanitizeIntegrationSyncLogSummary(value as Record<string, unknown>),
+        ];
+      }
+
+      return [key, value];
+    }),
+  );
+}
+
+export function buildIntegrationSyncPendingUpdate(
+  log: Pick<IntegrationSyncLogRecord, "attempt_count">,
+  { now = new Date(), requestSummary, responseSummary }: IntegrationSyncLogTransitionOptions = {},
+): Partial<IntegrationSyncLogInput> {
+  return {
+    status: "running",
+    attempt_count: log.attempt_count + 1,
+    last_attempted_at: getSyncTimestamp(now),
+    completed_at: null,
+    next_retry_at: null,
+    error_code: null,
+    error_message: null,
+    ...(requestSummary
+      ? { request_summary: sanitizeIntegrationSyncLogSummary(requestSummary) }
+      : {}),
+    ...(responseSummary
+      ? { response_summary: sanitizeIntegrationSyncLogSummary(responseSummary) }
+      : {}),
+  };
+}
+
+export function buildIntegrationSyncSuccessUpdate(
+  log: IntegrationSyncLogRecord,
+  { now = new Date(), responseSummary }: IntegrationSyncLogTransitionOptions = {},
+): Partial<IntegrationSyncLogInput> {
+  return {
+    status: "succeeded",
+    attempt_count: getCompletedAttemptCount(log),
+    last_attempted_at: log.last_attempted_at ?? getSyncTimestamp(now),
+    completed_at: getSyncTimestamp(now),
+    next_retry_at: null,
+    error_code: null,
+    error_message: null,
+    ...(responseSummary
+      ? { response_summary: sanitizeIntegrationSyncLogSummary(responseSummary) }
+      : {}),
+  };
+}
+
+export function buildIntegrationSyncFailedUpdate(
+  log: IntegrationSyncLogRecord,
+  {
+    now = new Date(),
+    errorCode = null,
+    errorMessage = null,
+    responseSummary,
+  }: IntegrationSyncLogTransitionOptions = {},
+): Partial<IntegrationSyncLogInput> {
+  return {
+    status: "failed",
+    attempt_count: getCompletedAttemptCount(log),
+    last_attempted_at: log.last_attempted_at ?? getSyncTimestamp(now),
+    completed_at: getSyncTimestamp(now),
+    next_retry_at: null,
+    error_code: sanitizeIntegrationSyncLogText(errorCode),
+    error_message: sanitizeIntegrationSyncLogText(errorMessage),
+    ...(responseSummary
+      ? { response_summary: sanitizeIntegrationSyncLogSummary(responseSummary) }
+      : {}),
+  };
+}
+
+export function buildIntegrationSyncRetryableUpdate(
+  log: IntegrationSyncLogRecord,
+  {
+    now = new Date(),
+    retryDelayMinutes = DEFAULT_RETRY_DELAY_MINUTES,
+    incrementAttempt = false,
+    errorCode = log.error_code,
+    errorMessage = log.error_message,
+    responseSummary,
+  }: IntegrationSyncRetryOptions = {},
+): Partial<IntegrationSyncLogInput> {
+  return {
+    status: "retrying",
+    attempt_count: incrementAttempt ? getCompletedAttemptCount(log) : log.attempt_count,
+    completed_at: null,
+    next_retry_at: getNextRetryTimestamp(now, retryDelayMinutes),
+    error_code: sanitizeIntegrationSyncLogText(errorCode),
+    error_message: sanitizeIntegrationSyncLogText(errorMessage),
+    ...(responseSummary
+      ? { response_summary: sanitizeIntegrationSyncLogSummary(responseSummary) }
+      : {}),
+  };
+}
+
+export function buildIntegrationSyncSkippedUpdate(
+  log: IntegrationSyncLogRecord,
+  {
+    now = new Date(),
+    errorCode = null,
+    errorMessage = null,
+    responseSummary,
+  }: IntegrationSyncLogTransitionOptions = {},
+): Partial<IntegrationSyncLogInput> {
+  return {
+    status: "skipped",
+    attempt_count: log.attempt_count,
+    completed_at: getSyncTimestamp(now),
+    next_retry_at: null,
+    error_code: sanitizeIntegrationSyncLogText(errorCode),
+    error_message: sanitizeIntegrationSyncLogText(errorMessage),
+    ...(responseSummary
+      ? { response_summary: sanitizeIntegrationSyncLogSummary(responseSummary) }
+      : {}),
+  };
+}
+
+export function canRetryIntegrationSyncLog(
+  log: IntegrationSyncLogRecord,
+  now = new Date(),
+) {
+  if (log.attempt_count >= log.max_attempts) {
+    return false;
+  }
+
+  if (log.status === "failed") {
+    return true;
+  }
+
+  if (log.status !== "retrying") {
+    return false;
+  }
+
+  return !log.next_retry_at || Date.parse(log.next_retry_at) <= now.getTime();
+}
+
+export function getFailedIntegrationSyncLogs(logs: IntegrationSyncLogRecord[]) {
+  return logs.filter((log) => log.status === "failed" || log.status === "retrying");
+}
+
+export function getRetryableIntegrationSyncLogs(
+  logs: IntegrationSyncLogRecord[],
+  now = new Date(),
+) {
+  return logs.filter((log) => canRetryIntegrationSyncLog(log, now));
 }
 
 export function calendarSyncStatusLabel(status: CalendarEventSyncStatus) {
