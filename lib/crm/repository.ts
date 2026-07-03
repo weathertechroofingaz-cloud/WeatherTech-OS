@@ -69,8 +69,141 @@ import type {
 
 type CrmClient = SupabaseClient<Database>;
 
+type CrmListResult<T> = {
+  data: T[] | null;
+  error: unknown;
+};
+
+type CoreCrmSnapshot = Pick<
+  CrmSnapshot,
+  "companies" | "leads" | "customers" | "estimates" | "scopes" | "jobs"
+>;
+
+function describeCrmLoadError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return "Unknown Supabase CRM load error.";
+}
+
+function throwCrmTableError(tableName: string, error: unknown): never {
+  const message = describeCrmLoadError(error);
+  const wrappedError = new Error(`Unable to load CRM table "${tableName}": ${message}`);
+
+  Object.assign(wrappedError, { cause: error });
+  console.error("[CRM] Supabase table load failed", {
+    tableName,
+    message,
+    error,
+  });
+
+  throw wrappedError;
+}
+
+function throwFirstTableError(results: Array<[string, { error: unknown }]>) {
+  const failedResult = results.find(([, result]) => result.error);
+
+  if (failedResult) {
+    throwCrmTableError(failedResult[0], failedResult[1].error);
+  }
+}
+
+function requireRows<T>(tableName: string, result: CrmListResult<T>): T[] {
+  if (result.error) {
+    throwCrmTableError(tableName, result.error);
+  }
+
+  return result.data ?? [];
+}
+
+function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
+  return leads.map((lead) => ({
+    ...lead,
+    updated_at:
+      typeof (lead as Partial<LeadRecord>).updated_at === "string"
+        ? lead.updated_at
+        : lead.created_at,
+  }));
+}
+
+function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
+  return {
+    ...core,
+    estimateLineItems: [],
+    scopeTemplates: [],
+    scheduleEvents: [],
+    jobPhotos: [],
+    invoices: [],
+    invoiceLineItems: [],
+    materialOrders: [],
+    materialOrderItems: [],
+    employees: [],
+    jobAssignments: [],
+    timeEntries: [],
+    inspections: [],
+    dailyLogs: [],
+    changeOrders: [],
+    signatures: [],
+    documents: [],
+    payments: [],
+    notifications: [],
+    integrationConnections: [],
+    calendarEventSyncs: [],
+    emailMessages: [],
+    smsMessages: [],
+    routePlans: [],
+    routePlanStops: [],
+    companyMemberships: [],
+    companyWorkflowSettings: [],
+  };
+}
+
 export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> {
-  
+  const [
+    coreCompanies,
+    coreLeads,
+    coreCustomers,
+    coreEstimates,
+    coreScopes,
+    coreJobs,
+  ] = await Promise.all([
+    client.from("companies").select("*").order("name", { ascending: true }),
+    client.from("leads").select("*").order("created_at", { ascending: false }),
+    client.from("customers").select("*").order("updated_at", { ascending: false }),
+    client.from("estimates").select("*").order("updated_at", { ascending: false }),
+    client.from("scopes").select("*").order("updated_at", { ascending: false }),
+    client.from("jobs").select("*").order("updated_at", { ascending: false }),
+  ]);
+
+  const coreSnapshot: CoreCrmSnapshot = {
+    companies: requireRows("companies", coreCompanies),
+    leads: normalizeLeadRows(requireRows("leads", coreLeads)),
+    customers: requireRows("customers", coreCustomers),
+    estimates: requireRows("estimates", coreEstimates),
+    scopes: requireRows("scopes", coreScopes),
+    jobs: requireRows("jobs", coreJobs),
+  };
+
+  const hasCoreRecords = Object.values(coreSnapshot).some(
+    (records) => records.length > 0,
+  );
+
+  if (!hasCoreRecords) {
+    return createEmptyCrmSnapshot(coreSnapshot);
+  }
 
   const [
     companies,
@@ -107,7 +240,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     companyWorkflowSettings,
   ] = await Promise.all([
     client.from("companies").select("*").order("name", { ascending: true }),
-    client.from("leads").select("*").order("updated_at", { ascending: false }),
+    client.from("leads").select("*").order("created_at", { ascending: false }),
     client.from("customers").select("*").order("updated_at", { ascending: false }),
     client.from("estimates").select("*").order("updated_at", { ascending: false }),
     client
@@ -174,167 +307,77 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .order("workflow_profile", { ascending: true }),
   ]);
 
-  if (companies.error) {
-    throw companies.error;
-  }
-
-  if (leads.error) {
-    throw leads.error;
-  }
-
-  if (customers.error) {
-    throw customers.error;
-  }
-
-  if (estimates.error) {
-    throw estimates.error;
-  }
-
-  if (estimateLineItems.error) {
-    throw estimateLineItems.error;
-  }
-
-  if (scopeTemplates.error) {
-    throw scopeTemplates.error;
-  }
-
-  if (scopes.error) {
-    throw scopes.error;
-  }
-
-  if (jobs.error) {
-    throw jobs.error;
-  }
-
-  if (scheduleEvents.error) {
-    throw scheduleEvents.error;
-  }
-
-  if (jobPhotos.error) {
-    throw jobPhotos.error;
-  }
-
-  if (invoices.error) {
-    throw invoices.error;
-  }
-
-  if (invoiceLineItems.error) {
-    throw invoiceLineItems.error;
-  }
-
-  if (materialOrders.error) {
-    throw materialOrders.error;
-  }
-
-  if (materialOrderItems.error) {
-    throw materialOrderItems.error;
-  }
-
-  if (employees.error) {
-    throw employees.error;
-  }
-
-  if (jobAssignments.error) {
-    throw jobAssignments.error;
-  }
-
-  if (timeEntries.error) {
-    throw timeEntries.error;
-  }
-
-  if (inspections.error) {
-    throw inspections.error;
-  }
-
-  if (dailyLogs.error) {
-    throw dailyLogs.error;
-  }
-
-  if (changeOrders.error) {
-    throw changeOrders.error;
-  }
-
-  if (signatures.error) {
-    throw signatures.error;
-  }
-
-  if (documents.error) {
-    throw documents.error;
-  }
-
-  if (payments.error) {
-    throw payments.error;
-  }
-
-  if (notifications.error) {
-    throw notifications.error;
-  }
-
-  if (integrationConnections.error) {
-    throw integrationConnections.error;
-  }
-
-  if (calendarEventSyncs.error) {
-    throw calendarEventSyncs.error;
-  }
-
-  if (emailMessages.error) {
-    throw emailMessages.error;
-  }
-
-  if (smsMessages.error) {
-    throw smsMessages.error;
-  }
-
-  if (routePlans.error) {
-    throw routePlans.error;
-  }
-
-  if (routePlanStops.error) {
-    throw routePlanStops.error;
-  }
-
-  if (companyMemberships.error) {
-    throw companyMemberships.error;
-  }
-
-  if (companyWorkflowSettings.error) {
-    throw companyWorkflowSettings.error;
-  }
+  throwFirstTableError([
+    ["companies", companies],
+    ["leads", leads],
+    ["customers", customers],
+    ["estimates", estimates],
+    ["estimate_line_items", estimateLineItems],
+    ["scope_templates", scopeTemplates],
+    ["scopes", scopes],
+    ["jobs", jobs],
+    ["schedule_events", scheduleEvents],
+    ["job_photos", jobPhotos],
+    ["invoices", invoices],
+    ["invoice_line_items", invoiceLineItems],
+    ["material_orders", materialOrders],
+    ["material_order_items", materialOrderItems],
+    ["employees", employees],
+    ["job_assignments", jobAssignments],
+    ["time_entries", timeEntries],
+    ["inspections", inspections],
+    ["daily_logs", dailyLogs],
+    ["change_orders", changeOrders],
+    ["signatures", signatures],
+    ["documents", documents],
+    ["payments", payments],
+    ["notifications", notifications],
+    ["integration_connections", integrationConnections],
+    ["calendar_event_syncs", calendarEventSyncs],
+    ["email_messages", emailMessages],
+    ["sms_messages", smsMessages],
+    ["route_plans", routePlans],
+    ["route_plan_stops", routePlanStops],
+    ["company_memberships", companyMemberships],
+    ["company_workflow_settings", companyWorkflowSettings],
+  ]);
 
   return {
-    companies: companies.data,
-    leads: leads.data,
-    customers: customers.data,
-    estimates: estimates.data,
-    estimateLineItems: estimateLineItems.data,
-    scopeTemplates: scopeTemplates.data,
-    scopes: scopes.data,
-    jobs: jobs.data,
-    scheduleEvents: scheduleEvents.data,
-    jobPhotos: jobPhotos.data,
-    invoices: invoices.data,
-    invoiceLineItems: invoiceLineItems.data,
-    materialOrders: materialOrders.data,
-    materialOrderItems: materialOrderItems.data,
-    employees: employees.data,
-    jobAssignments: jobAssignments.data,
-    timeEntries: timeEntries.data,
-    inspections: inspections.data,
-    dailyLogs: dailyLogs.data,
-    changeOrders: changeOrders.data,
-    signatures: signatures.data,
-    documents: documents.data,
-    payments: payments.data,
-    notifications: notifications.data,
-    integrationConnections: integrationConnections.data,
-    calendarEventSyncs: calendarEventSyncs.data,
-    emailMessages: emailMessages.data,
-    smsMessages: smsMessages.data,
-    routePlans: routePlans.data,
-    routePlanStops: routePlanStops.data,
-    companyMemberships: companyMemberships.data,
-    companyWorkflowSettings: companyWorkflowSettings.data,
+    companies: requireRows("companies", companies),
+    leads: normalizeLeadRows(requireRows("leads", leads)),
+    customers: requireRows("customers", customers),
+    estimates: requireRows("estimates", estimates),
+    estimateLineItems: requireRows("estimate_line_items", estimateLineItems),
+    scopeTemplates: requireRows("scope_templates", scopeTemplates),
+    scopes: requireRows("scopes", scopes),
+    jobs: requireRows("jobs", jobs),
+    scheduleEvents: requireRows("schedule_events", scheduleEvents),
+    jobPhotos: requireRows("job_photos", jobPhotos),
+    invoices: requireRows("invoices", invoices),
+    invoiceLineItems: requireRows("invoice_line_items", invoiceLineItems),
+    materialOrders: requireRows("material_orders", materialOrders),
+    materialOrderItems: requireRows("material_order_items", materialOrderItems),
+    employees: requireRows("employees", employees),
+    jobAssignments: requireRows("job_assignments", jobAssignments),
+    timeEntries: requireRows("time_entries", timeEntries),
+    inspections: requireRows("inspections", inspections),
+    dailyLogs: requireRows("daily_logs", dailyLogs),
+    changeOrders: requireRows("change_orders", changeOrders),
+    signatures: requireRows("signatures", signatures),
+    documents: requireRows("documents", documents),
+    payments: requireRows("payments", payments),
+    notifications: requireRows("notifications", notifications),
+    integrationConnections: requireRows("integration_connections", integrationConnections),
+    calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
+    emailMessages: requireRows("email_messages", emailMessages),
+    smsMessages: requireRows("sms_messages", smsMessages),
+    routePlans: requireRows("route_plans", routePlans),
+    routePlanStops: requireRows("route_plan_stops", routePlanStops),
+    companyMemberships: requireRows("company_memberships", companyMemberships),
+    companyWorkflowSettings: requireRows(
+      "company_workflow_settings",
+      companyWorkflowSettings,
+    ),
   };
 }
 

@@ -233,6 +233,7 @@ import type {
   SurfacePrepLevel,
   TimeEntryRecord,
 } from "../lib/crm/types";
+import { createDemoCrmSnapshot, isCrmDemoFallbackEnabled } from "../lib/crm/demoSnapshot";
 import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
 type CrmClient = SupabaseClient<Database>;
@@ -1038,7 +1039,49 @@ function buildDefaultSmsBody({
   return `Hi ${targetName}, this is ${companyName}. Reply here if you have any questions or need an update from our team. ${optOut}`;
 }
 
+function getCaughtErrorMessage(currentError: unknown, fallback: string) {
+  if (currentError instanceof Error) {
+    return currentError.message;
+  }
+
+  if (typeof currentError === "string") {
+    return currentError;
+  }
+
+  if (currentError && typeof currentError === "object" && "message" in currentError) {
+    const message = (currentError as { message?: unknown }).message;
+
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return fallback;
+}
+
+function logCaughtError(label: string, currentError: unknown) {
+  console.error(label, {
+    error: currentError,
+    message: getCaughtErrorMessage(currentError, "Unknown error."),
+    stack: currentError instanceof Error ? currentError.stack : undefined,
+    cause:
+      currentError instanceof Error
+        ? (currentError as Error & { cause?: unknown }).cause
+        : undefined,
+  });
+}
+
 export function CrmApp() {
+  const demoFallbackEnabled = isCrmDemoFallbackEnabled();
+  const demoUser = useMemo(
+    () =>
+      ({
+        id: "local-demo-user",
+        email: "local@weathertech.demo",
+      }) as User,
+    [],
+  );
+
   const [client] = useState<SupabaseClient<Database> | null>(() =>
     getSupabaseBrowserClient(),
   );
@@ -1076,46 +1119,95 @@ export function CrmApp() {
       const nextSnapshot = await fetchCrmSnapshot(crmClient);
       setSnapshot(nextSnapshot);
     } catch (currentError) {
-      setError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to load CRM records.",
-      );
+      logCaughtError("[CRM] CRM snapshot load failed", currentError);
+
+      if (demoFallbackEnabled) {
+        setSnapshot(createDemoCrmSnapshot());
+        setNotice("Using local demo CRM data because live Supabase CRM is unavailable.");
+        return;
+      }
+
+      setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [demoFallbackEnabled]);
 
   useEffect(() => {
     if (!client) {
+      if (demoFallbackEnabled) {
+        setUser(demoUser);
+        setSnapshot(createDemoCrmSnapshot());
+        setAuthReady(true);
+        setIsLoading(false);
+        setNotice("Using local demo CRM data because Supabase is not configured.");
+      }
+
       return;
     }
 
     let isMounted = true;
 
-    client.auth.getSession().then(({ data }) => {
-      if (!isMounted) {
-        return;
-      }
+    client.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!isMounted) {
+          return;
+        }
 
-      const activeUser = data.session?.user ?? null;
-      setUser(activeUser);
-      setAuthReady(true);
+        const activeUser = data.session?.user ?? null;
 
-      if (activeUser) {
-        void loadSnapshot(client);
-      } else {
-        setIsLoading(false);
-      }
-    });
+        if (activeUser) {
+          setUser(activeUser);
+          setAuthReady(true);
+          void loadSnapshot(client);
+        } else if (demoFallbackEnabled) {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+          setNotice("Using local demo CRM data because Supabase sign-in is not ready.");
+        } else {
+          setUser(null);
+          setAuthReady(true);
+          setIsLoading(false);
+        }
+      })
+      .catch((sessionError) => {
+        console.error("Supabase session check failed:", sessionError);
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (demoFallbackEnabled) {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+          setNotice("Using local demo CRM data because Supabase auth failed to load.");
+        } else {
+          setError(
+            sessionError instanceof Error
+              ? sessionError.message
+              : "Unable to load Supabase session.",
+          );
+          setAuthReady(true);
+          setIsLoading(false);
+        }
+      });
 
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
       const activeUser = session?.user ?? null;
-      setUser(activeUser);
 
       if (activeUser) {
+        setUser(activeUser);
         void loadSnapshot(client);
+      } else if (demoFallbackEnabled) {
+        setUser(demoUser);
+        setSnapshot(createDemoCrmSnapshot());
       } else {
+        setUser(null);
         setSnapshot(null);
       }
     });
@@ -1124,7 +1216,7 @@ export function CrmApp() {
       isMounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [client, loadSnapshot]);
+  }, [client, demoFallbackEnabled, demoUser, loadSnapshot]);
 
   const handleAuthNotice = (message: string) => {
     setNotice(message);
@@ -1145,11 +1237,15 @@ export function CrmApp() {
     return <LoadingScreen label="Preparing WeatherTech OS" />;
   }
 
-  if (!client) {
+  if (!client && !demoFallbackEnabled) {
     return <SupabaseConfigScreen />;
   }
 
   if (!user) {
+    if (!client) {
+      return <LoadingScreen label="Loading local demo workspace" />;
+    }
+
     return (
       <AuthScreen client={client} notice={notice} onNotice={handleAuthNotice} />
     );
@@ -1159,7 +1255,13 @@ export function CrmApp() {
     return (
       <LoadErrorScreen
         message={error}
-        onRetry={() => void loadSnapshot(client)}
+        onRetry={() => {
+          if (client) {
+            void loadSnapshot(client);
+          } else {
+            setSnapshot(createDemoCrmSnapshot());
+          }
+        }}
         onSignOut={handleSignOut}
       />
     );
@@ -1171,7 +1273,7 @@ export function CrmApp() {
 
   return (
     <CrmWorkspace
-      client={client}
+      client={client ?? ({} as CrmClient)}
       notice={notice}
       error={error}
       snapshot={snapshot}
@@ -1180,7 +1282,13 @@ export function CrmApp() {
       theme={theme}
       onViewChange={setView}
       onThemeChange={handleThemeChange}
-      onReload={() => loadSnapshot(client)}
+      onReload={async () => {
+        if (client) {
+          await loadSnapshot(client);
+        } else {
+          setSnapshot(createDemoCrmSnapshot());
+        }
+      }}
       onSignOut={handleSignOut}
       onNotice={setNotice}
       onError={setError}
@@ -1808,7 +1916,7 @@ function CrmWorkspace({
 
           {view === "leads" ? (
             <LeadsView
-              client={client}
+              client={client ?? ({} as CrmClient)}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
