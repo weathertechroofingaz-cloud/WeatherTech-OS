@@ -12761,11 +12761,27 @@ type GoHighLevelConnectionTestResult = {
   ok: boolean;
   dryRun: boolean;
   communicationsSent: boolean;
-  status: "ready" | "missing_location" | "missing_token";
+  status:
+    | "ready"
+    | "missing_location"
+    | "missing_token"
+    | "auth_failed"
+    | "read_check_unavailable";
   message: string;
-  configuredLocationIds: string[];
   tokenConfigured: boolean;
-  tokenSource: string | null;
+  requiredEnvVars: string[];
+  configuredLocationIds: string[];
+  locations: Array<{
+    key: "weathertech" | "ihc";
+    label: string;
+    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
+    locationId: string | null;
+    configured: boolean;
+    readCheck: "skipped" | "ok" | "unsupported" | "unauthorized" | "error";
+    statusCode: number | null;
+    message: string;
+    locationName: string | null;
+  }>;
   apiBaseUrl: string;
   checkedAt: string;
   nextStep: string;
@@ -12897,7 +12913,7 @@ function IntegrationsView({
     setGoHighLevelTestResult(null);
 
     try {
-      const response = await fetch(goHighLevelEnvVars.testEndpoint, {
+      const response = await fetch(`${goHighLevelEnvVars.testEndpoint}?probe=1`, {
         method: "GET",
         headers: {
           Accept: "application/json",
@@ -14193,6 +14209,34 @@ function IntegrationsView({
                   {goHighLevelTestResult.communicationsSent ? "yes" : "no"} ·
                   Checked {formatDateTime(goHighLevelTestResult.checkedAt)}
                 </p>
+                <div className="mt-3 grid gap-2">
+                  {goHighLevelTestResult.locations.map((location) => (
+                    <div
+                      key={location.key}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-2"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-semibold text-slate-950">
+                          {location.label}
+                        </p>
+                        <Badge
+                          label={location.readCheck.replace("_", " ")}
+                          tone={
+                            location.readCheck === "ok"
+                              ? "green"
+                              : location.readCheck === "skipped"
+                                ? "blue"
+                                : "amber"
+                          }
+                        />
+                      </div>
+                      <p className="mt-1 text-slate-500">
+                        {location.locationName ?? location.locationId ?? location.envVar} ·{" "}
+                        {location.message}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
           </div>
@@ -14240,11 +14284,15 @@ function IntegrationsView({
               {[
                 {
                   label: "Token",
-                  value: `${goHighLevelEnvVars.privateIntegrationToken} or ${goHighLevelEnvVars.legacyApiKey}`,
+                  value: goHighLevelEnvVars.privateIntegrationToken,
                 },
                 {
-                  label: "Locations",
-                  value: `${goHighLevelEnvVars.locationId} / ${goHighLevelEnvVars.locationIds}`,
+                  label: "WeatherTech",
+                  value: goHighLevelEnvVars.weatherTechLocationId,
+                },
+                {
+                  label: "IHC",
+                  value: goHighLevelEnvVars.ihcLocationId,
                 },
                 { label: "API base", value: goHighLevelEnvVars.apiBaseUrl },
                 { label: "Test route", value: goHighLevelEnvVars.testEndpoint },
