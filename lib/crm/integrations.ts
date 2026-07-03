@@ -38,11 +38,10 @@ export const twilioEnvVars = {
 };
 
 export const goHighLevelEnvVars = {
-  privateIntegrationToken: "GOHIGHLEVEL_PRIVATE_INTEGRATION_TOKEN",
-  legacyApiKey: "GOHIGHLEVEL_API_KEY",
-  locationId: "GOHIGHLEVEL_LOCATION_ID",
-  locationIds: "GOHIGHLEVEL_LOCATION_IDS",
-  apiBaseUrl: "GOHIGHLEVEL_API_BASE_URL",
+  privateIntegrationToken: "GHL_PRIVATE_INTEGRATION_TOKEN",
+  weatherTechLocationId: "GHL_LOCATION_ID_WEATHERTECH",
+  ihcLocationId: "GHL_LOCATION_ID_IHC",
+  apiBaseUrl: "https://services.leadconnectorhq.com",
   testEndpoint: "/api/integrations/gohighlevel/test",
 };
 
