@@ -131,14 +131,111 @@ function requireRows<T>(tableName: string, result: CrmListResult<T>): T[] {
   return result.data ?? [];
 }
 
+type LegacyLeadRecord = Partial<LeadRecord> & {
+  customer_name?: string | null;
+  lead_source?: string | null;
+  service_needed?: string | null;
+};
+
+function getLegacyLeadString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getLegacyLeadNumber(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) ? parsedValue : fallback;
+  }
+
+  return fallback;
+}
+
+function normalizeLeadStatus(value: unknown): LeadRecord["status"] {
+  const status = getLegacyLeadString(value)?.toLowerCase().replace(/\s+/g, "_");
+
+  if (status === "new" || status === "new_lead") {
+    return "new";
+  }
+
+  if (status === "contacted") {
+    return "contacted";
+  }
+
+  if (status === "qualified" || status === "estimate_scheduled") {
+    return "qualified";
+  }
+
+  if (status === "estimate_sent" || status === "proposal_sent") {
+    return "estimate_sent";
+  }
+
+  if (status === "won") {
+    return "won";
+  }
+
+  if (status === "lost") {
+    return "lost";
+  }
+
+  return "new";
+}
+
+function normalizeLeadServiceType(value: unknown): LeadRecord["service_type"] {
+  const serviceType = getLegacyLeadString(value)?.toLowerCase().replace(/\s+/g, "_");
+
+  if (serviceType === "painting" || serviceType?.includes("paint")) {
+    return "painting";
+  }
+
+  if (serviceType === "both") {
+    return "both";
+  }
+
+  return "roofing";
+}
+
 function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
-  return leads.map((lead) => ({
-    ...lead,
-    updated_at:
-      typeof (lead as Partial<LeadRecord>).updated_at === "string"
-        ? lead.updated_at
-        : lead.created_at,
-  }));
+  return leads.map((row) => {
+    const lead = row as LegacyLeadRecord;
+    const createdAt = getLegacyLeadString(lead.created_at) ?? new Date().toISOString();
+
+    return {
+      ...row,
+      company_id: getLegacyLeadString(lead.company_id) ?? "",
+      customer_id: lead.customer_id ?? null,
+      contact_name:
+        getLegacyLeadString(lead.contact_name) ??
+        getLegacyLeadString(lead.customer_name) ??
+        "Unnamed lead",
+      phone: getLegacyLeadString(lead.phone),
+      email: getLegacyLeadString(lead.email),
+      property_address: getLegacyLeadString(lead.property_address) ?? "",
+      city: getLegacyLeadString(lead.city),
+      state: getLegacyLeadString(lead.state) ?? "AZ",
+      postal_code: getLegacyLeadString(lead.postal_code),
+      latitude: lead.latitude ?? null,
+      longitude: lead.longitude ?? null,
+      google_place_id: getLegacyLeadString(lead.google_place_id),
+      address_verified_at: getLegacyLeadString(lead.address_verified_at),
+      service_type: normalizeLeadServiceType(lead.service_type ?? lead.service_needed),
+      source:
+        getLegacyLeadString(lead.source) ??
+        getLegacyLeadString(lead.lead_source) ??
+        "Website",
+      status: normalizeLeadStatus(lead.status),
+      priority: lead.priority ?? "normal",
+      estimated_value: getLegacyLeadNumber(lead.estimated_value),
+      next_follow_up: getLegacyLeadString(lead.next_follow_up),
+      notes: getLegacyLeadString(lead.notes),
+      created_by: lead.created_by ?? null,
+      created_at: createdAt,
+      updated_at: getLegacyLeadString(lead.updated_at) ?? createdAt,
+    };
+  });
 }
 
 function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
@@ -392,14 +489,77 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
   };
 }
 
+function isLeadColumnMismatchError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  const message =
+    typeof candidate.message === "string" ? candidate.message.toLowerCase() : "";
+  const missingAppLeadColumns = [
+    "contact_name",
+    "service_type",
+    "source",
+    "state",
+    "postal_code",
+  ];
+
+  return (
+    candidate.code === "PGRST204" &&
+    message.includes("leads") &&
+    missingAppLeadColumns.some((column) => message.includes(column))
+  );
+}
+
+function buildLegacyLeadInput(input: LeadInput) {
+  return {
+    company_id: input.company_id || null,
+    customer_name: input.contact_name,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    property_address: input.property_address,
+    lead_source: input.source ?? "Website",
+    service_needed: input.service_type,
+    status: normalizeLeadStatus(input.status),
+    priority: input.priority ?? "normal",
+    estimated_value: input.estimated_value ?? 0,
+    next_follow_up: input.next_follow_up ?? null,
+    notes: input.notes ?? null,
+  };
+}
+
 export async function createLead(client: CrmClient, input: LeadInput) {
   const { data, error } = await client.from("leads").insert(input).select("*").single();
 
-  if (error) {
+  if (!error) {
+    if (!data) {
+      throw new Error("Lead created, but Supabase did not return the new lead.");
+    }
+
+    return normalizeLeadRows([data])[0];
+  }
+
+  if (!isLeadColumnMismatchError(error)) {
     throw error;
   }
 
-  return data;
+  const legacyInput = buildLegacyLeadInput(input);
+  const { data: legacyData, error: legacyError } = await client
+    .from("leads")
+    .insert(legacyInput as unknown as LeadInput)
+    .select("*")
+    .single();
+
+  if (legacyError) {
+    throw legacyError;
+  }
+
+  if (!legacyData) {
+    throw new Error("Lead created, but Supabase did not return the new lead.");
+  }
+
+  return normalizeLeadRows([legacyData])[0];
 }
 
 export async function updateLead(
