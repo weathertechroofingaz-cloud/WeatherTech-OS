@@ -489,36 +489,25 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
   };
 }
 
-function isLeadColumnMismatchError(error: unknown) {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const candidate = error as { code?: unknown; message?: unknown };
-  const message =
-    typeof candidate.message === "string" ? candidate.message.toLowerCase() : "";
-  const missingAppLeadColumns = [
-    "contact_name",
-    "service_type",
-    "source",
-    "state",
-    "postal_code",
-  ];
-
-  return (
-    candidate.code === "PGRST204" &&
-    message.includes("leads") &&
-    missingAppLeadColumns.some((column) => message.includes(column))
-  );
+function formatLiveLeadPropertyAddress(input: LeadInput) {
+  return [
+    input.property_address,
+    input.city,
+    input.state,
+    input.postal_code,
+  ]
+    .map((value) => getLegacyLeadString(value))
+    .filter(Boolean)
+    .join(", ");
 }
 
-function buildLegacyLeadInput(input: LeadInput) {
+function buildLiveLeadInput(input: LeadInput) {
   return {
     company_id: input.company_id || null,
     customer_name: input.contact_name,
     phone: input.phone ?? null,
     email: input.email ?? null,
-    property_address: input.property_address,
+    property_address: formatLiveLeadPropertyAddress(input),
     lead_source: input.source ?? "Website",
     service_needed: input.service_type,
     status: normalizeLeadStatus(input.status),
@@ -529,37 +518,55 @@ function buildLegacyLeadInput(input: LeadInput) {
   };
 }
 
+function describeSafeSupabaseMutationError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return {
+      message: error instanceof Error ? error.message : "Unknown Supabase error.",
+    };
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    details?: unknown;
+    hint?: unknown;
+    message?: unknown;
+  };
+
+  return {
+    code: typeof candidate.code === "string" ? candidate.code : undefined,
+    message:
+      typeof candidate.message === "string"
+        ? candidate.message
+        : "Unknown Supabase error.",
+    details: typeof candidate.details === "string" ? candidate.details : undefined,
+    hint: typeof candidate.hint === "string" ? candidate.hint : undefined,
+  };
+}
+
 export async function createLead(client: CrmClient, input: LeadInput) {
-  const { data, error } = await client.from("leads").insert(input).select("*").single();
-
-  if (!error) {
-    if (!data) {
-      throw new Error("Lead created, but Supabase did not return the new lead.");
-    }
-
-    return normalizeLeadRows([data])[0];
-  }
-
-  if (!isLeadColumnMismatchError(error)) {
-    throw error;
-  }
-
-  const legacyInput = buildLegacyLeadInput(input);
-  const { data: legacyData, error: legacyError } = await client
+  const liveInput = buildLiveLeadInput(input);
+  const { data, error } = await client
     .from("leads")
-    .insert(legacyInput as unknown as LeadInput)
+    .insert(liveInput as unknown as LeadInput)
     .select("*")
     .single();
 
-  if (legacyError) {
-    throw legacyError;
+  if (error) {
+    console.error("[CRM] Lead create failed", {
+      ...describeSafeSupabaseMutationError(error),
+      attemptedColumns: Object.keys(liveInput).sort(),
+    });
+    throw error;
   }
 
-  if (!legacyData) {
+  if (!data) {
+    console.error("[CRM] Lead create returned no row", {
+      attemptedColumns: Object.keys(liveInput).sort(),
+    });
     throw new Error("Lead created, but Supabase did not return the new lead.");
   }
 
-  return normalizeLeadRows([legacyData])[0];
+  return normalizeLeadRows([data])[0];
 }
 
 export async function updateLead(
