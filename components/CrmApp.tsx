@@ -142,7 +142,6 @@ import {
   smsMessageStatusLabel,
   routePreviewToStopInputs,
   syncDirectionLabel,
-  twilioEnvVars,
 } from "../lib/crm/integrations";
 import { calculateDashboardMetrics } from "../lib/crm/metrics";
 import {
@@ -12829,6 +12828,109 @@ type GoHighLevelLeadDryRunResult = {
   syncLogId: string | null;
 };
 
+type TwilioConnectionTestResult = {
+  ok: boolean;
+  status: "configured" | "configured_with_warning" | "missing_config";
+  checkedAt: string | null;
+  outboundReady: boolean;
+  missing: string[];
+  warnings: Array<{
+    code: string;
+    message: string;
+  }>;
+  credentials: {
+    accountSid: string | null;
+    authToken: string | null;
+    messagingServiceSid: string | null;
+    fromNumber: string | null;
+  };
+  messagesEndpoint: string;
+  communicationsSent: boolean;
+  testSms: {
+    attempted: boolean;
+    sent: boolean;
+    message: string;
+  };
+};
+
+const TWILIO_TEST_ENDPOINT = "/api/integrations/twilio/test";
+const TWILIO_FROM_NUMBER_WARNING =
+  "TWILIO_FROM_NUMBER is blank. Outbound sending requires a sender number after buying one or porting an existing business number.";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getOptionalStringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getStringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : [];
+}
+
+function normalizeTwilioConnectionStatus(value: unknown): TwilioConnectionTestResult["status"] {
+  return value === "configured" ||
+    value === "configured_with_warning" ||
+    value === "missing_config"
+    ? value
+    : "missing_config";
+}
+
+function normalizeTwilioTestResult(value: unknown): TwilioConnectionTestResult {
+  const result = isRecord(value) ? value : {};
+  const credentials = isRecord(result.credentials) ? result.credentials : {};
+  const testSms = isRecord(result.testSms) ? result.testSms : {};
+  const warnings = Array.isArray(result.warnings)
+    ? result.warnings.map((warning) => {
+        const warningRecord = isRecord(warning) ? warning : {};
+
+        return {
+          code: getOptionalStringValue(warningRecord.code) ?? "warning",
+          message: getOptionalStringValue(warningRecord.message) ?? "",
+        };
+      }).filter((warning) => warning.message)
+    : [];
+
+  return {
+    ok: result.ok === true,
+    status: normalizeTwilioConnectionStatus(result.status),
+    checkedAt: getOptionalStringValue(result.checkedAt),
+    outboundReady: result.outboundReady === true,
+    missing: getStringArrayValue(result.missing),
+    warnings,
+    credentials: {
+      accountSid: getOptionalStringValue(credentials.accountSid),
+      authToken: getOptionalStringValue(credentials.authToken),
+      messagingServiceSid: getOptionalStringValue(credentials.messagingServiceSid),
+      fromNumber: getOptionalStringValue(credentials.fromNumber),
+    },
+    messagesEndpoint: getOptionalStringValue(result.messagesEndpoint) ?? "",
+    communicationsSent: result.communicationsSent === true,
+    testSms: {
+      attempted: testSms.attempted === true,
+      sent: testSms.sent === true,
+      message: getOptionalStringValue(testSms.message) ?? "",
+    },
+  };
+}
+
+function formatOptionalDateTime(value: string | null | undefined) {
+  if (!value) {
+    return "Not checked";
+  }
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "Not checked";
+  }
+
+  return formatDateTime(value);
+}
+
 function getStringSetting(
   settings: Record<string, unknown> | undefined,
   key: string,
@@ -12911,6 +13013,31 @@ function getGoHighLevelDryRunStatusTone(
   return status === "validated" || status === "succeeded" ? "green" : "amber";
 }
 
+function getTwilioStatusTone(
+  status: TwilioConnectionTestResult["status"] | "not_checked",
+): "blue" | "green" | "amber" {
+  if (status === "configured") {
+    return "green";
+  }
+
+  if (status === "configured_with_warning") {
+    return "amber";
+  }
+
+  return "blue";
+}
+
+function formatTwilioStatus(status: TwilioConnectionTestResult["status"] | "not_checked") {
+  const labels: Record<TwilioConnectionTestResult["status"] | "not_checked", string> = {
+    configured: "Configured",
+    configured_with_warning: "Configured with warning",
+    missing_config: "Missing config",
+    not_checked: "Not checked",
+  };
+
+  return labels[status];
+}
+
 function IntegrationsView({
   client,
   snapshot,
@@ -12987,6 +13114,10 @@ function IntegrationsView({
   const [goHighLevelLeadDryRunLeadId, setGoHighLevelLeadDryRunLeadId] = useState(
     snapshot.leads[0]?.id ?? "",
   );
+  const [twilioTestResult, setTwilioTestResult] =
+    useState<TwilioConnectionTestResult | null>(null);
+  const [twilioTestError, setTwilioTestError] = useState("");
+  const [isTestingTwilio, setIsTestingTwilio] = useState(false);
   const selectedGoHighLevelLead =
     snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
     snapshot.leads[0] ??
@@ -13033,6 +13164,18 @@ function IntegrationsView({
           ? "Server config ready"
           : "Configuration incomplete"
         : "Not synced yet";
+  const twilioStatus = twilioTestResult?.status ?? "not_checked";
+  const twilioFromNumberMissing =
+    Boolean(twilioTestResult) && !twilioTestResult?.credentials.fromNumber;
+  const twilioWarningMessages = Array.from(
+    new Set([
+      ...(twilioTestResult?.warnings.map((warning) => warning.message) ?? []),
+      ...(twilioFromNumberMissing ? [TWILIO_FROM_NUMBER_WARNING] : []),
+    ]),
+  );
+  const twilioAdditionalWarningMessages = twilioWarningMessages.filter(
+    (message) => message !== TWILIO_FROM_NUMBER_WARNING,
+  );
 
   useEffect(() => {
     if (!snapshot.leads.length) {
@@ -13049,6 +13192,63 @@ function IntegrationsView({
 
     setGoHighLevelLeadDryRunLeadId(snapshot.leads[0].id);
   }, [goHighLevelLeadDryRunLeadId, snapshot.leads]);
+
+  const handleTestTwilioConnection = useCallback(
+    async ({ showNotice = true }: { showNotice?: boolean } = {}) => {
+      setIsTestingTwilio(true);
+      setTwilioTestError("");
+
+      try {
+        const response = await fetch(TWILIO_TEST_ENDPOINT, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        });
+        const responseText = await response.text();
+        const rawResult = responseText ? JSON.parse(responseText) : {};
+        const result = normalizeTwilioTestResult(rawResult);
+        setTwilioTestResult(result);
+
+        if (!response.ok || !result.ok) {
+          const message = result.missing.length
+            ? `Twilio config is missing ${result.missing.join(", ")}.`
+            : "Twilio configuration check needs attention.";
+          setTwilioTestError(message);
+
+          if (showNotice) {
+            onError(message);
+          }
+          return;
+        }
+
+        if (showNotice) {
+          onNotice(
+            result.status === "configured_with_warning"
+              ? "Twilio is configured with a sender-number warning. No SMS was sent."
+              : "Twilio configuration check passed. No SMS was sent.",
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not test Twilio configuration.";
+        setTwilioTestError(message);
+
+        if (showNotice) {
+          onError(message);
+        }
+      } finally {
+        setIsTestingTwilio(false);
+      }
+    },
+    [onError, onNotice],
+  );
+
+  useEffect(() => {
+    void handleTestTwilioConnection({ showNotice: false });
+  }, [handleTestTwilioConnection]);
 
   const handleTestGoHighLevelConnection = async () => {
     setIsTestingGoHighLevel(true);
@@ -14326,13 +14526,98 @@ function IntegrationsView({
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Twilio readiness</h3>
-            <div className="mt-4 grid gap-3 text-sm">
-              <ProfileStat label="Account SID" value={twilioEnvVars.accountSid} />
-              <ProfileStat label="Messaging service" value={twilioEnvVars.messagingServiceSid} />
-              <ProfileStat label="Fallback sender" value={twilioEnvVars.fromNumber} />
-              <ProfileStat label="Endpoint" value="Messages API" />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase text-sky-700">
+                  Communications status
+                </p>
+                <h3 className="mt-1 text-lg font-bold text-slate-950">
+                  Twilio health check
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Checks server configuration only. No SMS is sent from this screen.
+                </p>
+              </div>
+              <Badge
+                label={formatTwilioStatus(twilioStatus)}
+                tone={getTwilioStatusTone(twilioStatus)}
+              />
             </div>
+
+            <div className="mt-4 grid gap-3 text-sm">
+              <ProfileStat
+                label="Twilio connection"
+                value={twilioStatus}
+              />
+              <ProfileStat
+                label="Account SID"
+                value={twilioTestResult?.credentials.accountSid ?? "Not checked"}
+              />
+              <ProfileStat
+                label="Auth token configured"
+                value={
+                  twilioTestResult
+                    ? twilioTestResult.credentials.authToken
+                      ? "Configured"
+                      : "Not configured"
+                    : "Not checked"
+                }
+              />
+              <ProfileStat
+                label="Messaging service"
+                value={twilioTestResult?.credentials.messagingServiceSid ?? "Not checked"}
+              />
+              <ProfileStat
+                label="From number"
+                value={twilioTestResult?.credentials.fromNumber ?? "Not configured yet"}
+              />
+              <ProfileStat
+                label="Outbound ready"
+                value={twilioTestResult?.outboundReady ? "Yes" : "No"}
+              />
+            </div>
+
+            {twilioFromNumberMissing ? (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+                {TWILIO_FROM_NUMBER_WARNING}
+              </div>
+            ) : null}
+
+            {twilioAdditionalWarningMessages.length ? (
+              <div className="mt-3 grid gap-2">
+                {twilioAdditionalWarningMessages.map((warning) => (
+                  <div
+                    key={warning}
+                    className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800"
+                  >
+                    {warning}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {twilioTestError ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+                {twilioTestError}
+              </div>
+            ) : null}
+
+            {twilioTestResult ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Last checked {formatOptionalDateTime(twilioTestResult.checkedAt)} · SMS sent:{" "}
+                {twilioTestResult.communicationsSent ? "yes" : "no"}
+              </p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void handleTestTwilioConnection()}
+              disabled={isTestingTwilio}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              {isTestingTwilio ? "Checking" : "Run Twilio Test"}
+            </button>
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
