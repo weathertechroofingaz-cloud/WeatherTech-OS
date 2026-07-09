@@ -5,6 +5,10 @@ import {
   sanitizeIntegrationSyncLogText,
 } from "../../../../lib/crm/integrations";
 import {
+  resolveLeadSourceMapping,
+  type LeadSourceMappingResolution,
+} from "../../../../lib/crm/leadSourceMappings";
+import {
   createIntegrationSyncLog,
   createLead,
 } from "../../../../lib/crm/repository";
@@ -66,6 +70,9 @@ type NormalizedYelpLead = {
   yelpBusinessId: string | null;
   yelpConversationId: string | null;
   yelpLeadId: string | null;
+  sourceMappingId: string | null;
+  sourceMappingDisplayName: string | null;
+  sourceMappingMatchType: string | null;
   warnings: string[];
 };
 
@@ -374,9 +381,68 @@ function normalizeYelpLeadBody(body: YelpLeadRequestBody):
       yelpBusinessId: getText(body.yelpBusinessId, 160),
       yelpConversationId: getText(body.yelpConversationId, 160),
       yelpLeadId: getText(body.yelpLeadId, 160),
+      sourceMappingId: null,
+      sourceMappingDisplayName: null,
+      sourceMappingMatchType: null,
       warnings,
     },
     errors: [],
+  };
+}
+
+function getBusinessFromMapping(value: string) {
+  const token = getToken(value);
+
+  if (token.includes("ihc")) {
+    return "IHC" satisfies BusinessKey;
+  }
+
+  if (token.includes("weathertech")) {
+    return "WeatherTech" satisfies BusinessKey;
+  }
+
+  return null;
+}
+
+function applyLeadSourceMapping(
+  lead: NormalizedYelpLead,
+  resolution: LeadSourceMappingResolution,
+) {
+  const warnings = [...lead.warnings, ...resolution.warnings];
+
+  if (!resolution.mapping) {
+    return {
+      ...lead,
+      warnings,
+    };
+  }
+
+  const mappedBusiness = getBusinessFromMapping(resolution.mapping.business);
+
+  if (!mappedBusiness) {
+    warnings.push(
+      `Lead source mapping ${resolution.mapping.display_name} has an unsupported business value and was not used for business routing.`,
+    );
+  }
+
+  const mappedLocation = resolution.mapping.location || lead.location;
+  const shouldUseMappedAddress =
+    !lead.propertyAddress ||
+    lead.propertyAddress === DEFAULT_ADDRESS ||
+    lead.propertyAddress === lead.location;
+
+  return {
+    ...lead,
+    business: mappedBusiness ?? lead.business,
+    yelpAccount: resolution.mapping.display_name,
+    location: mappedLocation,
+    propertyAddress: shouldUseMappedAddress
+      ? mappedLocation ?? lead.propertyAddress
+      : lead.propertyAddress,
+    sourceMappingId: resolution.mapping.id,
+    sourceMappingDisplayName: resolution.mapping.display_name,
+    sourceMappingMatchType: resolution.matchType,
+    warnings,
   };
 }
 
@@ -424,6 +490,11 @@ function buildLeadNotes(lead: NormalizedYelpLead) {
     `Yelp Business ID: ${lead.yelpBusinessId ?? "Not provided"}`,
     `Yelp Conversation ID: ${lead.yelpConversationId ?? "Not provided"}`,
     `Yelp Lead ID: ${lead.yelpLeadId ?? "Not provided"}`,
+    `Lead Source Mapping: ${
+      lead.sourceMappingDisplayName
+        ? `${lead.sourceMappingDisplayName} (${lead.sourceMappingMatchType})`
+        : "Not matched"
+    }`,
     `Message: ${lead.message ?? "Not provided"}`,
     "CRM mapping: name -> contact_name, location -> property_address/city, serviceType -> service_type.",
   ].join("\n");
@@ -487,6 +558,11 @@ async function writeYelpLeadSyncLog({
       yelpBusinessId: lead.yelpBusinessId,
       yelpConversationId: lead.yelpConversationId,
       yelpLeadId: lead.yelpLeadId,
+      sourceMapping: {
+        id: lead.sourceMappingId,
+        displayName: lead.sourceMappingDisplayName,
+        matchType: lead.sourceMappingMatchType,
+      },
       contact: {
         hasName: Boolean(lead.contactName),
         phone: maskPhone(lead.phone),
@@ -498,6 +574,11 @@ async function writeYelpLeadSyncLog({
       leadId,
       companyId: company.id,
       companyName: company.name,
+      sourceMapping: {
+        id: lead.sourceMappingId,
+        displayName: lead.sourceMappingDisplayName,
+        matchType: lead.sourceMappingMatchType,
+      },
       mapping: {
         business: "company_id",
         name: "contact_name",
@@ -564,9 +645,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const mappedLead = applyLeadSourceMapping(
+      normalized.lead,
+      await resolveLeadSourceMapping(client, {
+        provider: "yelp",
+        externalSourceId: normalized.lead.yelpBusinessId,
+        business: normalized.lead.business,
+        location: normalized.lead.location,
+      }),
+    );
     const company = await getCompanyForYelpLead(
       client,
-      normalized.lead.business,
+      mappedLead.business,
     );
 
     if (!company) {
@@ -575,21 +665,21 @@ export async function POST(request: NextRequest) {
           ok: false,
           status: "company_not_found",
           warnings: [
-            `No CRM company record was found for ${normalized.lead.business}.`,
+            `No CRM company record was found for ${mappedLead.business}.`,
           ],
         },
         503,
       );
     }
 
-    const lead = await createLead(client, buildLeadInput(company, normalized.lead));
-    const warnings = [...normalized.lead.warnings];
+    const lead = await createLead(client, buildLeadInput(company, mappedLead));
+    const warnings = [...mappedLead.warnings];
 
     try {
       await writeYelpLeadSyncLog({
         client,
         company,
-        lead: normalized.lead,
+        lead: mappedLead,
         leadId: lead.id,
       });
     } catch (syncLogError) {

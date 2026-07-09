@@ -106,6 +106,12 @@ export type IntegrationProvider =
   | "gohighlevel"
   | "website"
   | "yelp";
+export type LeadSourceMappingProvider =
+  | "website"
+  | "yelp"
+  | "twilio"
+  | "twilio_sms"
+  | "gohighlevel";
 export type IntegrationConnectionStatus =
   | "connected"
   | "needs_reauth"
@@ -605,6 +611,18 @@ export type IntegrationSyncLogRecord = {
   updated_at: string;
 };
 
+export type LeadSourceMappingRecord = {
+  id: string;
+  provider: LeadSourceMappingProvider;
+  external_source_id: string | null;
+  business: string;
+  location: string;
+  display_name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CalendarEventSyncRecord = {
   id: string;
   company_id: string;
@@ -1062,6 +1080,15 @@ export type IntegrationSyncLogInput = {
   error_message?: string | null;
 };
 
+export type LeadSourceMappingInput = {
+  provider: LeadSourceMappingProvider;
+  external_source_id?: string | null;
+  business: string;
+  location: string;
+  display_name: string;
+  is_active?: boolean;
+};
+
 export type CalendarEventSyncInput = {
   company_id: string;
   schedule_event_id: string;
@@ -1363,6 +1390,12 @@ export type IntegrationSyncLogInsert = IntegrationSyncLogInput & {
   updated_at?: string;
 };
 
+export type LeadSourceMappingInsert = LeadSourceMappingInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type CalendarEventSyncInsert = CalendarEventSyncInput & {
   id?: string;
   created_at?: string;
@@ -1635,6 +1668,14 @@ export type Database = {
         Insert: IntegrationSyncLogInsert;
         Update: Partial<
           Database["public"]["Tables"]["integration_sync_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      lead_source_mappings: {
+        Row: LeadSourceMappingRecord;
+        Insert: LeadSourceMappingInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["lead_source_mappings"]["Insert"]
         >;
         Relationships: [];
       };

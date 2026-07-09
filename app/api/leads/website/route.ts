@@ -5,6 +5,10 @@ import {
   sanitizeIntegrationSyncLogText,
 } from "../../../../lib/crm/integrations";
 import {
+  resolveLeadSourceMapping,
+  type LeadSourceMappingResolution,
+} from "../../../../lib/crm/leadSourceMappings";
+import {
   createIntegrationSyncLog,
   createLead,
 } from "../../../../lib/crm/repository";
@@ -70,6 +74,9 @@ type NormalizedWebsiteLead = {
   utmSource: string | null;
   utmCampaign: string | null;
   utmMedium: string | null;
+  sourceMappingId: string | null;
+  sourceMappingDisplayName: string | null;
+  sourceMappingMatchType: string | null;
   warnings: string[];
 };
 
@@ -366,9 +373,67 @@ function normalizeWebsiteLeadBody(body: WebsiteLeadRequestBody):
       utmSource: getText(body.utmSource, 120),
       utmCampaign: getText(body.utmCampaign, 120),
       utmMedium: getText(body.utmMedium, 120),
+      sourceMappingId: null,
+      sourceMappingDisplayName: null,
+      sourceMappingMatchType: null,
       warnings,
     },
     errors: [],
+  };
+}
+
+function getBusinessFromMapping(value: string) {
+  const token = getToken(value);
+
+  if (token.includes("ihc")) {
+    return "IHC" satisfies BusinessKey;
+  }
+
+  if (token.includes("weathertech")) {
+    return "WeatherTech" satisfies BusinessKey;
+  }
+
+  return null;
+}
+
+function applyLeadSourceMapping(
+  lead: NormalizedWebsiteLead,
+  resolution: LeadSourceMappingResolution,
+) {
+  const warnings = [...lead.warnings, ...resolution.warnings];
+
+  if (!resolution.mapping) {
+    return {
+      ...lead,
+      warnings,
+    };
+  }
+
+  const mappedBusiness = getBusinessFromMapping(resolution.mapping.business);
+
+  if (!mappedBusiness) {
+    warnings.push(
+      `Lead source mapping ${resolution.mapping.display_name} has an unsupported business value and was not used for business routing.`,
+    );
+  }
+
+  const mappedLocation = resolution.mapping.location || lead.location;
+  const shouldUseMappedAddress =
+    !lead.address ||
+    lead.address === DEFAULT_ADDRESS ||
+    lead.address === lead.location;
+
+  return {
+    ...lead,
+    business: mappedBusiness ?? lead.business,
+    location: mappedLocation,
+    address: shouldUseMappedAddress
+      ? mappedLocation ?? lead.address
+      : lead.address,
+    sourceMappingId: resolution.mapping.id,
+    sourceMappingDisplayName: resolution.mapping.display_name,
+    sourceMappingMatchType: resolution.matchType,
+    warnings,
   };
 }
 
@@ -420,6 +485,11 @@ function buildLeadNotes(lead: NormalizedWebsiteLead) {
     `Location: ${lead.location ?? "Not provided"}`,
     `Website URL: ${lead.websiteUrl ?? "Not provided"}`,
     `Yelp Business ID: ${lead.yelpBusinessId ?? "Not provided"}`,
+    `Lead Source Mapping: ${
+      lead.sourceMappingDisplayName
+        ? `${lead.sourceMappingDisplayName} (${lead.sourceMappingMatchType})`
+        : "Not matched"
+    }`,
     `UTM: ${utmValues.length > 0 ? utmValues.join(", ") : "Not provided"}`,
     `Message: ${lead.message ?? "Not provided"}`,
     "CRM mapping: name -> contact_name, address/location -> property_address, serviceType -> service_type.",
@@ -482,6 +552,11 @@ async function writeWebsiteLeadSyncLog({
       location: lead.location,
       websiteUrl: lead.websiteUrl,
       yelpBusinessId: lead.yelpBusinessId,
+      sourceMapping: {
+        id: lead.sourceMappingId,
+        displayName: lead.sourceMappingDisplayName,
+        matchType: lead.sourceMappingMatchType,
+      },
       utmSource: lead.utmSource,
       utmCampaign: lead.utmCampaign,
       utmMedium: lead.utmMedium,
@@ -496,6 +571,11 @@ async function writeWebsiteLeadSyncLog({
       leadId,
       companyId: company.id,
       companyName: company.name,
+      sourceMapping: {
+        id: lead.sourceMappingId,
+        displayName: lead.sourceMappingDisplayName,
+        matchType: lead.sourceMappingMatchType,
+      },
       mapping: {
         business: "company_id",
         name: "contact_name",
@@ -563,9 +643,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const mappedLead = applyLeadSourceMapping(
+      normalized.lead,
+      await resolveLeadSourceMapping(client, {
+        provider: "website",
+        externalSourceId: normalized.lead.websiteUrl,
+        business: normalized.lead.business,
+        location: normalized.lead.location,
+      }),
+    );
     const company = await getCompanyForWebsiteLead(
       client,
-      normalized.lead.business,
+      mappedLead.business,
     );
 
     if (!company) {
@@ -574,21 +663,21 @@ export async function POST(request: NextRequest) {
           ok: false,
           status: "company_not_found",
           warnings: [
-            `No CRM company record was found for ${normalized.lead.business}.`,
+            `No CRM company record was found for ${mappedLead.business}.`,
           ],
         },
         503,
       );
     }
 
-    const lead = await createLead(client, buildLeadInput(company, normalized.lead));
-    const warnings = [...normalized.lead.warnings];
+    const lead = await createLead(client, buildLeadInput(company, mappedLead));
+    const warnings = [...mappedLead.warnings];
 
     try {
       await writeWebsiteLeadSyncLog({
         client,
         company,
-        lead: normalized.lead,
+        lead: mappedLead,
         leadId: lead.id,
       });
     } catch (syncLogError) {
