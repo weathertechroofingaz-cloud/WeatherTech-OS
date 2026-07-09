@@ -250,6 +250,7 @@ type CrmClient = SupabaseClient<Database>;
 type ThemeMode = "light" | "dark";
 type WorkspaceView =
   | "dashboard"
+  | "inbox"
   | "leads"
   | "customers"
   | "estimates"
@@ -442,6 +443,31 @@ const smsCategories: { value: SmsMessageCategory; label: string }[] = [
   { value: "weather_delay", label: "Weather delay" },
   { value: "general", label: "General" },
 ];
+
+type InboxProvider =
+  | "website"
+  | "yelp"
+  | "twilio"
+  | "gohighlevel"
+  | "manual_unknown";
+
+type InboxFilter = "all" | Exclude<InboxProvider, "manual_unknown">;
+
+const inboxFilters: { value: InboxFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "website", label: "Website" },
+  { value: "yelp", label: "Yelp" },
+  { value: "twilio", label: "Twilio" },
+  { value: "gohighlevel", label: "GoHighLevel" },
+];
+
+const inboxProviderLabels: Record<InboxProvider, string> = {
+  website: "Website",
+  yelp: "Yelp",
+  twilio: "Twilio",
+  gohighlevel: "GoHighLevel",
+  manual_unknown: "Manual/unknown",
+};
 
 const scopeCategories = (Object.keys(scopeCategoryLabels) as ScopeCategory[]).map(
   (value) => ({
@@ -1636,12 +1662,13 @@ function CrmWorkspace({
     () =>
       [
         { key: "1", view: "dashboard", label: "Dashboard" },
-        { key: "2", view: "leads", label: "Leads" },
-        { key: "3", view: "customers", label: "Customers" },
-        { key: "4", view: "estimates", label: "Estimates" },
-        { key: "5", view: "jobs", label: "Jobs" },
-        { key: "6", view: "calendar", label: "Calendar" },
-        { key: "7", view: "analytics", label: "Analytics" },
+        { key: "2", view: "inbox", label: "Inbox" },
+        { key: "3", view: "leads", label: "Leads" },
+        { key: "4", view: "customers", label: "Customers" },
+        { key: "5", view: "estimates", label: "Estimates" },
+        { key: "6", view: "jobs", label: "Jobs" },
+        { key: "7", view: "calendar", label: "Calendar" },
+        { key: "8", view: "analytics", label: "Analytics" },
       ] satisfies { key: string; view: WorkspaceView; label: string }[],
     [],
   );
@@ -1717,6 +1744,12 @@ function CrmWorkspace({
               label="Dashboard"
               isActive={view === "dashboard"}
               onClick={() => onViewChange("dashboard")}
+            />
+            <NavButton
+              icon={MessageSquare}
+              label="Inbox"
+              isActive={view === "inbox"}
+              onClick={() => onViewChange("inbox")}
             />
             <NavButton
               icon={ClipboardList}
@@ -1922,6 +1955,10 @@ function CrmWorkspace({
               onViewChange={onViewChange}
               onCreateLead={() => onViewChange("leads")}
             />
+          ) : null}
+
+          {view === "inbox" ? (
+            <UnifiedInboxView snapshot={scopedSnapshot} companyMap={companyMap} />
           ) : null}
 
           {view === "leads" ? (
@@ -3522,6 +3559,370 @@ type LeadsViewProps = {
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
+
+type UnifiedInboxItem = {
+  id: string;
+  provider: InboxProvider;
+  kind: "Lead" | "SMS" | "Email" | "Integration";
+  customerName: string;
+  contact: string;
+  businessLocation: string;
+  sourceLabel: string;
+  serviceType: string;
+  summary: string;
+  createdAt: string;
+  status: string;
+};
+
+type UnifiedInboxViewProps = {
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+};
+
+function getInboxProviderTone(provider: InboxProvider) {
+  return provider === "website"
+    ? "green"
+    : provider === "manual_unknown"
+      ? "amber"
+      : "blue";
+}
+
+function getInboxProviderFromText(value: string | null | undefined): InboxProvider {
+  const normalized = value?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "";
+
+  if (normalized.includes("gohighlevel") || normalized.includes("ghl")) {
+    return "gohighlevel";
+  }
+
+  if (normalized.includes("twilio") || normalized.includes("sms")) {
+    return "twilio";
+  }
+
+  if (normalized.includes("yelp")) {
+    return "yelp";
+  }
+
+  if (normalized.includes("website") || normalized.includes("webform")) {
+    return "website";
+  }
+
+  return "manual_unknown";
+}
+
+function getInboxProviderFromLeadNotes(notes: string | null | undefined): InboxProvider {
+  const firstLine = notes?.split("\n")[0] ?? "";
+  const firstLineProvider = getInboxProviderFromText(firstLine);
+
+  if (firstLineProvider !== "manual_unknown") {
+    return firstLineProvider;
+  }
+
+  return "manual_unknown";
+}
+
+function getCompanyLocationLabel(
+  company: CompanyRecord | undefined,
+  location: string | null | undefined,
+) {
+  const companyName = company?.short_name ?? company?.name ?? "Business";
+  const locationText = location?.trim();
+
+  if (!locationText) {
+    return companyName;
+  }
+
+  if (locationText.toLowerCase() === companyName.toLowerCase()) {
+    return companyName;
+  }
+
+  return `${companyName} · ${locationText}`;
+}
+
+function getInboxContact(phone: string | null | undefined, email: string | null | undefined) {
+  return [phone, email].filter(Boolean).join(" · ") || "No contact provided";
+}
+
+function getLeadMessageSummary(lead: LeadRecord) {
+  const messageLine = lead.notes
+    ?.split("\n")
+    .find((line) => line.toLowerCase().startsWith("message:"));
+  const message = messageLine?.replace(/^message:\s*/i, "").trim();
+
+  if (message && message.toLowerCase() !== "not provided") {
+    return message;
+  }
+
+  return lead.notes?.trim() || lead.property_address || "New lead created.";
+}
+
+function getLeadInboxProvider(lead: LeadRecord) {
+  const sourceProvider = getInboxProviderFromText(lead.source);
+
+  if (sourceProvider !== "manual_unknown") {
+    return sourceProvider;
+  }
+
+  return getInboxProviderFromLeadNotes(lead.notes);
+}
+
+function getSmsTarget(snapshot: CrmSnapshot, message: SmsMessageRecord) {
+  const lead = message.lead_id
+    ? snapshot.leads.find((item) => item.id === message.lead_id)
+    : null;
+  const customer = message.customer_id
+    ? snapshot.customers.find((item) => item.id === message.customer_id)
+    : null;
+
+  return {
+    lead,
+    customer,
+    name:
+      lead?.contact_name ??
+      customer?.display_name ??
+      customer?.contact_name ??
+      message.to_phone,
+    serviceType: lead ? serviceLabel(lead.service_type) : "General",
+    location: lead?.city ?? customer?.city ?? lead?.property_address ?? null,
+  };
+}
+
+function getEmailTarget(snapshot: CrmSnapshot, message: EmailMessageRecord) {
+  const customer = message.customer_id
+    ? snapshot.customers.find((item) => item.id === message.customer_id)
+    : null;
+
+  return {
+    name: customer?.display_name ?? customer?.contact_name ?? message.to_email,
+    location: customer?.city ?? customer?.property_address ?? null,
+  };
+}
+
+function getIntegrationLogLead(snapshot: CrmSnapshot, log: IntegrationSyncLogRecord) {
+  return log.related_table === "leads" && log.related_record_id
+    ? snapshot.leads.find((lead) => lead.id === log.related_record_id)
+    : null;
+}
+
+function buildUnifiedInboxItems(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+) {
+  const leadItems: UnifiedInboxItem[] = snapshot.leads.map((lead) => {
+    const company = companyMap.get(lead.company_id);
+    const provider = getLeadInboxProvider(lead);
+
+    return {
+      id: `lead-${lead.id}`,
+      provider,
+      kind: "Lead",
+      customerName: lead.contact_name,
+      contact: getInboxContact(lead.phone, lead.email),
+      businessLocation: getCompanyLocationLabel(
+        company,
+        lead.city || lead.property_address,
+      ),
+      sourceLabel: inboxProviderLabels[provider],
+      serviceType: serviceLabel(lead.service_type),
+      summary: getLeadMessageSummary(lead),
+      createdAt: lead.created_at,
+      status: statusLabel(lead.status),
+    };
+  });
+
+  const smsItems: UnifiedInboxItem[] = snapshot.smsMessages.map((message) => {
+    const target = getSmsTarget(snapshot, message);
+
+    return {
+      id: `sms-${message.id}`,
+      provider: "twilio",
+      kind: "SMS",
+      customerName: target.name,
+      contact: message.to_phone,
+      businessLocation: getCompanyLocationLabel(
+        companyMap.get(message.company_id),
+        target.location,
+      ),
+      sourceLabel: "Twilio",
+      serviceType: target.serviceType,
+      summary: message.body,
+      createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
+      status: smsMessageStatusLabel(message.status),
+    };
+  });
+
+  const emailItems: UnifiedInboxItem[] = snapshot.emailMessages.map((message) => {
+    const target = getEmailTarget(snapshot, message);
+
+    return {
+      id: `email-${message.id}`,
+      provider: "manual_unknown",
+      kind: "Email",
+      customerName: target.name,
+      contact: message.to_email,
+      businessLocation: getCompanyLocationLabel(
+        companyMap.get(message.company_id),
+        target.location,
+      ),
+      sourceLabel: "Manual/unknown",
+      serviceType: emailCategoryLabel(message.category),
+      summary: message.subject || message.body,
+      createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
+      status: emailMessageStatusLabel(message.status),
+    };
+  });
+
+  const integrationItems: UnifiedInboxItem[] = snapshot.integrationSyncLogs
+    .filter((log) => log.provider === "gohighlevel")
+    .map((log) => {
+      const lead = getIntegrationLogLead(snapshot, log);
+
+      return {
+        id: `integration-${log.id}`,
+        provider: "gohighlevel",
+        kind: "Integration",
+        customerName: lead?.contact_name ?? log.event_type,
+        contact: getInboxContact(lead?.phone, lead?.email),
+        businessLocation: getCompanyLocationLabel(
+          companyMap.get(log.company_id),
+          lead?.city ?? lead?.property_address,
+        ),
+        sourceLabel: "GoHighLevel",
+        serviceType: lead ? serviceLabel(lead.service_type) : "Lead sync",
+        summary:
+          sanitizeIntegrationSyncLogText(log.error_message) ??
+          integrationSyncLogStatusLabel(log.status),
+        createdAt: log.completed_at ?? log.last_attempted_at ?? log.created_at,
+        status: integrationSyncLogStatusLabel(log.status),
+      };
+    });
+
+  return [...leadItems, ...smsItems, ...emailItems, ...integrationItems].sort(
+    (left, right) =>
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
+}
+
+function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
+  const [providerFilter, setProviderFilter] = useState<InboxFilter>("all");
+  const inboxItems = useMemo(
+    () => buildUnifiedInboxItems(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const filteredItems = inboxItems.filter(
+    (item) => providerFilter === "all" || item.provider === providerFilter,
+  );
+  const counts = useMemo(
+    () =>
+      inboxFilters.reduce(
+        (accumulator, filter) => ({
+          ...accumulator,
+          [filter.value]:
+            filter.value === "all"
+              ? inboxItems.length
+              : inboxItems.filter((item) => item.provider === filter.value).length,
+        }),
+        {} as Record<InboxFilter, number>,
+      ),
+    [inboxItems],
+  );
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Unified Inbox
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              Lead and communication activity
+            </h2>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[360px]">
+            <ProfileStat label="Inbox items" value={inboxItems.length} />
+            <ProfileStat label="CRM leads" value={snapshot.leads.length} />
+            <ProfileStat label="SMS" value={snapshot.smsMessages.length} />
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          {inboxFilters.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              onClick={() => setProviderFilter(filter.value)}
+              className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                providerFilter === filter.value
+                  ? "border-sky-400 bg-sky-50 text-sky-800"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {filter.label} · {counts[filter.value] ?? 0}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
+          <p className="text-sm font-bold text-slate-950">Recent activity</p>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {filteredItems.map((item) => (
+            <article
+              key={item.id}
+              className="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_160px_150px]"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    label={item.sourceLabel}
+                    tone={getInboxProviderTone(item.provider)}
+                  />
+                  <Badge label={item.kind} tone="blue" />
+                  <Badge
+                    label={item.status}
+                    tone={
+                      item.status.toLowerCase().includes("failed")
+                        ? "amber"
+                        : item.status.toLowerCase().includes("sent") ||
+                            item.status.toLowerCase().includes("succeeded")
+                          ? "green"
+                          : "blue"
+                    }
+                  />
+                </div>
+                <h3 className="mt-3 font-bold text-slate-950">
+                  {item.customerName}
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">{item.contact}</p>
+                <p className="mt-2 line-clamp-2 text-sm text-slate-600">
+                  {item.summary}
+                </p>
+              </div>
+              <div className="text-sm text-slate-600">
+                <p className="font-semibold text-slate-950">Business/location</p>
+                <p className="mt-1">{item.businessLocation}</p>
+                <p className="mt-3 font-semibold text-slate-950">Service</p>
+                <p className="mt-1">{item.serviceType}</p>
+              </div>
+              <div className="text-sm text-slate-600 lg:text-right">
+                <p className="font-semibold text-slate-950">Created</p>
+                <p className="mt-1">{formatDateTime(item.createdAt)}</p>
+              </div>
+            </article>
+          ))}
+
+          {!filteredItems.length ? (
+            <div className="p-5">
+              <EmptyState label="No inbox activity for this view yet." />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function LeadsView({
   client,
