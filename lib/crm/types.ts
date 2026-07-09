@@ -15,6 +15,16 @@ export type LeadStatus =
   | "estimate_sent"
   | "won"
   | "lost";
+export type PipelineStage =
+  | "new_lead"
+  | "contacted"
+  | "estimate_scheduled"
+  | "estimate_sent"
+  | "approved"
+  | "job_scheduled"
+  | "completed"
+  | "paid"
+  | "lost";
 export type LeadPriority = "low" | "normal" | "high" | "urgent";
 export type CustomerType = "homeowner" | "commercial" | "hoa" | "property_manager";
 export type CustomerStatus = "active" | "inactive" | "prospect";
@@ -202,6 +212,7 @@ export type LeadRecord = {
   service_type: ServiceType;
   source: string;
   status: LeadStatus;
+  pipeline_stage: PipelineStage;
   priority: LeadPriority;
   estimated_value: number;
   next_follow_up: string | null;
@@ -747,6 +758,7 @@ export type LeadInput = {
   service_type: ServiceType;
   source?: string;
   status?: LeadStatus;
+  pipeline_stage?: PipelineStage;
   priority?: LeadPriority;
   estimated_value?: number;
   next_follow_up?: string | null;

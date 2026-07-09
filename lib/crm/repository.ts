@@ -45,6 +45,7 @@ import type {
   JobRecord,
   LeadInput,
   LeadRecord,
+  PipelineStage,
   MaterialOrderInput,
   MaterialOrderItemInput,
   MaterialOrderItemRecord,
@@ -184,6 +185,65 @@ function normalizeLeadStatus(value: unknown): LeadRecord["status"] {
   return "new";
 }
 
+function normalizePipelineStage(
+  value: unknown,
+  fallbackStatus?: LeadRecord["status"],
+): PipelineStage {
+  const stage = getLegacyLeadString(value)?.toLowerCase().replace(/\s+/g, "_");
+
+  if (
+    stage === "new_lead" ||
+    stage === "contacted" ||
+    stage === "estimate_scheduled" ||
+    stage === "estimate_sent" ||
+    stage === "approved" ||
+    stage === "job_scheduled" ||
+    stage === "completed" ||
+    stage === "paid" ||
+    stage === "lost"
+  ) {
+    return stage;
+  }
+
+  if (fallbackStatus === "contacted") {
+    return "contacted";
+  }
+
+  if (fallbackStatus === "qualified") {
+    return "estimate_scheduled";
+  }
+
+  if (fallbackStatus === "estimate_sent") {
+    return "estimate_sent";
+  }
+
+  if (fallbackStatus === "won") {
+    return "approved";
+  }
+
+  if (fallbackStatus === "lost") {
+    return "lost";
+  }
+
+  return "new_lead";
+}
+
+function pipelineStageToLeadStatus(stage: PipelineStage): LeadRecord["status"] {
+  if (stage === "new_lead") {
+    return "new";
+  }
+
+  if (stage === "estimate_scheduled") {
+    return "qualified";
+  }
+
+  if (stage === "approved" || stage === "job_scheduled" || stage === "completed" || stage === "paid") {
+    return "won";
+  }
+
+  return stage;
+}
+
 function normalizeLeadServiceType(value: unknown): LeadRecord["service_type"] {
   const serviceType = getLegacyLeadString(value)?.toLowerCase().replace(/\s+/g, "_");
 
@@ -202,6 +262,7 @@ function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
   return leads.map((row) => {
     const lead = row as LegacyLeadRecord;
     const createdAt = getLegacyLeadString(lead.created_at) ?? new Date().toISOString();
+    const status = normalizeLeadStatus(lead.status);
 
     return {
       ...row,
@@ -226,7 +287,8 @@ function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
         getLegacyLeadString(lead.source) ??
         getLegacyLeadString(lead.lead_source) ??
         "Website",
-      status: normalizeLeadStatus(lead.status),
+      status,
+      pipeline_stage: normalizePipelineStage(lead.pipeline_stage, status),
       priority: lead.priority ?? "normal",
       estimated_value: getLegacyLeadNumber(lead.estimated_value),
       next_follow_up: getLegacyLeadString(lead.next_follow_up),
@@ -502,6 +564,8 @@ function formatLiveLeadPropertyAddress(input: LeadInput) {
 }
 
 function buildLiveLeadInput(input: LeadInput) {
+  const pipelineStage = normalizePipelineStage(input.pipeline_stage, input.status);
+
   return {
     company_id: input.company_id || null,
     customer_name: input.contact_name,
@@ -510,7 +574,8 @@ function buildLiveLeadInput(input: LeadInput) {
     property_address: formatLiveLeadPropertyAddress(input),
     lead_source: input.source ?? "Website",
     service_needed: input.service_type,
-    status: normalizeLeadStatus(input.status),
+    status: pipelineStageToLeadStatus(pipelineStage),
+    pipeline_stage: pipelineStage,
     priority: input.priority ?? "normal",
     estimated_value: input.estimated_value ?? 0,
     next_follow_up: input.next_follow_up ?? null,
@@ -639,6 +704,7 @@ export async function convertLeadToCustomer(client: CrmClient, lead: LeadRecord)
 
   await updateLead(client, lead.id, {
     status: "won",
+    pipeline_stage: "approved",
   });
 
   const { error } = await client

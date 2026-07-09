@@ -224,6 +224,7 @@ import type {
   PaymentRecord,
   PaintFinish,
   PaintingAreaType,
+  PipelineStage,
   ScheduleEventInput,
   ScheduleEventRecord,
   ScheduleEventStatus,
@@ -278,6 +279,18 @@ const leadStatuses: { value: LeadStatus; label: string }[] = [
   { value: "qualified", label: "Qualified" },
   { value: "estimate_sent", label: "Estimate sent" },
   { value: "won", label: "Won" },
+  { value: "lost", label: "Lost" },
+];
+
+const pipelineStages: { value: PipelineStage; label: string }[] = [
+  { value: "new_lead", label: "New lead" },
+  { value: "contacted", label: "Contacted" },
+  { value: "estimate_scheduled", label: "Estimate scheduled" },
+  { value: "estimate_sent", label: "Estimate sent" },
+  { value: "approved", label: "Approved" },
+  { value: "job_scheduled", label: "Job scheduled" },
+  { value: "completed", label: "Completed" },
+  { value: "paid", label: "Paid" },
   { value: "lost", label: "Lost" },
 ];
 
@@ -531,6 +544,31 @@ function companyTradeLabel(company: CompanyRecord | null | undefined) {
 
 function statusLabel(status: LeadStatus) {
   return leadStatuses.find((item) => item.value === status)?.label ?? status;
+}
+
+function pipelineStageLabel(stage: PipelineStage) {
+  return pipelineStages.find((item) => item.value === stage)?.label ?? stage;
+}
+
+function leadStatusForPipelineStage(stage: PipelineStage): LeadStatus {
+  if (stage === "new_lead") {
+    return "new";
+  }
+
+  if (stage === "estimate_scheduled") {
+    return "qualified";
+  }
+
+  if (
+    stage === "approved" ||
+    stage === "job_scheduled" ||
+    stage === "completed" ||
+    stage === "paid"
+  ) {
+    return "won";
+  }
+
+  return stage;
 }
 
 function customerStatusLabel(status: CustomerStatus) {
@@ -3040,7 +3078,7 @@ function DashboardView({
             <div>
               <h2 className="text-lg font-bold text-slate-950">Lead pipeline</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Active opportunities by status.
+                Active opportunities by pipeline stage.
               </p>
             </div>
             <button
@@ -3054,16 +3092,18 @@ function DashboardView({
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2">
-            {leadStatuses.slice(0, 4).map((status) => {
-              const leads = snapshot.leads.filter((lead) => lead.status === status.value);
+            {pipelineStages.map((stage) => {
+              const leads = snapshot.leads.filter(
+                (lead) => lead.pipeline_stage === stage.value,
+              );
               const value = leads.reduce((total, lead) => total + lead.estimated_value, 0);
 
               return (
                 <div
-                  key={status.value}
+                  key={stage.value}
                   className="rounded-lg border border-slate-200 bg-slate-50 p-4"
                 >
-                  <p className="text-sm font-semibold text-slate-600">{status.label}</p>
+                  <p className="text-sm font-semibold text-slate-600">{stage.label}</p>
                   <div className="mt-3 flex items-end justify-between">
                     <p className="text-3xl font-bold text-slate-950">{leads.length}</p>
                     <p className="text-sm font-semibold text-slate-700">
@@ -3934,11 +3974,28 @@ function LeadsView({
 }: LeadsViewProps) {
   const [selectedLeadId, setSelectedLeadId] = useState(snapshot.leads[0]?.id ?? "");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | "all">("all");
+  const [stageFilter, setStageFilter] = useState<PipelineStage | "all">("all");
   const [isCreating, setIsCreating] = useState(false);
 
   const selectedLead =
-    snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? snapshot.leads[0];
+    snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? null;
+
+  useEffect(() => {
+    if (!snapshot.leads.length) {
+      if (selectedLeadId) {
+        setSelectedLeadId("");
+      }
+
+      return;
+    }
+
+    if (
+      !selectedLeadId ||
+      !snapshot.leads.some((lead) => lead.id === selectedLeadId)
+    ) {
+      setSelectedLeadId(snapshot.leads[0].id);
+    }
+  }, [selectedLeadId, snapshot.leads]);
 
   const filteredLeads = snapshot.leads.filter((lead) => {
     const query = search.toLowerCase();
@@ -3946,16 +4003,48 @@ function LeadsView({
       !query ||
       lead.contact_name.toLowerCase().includes(query) ||
       lead.property_address.toLowerCase().includes(query) ||
-      lead.source.toLowerCase().includes(query);
-    const matchesStatus = statusFilter === "all" || lead.status === statusFilter;
-    return matchesSearch && matchesStatus;
+      lead.source.toLowerCase().includes(query) ||
+      pipelineStageLabel(lead.pipeline_stage).toLowerCase().includes(query);
+    const matchesStage =
+      stageFilter === "all" || lead.pipeline_stage === stageFilter;
+    return matchesSearch && matchesStage;
   });
-  const {
-    page: leadPage,
-    pageCount: leadPageCount,
-    setPage: setLeadPage,
-    pagedItems: pagedLeads,
-  } = usePagination(filteredLeads);
+  const filteredStageGroups = pipelineStages
+    .map((stage) => {
+      const leads = filteredLeads.filter(
+        (lead) => lead.pipeline_stage === stage.value,
+      );
+
+      return {
+        ...stage,
+        leads,
+        totalValue: leads.reduce((total, lead) => total + lead.estimated_value, 0),
+      };
+    })
+    .filter((stage) =>
+      stageFilter === "all" ? stage.leads.length > 0 : stage.value === stageFilter,
+    );
+  const stageCounts = pipelineStages.reduce(
+    (counts, stage) => ({
+      ...counts,
+      [stage.value]: snapshot.leads.filter(
+        (lead) => lead.pipeline_stage === stage.value,
+      ).length,
+    }),
+    {} as Record<PipelineStage, number>,
+  );
+  const selectedLeadCompany = selectedLead
+    ? companyMap.get(selectedLead.company_id)
+    : undefined;
+  const selectedLeadProvider = selectedLead
+    ? getLeadInboxProvider(selectedLead)
+    : null;
+  const selectedLeadBusinessLocation = selectedLead
+    ? getCompanyLocationLabel(
+        selectedLeadCompany,
+        selectedLead.city || selectedLead.property_address,
+      )
+    : "";
 
   const handleCreateLead = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3976,6 +4065,8 @@ function LeadsView({
         postal_code: getOptionalFormString(formData, "postal_code"),
         service_type: getFormString(formData, "service_type", "roofing") as ServiceType,
         source: getFormString(formData, "source", "Website"),
+        status: "new",
+        pipeline_stage: "new_lead",
         priority: getFormString(formData, "priority", "normal") as LeadPriority,
         estimated_value: getFormNumber(formData, "estimated_value"),
         next_follow_up: getOptionalFormString(formData, "next_follow_up"),
@@ -4002,8 +4093,15 @@ function LeadsView({
 
     try {
       const formData = new FormData(event.currentTarget);
+      const pipelineStage = getFormString(
+        formData,
+        "pipeline_stage",
+        selectedLead.pipeline_stage,
+      ) as PipelineStage;
+
       await updateLead(client, selectedLead.id, {
-        status: getFormString(formData, "status", selectedLead.status) as LeadStatus,
+        status: leadStatusForPipelineStage(pipelineStage),
+        pipeline_stage: pipelineStage,
         priority: getFormString(
           formData,
           "priority",
@@ -4041,14 +4139,14 @@ function LeadsView({
   };
 
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
-      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-xl font-bold text-slate-950">Leads CRM</h2>
+              <h2 className="text-xl font-bold text-slate-950">CRM Pipeline</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Intake, qualify, follow up, and convert opportunities.
+                Move leads from intake through estimates, jobs, completion, and payment.
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -4062,69 +4160,110 @@ function LeadsView({
                 />
               </div>
               <select
-                value={statusFilter}
+                value={stageFilter}
                 onChange={(event) =>
-                  setStatusFilter(event.target.value as LeadStatus | "all")
+                  setStageFilter(event.target.value as PipelineStage | "all")
                 }
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
-                <option value="all">All statuses</option>
-                {leadStatuses.map((status) => (
-                  <option key={status.value} value={status.value}>
-                    {status.label}
+                <option value="all">All stages</option>
+                {pipelineStages.map((stage) => (
+                  <option key={stage.value} value={stage.value}>
+                    {stage.label}
                   </option>
                 ))}
               </select>
             </div>
           </div>
+          <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            <button
+              type="button"
+              onClick={() => setStageFilter("all")}
+              className={`rounded-md border px-3 py-2 text-left text-sm transition ${
+                stageFilter === "all"
+                  ? "border-sky-400 bg-sky-50 text-sky-800"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <span className="block font-semibold">All stages</span>
+              <span className="text-xs text-slate-500">
+                {snapshot.leads.length} leads
+              </span>
+            </button>
+            {pipelineStages.map((stage) => (
+              <button
+                key={stage.value}
+                type="button"
+                onClick={() => setStageFilter(stage.value)}
+                className={`rounded-md border px-3 py-2 text-left text-sm transition ${
+                  stageFilter === stage.value
+                    ? "border-sky-400 bg-sky-50 text-sky-800"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <span className="block font-semibold">{stage.label}</span>
+                <span className="text-xs text-slate-500">
+                  {stageCounts[stage.value]} leads
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">
-          {pagedLeads.map((lead) => (
-            <button
-              key={lead.id}
-              type="button"
-              onClick={() => setSelectedLeadId(lead.id)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 lg:grid-cols-[1fr_120px_130px_120px] lg:items-center ${
-                selectedLead?.id === lead.id ? "bg-sky-50" : "bg-white"
-              }`}
-            >
-              <div>
-                <p className="font-semibold text-slate-950">{lead.contact_name}</p>
-                <p className="mt-1 text-sm text-slate-500">{lead.property_address}</p>
+          {filteredStageGroups.map((stage) => (
+            <div key={stage.value} className="divide-y divide-slate-100">
+              <div className="flex flex-col gap-2 bg-slate-50 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{stage.label}</p>
+                  <p className="text-sm text-slate-500">
+                    {stage.leads.length} leads · {formatMoney(stage.totalValue)}
+                  </p>
+                </div>
+                <Badge label={stage.value} tone="blue" />
               </div>
-              <Badge label={statusLabel(lead.status)} tone="blue" />
-              <span className="text-sm text-slate-600">
-                {companyMap.get(lead.company_id)?.name ?? "Company"}
-              </span>
-              <span className="text-sm font-semibold text-slate-950">
-                {formatMoney(lead.estimated_value)}
-              </span>
-            </button>
+              {stage.leads.map((lead) => (
+                <button
+                  key={lead.id}
+                  type="button"
+                  aria-pressed={selectedLead?.id === lead.id}
+                  onClick={() => setSelectedLeadId(lead.id)}
+                  className={`grid w-full cursor-pointer gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:grid-cols-[1fr_150px_130px_120px] lg:items-center ${
+                    selectedLead?.id === lead.id
+                      ? "border-l-sky-500 bg-sky-50"
+                      : "border-l-transparent bg-white"
+                  }`}
+                >
+                  <div>
+                    <p className="font-semibold text-slate-950">{lead.contact_name}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {lead.property_address}
+                    </p>
+                  </div>
+                  <span className="text-sm text-slate-600">
+                    {lead.phone ?? lead.email ?? "No contact"}
+                  </span>
+                  <span className="text-sm text-slate-600">
+                    {companyMap.get(lead.company_id)?.name ?? "Company"}
+                  </span>
+                  <span className="text-sm font-semibold text-slate-950">
+                    {formatMoney(lead.estimated_value)}
+                  </span>
+                </button>
+              ))}
+            </div>
           ))}
 
           {!filteredLeads.length ? <EmptyState label="No leads match this view." /> : null}
         </div>
-        <PaginationControls
-          page={leadPage}
-          pageCount={leadPageCount}
-          total={filteredLeads.length}
-          onPageChange={setLeadPage}
-        />
       </section>
 
-      <aside className="space-y-5">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-950">New lead</h3>
-          <LeadCreateForm
-            companies={snapshot.companies}
-            isSubmitting={isCreating}
-            onSubmit={handleCreateLead}
-          />
-        </section>
-
+      <aside className="space-y-5 xl:sticky xl:top-5 xl:self-start">
         {selectedLead ? (
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <section
+            key={selectedLead.id}
+            className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-lg font-bold text-slate-950">
@@ -4134,7 +4273,13 @@ function LeadsView({
                   {serviceLabel(selectedLead.service_type)} lead from {selectedLead.source}
                 </p>
               </div>
-              <Badge label={selectedLead.priority} tone="amber" />
+              <div className="flex flex-wrap justify-end gap-2">
+                <Badge
+                  label={pipelineStageLabel(selectedLead.pipeline_stage)}
+                  tone="blue"
+                />
+                <Badge label={selectedLead.priority} tone="amber" />
+              </div>
             </div>
 
             <div className="mt-4 grid gap-2 text-sm text-slate-600">
@@ -4143,18 +4288,48 @@ function LeadsView({
               <ContactLine icon={Building2} value={selectedLead.property_address} />
             </div>
 
+            <div className="mt-5 divide-y divide-slate-100 border-y border-slate-100 text-sm">
+              <div className="py-3">
+                <p className="font-semibold text-slate-950">Source/provider</p>
+                <p className="mt-1 text-slate-600">
+                  {selectedLead.source} ·{" "}
+                  {selectedLeadProvider
+                    ? inboxProviderLabels[selectedLeadProvider]
+                    : "Manual/unknown"}
+                </p>
+              </div>
+              <div className="py-3">
+                <p className="font-semibold text-slate-950">Business/location</p>
+                <p className="mt-1 text-slate-600">
+                  {selectedLeadBusinessLocation}
+                </p>
+              </div>
+              <div className="py-3">
+                <p className="font-semibold text-slate-950">Service type</p>
+                <p className="mt-1 text-slate-600">
+                  {serviceLabel(selectedLead.service_type)}
+                </p>
+              </div>
+              <div className="py-3">
+                <p className="font-semibold text-slate-950">Message/notes</p>
+                <p className="mt-1 line-clamp-4 text-slate-600">
+                  {getLeadMessageSummary(selectedLead)}
+                </p>
+              </div>
+            </div>
+
             <form onSubmit={handleUpdateLead} className="mt-5 grid gap-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-sm font-medium text-slate-700">
-                  Status
+                  Pipeline stage
                   <select
-                    name="status"
-                    defaultValue={selectedLead.status}
+                    name="pipeline_stage"
+                    defaultValue={selectedLead.pipeline_stage}
                     className="rounded-md border border-slate-300 px-3 py-2"
                   >
-                    {leadStatuses.map((status) => (
-                      <option key={status.value} value={status.value}>
-                        {status.label}
+                    {pipelineStages.map((stage) => (
+                      <option key={stage.value} value={stage.value}>
+                        {stage.label}
                       </option>
                     ))}
                   </select>
@@ -4218,7 +4393,23 @@ function LeadsView({
               </div>
             </form>
           </section>
-        ) : null}
+        ) : (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Lead details</h3>
+            <div className="mt-4">
+              <EmptyState label="Select a lead to view and update pipeline details." />
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">New lead</h3>
+          <LeadCreateForm
+            companies={snapshot.companies}
+            isSubmitting={isCreating}
+            onSubmit={handleCreateLead}
+          />
+        </section>
       </aside>
     </div>
   );

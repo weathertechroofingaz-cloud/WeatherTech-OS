@@ -516,6 +516,7 @@ function buildLeadInput(
     service_type: lead.serviceType,
     source: lead.source,
     status: "new",
+    pipeline_stage: "new_lead",
     priority: "normal",
     estimated_value: 0,
     next_follow_up: null,
