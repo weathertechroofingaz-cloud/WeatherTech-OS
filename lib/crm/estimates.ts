@@ -21,7 +21,8 @@ function roundCurrency(value: number) {
 
 export function calculateLineItemTotal(item: EstimateLineItemInput) {
   const quantity = Number.isFinite(item.quantity) ? item.quantity : 0;
-  const unitCost = Number.isFinite(item.unit_cost) ? item.unit_cost : 0;
+  const unitPrice = item.unit_price ?? item.unit_cost;
+  const unitCost = Number.isFinite(unitPrice) ? unitPrice : 0;
   const markupRate = Number.isFinite(item.markup_rate ?? 0) ? item.markup_rate ?? 0 : 0;
 
   return roundCurrency(quantity * unitCost * (1 + markupRate / 100));

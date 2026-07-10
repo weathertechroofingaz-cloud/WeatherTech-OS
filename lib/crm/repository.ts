@@ -731,8 +731,11 @@ function buildEstimatePayload(input: EstimateInput, lineItems: EstimateLineItemI
     profit_margin_rate: input.profit_margin_rate ?? 0,
     customer_id: input.customer_id ?? null,
     lead_id: input.lead_id ?? null,
+    business: input.business ?? null,
+    location: input.location ?? null,
     expiration_date: input.expiration_date ?? null,
     notes: input.notes ?? null,
+    scope_of_work: input.scope_of_work ?? null,
     painting_area_type: input.painting_area_type ?? null,
     paint_brand: input.paint_brand ?? "Dunn-Edwards",
     paint_product_line: input.paint_product_line ?? null,
@@ -759,6 +762,8 @@ function buildLineItemPayload(
   estimateId: string,
   index: number,
 ) {
+  const unitPrice = item.unit_price ?? item.unit_cost;
+
   return {
     estimate_id: estimateId,
     category: item.category,
@@ -766,7 +771,8 @@ function buildLineItemPayload(
     description: item.description ?? null,
     quantity: item.quantity,
     unit: item.unit ?? "each",
-    unit_cost: item.unit_cost,
+    unit_cost: unitPrice,
+    unit_price: unitPrice,
     markup_rate: item.markup_rate ?? 0,
     taxable: item.taxable ?? true,
     sort_order: item.sort_order ?? index,

@@ -324,6 +324,7 @@ const estimateStatuses: { value: EstimateStatus; label: string }[] = [
   { value: "draft", label: "Draft" },
   { value: "sent", label: "Sent" },
   { value: "approved", label: "Approved" },
+  { value: "declined", label: "Declined" },
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
 ];
@@ -722,6 +723,31 @@ function getEstimateTargetName(snapshot: CrmSnapshot, estimate: EstimateRecord) 
     getLeadName(snapshot, estimate.lead_id) ??
     "Unassigned"
   );
+}
+
+function getEstimateBusinessName(
+  snapshot: CrmSnapshot,
+  companyId: string,
+  business: string | null | undefined,
+) {
+  return (
+    business?.trim() ||
+    snapshot.companies.find((company) => company.id === companyId)?.name ||
+    "Business"
+  );
+}
+
+function getAssociationLocation(
+  snapshot: CrmSnapshot,
+  customerId: string | null,
+  leadId: string | null,
+) {
+  const customer = customerId
+    ? snapshot.customers.find((item) => item.id === customerId)
+    : null;
+  const lead = leadId ? snapshot.leads.find((item) => item.id === leadId) : null;
+
+  return customer?.property_address ?? lead?.property_address ?? "";
 }
 
 function getScopeTargetName(snapshot: CrmSnapshot, scope: ScopeRecord) {
@@ -2433,6 +2459,7 @@ function buildCompanyDashboardSummary(
     pendingColorSelections: companySnapshot.estimates.filter(
       (estimate) =>
         estimate.service_type === "painting" &&
+        estimate.status !== "declined" &&
         estimate.status !== "rejected" &&
         estimate.color_selection_status !== "approved",
     ).length,
@@ -2597,6 +2624,7 @@ function DashboardView({
   );
   const pendingColorSelections = paintingEstimates.filter(
     (estimate) =>
+      estimate.status !== "declined" &&
       estimate.status !== "rejected" &&
       estimate.color_selection_status !== "approved",
   );
@@ -5032,6 +5060,7 @@ function EstimatesView({
   const [selectedEstimateId, setSelectedEstimateId] = useState(
     snapshot.estimates[0]?.id ?? "new",
   );
+  const [estimateDraftVersion, setEstimateDraftVersion] = useState(0);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | "all">("all");
 
@@ -5047,6 +5076,9 @@ function EstimatesView({
       !query ||
       estimate.title.toLowerCase().includes(query) ||
       target.includes(query) ||
+      (estimate.business ?? "").toLowerCase().includes(query) ||
+      (estimate.location ?? "").toLowerCase().includes(query) ||
+      (estimate.scope_of_work ?? "").toLowerCase().includes(query) ||
       estimateStatusLabel(estimate.status).toLowerCase().includes(query);
     const matchesStatus = statusFilter === "all" || estimate.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -5073,6 +5105,28 @@ function EstimatesView({
     (signature) =>
       signature.document_id !== null && selectedEstimateDocumentIds.has(signature.document_id),
   );
+  const isCreatingEstimate = selectedEstimateId === "new" || selectedEstimate === null;
+
+  const focusEstimateBuilder = () => {
+    if (typeof document !== "undefined") {
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById("estimate-builder")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  };
+
+  const handleStartNewEstimate = () => {
+    setSelectedEstimateId("new");
+    setEstimateDraftVersion((version) => version + 1);
+    focusEstimateBuilder();
+  };
+
+  const handleSelectEstimate = (estimateId: string) => {
+    setSelectedEstimateId(estimateId);
+    focusEstimateBuilder();
+  };
 
   const handleSaveEstimate = async (
     input: EstimateInput,
@@ -5087,7 +5141,11 @@ function EstimatesView({
 
       setSelectedEstimateId(savedEstimate.id);
       await onReload();
-      onNotice(selectedEstimate ? "Estimate updated." : "Estimate created.");
+      onNotice(
+        selectedEstimate
+          ? "Estimate updated."
+          : "Draft estimate saved.",
+      );
     } catch (currentError) {
       onError(
         currentError instanceof Error
@@ -5290,131 +5348,162 @@ function EstimatesView({
   };
 
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
-      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-slate-950">Estimates</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Create priced proposals with labor, materials, tax, discounts, and margin.
-              </p>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-72"
-                  placeholder="Search estimates"
-                />
-              </div>
-              <select
-                value={statusFilter}
-                onChange={(event) =>
-                  setStatusFilter(event.target.value as EstimateStatus | "all")
-                }
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-              >
-                <option value="all">All statuses</option>
-                {estimateStatuses.map((status) => (
-                  <option key={status.value} value={status.value}>
-                    {status.label}
-                  </option>
-                ))}
-              </select>
+    <div className="space-y-5">
+      <section
+        id="estimate-builder"
+        className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm scroll-mt-5"
+      >
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Estimate Builder
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              {selectedEstimate ? "Edit estimate" : "Create draft estimate"}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Build a priced draft with scope, line items, and live totals before sending.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              label={
+                selectedEstimate
+                  ? estimateStatusLabel(selectedEstimate.status)
+                  : "Draft mode"
+              }
+              tone={isCreatingEstimate ? "amber" : "blue"}
+            />
+            {selectedEstimate ? (
               <button
                 type="button"
-                onClick={() => setSelectedEstimateId("new")}
+                onClick={handleStartNewEstimate}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
               >
                 <Plus className="h-4 w-4" />
-                New
+                New Estimate
               </button>
-            </div>
+            ) : null}
           </div>
         </div>
-
-        <div className="divide-y divide-slate-100">
-          {pagedEstimates.map((estimate) => (
-            <button
-              key={estimate.id}
-              type="button"
-              onClick={() => setSelectedEstimateId(estimate.id)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[1fr_130px_140px_120px] xl:items-center ${
-                selectedEstimate?.id === estimate.id ? "bg-sky-50" : "bg-white"
-              }`}
-            >
-              <div>
-                <p className="font-semibold text-slate-950">{estimate.title}</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {getEstimateTargetName(snapshot, estimate)}
-                </p>
-              </div>
-              <Badge label={estimateStatusLabel(estimate.status)} tone="blue" />
-              <span className="text-sm text-slate-600">
-                {companyMap.get(estimate.company_id)?.name ?? "Company"}
-              </span>
-              <span className="text-sm font-semibold text-slate-950">
-                {formatMoney(estimate.total)}
-              </span>
-            </button>
-          ))}
-
-          {!filteredEstimates.length ? (
-            <EmptyState label="No estimates match this view." />
-          ) : null}
-        </div>
-        <PaginationControls
-          page={estimatePage}
-          pageCount={estimatePageCount}
-          total={filteredEstimates.length}
-          onPageChange={setEstimatePage}
-        />
-      </section>
-
-      <aside className="space-y-5">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-bold text-slate-950">
-                {selectedEstimate ? "Edit estimate" : "Create estimate"}
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Line items update totals before saving.
-              </p>
-            </div>
-            <Calculator className="h-5 w-5 text-sky-600" />
-          </div>
-          <EstimateEditor
-            key={selectedEstimate?.id ?? "new-estimate"}
-            estimate={selectedEstimate}
-            lineItems={selectedLineItems}
-            snapshot={snapshot}
-            onSave={handleSaveEstimate}
-          />
-        </section>
-
-        <EstimatePdfPreview
+        <EstimateEditor
+          key={selectedEstimate?.id ?? `new-estimate-${estimateDraftVersion}`}
           estimate={selectedEstimate}
           lineItems={selectedLineItems}
           snapshot={snapshot}
-          company={selectedEstimate ? companyMap.get(selectedEstimate.company_id) : undefined}
+          onSave={handleSaveEstimate}
         />
-        <EstimateWorkflowPanel
-          snapshot={snapshot}
-          estimate={selectedEstimate}
-          linkedJob={selectedEstimateJob}
-          linkedScope={selectedEstimateScope}
-          documents={selectedEstimateDocuments}
-          signatures={selectedEstimateSignatures}
-          onCreateJob={handleCreateJobFromEstimate}
-          onSaveDocument={handleSaveEstimateDocument}
-          onGenerateScope={handleGenerateScopeFromEstimate}
-          onRequestSignature={handleRequestEstimateSignature}
-        />
-      </aside>
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Estimates</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Create priced proposals with labor, materials, tax, discounts, and margin.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-72"
+                    placeholder="Search estimates"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(event) =>
+                    setStatusFilter(event.target.value as EstimateStatus | "all")
+                  }
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="all">All statuses</option>
+                  {estimateStatuses.map((status) => (
+                    <option key={status.value} value={status.value}>
+                      {status.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleStartNewEstimate}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+                >
+                  <Plus className="h-4 w-4" />
+                  New Estimate
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {pagedEstimates.map((estimate) => (
+              <button
+                key={estimate.id}
+                type="button"
+                onClick={() => handleSelectEstimate(estimate.id)}
+                className={`grid w-full cursor-pointer gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 xl:grid-cols-[1fr_130px_140px_120px] xl:items-center ${
+                  selectedEstimate?.id === estimate.id
+                    ? "border-l-sky-500 bg-sky-50"
+                    : "border-l-transparent bg-white"
+                }`}
+              >
+                <div>
+                  <p className="font-semibold text-slate-950">{estimate.title}</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {getEstimateTargetName(snapshot, estimate)}
+                  </p>
+                </div>
+                <Badge label={estimateStatusLabel(estimate.status)} tone="blue" />
+                <span className="text-sm text-slate-600">
+                  {estimate.business ??
+                    companyMap.get(estimate.company_id)?.name ??
+                    "Company"}
+                </span>
+                <span className="text-sm font-semibold text-slate-950">
+                  {formatMoney(estimate.total)}
+                </span>
+              </button>
+            ))}
+
+            {!filteredEstimates.length ? (
+              <EmptyState label="No estimates match this view." />
+            ) : null}
+          </div>
+          <PaginationControls
+            page={estimatePage}
+            pageCount={estimatePageCount}
+            total={filteredEstimates.length}
+            onPageChange={setEstimatePage}
+          />
+        </section>
+
+        <aside className="space-y-5">
+          <EstimatePdfPreview
+            estimate={selectedEstimate}
+            lineItems={selectedLineItems}
+            snapshot={snapshot}
+            company={selectedEstimate ? companyMap.get(selectedEstimate.company_id) : undefined}
+          />
+          <EstimateWorkflowPanel
+            snapshot={snapshot}
+            estimate={selectedEstimate}
+            linkedJob={selectedEstimateJob}
+            linkedScope={selectedEstimateScope}
+            documents={selectedEstimateDocuments}
+            signatures={selectedEstimateSignatures}
+            onCreateJob={handleCreateJobFromEstimate}
+            onSaveDocument={handleSaveEstimateDocument}
+            onGenerateScope={handleGenerateScopeFromEstimate}
+            onRequestSignature={handleRequestEstimateSignature}
+          />
+        </aside>
+      </div>
     </div>
   );
 }
@@ -5482,6 +5571,7 @@ function cloneEstimateTemplateLineItems(template: EstimateTemplate) {
     ...item,
     description: item.description ?? "",
     unit: item.unit ?? "each",
+    unit_price: item.unit_price ?? item.unit_cost,
     markup_rate: item.markup_rate ?? 0,
     taxable: item.taxable ?? true,
     sort_order: index,
@@ -5548,8 +5638,16 @@ function buildScopeBodyFromEstimate(
     ? snapshot.leads.find((item) => item.id === estimate.lead_id)
     : null;
   const propertyAddress =
-    customer?.property_address ?? lead?.property_address ?? "Property address to confirm";
+    estimate.location ??
+    customer?.property_address ??
+    lead?.property_address ??
+    "Property address to confirm";
   const company = snapshot.companies.find((item) => item.id === estimate.company_id);
+  const businessName = getEstimateBusinessName(
+    snapshot,
+    estimate.company_id,
+    estimate.business,
+  );
   const templateBody =
     template?.template_body ??
     "1. Confirm customer expectations, access, and approved proposal details.\n2. Protect property and prepare work areas before production.\n3. Complete approved work according to company standards and documented scope.\n4. Clean work areas, capture final photos, and complete customer walkthrough.";
@@ -5583,7 +5681,7 @@ function buildScopeBodyFromEstimate(
     templateBody,
     "",
     "Project-specific details:",
-    `- Company: ${company?.name ?? "WeatherTech OS"}`,
+    `- Company: ${businessName}`,
     `- Estimate: ${estimate.title}`,
     `- Customer: ${getEstimateTargetName(snapshot, estimate)}`,
     `- Property: ${propertyAddress}`,
@@ -5593,6 +5691,8 @@ function buildScopeBodyFromEstimate(
     "",
     "Included estimate line items:",
     itemList,
+    estimate.scope_of_work ? "\nSaved estimate scope of work:" : "",
+    estimate.scope_of_work ?? "",
     "",
     "Customer expectations:",
     "- Scope is based on the approved estimate, selected materials, approved colors where applicable, and documented site conditions.",
@@ -5619,6 +5719,14 @@ function EstimateEditor({
     snapshot.companies.find((company) => company.id === initialCompanyId) ?? null;
   const initialServiceType =
     estimate?.service_type ?? (isPaintingCompany(initialCompany) ? "painting" : "roofing");
+  const initialBusiness = getEstimateBusinessName(
+    snapshot,
+    initialCompanyId,
+    estimate?.business,
+  );
+  const initialLocation =
+    estimate?.location ??
+    getAssociationLocation(snapshot, estimate?.customer_id ?? null, estimate?.lead_id ?? null);
   const [draftLineItems, setDraftLineItems] = useState<EstimateLineItemInput[]>(
     lineItems.length
       ? lineItems.map((item) => ({
@@ -5629,6 +5737,7 @@ function EstimateEditor({
           quantity: item.quantity,
           unit: item.unit,
           unit_cost: item.unit_cost,
+          unit_price: item.unit_price ?? item.unit_cost,
           markup_rate: item.markup_rate,
           taxable: item.taxable,
           sort_order: item.sort_order,
@@ -5639,6 +5748,8 @@ function EstimateEditor({
   const [selectedServiceType, setSelectedServiceType] =
     useState<ServiceType>(initialServiceType);
   const [draftTitle, setDraftTitle] = useState(estimate?.title ?? "");
+  const [draftBusiness, setDraftBusiness] = useState(initialBusiness);
+  const [draftLocation, setDraftLocation] = useState(initialLocation);
   const [draftStatus, setDraftStatus] = useState<EstimateStatus>(
     estimate?.status ?? "draft",
   );
@@ -5653,6 +5764,9 @@ function EstimateEditor({
     estimate?.expiration_date ?? addDaysIsoDate(30),
   );
   const [draftNotes, setDraftNotes] = useState(estimate?.notes ?? "");
+  const [draftScopeOfWork, setDraftScopeOfWork] = useState(
+    estimate?.scope_of_work ?? "",
+  );
   const [selectedColorStatus, setSelectedColorStatus] =
     useState<ColorSelectionStatus>(
       estimate?.color_selection_status ?? "not_started",
@@ -5725,6 +5839,7 @@ function EstimateEditor({
         quantity: 1,
         unit: category === "labor" ? "hour" : "each",
         unit_cost: 0,
+        unit_price: 0,
         markup_rate: 0,
         taxable: category !== "labor",
         sort_order: items.length,
@@ -5748,6 +5863,15 @@ function EstimateEditor({
       estimate && current.trim() ? current : getTemplateDefaultTitle(template),
     );
     setDraftNotes(template.notes);
+    setDraftScopeOfWork(
+      [
+        scopeCategoryLabels[template.scopeCategory],
+        template.description,
+        template.notes,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
     setDraftLineItems(cloneEstimateTemplateLineItems(template));
     setEstimateControls({
       tax_rate: template.taxRate,
@@ -5774,6 +5898,7 @@ function EstimateEditor({
   const handleCompanyChange = (companyId: string) => {
     setSelectedCompanyId(companyId);
     const company = snapshot.companies.find((item) => item.id === companyId);
+    setDraftBusiness(company?.name ?? "");
     const nextTemplates = getEstimateTemplatesForTrade(
       company?.workflow_profile ?? company?.trade,
     );
@@ -5796,11 +5921,38 @@ function EstimateEditor({
     setDraftLineItems((items) => items.filter((_item, itemIndex) => itemIndex !== index));
   };
 
+  const handleCustomerChange = (customerId: string) => {
+    setDraftCustomerId(customerId);
+
+    if (customerId !== "none") {
+      const location = getAssociationLocation(snapshot, customerId, null);
+      setDraftLocation(location || draftLocation);
+    }
+  };
+
+  const handleLeadChange = (leadId: string) => {
+    setDraftLeadId(leadId);
+
+    if (leadId !== "none") {
+      const location = getAssociationLocation(snapshot, null, leadId);
+      setDraftLocation(location || draftLocation);
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const cleanLineItems = draftLineItems
       .filter((item) => item.name.trim())
-      .map((item, index) => ({ ...item, sort_order: index }));
+      .map((item, index) => {
+        const unitPrice = item.unit_price ?? item.unit_cost;
+
+        return {
+          ...item,
+          unit_cost: unitPrice,
+          unit_price: unitPrice,
+          sort_order: index,
+        };
+      });
 
     try {
       setIsSaving(true);
@@ -5809,6 +5961,10 @@ function EstimateEditor({
           company_id: selectedCompanyId || snapshot.companies[0]?.id || "",
           customer_id: draftCustomerId === "none" ? null : draftCustomerId,
           lead_id: draftLeadId === "none" ? null : draftLeadId,
+          business:
+            draftBusiness.trim() ||
+            getEstimateBusinessName(snapshot, selectedCompanyId, null),
+          location: draftLocation.trim() || null,
           title: draftTitle.trim() || "New estimate",
           status: draftStatus,
           service_type: selectedServiceType,
@@ -5819,6 +5975,7 @@ function EstimateEditor({
           discount_value: estimateControls.discount_value,
           profit_margin_rate: estimateControls.profit_margin_rate,
           notes: draftNotes.trim() || null,
+          scope_of_work: draftScopeOfWork.trim() || null,
           painting_area_type: showPaintingWorkflow
             ? (paintingFields.painting_area_type as PaintingAreaType)
             : null,
@@ -5901,11 +6058,34 @@ function EstimateEditor({
         placeholder="Estimate title"
       />
 
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Business
+          <input
+            name="business"
+            value={draftBusiness}
+            onChange={(event) => setDraftBusiness(event.target.value)}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Business"
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Location
+          <input
+            name="location"
+            value={draftLocation}
+            onChange={(event) => setDraftLocation(event.target.value)}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Project location"
+          />
+        </label>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-3">
         <select
           name="customer_id"
           value={draftCustomerId}
-          onChange={(event) => setDraftCustomerId(event.target.value)}
+          onChange={(event) => handleCustomerChange(event.target.value)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No customer</option>
@@ -5918,7 +6098,7 @@ function EstimateEditor({
         <select
           name="lead_id"
           value={draftLeadId}
-          onChange={(event) => setDraftLeadId(event.target.value)}
+          onChange={(event) => handleLeadChange(event.target.value)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No lead</option>
@@ -6335,13 +6515,16 @@ function EstimateEditor({
                   placeholder="Unit"
                 />
                 <input
-                  value={item.unit_cost}
+                  value={item.unit_price ?? item.unit_cost}
                   onChange={(event) =>
-                    updateLineItem(index, { unit_cost: Number(event.target.value) || 0 })
+                    updateLineItem(index, {
+                      unit_cost: Number(event.target.value) || 0,
+                      unit_price: Number(event.target.value) || 0,
+                    })
                   }
                   className="rounded-md border border-slate-300 px-2 py-2 text-sm"
                   inputMode="decimal"
-                  placeholder="Cost"
+                  placeholder="Price"
                 />
                 <label className="flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-600">
                   <input
@@ -6388,6 +6571,14 @@ function EstimateEditor({
           <TotalRow label="Total" value={liveTotals.total} strong />
         </div>
       </div>
+
+      <textarea
+        name="scope_of_work"
+        value={draftScopeOfWork}
+        onChange={(event) => setDraftScopeOfWork(event.target.value)}
+        className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
+        placeholder="Scope of work"
+      />
 
       <textarea
         name="notes"
@@ -6480,7 +6671,15 @@ function EstimatePdfPreview({
     ? snapshot.leads.find((item) => item.id === estimate.lead_id)
     : null;
   const propertyAddress =
-    customer?.property_address ?? lead?.property_address ?? "Property address to confirm";
+    estimate.location ??
+    customer?.property_address ??
+    lead?.property_address ??
+    "Property address to confirm";
+  const businessName = getEstimateBusinessName(
+    snapshot,
+    estimate.company_id,
+    estimate.business,
+  );
   const brandColor = company?.brand_color ?? "#0284c7";
 
   return (
@@ -6511,7 +6710,7 @@ function EstimatePdfPreview({
               {estimate.title}
             </h4>
             <p className="mt-1 text-slate-500">
-              Prepared by {company?.name ?? "WeatherTech OS"}
+              Prepared by {businessName}
             </p>
           </div>
           <div className="text-right text-slate-600">
@@ -6618,6 +6817,12 @@ function EstimatePdfPreview({
         {estimate.notes ? (
           <div className="mx-5 mt-5 rounded-lg bg-slate-50 p-3 text-slate-600">
             {estimate.notes}
+          </div>
+        ) : null}
+        {estimate.scope_of_work ? (
+          <div className="mx-5 mt-3 rounded-lg bg-slate-50 p-3 text-slate-600">
+            <p className="font-semibold text-slate-950">Scope of work</p>
+            <p className="mt-1 whitespace-pre-line">{estimate.scope_of_work}</p>
           </div>
         ) : null}
         <div className="m-5 grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">

@@ -48,7 +48,12 @@ export function calculateDashboardMetrics(snapshot: CrmSnapshot): DashboardMetri
       (estimate) => estimate.status === "draft" || estimate.status === "sent",
     ).length,
     estimateValue: snapshot.estimates
-      .filter((estimate) => estimate.status !== "rejected" && estimate.status !== "expired")
+      .filter(
+        (estimate) =>
+          estimate.status !== "declined" &&
+          estimate.status !== "rejected" &&
+          estimate.status !== "expired",
+      )
       .reduce((total, estimate) => total + estimate.total, 0),
     scopesReady: snapshot.scopes.filter((scope) => scope.status === "ready").length,
     activeJobs: snapshot.jobs.filter((job) => activeJobStatuses.has(job.status)).length,

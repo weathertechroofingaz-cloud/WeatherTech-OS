@@ -28,7 +28,13 @@ export type PipelineStage =
 export type LeadPriority = "low" | "normal" | "high" | "urgent";
 export type CustomerType = "homeowner" | "commercial" | "hoa" | "property_manager";
 export type CustomerStatus = "active" | "inactive" | "prospect";
-export type EstimateStatus = "draft" | "sent" | "approved" | "rejected" | "expired";
+export type EstimateStatus =
+  | "draft"
+  | "sent"
+  | "approved"
+  | "declined"
+  | "rejected"
+  | "expired";
 export type EstimateLineItemCategory = "labor" | "material" | "other";
 export type DiscountType = "fixed" | "percent";
 export type PaintingAreaType =
@@ -227,6 +233,8 @@ export type EstimateRecord = {
   company_id: string;
   customer_id: string | null;
   lead_id: string | null;
+  business: string | null;
+  location: string | null;
   title: string;
   status: EstimateStatus;
   service_type: ServiceType;
@@ -244,6 +252,7 @@ export type EstimateRecord = {
   profit_margin_total: number;
   total: number;
   notes: string | null;
+  scope_of_work: string | null;
   painting_area_type: PaintingAreaType | null;
   paint_brand: string;
   paint_product_line: string | null;
@@ -268,6 +277,7 @@ export type EstimateLineItemRecord = {
   quantity: number;
   unit: string;
   unit_cost: number;
+  unit_price: number;
   markup_rate: number;
   taxable: boolean;
   sort_order: number;
@@ -788,6 +798,7 @@ export type EstimateLineItemInput = {
   quantity: number;
   unit?: string;
   unit_cost: number;
+  unit_price?: number;
   markup_rate?: number;
   taxable?: boolean;
   sort_order?: number;
@@ -797,6 +808,8 @@ export type EstimateInput = {
   company_id: string;
   customer_id?: string | null;
   lead_id?: string | null;
+  business?: string | null;
+  location?: string | null;
   title: string;
   status?: EstimateStatus;
   service_type: ServiceType;
@@ -807,6 +820,7 @@ export type EstimateInput = {
   discount_value?: number;
   profit_margin_rate?: number;
   notes?: string | null;
+  scope_of_work?: string | null;
   painting_area_type?: PaintingAreaType | null;
   paint_brand?: string;
   paint_product_line?: string | null;
