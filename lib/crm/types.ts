@@ -68,10 +68,13 @@ export type ScopeCategory =
   | "custom";
 export type ScopeStatus = "draft" | "ready" | "sent" | "approved";
 export type JobStatus =
+  | "draft"
   | "scheduled"
   | "in_progress"
   | "blocked"
   | "completed"
+  | "cancelled"
+  | "canceled"
   | "closed";
 export type ScheduleEventType =
   | "inspection"
@@ -322,14 +325,21 @@ export type JobRecord = {
   lead_id: string | null;
   estimate_id: string | null;
   scope_id: string | null;
+  business: string | null;
+  location: string | null;
   title: string;
   service_type: ServiceType;
   status: JobStatus;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
   start_date: string | null;
   end_date: string | null;
   crew_name: string | null;
   project_manager: string | null;
+  address: string | null;
   property_address: string;
+  scope_of_work: string | null;
+  total: number;
   latitude: number | null;
   longitude: number | null;
   google_place_id: string | null;
@@ -863,14 +873,21 @@ export type JobInput = {
   lead_id?: string | null;
   estimate_id?: string | null;
   scope_id?: string | null;
+  business?: string | null;
+  location?: string | null;
   title: string;
   service_type: ServiceType;
   status?: JobStatus;
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
   start_date?: string | null;
   end_date?: string | null;
   crew_name?: string | null;
   project_manager?: string | null;
+  address?: string | null;
   property_address: string;
+  scope_of_work?: string | null;
+  total?: number;
   latitude?: number | null;
   longitude?: number | null;
   google_place_id?: string | null;

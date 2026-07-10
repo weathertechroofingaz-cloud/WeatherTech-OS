@@ -1,9 +1,35 @@
-import type { CrmSnapshot } from "./types";
+import type { CrmSnapshot, ScopeCategory, Trade } from "./types";
 
 export type CompanyScopeId = "all" | string;
 
 function byCompany<T extends { company_id: string }>(items: T[], companyId: string) {
   return items.filter((item) => item.company_id === companyId);
+}
+
+const roofingScopeCategories = new Set<ScopeCategory>([
+  "roofing",
+  "roof_repairs",
+  "tile_underlayment",
+  "custom",
+]);
+
+const paintingScopeCategories = new Set<ScopeCategory>([
+  "exterior_painting",
+  "interior_painting",
+  "cabinet_refinishing",
+  "custom",
+]);
+
+function categoryMatchesTrade(category: ScopeCategory, trade: Trade) {
+  if (trade === "both") {
+    return true;
+  }
+
+  if (trade === "painting") {
+    return paintingScopeCategories.has(category);
+  }
+
+  return roofingScopeCategories.has(category);
 }
 
 export function scopeCrmSnapshotByCompany(
@@ -15,6 +41,7 @@ export function scopeCrmSnapshotByCompany(
   }
 
   const companies = snapshot.companies.filter((company) => company.id === companyId);
+  const companyTrade = companies[0]?.workflow_profile ?? companies[0]?.trade ?? "both";
   const leads = byCompany(snapshot.leads, companyId);
   const customers = byCompany(snapshot.customers, companyId);
   const estimates = byCompany(snapshot.estimates, companyId);
@@ -43,7 +70,9 @@ export function scopeCrmSnapshotByCompany(
       estimateIds.has(item.estimate_id),
     ),
     scopeTemplates: snapshot.scopeTemplates.filter(
-      (template) => template.company_id === null || template.company_id === companyId,
+      (template) =>
+        (template.company_id === null || template.company_id === companyId) &&
+        categoryMatchesTrade(template.category, companyTrade),
     ),
     scopes,
     jobs,
