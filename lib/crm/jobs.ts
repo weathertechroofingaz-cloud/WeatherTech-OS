@@ -1,4 +1,38 @@
-import type { CrmSnapshot, EstimateRecord, JobInput, JobRecord } from "./types";
+import type {
+  CrmSnapshot,
+  EstimateRecord,
+  JobInput,
+  JobRecord,
+  ScopeCategory,
+  ServiceType,
+} from "./types";
+
+const roofingJobScopeCategories = new Set<ScopeCategory>([
+  "roofing",
+  "roof_repairs",
+  "tile_underlayment",
+]);
+
+const paintingJobScopeCategories = new Set<ScopeCategory>([
+  "exterior_painting",
+  "interior_painting",
+  "cabinet_refinishing",
+]);
+
+function scopeCategoryMatchesService(
+  category: ScopeCategory,
+  serviceType: ServiceType,
+) {
+  if (serviceType === "roofing") {
+    return roofingJobScopeCategories.has(category);
+  }
+
+  if (serviceType === "painting") {
+    return paintingJobScopeCategories.has(category);
+  }
+
+  return true;
+}
 
 export function getJobDisplayBusiness(snapshot: CrmSnapshot, job: JobRecord) {
   return (
@@ -48,7 +82,14 @@ export function buildJobInputFromEstimate(
   const lead = estimate.lead_id
     ? snapshot.leads.find((item) => item.id === estimate.lead_id)
     : null;
-  const scope = scopeId ? snapshot.scopes.find((item) => item.id === scopeId) : null;
+  const scope = scopeId
+    ? snapshot.scopes.find(
+        (item) =>
+          item.id === scopeId &&
+          item.company_id === estimate.company_id &&
+          scopeCategoryMatchesService(item.category, estimate.service_type),
+      )
+    : null;
   const company = snapshot.companies.find((item) => item.id === estimate.company_id);
   const address =
     estimate.location?.trim() ||
@@ -63,7 +104,7 @@ export function buildJobInputFromEstimate(
     customer_id: estimate.customer_id,
     lead_id: estimate.lead_id,
     estimate_id: estimate.id,
-    scope_id: scopeId,
+    scope_id: scope?.id ?? null,
     business: estimate.business?.trim() || company?.name || null,
     location: estimate.location?.trim() || address,
     title: estimate.title,

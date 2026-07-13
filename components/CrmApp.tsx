@@ -825,6 +825,18 @@ const paintingScopeCategorySet = new Set<ScopeCategory>([
   "custom",
 ]);
 
+const roofingJobScopeCategorySet = new Set<ScopeCategory>([
+  "roofing",
+  "roof_repairs",
+  "tile_underlayment",
+]);
+
+const paintingJobScopeCategorySet = new Set<ScopeCategory>([
+  "exterior_painting",
+  "interior_painting",
+  "cabinet_refinishing",
+]);
+
 function getDefaultServiceTypeForCompany(company: CompanyRecord | null | undefined) {
   if (isPaintingCompany(company)) {
     return "painting" as ServiceType;
@@ -844,6 +856,13 @@ function isServiceAllowedForCompany(
   const workflow = company?.workflow_profile ?? company?.trade ?? "both";
 
   return workflow === "both" || service === workflow;
+}
+
+function serviceTypeMatchesJobType(
+  recordServiceType: ServiceType,
+  jobServiceType: ServiceType,
+) {
+  return jobServiceType === "both" || recordServiceType === jobServiceType;
 }
 
 function getDefaultJobLocationForCompany(company: CompanyRecord | null | undefined) {
@@ -873,6 +892,21 @@ function scopeCategoryMatchesCompany(
   return isPaintingCompany(company)
     ? paintingScopeCategorySet.has(category)
     : roofingScopeCategorySet.has(category);
+}
+
+function scopeCategoryMatchesJobType(
+  category: ScopeCategory,
+  jobServiceType: ServiceType,
+) {
+  if (jobServiceType === "painting") {
+    return paintingJobScopeCategorySet.has(category);
+  }
+
+  if (jobServiceType === "roofing") {
+    return roofingJobScopeCategorySet.has(category);
+  }
+
+  return true;
 }
 
 function getScheduleTargetName(snapshot: CrmSnapshot, event: ScheduleEventRecord) {
@@ -1459,6 +1493,15 @@ export function CrmApp() {
     setView("dashboard");
   };
 
+  const handleDemoSnapshotChange = useCallback(
+    (updater: (currentSnapshot: CrmSnapshot) => CrmSnapshot) => {
+      setSnapshot((currentSnapshot) =>
+        currentSnapshot ? updater(currentSnapshot) : currentSnapshot,
+      );
+    },
+    [],
+  );
+
   if (!authReady) {
     return <LoadingScreen label="Preparing WeatherTech OS" />;
   }
@@ -1497,9 +1540,12 @@ export function CrmApp() {
     return <LoadingScreen label="Loading CRM workspace" />;
   }
 
+  const isDemoWorkspace = demoFallbackEnabled && user.id === demoUser.id;
+
   return (
     <CrmWorkspace
       client={client ?? ({} as CrmClient)}
+      isDemoMode={isDemoWorkspace}
       notice={notice}
       error={error}
       snapshot={snapshot}
@@ -1509,12 +1555,13 @@ export function CrmApp() {
       onViewChange={setView}
       onThemeChange={handleThemeChange}
       onReload={async () => {
-        if (client) {
+        if (client && !isDemoWorkspace) {
           await loadSnapshot(client);
         } else {
           setSnapshot(createDemoCrmSnapshot());
         }
       }}
+      onDemoSnapshotChange={handleDemoSnapshotChange}
       onSignOut={handleSignOut}
       onNotice={setNotice}
       onError={setError}
@@ -1787,6 +1834,7 @@ function AuthPoint({ label }: { label: string }) {
 
 type CrmWorkspaceProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   notice: string;
   error: string;
   snapshot: CrmSnapshot;
@@ -1796,6 +1844,7 @@ type CrmWorkspaceProps = {
   onViewChange: (view: WorkspaceView) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onSignOut: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -1803,6 +1852,7 @@ type CrmWorkspaceProps = {
 
 function CrmWorkspace({
   client,
+  isDemoMode,
   notice,
   error,
   snapshot,
@@ -1812,6 +1862,7 @@ function CrmWorkspace({
   onViewChange,
   onThemeChange,
   onReload,
+  onDemoSnapshotChange,
   onSignOut,
   onNotice,
   onError,
@@ -2198,9 +2249,11 @@ function CrmWorkspace({
           {view === "jobs" ? (
             <JobsView
               client={client}
+              isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -7957,18 +8010,22 @@ function ScopeGeneratorView({
 
 type JobsViewProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
 
 function JobsView({
   client,
+  isDemoMode,
   snapshot,
   companyMap,
   onReload,
+  onDemoSnapshotChange,
   onNotice,
   onError,
 }: JobsViewProps) {
@@ -8008,13 +8065,26 @@ function JobsView({
   );
   const jobFormLeads = snapshot.leads.filter((lead) => lead.company_id === jobFormCompanyId);
   const jobFormEstimates = snapshot.estimates.filter(
-    (estimate) => estimate.company_id === jobFormCompanyId,
+    (estimate) =>
+      estimate.company_id === jobFormCompanyId &&
+      serviceTypeMatchesJobType(estimate.service_type, jobFormServiceType),
   );
   const jobFormScopes = snapshot.scopes.filter(
     (scope) =>
       scope.company_id === jobFormCompanyId &&
-      scopeCategoryMatchesCompany(scope.category, jobFormCompany),
+      scopeCategoryMatchesJobType(scope.category, jobFormServiceType),
   );
+  const isEditingCurrentJobCompany =
+    selectedJob !== null && selectedJob.company_id === jobFormCompanyId;
+  const isEditingCurrentJobType =
+    isEditingCurrentJobCompany && selectedJob.service_type === jobFormServiceType;
+  const jobFormServiceLabel = serviceLabel(jobFormServiceType);
+  const jobFormTradeDescription =
+    jobFormServiceType === "painting"
+      ? "Painting estimates, scopes, and checklist defaults only."
+      : jobFormServiceType === "roofing"
+        ? "Roofing estimates, scopes, and checklist defaults only."
+        : "Shared company records are available for this job.";
   const filteredJobs = snapshot.jobs.filter((job) => {
     const query = search.toLowerCase();
     const matchesSearch =
@@ -8182,9 +8252,14 @@ function JobsView({
   const focusJobBuilder = () => {
     if (typeof document !== "undefined") {
       window.requestAnimationFrame(() => {
-        document
-          .getElementById("job-builder")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        const builder = document.getElementById("job-builder");
+
+        builder?.scrollIntoView({ behavior: "smooth", block: "start" });
+        builder
+          ?.querySelector<HTMLInputElement | HTMLSelectElement>(
+            '[name="title"], [name="company_id"]',
+          )
+          ?.focus({ preventScroll: true });
       });
     }
   };
@@ -8195,6 +8270,8 @@ function JobsView({
     setSelectedJobId("new");
     setJobFormCompanyId(firstCompany?.id ?? "");
     setJobFormServiceType(getDefaultServiceTypeForCompany(firstCompany));
+    setSearch("");
+    setStatusFilter("all");
     setEditingTaskId(null);
     setProductionAction(null);
     setJobDraftVersion((version) => version + 1);
@@ -8210,8 +8287,55 @@ function JobsView({
     focusJobBuilder();
   };
 
+  const saveDemoJob = (input: JobInput) => {
+    const now = new Date().toISOString();
+    const savedJob: JobRecord = {
+      id: selectedJob?.id ?? `demo-job-${Date.now()}`,
+      company_id: input.company_id,
+      customer_id: input.customer_id ?? null,
+      lead_id: input.lead_id ?? null,
+      estimate_id: input.estimate_id ?? null,
+      scope_id: input.scope_id ?? null,
+      business: input.business ?? null,
+      location: input.location ?? null,
+      title: input.title,
+      service_type: input.service_type,
+      status: input.status ?? "draft",
+      scheduled_start: input.scheduled_start ?? null,
+      scheduled_end: input.scheduled_end ?? null,
+      start_date: input.start_date ?? null,
+      end_date: input.end_date ?? null,
+      crew_name: input.crew_name ?? null,
+      project_manager: input.project_manager ?? null,
+      address: input.address ?? null,
+      property_address: input.property_address,
+      scope_of_work: input.scope_of_work ?? null,
+      total: input.total ?? 0,
+      latitude: input.latitude ?? selectedJob?.latitude ?? null,
+      longitude: input.longitude ?? selectedJob?.longitude ?? null,
+      google_place_id: input.google_place_id ?? selectedJob?.google_place_id ?? null,
+      address_verified_at:
+        input.address_verified_at ?? selectedJob?.address_verified_at ?? null,
+      notes: input.notes ?? null,
+      created_at: selectedJob?.created_at ?? now,
+      updated_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobs: selectedJob
+        ? currentSnapshot.jobs.map((job) =>
+            job.id === selectedJob.id ? savedJob : job,
+          )
+        : [savedJob, ...currentSnapshot.jobs],
+    }));
+
+    return savedJob;
+  };
+
   const handleSaveJob = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    onError("");
     const formData = new FormData(event.currentTarget);
     const companyId = getFormString(
       formData,
@@ -8224,19 +8348,35 @@ function JobsView({
       null;
     const estimateId = getOptionalRelation(formData, "estimate_id");
     const scopeId = getOptionalRelation(formData, "scope_id");
-    const customerId = getOptionalRelation(formData, "customer_id");
-    const leadId = getOptionalRelation(formData, "lead_id");
+    const requestedCustomerId = getOptionalRelation(formData, "customer_id");
+    const requestedLeadId = getOptionalRelation(formData, "lead_id");
     const serviceType = getFormString(
       formData,
       "service_type",
       getDefaultServiceTypeForCompany(company),
     ) as ServiceType;
-    const selectedEstimate = estimateId
+    const estimateCandidate = estimateId
       ? snapshot.estimates.find((estimate) => estimate.id === estimateId)
       : null;
-    const selectedScope = scopeId
+    const scopeCandidate = scopeId
       ? snapshot.scopes.find((scope) => scope.id === scopeId)
       : null;
+    const selectedEstimate =
+      estimateCandidate &&
+      estimateCandidate.company_id === companyId &&
+      serviceTypeMatchesJobType(estimateCandidate.service_type, serviceType)
+        ? estimateCandidate
+        : null;
+    const selectedScope =
+      scopeCandidate &&
+      scopeCandidate.company_id === companyId &&
+      scopeCategoryMatchesJobType(scopeCandidate.category, serviceType)
+        ? scopeCandidate
+        : null;
+    const customerId =
+      requestedCustomerId ?? selectedEstimate?.customer_id ?? selectedScope?.customer_id ?? null;
+    const leadId =
+      requestedLeadId ?? selectedEstimate?.lead_id ?? selectedScope?.lead_id ?? null;
     const selectedCustomer = customerId
       ? snapshot.customers.find((customer) => customer.id === customerId)
       : null;
@@ -8257,12 +8397,12 @@ function JobsView({
     const business =
       getFormString(formData, "business") ||
       selectedEstimate?.business ||
-      jobFormCompany?.name ||
+      company?.name ||
       "";
     const location =
       getFormString(formData, "location") ||
       selectedEstimate?.location ||
-      getDefaultJobLocationForCompany(jobFormCompany);
+      getDefaultJobLocationForCompany(company);
 
     if (!business || !location) {
       onError("Job business and location are required.");
@@ -8271,6 +8411,16 @@ function JobsView({
 
     if (!isServiceAllowedForCompany(company, serviceType)) {
       onError(`${company?.name ?? "This company"} uses ${getDefaultServiceTypeForCompany(company)} jobs.`);
+      return;
+    }
+
+    if (estimateId && !selectedEstimate) {
+      onError(`Choose a ${serviceLabel(serviceType).toLowerCase()} estimate from ${company?.name ?? "this company"}.`);
+      return;
+    }
+
+    if (scopeId && !selectedScope) {
+      onError(`Choose a ${serviceLabel(serviceType).toLowerCase()} scope from ${company?.name ?? "this company"}.`);
       return;
     }
 
@@ -8284,13 +8434,9 @@ function JobsView({
           (lead) => lead.id === leadId && lead.company_id === companyId,
         )) ||
       (estimateId &&
-        !snapshot.estimates.some(
-          (estimate) => estimate.id === estimateId && estimate.company_id === companyId,
-        )) ||
+        !selectedEstimate) ||
       (scopeId &&
-        !snapshot.scopes.some(
-          (scope) => scope.id === scopeId && scope.company_id === companyId,
-        ))
+        !selectedScope)
     ) {
       onError("Choose customer, lead, estimate, and scope records from the same company.");
       return;
@@ -8326,11 +8472,15 @@ function JobsView({
 
     try {
       setIsSaving(true);
-      const savedJob = selectedJob
-        ? await updateJob(client, selectedJob.id, input)
-        : await createJob(client, input);
+      const savedJob = isDemoMode
+        ? saveDemoJob(input)
+        : selectedJob
+          ? await updateJob(client, selectedJob.id, input)
+          : await createJob(client, input);
       setSelectedJobId(savedJob.id);
-      await onReload();
+      if (!isDemoMode) {
+        await onReload();
+      }
       onNotice(selectedJob ? "Job updated." : "Draft job created.");
     } catch (currentError) {
       onError(currentError instanceof Error ? currentError.message : "Unable to save job.");
@@ -8743,6 +8893,8 @@ function JobsView({
               </select>
               <button
                 type="button"
+                aria-controls="job-builder"
+                aria-expanded={selectedJobId === "new"}
                 onClick={handleStartNewJob}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700"
               >
@@ -9310,250 +9462,332 @@ function JobsView({
             onSubmit={handleSaveJob}
             className="mt-4 grid gap-3"
           >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <select
-                name="company_id"
-                value={jobFormCompanyId}
-                onChange={(event) => {
-                  const nextCompanyId = event.target.value;
-                  const nextCompany =
-                    companyMap.get(nextCompanyId) ??
-                    snapshot.companies.find(
-                      (company) => company.id === nextCompanyId,
-                    ) ??
-                    null;
-
-                  setJobFormCompanyId(nextCompanyId);
-                  setJobFormServiceType(getDefaultServiceTypeForCompany(nextCompany));
-                }}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                {snapshot.companies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="status"
-                defaultValue={selectedJob?.status ?? "draft"}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                {jobStatuses.map((status) => (
-                  <option key={status.value} value={status.value}>
-                    {status.label}
-                  </option>
-                ))}
-              </select>
+            <div className="rounded-md border border-purple-100 bg-purple-50/70 p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">
+                    Job setup
+                  </p>
+                  <p className="mt-1 text-sm font-bold text-slate-950">
+                    {jobFormCompany?.name ?? "Select company"} - {jobFormServiceLabel}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {jobFormTradeDescription}
+                  </p>
+                </div>
+                <Badge
+                  label={jobFormServiceLabel}
+                  tone={jobFormServiceType === "painting" ? "amber" : "blue"}
+                />
+              </div>
             </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Company
+                <select
+                  name="company_id"
+                  value={jobFormCompanyId}
+                  onChange={(event) => {
+                    const nextCompanyId = event.target.value;
+                    const nextCompany =
+                      companyMap.get(nextCompanyId) ??
+                      snapshot.companies.find(
+                        (company) => company.id === nextCompanyId,
+                      ) ??
+                      null;
+
+                    setJobFormCompanyId(nextCompanyId);
+                    setJobFormServiceType(getDefaultServiceTypeForCompany(nextCompany));
+                  }}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {snapshot.companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Job type
+                <select
+                  name="service_type"
+                  value={jobFormServiceType}
+                  onChange={(event) =>
+                    setJobFormServiceType(event.target.value as ServiceType)
+                  }
+                  key={`service-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {jobFormServiceOptions.map((service) => (
+                    <option key={service.value} value={service.value}>
+                      {service.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
             <input
               required
               name="title"
-              defaultValue={selectedJob?.title ?? ""}
+              defaultValue={isEditingCurrentJobType ? selectedJob?.title ?? "" : ""}
+              key={`title-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="Job title"
             />
+            <input
+              name="address"
+              defaultValue={
+                isEditingCurrentJobType && selectedJob
+                  ? getJobDisplayAddress(selectedJob)
+                  : ""
+              }
+              key={`address-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Job address"
+            />
+
             <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                name="business"
-                defaultValue={
-                  selectedJob && selectedJob.company_id === jobFormCompanyId
-                    ? getJobDisplayBusiness(snapshot, selectedJob)
-                    : jobFormCompany?.name ?? ""
-                }
-                key={`business-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                required
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Business"
-              />
-              <input
-                name="location"
-                defaultValue={
-                  selectedJob && selectedJob.company_id === jobFormCompanyId
-                    ? getJobDisplayLocation(selectedJob)
-                    : getDefaultJobLocationForCompany(jobFormCompany)
-                }
-                key={`location-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                required
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Location"
-              />
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Estimate
+                <select
+                  name="estimate_id"
+                  defaultValue={
+                    selectedJob?.estimate_id &&
+                    jobFormEstimates.some((estimate) => estimate.id === selectedJob.estimate_id)
+                      ? selectedJob.estimate_id
+                      : "none"
+                  }
+                  key={`estimate-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No estimate - enter manually</option>
+                  {jobFormEstimates.map((estimate) => (
+                    <option key={estimate.id} value={estimate.id}>
+                      {estimate.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Scope
+                <select
+                  name="scope_id"
+                  defaultValue={
+                    selectedJob?.scope_id &&
+                    jobFormScopes.some((scope) => scope.id === selectedJob.scope_id)
+                      ? selectedJob.scope_id
+                      : "none"
+                  }
+                  key={`scope-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No scope - keep blank</option>
+                  {jobFormScopes.map((scope) => (
+                    <option key={scope.id} value={scope.id}>
+                      {scope.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-              <input
-                name="address"
-                defaultValue={
-                  selectedJob && selectedJob.company_id === jobFormCompanyId
-                    ? getJobDisplayAddress(selectedJob)
-                    : ""
-                }
-                key={`address-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Address"
-              />
-            <div className="grid gap-3 sm:grid-cols-3">
-              <select
-                name="customer_id"
-                defaultValue={
-                  selectedJob?.customer_id &&
-                  jobFormCustomers.some((customer) => customer.id === selectedJob.customer_id)
-                    ? selectedJob.customer_id
-                    : "none"
-                }
-                key={`customer-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="none">No customer</option>
-                {jobFormCustomers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.display_name}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="lead_id"
-                defaultValue={
-                  selectedJob?.lead_id &&
-                  jobFormLeads.some((lead) => lead.id === selectedJob.lead_id)
-                    ? selectedJob.lead_id
-                    : "none"
-                }
-                key={`lead-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="none">No lead</option>
-                {jobFormLeads.map((lead) => (
-                  <option key={lead.id} value={lead.id}>
-                    {lead.contact_name}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="service_type"
-                value={jobFormServiceType}
-                onChange={(event) =>
-                  setJobFormServiceType(event.target.value as ServiceType)
-                }
-                key={`service-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                {jobFormServiceOptions.map((service) => (
-                  <option key={service.value} value={service.value}>
-                    {service.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <select
-                name="estimate_id"
-                defaultValue={
-                  selectedJob?.estimate_id &&
-                  jobFormEstimates.some((estimate) => estimate.id === selectedJob.estimate_id)
-                    ? selectedJob.estimate_id
-                    : "none"
-                }
-                key={`estimate-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="none">No estimate</option>
-                {jobFormEstimates.map((estimate) => (
-                  <option key={estimate.id} value={estimate.id}>
-                    {estimate.title}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="scope_id"
-                defaultValue={
-                  selectedJob?.scope_id &&
-                  jobFormScopes.some((scope) => scope.id === selectedJob.scope_id)
-                    ? selectedJob.scope_id
-                    : "none"
-                }
-                key={`scope-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="none">No scope</option>
-                {jobFormScopes.map((scope) => (
-                  <option key={scope.id} value={scope.id}>
-                    {scope.title}
-                  </option>
-                ))}
-              </select>
-            </div>
+
             {!jobFormEstimates.length || !jobFormScopes.length ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {!jobFormEstimates.length ? (
-                  <p>No estimates for {jobFormCompany?.name ?? "this business"} yet.</p>
+                  <p>
+                    No {jobFormServiceLabel.toLowerCase()} estimates for{" "}
+                    {jobFormCompany?.name ?? "this business"} yet.
+                  </p>
                 ) : null}
                 {!jobFormScopes.length ? (
-                  <p>No scopes for {jobFormCompany?.name ?? "this business"} yet.</p>
+                  <p>
+                    No {jobFormServiceLabel.toLowerCase()} scopes for{" "}
+                    {jobFormCompany?.name ?? "this business"} yet.
+                  </p>
                 ) : null}
               </div>
             ) : null}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-sm font-medium text-slate-700">
-                Scheduled start
-                <input
-                  name="scheduled_start"
-                  type="datetime-local"
-                  defaultValue={
-                    selectedJob && getJobScheduledStart(selectedJob)
-                      ? toDateTimeInputValue(getJobScheduledStart(selectedJob) ?? "")
-                      : ""
-                  }
-                  className="rounded-md border border-slate-300 px-3 py-2"
+
+            <details className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-slate-900">
+                More details
+                <ChevronRight className="h-4 w-4 text-slate-500" />
+              </summary>
+              <div className="mt-3 grid gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Business
+                    <input
+                      name="business"
+                      defaultValue={
+                        isEditingCurrentJobCompany && selectedJob
+                          ? getJobDisplayBusiness(snapshot, selectedJob)
+                          : jobFormCompany?.name ?? ""
+                      }
+                      key={`business-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
+                      required
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Business"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Location
+                    <input
+                      name="location"
+                      defaultValue={
+                        isEditingCurrentJobCompany && selectedJob
+                          ? getJobDisplayLocation(selectedJob)
+                          : getDefaultJobLocationForCompany(jobFormCompany)
+                      }
+                      key={`location-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
+                      required
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Location"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Customer
+                    <select
+                      name="customer_id"
+                      defaultValue={
+                        selectedJob?.customer_id &&
+                        jobFormCustomers.some((customer) => customer.id === selectedJob.customer_id)
+                          ? selectedJob.customer_id
+                          : "none"
+                      }
+                      key={`customer-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="none">No customer</option>
+                      {jobFormCustomers.map((customer) => (
+                        <option key={customer.id} value={customer.id}>
+                          {customer.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Lead
+                    <select
+                      name="lead_id"
+                      defaultValue={
+                        selectedJob?.lead_id &&
+                        jobFormLeads.some((lead) => lead.id === selectedJob.lead_id)
+                          ? selectedJob.lead_id
+                          : "none"
+                      }
+                      key={`lead-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="none">No lead</option>
+                      {jobFormLeads.map((lead) => (
+                        <option key={lead.id} value={lead.id}>
+                          {lead.contact_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Status
+                    <select
+                      name="status"
+                      defaultValue={selectedJob?.status ?? "draft"}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    >
+                      {jobStatuses.map((status) => (
+                        <option key={status.value} value={status.value}>
+                          {status.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Scheduled start
+                    <input
+                      name="scheduled_start"
+                      type="datetime-local"
+                      defaultValue={
+                        isEditingCurrentJobType &&
+                        selectedJob &&
+                        getJobScheduledStart(selectedJob)
+                          ? toDateTimeInputValue(getJobScheduledStart(selectedJob) ?? "")
+                          : ""
+                      }
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Scheduled end
+                    <input
+                      name="scheduled_end"
+                      type="datetime-local"
+                      defaultValue={
+                        isEditingCurrentJobType &&
+                        selectedJob &&
+                        getJobScheduledEnd(selectedJob)
+                          ? toDateTimeInputValue(getJobScheduledEnd(selectedJob) ?? "")
+                          : ""
+                      }
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <input
+                    name="total"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    defaultValue={isEditingCurrentJobType ? selectedJob?.total ?? "" : ""}
+                    key={`total-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Project total"
+                  />
+                  <input
+                    name="crew_name"
+                    defaultValue={isEditingCurrentJobType ? selectedJob?.crew_name ?? "" : ""}
+                    key={`crew-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Crew"
+                  />
+                  <input
+                    name="project_manager"
+                    defaultValue={
+                      isEditingCurrentJobType ? selectedJob?.project_manager ?? "" : ""
+                    }
+                    key={`manager-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Project manager"
+                  />
+                </div>
+
+                <textarea
+                  name="scope_of_work"
+                  defaultValue={isEditingCurrentJobType ? selectedJob?.scope_of_work ?? "" : ""}
+                  key={`scope-body-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                  className="min-h-28 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Scope of work"
                 />
-              </label>
-              <label className="grid gap-1 text-sm font-medium text-slate-700">
-                Scheduled end
-                <input
-                  name="scheduled_end"
-                  type="datetime-local"
-                  defaultValue={
-                    selectedJob && getJobScheduledEnd(selectedJob)
-                      ? toDateTimeInputValue(getJobScheduledEnd(selectedJob) ?? "")
-                      : ""
-                  }
-                  className="rounded-md border border-slate-300 px-3 py-2"
+                <textarea
+                  name="notes"
+                  defaultValue={isEditingCurrentJobType ? selectedJob?.notes ?? "" : ""}
+                  key={`notes-${selectedJob?.id ?? "new"}-${jobFormCompanyId}-${jobFormServiceType}`}
+                  className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Production notes"
                 />
-              </label>
-            </div>
-            <input
-              name="total"
-              type="number"
-              min="0"
-              step="0.01"
-              defaultValue={selectedJob?.total ?? ""}
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Project total"
-            />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                name="crew_name"
-                defaultValue={selectedJob?.crew_name ?? ""}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Crew"
-              />
-              <input
-                name="project_manager"
-                defaultValue={selectedJob?.project_manager ?? ""}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Project manager"
-              />
-            </div>
-            <textarea
-              name="scope_of_work"
-              defaultValue={selectedJob?.scope_of_work ?? ""}
-              className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Scope of work"
-            />
-            <textarea
-              name="notes"
-              defaultValue={selectedJob?.notes ?? ""}
-              className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Production notes"
-            />
+              </div>
+            </details>
+
             <button
               type="submit"
               disabled={isSaving}
