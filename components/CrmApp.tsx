@@ -224,14 +224,11 @@ import type {
   AssignmentStatus,
   JobInput,
   JobMaterialInput,
-  JobMaterialRecord,
   JobNoteInput,
-  JobNoteRecord,
   JobPhotoRecord,
   JobRecord,
   JobStatus,
   JobTaskInput,
-  JobTaskRecord,
   JobTaskStatus,
   LeadPriority,
   LeadRecord,
@@ -930,42 +927,6 @@ function getJobMaterials(snapshot: CrmSnapshot, jobId: string) {
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-function getRequiredJobTasks(snapshot: CrmSnapshot, jobId: string) {
-  return getJobTasks(snapshot, jobId).filter((task) => task.status !== "done");
-}
-
-function getImportantJobNotes(
-  job: JobRecord,
-  notes: ReturnType<typeof getJobNotes>,
-) {
-  return [
-    job.notes?.trim() ? { id: `${job.id}-job-note`, note: job.notes, created_at: job.updated_at } : null,
-    ...notes,
-  ]
-    .filter(Boolean)
-    .slice(0, 3) as { id: string; note: string; created_at: string }[];
-}
-
-function getCrewDisplayName(
-  snapshot: CrmSnapshot,
-  job: JobRecord | null,
-  assignments: JobAssignmentRecord[],
-) {
-  if (!job) {
-    return "Crew needed";
-  }
-
-  if (job.crew_name?.trim()) {
-    return job.crew_name;
-  }
-
-  const assignedNames = assignments
-    .map((assignment) => getEmployeeName(snapshot, assignment.employee_id))
-    .filter(Boolean);
-
-  return assignedNames.length ? assignedNames.join(", ") : "Crew needed";
-}
-
 function getJobAssignments(snapshot: CrmSnapshot, jobId: string) {
   return snapshot.jobAssignments
     .filter((assignment) => assignment.job_id === jobId)
@@ -1326,15 +1287,6 @@ function logCaughtError(label: string, currentError: unknown) {
   });
 }
 
-function createLocalRecordId(prefix: string) {
-  const randomId =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-  return `${prefix}-${randomId}`;
-}
-
 export function CrmApp() {
   const demoFallbackEnabled = isCrmDemoFallbackEnabled();
   const demoUser = useMemo(
@@ -1538,7 +1490,6 @@ export function CrmApp() {
   return (
     <CrmWorkspace
       client={client ?? ({} as CrmClient)}
-      hasLiveClient={client !== null}
       notice={notice}
       error={error}
       snapshot={snapshot}
@@ -1553,11 +1504,6 @@ export function CrmApp() {
         } else {
           setSnapshot(createDemoCrmSnapshot());
         }
-      }}
-      onSnapshotChange={(updater) => {
-        setSnapshot((currentSnapshot) =>
-          currentSnapshot ? updater(currentSnapshot) : currentSnapshot,
-        );
       }}
       onSignOut={handleSignOut}
       onNotice={setNotice}
@@ -1831,7 +1777,6 @@ function AuthPoint({ label }: { label: string }) {
 
 type CrmWorkspaceProps = {
   client: CrmClient;
-  hasLiveClient: boolean;
   notice: string;
   error: string;
   snapshot: CrmSnapshot;
@@ -1841,7 +1786,6 @@ type CrmWorkspaceProps = {
   onViewChange: (view: WorkspaceView) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onReload: () => Promise<void>;
-  onSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onSignOut: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -1849,7 +1793,6 @@ type CrmWorkspaceProps = {
 
 function CrmWorkspace({
   client,
-  hasLiveClient,
   notice,
   error,
   snapshot,
@@ -1859,7 +1802,6 @@ function CrmWorkspace({
   onViewChange,
   onThemeChange,
   onReload,
-  onSnapshotChange,
   onSignOut,
   onNotice,
   onError,
@@ -2246,11 +2188,9 @@ function CrmWorkspace({
           {view === "jobs" ? (
             <JobsView
               client={client}
-              hasLiveClient={hasLiveClient}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
-              onSnapshotChange={onSnapshotChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -8007,22 +7947,18 @@ function ScopeGeneratorView({
 
 type JobsViewProps = {
   client: CrmClient;
-  hasLiveClient: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
-  onSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
 
 function JobsView({
   client,
-  hasLiveClient,
   snapshot,
   companyMap,
   onReload,
-  onSnapshotChange,
   onNotice,
   onError,
 }: JobsViewProps) {
@@ -8094,22 +8030,11 @@ function JobsView({
     ? getJobScheduleEvents(snapshot, selectedJob.id)
     : [];
   const selectedJobTasks = selectedJob ? getJobTasks(snapshot, selectedJob.id) : [];
-  const selectedJobRequiredTasks = selectedJob
-    ? getRequiredJobTasks(snapshot, selectedJob.id)
-    : [];
   const selectedJobNotes = selectedJob ? getJobNotes(snapshot, selectedJob.id) : [];
-  const selectedJobImportantNotes = selectedJob
-    ? getImportantJobNotes(selectedJob, selectedJobNotes)
-    : [];
   const selectedJobMaterials = selectedJob ? getJobMaterials(snapshot, selectedJob.id) : [];
   const selectedJobAssignments = selectedJob
     ? getJobAssignments(snapshot, selectedJob.id)
     : [];
-  const selectedJobCrewLabel = getCrewDisplayName(
-    snapshot,
-    selectedJob,
-    selectedJobAssignments,
-  );
   const selectedJobInvoices = selectedJob ? getJobInvoices(snapshot, selectedJob.id) : [];
   const selectedJobOrders = selectedJob
     ? getJobMaterialOrders(snapshot, selectedJob.id)
@@ -8211,114 +8136,10 @@ function JobsView({
     : 0;
   const selectedJobProductionTotal =
     selectedJob?.total || selectedJobEstimate?.total || selectedJobFinancials.invoiced;
-  const todayTaskQueue = snapshot.jobs
-    .filter(
-      (job) =>
-        job.status === "scheduled" ||
-        job.status === "in_progress" ||
-        job.status === "blocked",
-    )
-    .flatMap((job) =>
-      getRequiredJobTasks(snapshot, job.id)
-        .slice(0, 2)
-        .map((task) => ({ job, task })),
-    )
-    .slice(0, 6);
   const defaultJobEventStart = new Date();
   defaultJobEventStart.setDate(defaultJobEventStart.getDate() + 1);
   defaultJobEventStart.setHours(8, 0, 0, 0);
   const defaultJobEventEnd = new Date(defaultJobEventStart.getTime() + 4 * 60 * 60 * 1000);
-
-  const createJobTaskLocally = (input: JobTaskInput) => {
-    const now = new Date().toISOString();
-    const task: JobTaskRecord = {
-      id: createLocalRecordId("local-task"),
-      job_id: input.job_id,
-      title: input.title,
-      description: input.description ?? null,
-      status: input.status ?? "todo",
-      sort_order: input.sort_order ?? 0,
-      created_at: now,
-      updated_at: now,
-    };
-
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobTasks: [...currentSnapshot.jobTasks, task],
-    }));
-  };
-
-  const updateJobTaskLocally = (
-    taskId: string,
-    input: Partial<Omit<JobTaskInput, "job_id">>,
-  ) => {
-    const now = new Date().toISOString();
-
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobTasks: currentSnapshot.jobTasks.map((task) =>
-        task.id === taskId ? { ...task, ...input, updated_at: now } : task,
-      ),
-    }));
-  };
-
-  const deleteJobTaskLocally = (taskId: string) => {
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobTasks: currentSnapshot.jobTasks.filter((task) => task.id !== taskId),
-    }));
-  };
-
-  const reorderJobTasksLocally = (
-    updates: { id: string; sort_order: number }[],
-  ) => {
-    const sortOrderByTaskId = new Map(
-      updates.map((update) => [update.id, update.sort_order]),
-    );
-    const now = new Date().toISOString();
-
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobTasks: currentSnapshot.jobTasks.map((task) => {
-        const nextSortOrder = sortOrderByTaskId.get(task.id);
-
-        return nextSortOrder === undefined
-          ? task
-          : { ...task, sort_order: nextSortOrder, updated_at: now };
-      }),
-    }));
-  };
-
-  const addJobNoteLocally = (input: JobNoteInput) => {
-    const note: JobNoteRecord = {
-      id: createLocalRecordId("local-note"),
-      job_id: input.job_id,
-      note: input.note,
-      created_at: new Date().toISOString(),
-    };
-
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobNotes: [...currentSnapshot.jobNotes, note],
-    }));
-  };
-
-  const addJobMaterialLocally = (input: JobMaterialInput) => {
-    const material: JobMaterialRecord = {
-      id: createLocalRecordId("local-material"),
-      job_id: input.job_id,
-      name: input.name,
-      quantity: input.quantity,
-      unit: input.unit ?? "each",
-      notes: input.notes ?? null,
-      created_at: new Date().toISOString(),
-    };
-
-    onSnapshotChange((currentSnapshot) => ({
-      ...currentSnapshot,
-      jobMaterials: [...currentSnapshot.jobMaterials, material],
-    }));
-  };
 
   useEffect(() => {
     const nextCompanyId = selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
@@ -8550,13 +8371,9 @@ function JobsView({
 
     try {
       setProductionAction("create-task");
-      if (hasLiveClient) {
-        await createJobTask(client, input);
-        await onReload();
-      } else {
-        createJobTaskLocally(input);
-      }
+      await createJobTask(client, input);
       event.currentTarget.reset();
+      await onReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(
@@ -8577,19 +8394,13 @@ function JobsView({
 
     try {
       setProductionAction(`suggest:${title}`);
-      const input: JobTaskInput = {
+      await createJobTask(client, {
         job_id: selectedJob.id,
         title,
         status: "todo",
         sort_order: selectedJobTasks.length,
-      };
-
-      if (hasLiveClient) {
-        await createJobTask(client, input);
-        await onReload();
-      } else {
-        createJobTaskLocally(input);
-      }
+      });
+      await onReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(
@@ -8608,12 +8419,8 @@ function JobsView({
   ) => {
     try {
       setProductionAction(`status:${taskId}`);
-      if (hasLiveClient) {
-        await updateJobTask(client, taskId, { status });
-        await onReload();
-      } else {
-        updateJobTaskLocally(taskId, { status });
-      }
+      await updateJobTask(client, taskId, { status });
+      await onReload();
       onNotice(`Checklist task marked ${jobTaskStatusLabel(status)}.`);
     } catch (currentError) {
       onError(
@@ -8642,19 +8449,13 @@ function JobsView({
 
     try {
       setProductionAction(`edit:${taskId}`);
-      const input: Partial<Omit<JobTaskInput, "job_id">> = {
+      await updateJobTask(client, taskId, {
         title,
         description: getOptionalFormString(formData, "description"),
         status: getFormString(formData, "status", "todo") as JobTaskStatus,
-      };
-
-      if (hasLiveClient) {
-        await updateJobTask(client, taskId, input);
-        await onReload();
-      } else {
-        updateJobTaskLocally(taskId, input);
-      }
+      });
       setEditingTaskId(null);
+      await onReload();
       onNotice("Checklist task updated.");
     } catch (currentError) {
       onError(
@@ -8674,13 +8475,9 @@ function JobsView({
 
     try {
       setProductionAction(`delete:${taskId}`);
-      if (hasLiveClient) {
-        await deleteJobTask(client, taskId);
-        await onReload();
-      } else {
-        deleteJobTaskLocally(taskId);
-      }
+      await deleteJobTask(client, taskId);
       setEditingTaskId((currentId) => (currentId === taskId ? null : currentId));
+      await onReload();
       onNotice("Checklist task deleted.");
     } catch (currentError) {
       onError(
@@ -8707,17 +8504,14 @@ function JobsView({
 
     try {
       setProductionAction(`move:${taskId}`);
-      const updates = reorderedTasks.map((task, index) => ({
-        id: task.id,
-        sort_order: index,
-      }));
-
-      if (hasLiveClient) {
-        await reorderJobTasks(client, updates);
-        await onReload();
-      } else {
-        reorderJobTasksLocally(updates);
-      }
+      await reorderJobTasks(
+        client,
+        reorderedTasks.map((task, index) => ({
+          id: task.id,
+          sort_order: index,
+        })),
+      );
+      await onReload();
       onNotice("Checklist order updated.");
     } catch (currentError) {
       onError(
@@ -8751,13 +8545,9 @@ function JobsView({
 
     try {
       setProductionAction("add-note");
-      if (hasLiveClient) {
-        await addJobNote(client, input);
-        await onReload();
-      } else {
-        addJobNoteLocally(input);
-      }
+      await addJobNote(client, input);
       event.currentTarget.reset();
+      await onReload();
       onNotice("Job note added.");
     } catch (currentError) {
       onError(
@@ -8792,13 +8582,9 @@ function JobsView({
 
     try {
       setProductionAction("add-material");
-      if (hasLiveClient) {
-        await addJobMaterial(client, input);
-        await onReload();
-      } else {
-        addJobMaterialLocally(input);
-      }
+      await addJobMaterial(client, input);
       event.currentTarget.reset();
+      await onReload();
       onNotice("Job material added.");
     } catch (currentError) {
       onError(
@@ -8958,107 +8744,46 @@ function JobsView({
         </div>
 
         <div className="border-b border-slate-200 p-5">
-          <div className="rounded-lg border border-sky-100 bg-sky-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold uppercase text-sky-900">Today</h3>
-                <p className="mt-1 text-sm text-sky-800">
-                  {todayTaskQueue.length
-                    ? `${todayTaskQueue.length} task${
-                        todayTaskQueue.length === 1 ? "" : "s"
-                      } requiring attention`
-                    : "No required production tasks waiting"}
-                </p>
-              </div>
-              <Badge
-                label={todayTaskQueue.length ? "Focus" : "Clear"}
-                tone={todayTaskQueue.length ? "amber" : "green"}
-              />
-            </div>
-            <div className="mt-3 grid gap-2">
-              {todayTaskQueue.map(({ job, task }) => (
-                <div
-                  key={`${job.id}-${task.id}`}
-                  className="grid gap-3 rounded-md border border-sky-100 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleSelectJob(job)}
-                    aria-label={`Open ${job.title} task ${task.title}`}
-                    className="min-w-0 text-left"
-                  >
-                    <p className="truncate text-sm font-semibold text-slate-950">
-                      {task.title}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-slate-500">
-                      {job.title} - {getJobDisplayAddress(job)}
-                    </p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleUpdateJobTaskStatus(task.id, "done")}
-                    aria-label={`Mark ${task.title} done`}
-                    disabled={productionAction !== null}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    Done
-                  </button>
-                </div>
-              ))}
-              {!todayTaskQueue.length ? (
-                <div className="rounded-md border border-sky-100 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
-                  Nothing needs action right now.
-                </div>
-              ) : null}
-            </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <ProfileStat label="Active jobs" value={productionKpis.activeJobs.length} />
+            <ProfileStat label="Scheduled" value={productionKpis.scheduledJobs.length} />
+            <ProfileStat label="In progress" value={productionKpis.inProgressJobs.length} />
+            <ProfileStat label="Crew coverage" value={`${productionKpis.crewCoverage}%`} />
+            <ProfileStat label="At risk" value={productionKpis.atRiskJobs.length} />
           </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setStatusFilter("all")}
+              className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                statusFilter === "all"
+                  ? "border-sky-300 bg-sky-50 text-sky-800"
+                  : "border-slate-300 text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              All jobs
+            </button>
+            {jobStatuses.map((status) => {
+              const count = snapshot.jobs.filter(
+                (job) => job.status === status.value,
+              ).length;
 
-          <details className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-sm font-bold text-slate-950">
-              Production overview
-            </summary>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <ProfileStat label="Active jobs" value={productionKpis.activeJobs.length} />
-              <ProfileStat label="Scheduled" value={productionKpis.scheduledJobs.length} />
-              <ProfileStat label="In progress" value={productionKpis.inProgressJobs.length} />
-              <ProfileStat label="Crew coverage" value={`${productionKpis.crewCoverage}%`} />
-              <ProfileStat label="At risk" value={productionKpis.atRiskJobs.length} />
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setStatusFilter("all")}
-                className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
-                  statusFilter === "all"
-                    ? "border-sky-300 bg-sky-50 text-sky-800"
-                    : "border-slate-300 text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                All jobs
-              </button>
-              {jobStatuses.map((status) => {
-                const count = snapshot.jobs.filter(
-                  (job) => job.status === status.value,
-                ).length;
-
-                return (
-                  <button
-                    key={status.value}
-                    type="button"
-                    onClick={() => setStatusFilter(status.value)}
-                    className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
-                      statusFilter === status.value
-                        ? "border-sky-300 bg-sky-50 text-sky-800"
-                        : "border-slate-300 text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    {status.label} ({count})
-                  </button>
-                );
-              })}
-            </div>
-          </details>
+              return (
+                <button
+                  key={status.value}
+                  type="button"
+                  onClick={() => setStatusFilter(status.value)}
+                  className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                    statusFilter === status.value
+                      ? "border-sky-300 bg-sky-50 text-sky-800"
+                      : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {status.label} ({count})
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">
@@ -9116,200 +8841,101 @@ function JobsView({
 
       <aside className="space-y-5">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">
+                {selectedJob ? selectedJob.title : "Job detail"}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                {selectedJob
+                  ? `${selectedJobCompany?.name ?? "Company"} - ${getJobTargetName(
+                      snapshot,
+                      selectedJob,
+                    )}`
+                  : "Select a job to review production details."}
+              </p>
+            </div>
+            {selectedJob ? (
+              <Badge
+                label={jobStatusLabel(selectedJob.status)}
+                tone={
+                  selectedJob.status === "completed" || selectedJob.status === "closed"
+                    ? "green"
+                    : selectedJob.status === "blocked" ||
+                        selectedJob.status === "cancelled"
+                      ? "amber"
+                      : "blue"
+                }
+              />
+            ) : null}
+          </div>
+
           {selectedJob ? (
-            <div className="space-y-5">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-bold text-slate-950">
-                    {selectedJob.title}
-                  </h3>
-                  <p className="mt-1 text-sm font-semibold text-slate-700">
-                    {getJobDisplayAddress(selectedJob)}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {selectedJobCompany?.name ?? getJobDisplayBusiness(snapshot, selectedJob)}
-                  </p>
-                </div>
-                <select
-                  value={selectedJob.status}
-                  onChange={(event) =>
-                    void handleUpdateJobStatus(event.target.value as JobStatus)
+            <div className="mt-5 space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ProfileStat
+                  label="Business"
+                  value={getJobDisplayBusiness(snapshot, selectedJob)}
+                />
+                <ProfileStat
+                  label="Location"
+                  value={getJobDisplayLocation(selectedJob)}
+                />
+                <ProfileStat
+                  label="Scheduled start"
+                  value={
+                    getJobScheduledStart(selectedJob)
+                      ? formatDateTime(getJobScheduledStart(selectedJob) ?? "")
+                      : "Not scheduled"
                   }
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold"
-                >
-                  {jobStatuses.map((status) => (
-                    <option key={status.value} value={status.value}>
-                      {status.label}
-                    </option>
-                  ))}
-                </select>
+                />
+                <ProfileStat
+                  label="Scheduled end"
+                  value={
+                    getJobScheduledEnd(selectedJob)
+                      ? formatDateTime(getJobScheduledEnd(selectedJob) ?? "")
+                      : "Not scheduled"
+                  }
+                />
+                <ProfileStat
+                  label="Address"
+                  value={getJobDisplayAddress(selectedJob)}
+                />
+                <ProfileStat
+                  label="Total"
+                  value={formatMoney(selectedJobProductionTotal)}
+                />
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-bold uppercase text-slate-500">Crew</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">
-                    {selectedJobCrewLabel}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-bold uppercase text-slate-500">Progress</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">
-                    {selectedJobTaskCompletion.done} of {selectedJobTaskCompletion.total} done
-                  </p>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full rounded-full bg-sky-600"
-                      style={{ width: `${selectedJobTaskCompletionPercent}%` }}
-                    />
-                  </div>
-                </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Scope of work</p>
+                <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
+                  {selectedJob.scope_of_work ??
+                    selectedJobScope?.scope_body ??
+                    "No linked scope of work yet."}
+                </p>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-bold text-slate-950">Today required tasks</p>
-                  <Badge
-                    label={
-                      selectedJobRequiredTasks.length
-                        ? `${selectedJobRequiredTasks.length} open`
-                        : "Clear"
-                    }
-                    tone={selectedJobRequiredTasks.length ? "amber" : "green"}
-                  />
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {selectedJobRequiredTasks.slice(0, 4).map((task) => (
-                    <div
-                      key={task.id}
-                      className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-950">{task.title}</p>
-                        {task.description ? (
-                          <p className="mt-1 text-sm text-slate-500">
-                            {task.description}
-                          </p>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleUpdateJobTaskStatus(task.id, "done")}
-                        aria-label={`Mark ${task.title} done`}
-                        disabled={productionAction !== null}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        Done
-                      </button>
-                    </div>
-                  ))}
-                  {!selectedJobRequiredTasks.length && selectedJobSuggestedTasks.length ? (
-                    <div className="grid gap-2">
-                      {selectedJobSuggestedTasks.slice(0, 3).map((item) => (
-                        <button
-                          key={item}
-                          type="button"
-                          onClick={() => void handleCreateSuggestedJobTask(item)}
-                          disabled={productionAction !== null}
-                          className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <span>{productionAction === `suggest:${item}` ? "Adding" : item}</span>
-                          <Plus className="h-4 w-4 text-sky-600" />
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {!selectedJobRequiredTasks.length && !selectedJobSuggestedTasks.length ? (
-                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
-                      No open tasks for this job.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-bold text-slate-950">Important notes</p>
-                <div className="mt-3 grid gap-2">
-                  {selectedJobImportantNotes.map((note) => (
-                    <div
-                      key={note.id}
-                      className="rounded-md border border-slate-200 bg-white p-3"
-                    >
-                      <p className="text-sm text-slate-700">{note.note}</p>
-                    </div>
-                  ))}
-                  {!selectedJobImportantNotes.length ? (
-                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
-                      No important notes yet.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
-                <div className="flex items-start gap-3">
-                  <div className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-500">
-                    <Camera className="h-5 w-5" />
-                  </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-950">Photos</p>
+                    <p className="text-sm font-bold text-slate-950">Production checklist</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      {selectedJobPhotos.length} linked photo{selectedJobPhotos.length === 1 ? "" : "s"}
+                      {selectedJobTaskCompletion.done} of {selectedJobTaskCompletion.total} done
                     </p>
                   </div>
+                  <Badge
+                    label={`${selectedJobTaskCompletionPercent}%`}
+                    tone={selectedJobTaskCompletionPercent === 100 ? "green" : "blue"}
+                  />
                 </div>
-              </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-sky-600"
+                    style={{ width: `${selectedJobTaskCompletionPercent}%` }}
+                  />
+                </div>
 
-              <details className="rounded-lg border border-slate-200 bg-white p-3">
-                <summary className="cursor-pointer text-sm font-bold text-slate-950">
-                  More details
-                </summary>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <ProfileStat
-                    label="Business"
-                    value={getJobDisplayBusiness(snapshot, selectedJob)}
-                  />
-                  <ProfileStat
-                    label="Location"
-                    value={getJobDisplayLocation(selectedJob)}
-                  />
-                  <ProfileStat
-                    label="Scheduled start"
-                    value={
-                      getJobScheduledStart(selectedJob)
-                        ? formatDateTime(getJobScheduledStart(selectedJob) ?? "")
-                        : "Not scheduled"
-                    }
-                  />
-                  <ProfileStat
-                    label="Scheduled end"
-                    value={
-                      getJobScheduledEnd(selectedJob)
-                        ? formatDateTime(getJobScheduledEnd(selectedJob) ?? "")
-                        : "Not scheduled"
-                    }
-                  />
-                  <ProfileStat
-                    label="Total"
-                    value={formatMoney(selectedJobProductionTotal)}
-                  />
-                  <ProfileStat label="Materials" value={selectedJobMaterials.length} />
-                </div>
-                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-sm font-bold text-slate-950">Scope of work</p>
-                  <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
-                    {selectedJob.scope_of_work ??
-                      selectedJobScope?.scope_body ??
-                      "No linked scope of work yet."}
-                  </p>
-                </div>
-              </details>
-
-              <details className="rounded-lg border border-slate-200 bg-white p-3">
-                <summary className="cursor-pointer text-sm font-bold text-slate-950">
-                  Full checklist
-                </summary>
                 <div className="mt-4 grid gap-3">
                   {selectedJobTasks.map((task, taskIndex) => {
                     const isEditingTask = editingTaskId === task.id;
@@ -9318,7 +8944,7 @@ function JobsView({
                     return (
                       <div
                         key={task.id}
-                        className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                        className="rounded-lg border border-slate-200 bg-white p-3"
                       >
                         {isEditingTask ? (
                           <form
@@ -9463,26 +9089,48 @@ function JobsView({
                   ) : null}
                 </div>
 
+                {selectedJobSuggestedTasks.length ? (
+                  <div className="mt-4 grid gap-2">
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      {selectedJobCompany?.short_name ?? selectedJobCompany?.name ?? "Company"} checklist starts
+                    </p>
+                    {selectedJobSuggestedTasks.slice(0, 4).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => void handleCreateSuggestedJobTask(item)}
+                        disabled={productionAction !== null}
+                        className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span>
+                          {productionAction === `suggest:${item}` ? "Adding" : item}
+                        </span>
+                        <Plus className="h-4 w-4 text-sky-600" />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
                 <form
                   key={`task-${selectedJob.id}`}
                   onSubmit={handleCreateJobTask}
-                  className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3"
                 >
                   <input
                     required
                     name="title"
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                     placeholder="Checklist task"
                   />
                   <textarea
                     name="description"
-                    className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
                     placeholder="Task details"
                   />
                   <select
                     name="status"
                     defaultValue="todo"
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                   >
                     {jobTaskStatuses.map((status) => (
                       <option key={status.value} value={status.value}>
@@ -9499,142 +9147,153 @@ function JobsView({
                     {productionAction === "create-task" ? "Adding" : "Add checklist task"}
                   </button>
                 </form>
-              </details>
+              </div>
 
-              <details className="rounded-lg border border-slate-200 bg-white p-3">
-                <summary className="cursor-pointer text-sm font-bold text-slate-950">
-                  Additional information
-                </summary>
-                <div className="mt-4 grid gap-4">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-sm font-bold text-slate-950">Notes</p>
-                    <div className="mt-3 grid gap-2">
-                      {selectedJobNotes.map((note) => (
-                        <div
-                          key={note.id}
-                          className="rounded-md border border-slate-200 bg-white p-3"
-                        >
-                          <p className="text-sm text-slate-700">{note.note}</p>
-                          <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
-                            {formatDateTime(note.created_at)}
-                          </p>
-                        </div>
-                      ))}
-                      {!selectedJob.notes && !selectedJobNotes.length ? (
-                        <EmptyState label="No production notes yet." />
-                      ) : null}
-                    </div>
-                    <form
-                      key={`note-${selectedJob.id}`}
-                      onSubmit={handleAddJobNote}
-                      className="mt-4 grid gap-3"
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Notes</p>
+                {selectedJob.notes ? (
+                  <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
+                    {selectedJob.notes}
+                  </p>
+                ) : null}
+                <div className="mt-3 grid gap-2">
+                  {selectedJobNotes.map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-md border border-slate-200 bg-white p-3"
                     >
-                      <textarea
-                        required
-                        name="note"
-                        className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                        placeholder="Add job note"
-                      />
-                      <button
-                        type="submit"
-                        disabled={productionAction !== null}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                        {productionAction === "add-note" ? "Adding" : "Add note"}
-                      </button>
-                    </form>
-                  </div>
+                      <p className="text-sm text-slate-700">{note.note}</p>
+                      <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                        {formatDateTime(note.created_at)}
+                      </p>
+                    </div>
+                  ))}
+                  {!selectedJob.notes && !selectedJobNotes.length ? (
+                    <EmptyState label="No production notes yet." />
+                  ) : null}
+                </div>
+                <form
+                  key={`note-${selectedJob.id}`}
+                  onSubmit={handleAddJobNote}
+                  className="mt-4 grid gap-3"
+                >
+                  <textarea
+                    required
+                    name="note"
+                    className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Add job note"
+                  />
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    {productionAction === "add-note" ? "Adding" : "Add note"}
+                  </button>
+                </form>
+              </div>
 
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-sm font-bold text-slate-950">Materials list</p>
-                    <div className="mt-3 grid gap-2">
-                      {selectedJobMaterials.map((material) => (
-                        <div
-                          key={material.id}
-                          className="rounded-md border border-slate-200 bg-white p-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-semibold text-slate-950">{material.name}</p>
-                              {material.notes ? (
-                                <p className="mt-1 text-sm text-slate-500">
-                                  {material.notes}
-                                </p>
-                              ) : null}
-                            </div>
-                            <p className="text-sm font-bold text-slate-700">
-                              {material.quantity} {material.unit}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Materials list</p>
+                <div className="mt-3 grid gap-2">
+                  {selectedJobMaterials.map((material) => (
+                    <div
+                      key={material.id}
+                      className="rounded-md border border-slate-200 bg-white p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-950">{material.name}</p>
+                          {material.notes ? (
+                            <p className="mt-1 text-sm text-slate-500">
+                              {material.notes}
                             </p>
-                          </div>
+                          ) : null}
                         </div>
-                      ))}
-                      {!selectedJobMaterials.length ? (
-                        <EmptyState label="No job materials yet." />
-                      ) : null}
-                    </div>
-                    <form
-                      key={`material-${selectedJob.id}`}
-                      onSubmit={handleAddJobMaterial}
-                      className="mt-4 grid gap-3"
-                    >
-                      <input
-                        required
-                        name="name"
-                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                        placeholder="Material name"
-                      />
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <input
-                          required
-                          name="quantity"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          defaultValue="1"
-                          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                          placeholder="Quantity"
-                        />
-                        <input
-                          name="unit"
-                          defaultValue="each"
-                          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                          placeholder="Unit"
-                        />
+                        <p className="text-sm font-bold text-slate-700">
+                          {material.quantity} {material.unit}
+                        </p>
                       </div>
-                      <textarea
-                        name="notes"
-                        className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                        placeholder="Material notes"
-                      />
-                      <button
-                        type="submit"
-                        disabled={productionAction !== null}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                      >
-                        <Package className="h-4 w-4" />
-                        {productionAction === "add-material" ? "Adding" : "Add material"}
-                      </button>
-                    </form>
+                    </div>
+                  ))}
+                  {!selectedJobMaterials.length ? (
+                    <EmptyState label="No job materials yet." />
+                  ) : null}
+                </div>
+                <form
+                  key={`material-${selectedJob.id}`}
+                  onSubmit={handleAddJobMaterial}
+                  className="mt-4 grid gap-3"
+                >
+                  <input
+                    required
+                    name="name"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Material name"
+                  />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input
+                      required
+                      name="quantity"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue="1"
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Quantity"
+                    />
+                    <input
+                      name="unit"
+                      defaultValue="each"
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Unit"
+                    />
+                  </div>
+                  <textarea
+                    name="notes"
+                    className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Material notes"
+                  />
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <Package className="h-4 w-4" />
+                    {productionAction === "add-material" ? "Adding" : "Add material"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-500">
+                    <Camera className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">Photos</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Job photos will be added here later. Current linked photo count: {selectedJobPhotos.length}.
+                    </p>
                   </div>
                 </div>
-              </details>
+              </div>
             </div>
           ) : (
             <EmptyState label="Select a job to open production details." />
           )}
         </section>
 
-        <details
+        <section
           id="job-builder"
-          open={!selectedJob}
           className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm scroll-mt-5"
         >
-          <summary className="cursor-pointer text-lg font-bold text-slate-950">
+          <h3 className="text-lg font-bold text-slate-950">
             {selectedJob ? "Edit job" : "Create draft job"}
-          </summary>
+          </h3>
           <p className="mt-1 text-sm text-slate-500">
-            Uses available lead, customer, estimate, company, and job details first.
+            Manual jobs can be saved without a lead, customer, or estimate.
           </p>
           <form
             key={selectedJob?.id ?? `new-job-${jobDraftVersion}`}
@@ -9894,12 +9553,30 @@ function JobsView({
               {isSaving ? "Saving" : selectedJob ? "Save job" : "Create job"}
             </button>
           </form>
-        </details>
+        </section>
 
-        <details className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <summary className="cursor-pointer text-lg font-bold text-slate-950">
-            Advanced workflow
-          </summary>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Job workflow</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Move production through the operating lifecycle.
+              </p>
+            </div>
+            {selectedJob ? (
+              <Badge
+                label={jobStatusLabel(selectedJob.status)}
+                tone={
+                  selectedJob.status === "completed" || selectedJob.status === "closed"
+                    ? "green"
+                    : selectedJob.status === "blocked" ||
+                        selectedJob.status === "cancelled"
+                      ? "amber"
+                      : "blue"
+                }
+              />
+            ) : null}
+          </div>
 
           {selectedJob ? (
             <div className="mt-4 grid gap-2">
@@ -9956,12 +9633,10 @@ function JobsView({
           ) : (
             <EmptyState label="Save or select a job to manage workflow." />
           )}
-        </details>
+        </section>
 
-        <details className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <summary className="cursor-pointer text-lg font-bold text-slate-950">
-            Production readiness
-          </summary>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Production readiness</h3>
           {selectedJob ? (
             <>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -9995,12 +9670,10 @@ function JobsView({
           ) : (
             <EmptyState label="Select a job to review readiness." />
           )}
-        </details>
+        </section>
 
-        <details className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <summary className="cursor-pointer text-lg font-bold text-slate-950">
-            Crew assignments
-          </summary>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Crew assignments</h3>
           {selectedJob ? (
             <>
               <div className="mt-4 grid gap-3">
@@ -10123,12 +9796,10 @@ function JobsView({
           ) : (
             <EmptyState label="Select a job to assign crew." />
           )}
-        </details>
+        </section>
 
-        <details className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <summary className="cursor-pointer text-lg font-bold text-slate-950">
-            Schedule job
-          </summary>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Schedule job</h3>
           {selectedJob ? (
             <>
               <div className="mt-4 grid gap-3">
@@ -10231,7 +9902,7 @@ function JobsView({
           ) : (
             <EmptyState label="Select a job to schedule production." />
           )}
-        </details>
+        </section>
       </aside>
     </div>
   );
