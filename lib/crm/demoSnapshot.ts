@@ -40,7 +40,7 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
         name: "WeatherTech Roofing LLC",
         trade: "roofing",
         short_name: "WeatherTech",
-        brand_color: "#0ea5e9",
+        brand_color: "#6d28d9",
         workflow_profile: "roofing",
         phone: "(480) 848-3486",
         email: "weathertechroofingaz@gmail.com",

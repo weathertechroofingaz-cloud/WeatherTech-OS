@@ -565,6 +565,16 @@ function companyInitials(company: CompanyRecord | null | undefined) {
     .toUpperCase();
 }
 
+function getCompanyBrandColor(company: CompanyRecord | null | undefined) {
+  const brandColor = company?.brand_color?.toLowerCase();
+
+  if (!brandColor || brandColor === "#0284c7" || brandColor === "#0ea5e9") {
+    return "var(--wt-primary)";
+  }
+
+  return company?.brand_color ?? "var(--wt-primary)";
+}
+
 function companyTradeLabel(company: CompanyRecord | null | undefined) {
   if (!company) {
     return "All-company workspace";
@@ -1904,7 +1914,7 @@ function CrmWorkspace({
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
             <div
               className="grid h-11 w-11 place-items-center rounded-md font-bold text-white"
-              style={{ backgroundColor: activeCompany?.brand_color ?? "#0284c7" }}
+              style={{ backgroundColor: getCompanyBrandColor(activeCompany) }}
             >
               {companyInitials(activeCompany)}
             </div>
@@ -2426,7 +2436,7 @@ function CompanyScopeSwitcher({
 
       {summaries.map((summary) => {
         const isActive = activeCompanyId === summary.company.id;
-        const brandColor = summary.company.brand_color ?? "#0284c7";
+        const brandColor = getCompanyBrandColor(summary.company);
 
         return (
           <button
@@ -3369,7 +3379,7 @@ function CompanyDashboardPanel({
   onViewChange: (view: WorkspaceView) => void;
 }) {
   const isPainting = isPaintingCompany(summary.company);
-  const brandColor = summary.company.brand_color ?? "#0284c7";
+  const brandColor = getCompanyBrandColor(summary.company);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -3463,7 +3473,7 @@ function CompanyPerformanceCard({
   onCompanyScopeChange: (companyId: CompanyScopeId) => void;
   onViewChange: (view: WorkspaceView) => void;
 }) {
-  const brandColor = summary.company.brand_color ?? "#0284c7";
+  const brandColor = getCompanyBrandColor(summary.company);
   const isPainting = isPaintingCompany(summary.company);
   const goTo = (view: WorkspaceView) => {
     onCompanyScopeChange(summary.company.id);
@@ -3609,7 +3619,7 @@ function RecentActivityFeed({
               >
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-white"
-                  style={{ backgroundColor: company?.brand_color ?? "#0284c7" }}
+                  style={{ backgroundColor: getCompanyBrandColor(company) }}
                 >
                   <Icon className="h-4 w-4" />
                 </div>
@@ -3718,7 +3728,7 @@ function ChartPanel({
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-sky-500"
+                className="h-full rounded-full wt-progress-fill"
                 style={{ width: `${Math.max((row.value / max) * 100, 6)}%` }}
               />
             </div>
@@ -6779,7 +6789,7 @@ function EstimatePdfPreview({
     estimate.company_id,
     estimate.business,
   );
-  const brandColor = company?.brand_color ?? "#0284c7";
+  const brandColor = getCompanyBrandColor(company);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -8931,7 +8941,7 @@ function JobsView({
                 </div>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                   <div
-                    className="h-full rounded-full bg-sky-600"
+                    className="h-full rounded-full wt-progress-fill"
                     style={{ width: `${selectedJobTaskCompletionPercent}%` }}
                   />
                 </div>
@@ -12482,7 +12492,7 @@ function CustomerPortalView({
                     </div>
                     <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
                       <div
-                        className="h-full rounded-full bg-sky-500"
+                        className="h-full rounded-full wt-progress-fill"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
@@ -14570,7 +14580,7 @@ function AnalyticsPanel({
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-sky-500"
+                className="h-full rounded-full wt-progress-fill"
                 style={{ width: `${Math.max((row.value / max) * 100, 4)}%` }}
               />
             </div>
@@ -17230,7 +17240,7 @@ function SettingsView({ snapshot }: { snapshot: CrmSnapshot }) {
                   <div className="flex items-center gap-3">
                     <div
                       className="grid h-10 w-10 place-items-center rounded-md font-bold text-white"
-                      style={{ backgroundColor: company.brand_color ?? "#0284c7" }}
+                      style={{ backgroundColor: getCompanyBrandColor(company) }}
                     >
                       {companyInitials(company)}
                     </div>
