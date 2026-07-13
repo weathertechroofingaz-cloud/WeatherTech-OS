@@ -40,9 +40,15 @@ import type {
   JobAssignmentInput,
   JobAssignmentRecord,
   JobInput,
+  JobMaterialInput,
+  JobMaterialRecord,
+  JobNoteInput,
+  JobNoteRecord,
   JobPhotoInput,
   JobPhotoRecord,
   JobRecord,
+  JobTaskInput,
+  JobTaskRecord,
   LeadInput,
   LeadRecord,
   PipelineStage,
@@ -305,6 +311,9 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     ...core,
     estimateLineItems: [],
     scopeTemplates: [],
+    jobTasks: [],
+    jobNotes: [],
+    jobMaterials: [],
     scheduleEvents: [],
     jobPhotos: [],
     invoices: [],
@@ -376,6 +385,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     scopeTemplates,
     scopes,
     jobs,
+    jobTasks,
+    jobNotes,
+    jobMaterials,
     scheduleEvents,
     jobPhotos,
     invoices,
@@ -417,6 +429,13 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .order("title", { ascending: true }),
     client.from("scopes").select("*").order("updated_at", { ascending: false }),
     client.from("jobs").select("*").order("updated_at", { ascending: false }),
+    client
+      .from("job_tasks")
+      .select("*")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true }),
+    client.from("job_notes").select("*").order("created_at", { ascending: false }),
+    client.from("job_materials").select("*").order("created_at", { ascending: false }),
     client
       .from("schedule_events")
       .select("*")
@@ -484,6 +503,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["scope_templates", scopeTemplates],
     ["scopes", scopes],
     ["jobs", jobs],
+    ["job_tasks", jobTasks],
+    ["job_notes", jobNotes],
+    ["job_materials", jobMaterials],
     ["schedule_events", scheduleEvents],
     ["job_photos", jobPhotos],
     ["invoices", invoices],
@@ -520,6 +542,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     scopeTemplates: requireRows("scope_templates", scopeTemplates),
     scopes: requireRows("scopes", scopes),
     jobs: requireRows("jobs", jobs),
+    jobTasks: requireRows("job_tasks", jobTasks),
+    jobNotes: requireRows("job_notes", jobNotes),
+    jobMaterials: requireRows("job_materials", jobMaterials),
     scheduleEvents: requireRows("schedule_events", scheduleEvents),
     jobPhotos: requireRows("job_photos", jobPhotos),
     invoices: requireRows("invoices", invoices),
@@ -953,6 +978,163 @@ export async function updateJob(
     .from("jobs")
     .update(input)
     .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function listJobTasks(
+  client: CrmClient,
+  jobId: string,
+): Promise<JobTaskRecord[]> {
+  const { data, error } = await client
+    .from("job_tasks")
+    .select("*")
+    .eq("job_id", jobId)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function createJobTask(
+  client: CrmClient,
+  input: JobTaskInput,
+): Promise<JobTaskRecord> {
+  const { data, error } = await client
+    .from("job_tasks")
+    .insert({
+      ...input,
+      description: input.description ?? null,
+      status: input.status ?? "todo",
+      sort_order: input.sort_order ?? 0,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateJobTask(
+  client: CrmClient,
+  id: string,
+  input: Partial<Omit<JobTaskInput, "job_id">>,
+): Promise<JobTaskRecord> {
+  const { data, error } = await client
+    .from("job_tasks")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function deleteJobTask(client: CrmClient, id: string) {
+  const { error } = await client.from("job_tasks").delete().eq("id", id);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function reorderJobTasks(
+  client: CrmClient,
+  updates: { id: string; sort_order: number }[],
+) {
+  await Promise.all(
+    updates.map(async (update) => {
+      const { error } = await client
+        .from("job_tasks")
+        .update({ sort_order: update.sort_order })
+        .eq("id", update.id);
+
+      if (error) {
+        throw error;
+      }
+    }),
+  );
+}
+
+export async function listJobNotes(
+  client: CrmClient,
+  jobId: string,
+): Promise<JobNoteRecord[]> {
+  const { data, error } = await client
+    .from("job_notes")
+    .select("*")
+    .eq("job_id", jobId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function addJobNote(
+  client: CrmClient,
+  input: JobNoteInput,
+): Promise<JobNoteRecord> {
+  const { data, error } = await client
+    .from("job_notes")
+    .insert(input)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function listJobMaterials(
+  client: CrmClient,
+  jobId: string,
+): Promise<JobMaterialRecord[]> {
+  const { data, error } = await client
+    .from("job_materials")
+    .select("*")
+    .eq("job_id", jobId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function addJobMaterial(
+  client: CrmClient,
+  input: JobMaterialInput,
+): Promise<JobMaterialRecord> {
+  const { data, error } = await client
+    .from("job_materials")
+    .insert({
+      ...input,
+      unit: input.unit ?? "each",
+      notes: input.notes ?? null,
+    })
     .select("*")
     .single();
 

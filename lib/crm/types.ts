@@ -76,6 +76,7 @@ export type JobStatus =
   | "cancelled"
   | "canceled"
   | "closed";
+export type JobTaskStatus = "todo" | "in_progress" | "done";
 export type ScheduleEventType =
   | "inspection"
   | "estimate"
@@ -347,6 +348,34 @@ export type JobRecord = {
   notes: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type JobTaskRecord = {
+  id: string;
+  job_id: string;
+  title: string;
+  description: string | null;
+  status: JobTaskStatus;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobNoteRecord = {
+  id: string;
+  job_id: string;
+  note: string;
+  created_at: string;
+};
+
+export type JobMaterialRecord = {
+  id: string;
+  job_id: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  notes: string | null;
+  created_at: string;
 };
 
 export type ScheduleEventRecord = {
@@ -895,6 +924,27 @@ export type JobInput = {
   notes?: string | null;
 };
 
+export type JobTaskInput = {
+  job_id: string;
+  title: string;
+  description?: string | null;
+  status?: JobTaskStatus;
+  sort_order?: number;
+};
+
+export type JobNoteInput = {
+  job_id: string;
+  note: string;
+};
+
+export type JobMaterialInput = {
+  job_id: string;
+  name: string;
+  quantity: number;
+  unit?: string;
+  notes?: string | null;
+};
+
 export type ScheduleEventInput = {
   company_id: string;
   customer_id?: string | null;
@@ -1312,6 +1362,22 @@ export type JobInsert = JobInput & {
   updated_at?: string;
 };
 
+export type JobTaskInsert = JobTaskInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type JobNoteInsert = JobNoteInput & {
+  id?: string;
+  created_at?: string;
+};
+
+export type JobMaterialInsert = JobMaterialInput & {
+  id?: string;
+  created_at?: string;
+};
+
 export type ScheduleEventInsert = ScheduleEventInput & {
   id?: string;
   created_at?: string;
@@ -1501,6 +1567,9 @@ export type CrmSnapshot = {
   scopeTemplates: ScopeTemplateRecord[];
   scopes: ScopeRecord[];
   jobs: JobRecord[];
+  jobTasks: JobTaskRecord[];
+  jobNotes: JobNoteRecord[];
+  jobMaterials: JobMaterialRecord[];
   scheduleEvents: ScheduleEventRecord[];
   jobPhotos: JobPhotoRecord[];
   invoices: InvoiceRecord[];
@@ -1600,6 +1669,24 @@ export type Database = {
         Row: JobRecord;
         Insert: JobInsert;
         Update: Partial<Database["public"]["Tables"]["jobs"]["Insert"]>;
+        Relationships: [];
+      };
+      job_tasks: {
+        Row: JobTaskRecord;
+        Insert: JobTaskInsert;
+        Update: Partial<Database["public"]["Tables"]["job_tasks"]["Insert"]>;
+        Relationships: [];
+      };
+      job_notes: {
+        Row: JobNoteRecord;
+        Insert: JobNoteInsert;
+        Update: Partial<Database["public"]["Tables"]["job_notes"]["Insert"]>;
+        Relationships: [];
+      };
+      job_materials: {
+        Row: JobMaterialRecord;
+        Insert: JobMaterialInsert;
+        Update: Partial<Database["public"]["Tables"]["job_materials"]["Insert"]>;
         Relationships: [];
       };
       schedule_events: {

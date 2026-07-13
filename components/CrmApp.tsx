@@ -2,6 +2,8 @@
 
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import {
+  ArrowDown,
+  ArrowUp,
   Building2,
   Bot,
   Calculator,
@@ -23,6 +25,7 @@ import {
   Package,
   Palette,
   Paintbrush,
+  Pencil,
   Phone,
   Plus,
   Printer,
@@ -37,6 +40,7 @@ import {
   UserRound,
   Users,
   WandSparkles,
+  X,
 } from "lucide-react";
 import {
   useCallback,
@@ -46,6 +50,8 @@ import {
   type FormEvent,
 } from "react";
 import {
+  addJobMaterial,
+  addJobNote,
   convertLeadToCustomer,
   createChangeOrder,
   createDailyLog,
@@ -60,6 +66,8 @@ import {
   createJobAssignment,
   createJob,
   createJobPhoto,
+  createJobTask,
+  deleteJobTask,
   createLead,
   createMaterialOrder,
   createNotification,
@@ -81,9 +89,11 @@ import {
   updateEmailMessage,
   updateJob,
   updateJobAssignment,
+  updateJobTask,
   updateLead,
   updateMaterialOrder,
   updateNotification,
+  reorderJobTasks,
   updateScheduleEvent,
   updateSignature,
   updateSmsMessage,
@@ -213,9 +223,13 @@ import type {
   JobAssignmentRecord,
   AssignmentStatus,
   JobInput,
+  JobMaterialInput,
+  JobNoteInput,
   JobPhotoRecord,
   JobRecord,
   JobStatus,
+  JobTaskInput,
+  JobTaskStatus,
   LeadPriority,
   LeadRecord,
   LeadStatus,
@@ -358,6 +372,12 @@ const jobStatuses: { value: JobStatus; label: string }[] = [
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
   { value: "closed", label: "Closed" },
+];
+
+const jobTaskStatuses: { value: JobTaskStatus; label: string }[] = [
+  { value: "todo", label: "To do" },
+  { value: "in_progress", label: "In progress" },
+  { value: "done", label: "Done" },
 ];
 
 const scheduleEventTypes: { value: ScheduleEventType; label: string }[] = [
@@ -602,6 +622,10 @@ function jobStatusLabel(status: JobStatus) {
   return jobStatuses.find((item) => item.value === status)?.label ?? status;
 }
 
+function jobTaskStatusLabel(status: JobTaskStatus) {
+  return jobTaskStatuses.find((item) => item.value === status)?.label ?? status;
+}
+
 function scheduleEventTypeLabel(type: ScheduleEventType) {
   return scheduleEventTypes.find((item) => item.value === type)?.label ?? type;
 }
@@ -803,6 +827,15 @@ function getDefaultServiceTypeForCompany(company: CompanyRecord | null | undefin
   return "roofing" as ServiceType;
 }
 
+function isServiceAllowedForCompany(
+  company: CompanyRecord | null | undefined,
+  service: ServiceType,
+) {
+  const workflow = company?.workflow_profile ?? company?.trade ?? "both";
+
+  return workflow === "both" || service === workflow;
+}
+
 function getDefaultJobLocationForCompany(company: CompanyRecord | null | undefined) {
   if (!company) {
     return "";
@@ -874,6 +907,24 @@ function getJobScheduleEvents(snapshot: CrmSnapshot, jobId: string) {
   return snapshot.scheduleEvents
     .filter((event) => event.job_id === jobId)
     .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+}
+
+function getJobTasks(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.jobTasks
+    .filter((task) => task.job_id === jobId)
+    .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at));
+}
+
+function getJobNotes(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.jobNotes
+    .filter((note) => note.job_id === jobId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+function getJobMaterials(snapshot: CrmSnapshot, jobId: string) {
+  return snapshot.jobMaterials
+    .filter((material) => material.job_id === jobId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 function getJobAssignments(snapshot: CrmSnapshot, jobId: string) {
@@ -7916,9 +7967,20 @@ function JobsView({
   const [jobFormCompanyId, setJobFormCompanyId] = useState(
     snapshot.jobs[0]?.company_id ?? snapshot.companies[0]?.id ?? "",
   );
+  const [jobFormServiceType, setJobFormServiceType] = useState<ServiceType>(() => {
+    const firstJob = snapshot.jobs[0];
+    const firstCompany = firstJob
+      ? companyMap.get(firstJob.company_id) ??
+        snapshot.companies.find((company) => company.id === firstJob.company_id)
+      : snapshot.companies[0];
+
+    return firstJob?.service_type ?? getDefaultServiceTypeForCompany(firstCompany);
+  });
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<JobStatus | "all">("all");
   const [isSaving, setIsSaving] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [productionAction, setProductionAction] = useState<string | null>(null);
 
   const productionKpis = calculateProductionKpis(snapshot);
   const selectedJob =
@@ -7928,6 +7990,9 @@ function JobsView({
     companyMap.get(jobFormCompanyId) ??
     snapshot.companies[0] ??
     null;
+  const jobFormServiceOptions = serviceTypes.filter((service) =>
+    isServiceAllowedForCompany(jobFormCompany, service.value),
+  );
   const jobFormCustomers = snapshot.customers.filter(
     (customer) => customer.company_id === jobFormCompanyId,
   );
@@ -7964,6 +8029,9 @@ function JobsView({
   const selectedJobEvents = selectedJob
     ? getJobScheduleEvents(snapshot, selectedJob.id)
     : [];
+  const selectedJobTasks = selectedJob ? getJobTasks(snapshot, selectedJob.id) : [];
+  const selectedJobNotes = selectedJob ? getJobNotes(snapshot, selectedJob.id) : [];
+  const selectedJobMaterials = selectedJob ? getJobMaterials(snapshot, selectedJob.id) : [];
   const selectedJobAssignments = selectedJob
     ? getJobAssignments(snapshot, selectedJob.id)
     : [];
@@ -7978,6 +8046,37 @@ function JobsView({
     ? getJobChangeOrders(snapshot, selectedJob.id)
     : [];
   const selectedJobPhotos = selectedJob ? getJobPhotos(snapshot, selectedJob.id) : [];
+  const selectedJobCompany = selectedJob
+    ? companyMap.get(selectedJob.company_id) ??
+      snapshot.companies.find((company) => company.id === selectedJob.company_id) ??
+      null
+    : null;
+  const selectedJobEstimate = selectedJob?.estimate_id
+    ? snapshot.estimates.find((estimate) => estimate.id === selectedJob.estimate_id) ?? null
+    : null;
+  const selectedJobScope = selectedJob
+    ? snapshot.scopes.find((scope) => scope.id === selectedJob.scope_id) ??
+      snapshot.scopes.find(
+        (scope) =>
+          selectedJob.estimate_id !== null &&
+          scope.estimate_id === selectedJob.estimate_id,
+      ) ??
+      null
+    : null;
+  const selectedJobChecklistDefaults = selectedJob
+    ? snapshot.companyWorkflowSettings.find(
+        (settings) => settings.company_id === selectedJob.company_id,
+      )?.production_checklist ?? []
+    : [];
+  const selectedJobTaskTitles = new Set(
+    selectedJobTasks.map((task) => task.title.toLowerCase()),
+  );
+  const selectedJobSuggestedTasks = selectedJobChecklistDefaults.filter(
+    (item) =>
+      typeof item === "string" &&
+      item.trim() &&
+      !selectedJobTaskTitles.has(item.trim().toLowerCase()),
+  );
   const selectedJobScheduleReady = hasUpcomingScheduledEvent(selectedJobEvents);
   const selectedJobCrewReady =
     Boolean(selectedJob?.crew_name) || selectedJobAssignments.length > 0;
@@ -8026,16 +8125,49 @@ function JobsView({
         },
       ]
     : [];
+  const selectedJobTaskCompletion = {
+    done: selectedJobTasks.filter((task) => task.status === "done").length,
+    total: selectedJobTasks.length,
+  };
+  const selectedJobTaskCompletionPercent = selectedJobTaskCompletion.total
+    ? Math.round(
+        (selectedJobTaskCompletion.done / selectedJobTaskCompletion.total) * 100,
+      )
+    : 0;
+  const selectedJobProductionTotal =
+    selectedJob?.total || selectedJobEstimate?.total || selectedJobFinancials.invoiced;
   const defaultJobEventStart = new Date();
   defaultJobEventStart.setDate(defaultJobEventStart.getDate() + 1);
   defaultJobEventStart.setHours(8, 0, 0, 0);
   const defaultJobEventEnd = new Date(defaultJobEventStart.getTime() + 4 * 60 * 60 * 1000);
 
   useEffect(() => {
-    setJobFormCompanyId(
-      selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "",
+    const nextCompanyId = selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
+    const nextCompany =
+      companyMap.get(nextCompanyId) ??
+      snapshot.companies.find((company) => company.id === nextCompanyId) ??
+      null;
+
+    setJobFormCompanyId(nextCompanyId);
+    setJobFormServiceType(
+      selectedJob?.service_type ?? getDefaultServiceTypeForCompany(nextCompany),
     );
-  }, [jobDraftVersion, selectedJob?.company_id, selectedJob?.id, snapshot.companies]);
+    setEditingTaskId(null);
+    setProductionAction(null);
+  }, [
+    companyMap,
+    jobDraftVersion,
+    selectedJob?.company_id,
+    selectedJob?.id,
+    selectedJob?.service_type,
+    snapshot.companies,
+  ]);
+
+  useEffect(() => {
+    if (!isServiceAllowedForCompany(jobFormCompany, jobFormServiceType)) {
+      setJobFormServiceType(getDefaultServiceTypeForCompany(jobFormCompany));
+    }
+  }, [jobFormCompany, jobFormServiceType]);
 
   const focusJobBuilder = () => {
     if (typeof document !== "undefined") {
@@ -8048,8 +8180,13 @@ function JobsView({
   };
 
   const handleStartNewJob = () => {
+    const firstCompany = snapshot.companies[0] ?? null;
+
     setSelectedJobId("new");
-    setJobFormCompanyId(snapshot.companies[0]?.id ?? "");
+    setJobFormCompanyId(firstCompany?.id ?? "");
+    setJobFormServiceType(getDefaultServiceTypeForCompany(firstCompany));
+    setEditingTaskId(null);
+    setProductionAction(null);
     setJobDraftVersion((version) => version + 1);
     focusJobBuilder();
   };
@@ -8057,6 +8194,9 @@ function JobsView({
   const handleSelectJob = (job: JobRecord) => {
     setSelectedJobId(job.id);
     setJobFormCompanyId(job.company_id);
+    setJobFormServiceType(job.service_type);
+    setEditingTaskId(null);
+    setProductionAction(null);
     focusJobBuilder();
   };
 
@@ -8068,10 +8208,19 @@ function JobsView({
       "company_id",
       snapshot.companies[0]?.id,
     );
+    const company =
+      companyMap.get(companyId) ??
+      snapshot.companies.find((item) => item.id === companyId) ??
+      null;
     const estimateId = getOptionalRelation(formData, "estimate_id");
     const scopeId = getOptionalRelation(formData, "scope_id");
     const customerId = getOptionalRelation(formData, "customer_id");
     const leadId = getOptionalRelation(formData, "lead_id");
+    const serviceType = getFormString(
+      formData,
+      "service_type",
+      getDefaultServiceTypeForCompany(company),
+    ) as ServiceType;
     const selectedEstimate = estimateId
       ? snapshot.estimates.find((estimate) => estimate.id === estimateId)
       : null;
@@ -8110,6 +8259,33 @@ function JobsView({
       return;
     }
 
+    if (!isServiceAllowedForCompany(company, serviceType)) {
+      onError(`${company?.name ?? "This company"} uses ${getDefaultServiceTypeForCompany(company)} jobs.`);
+      return;
+    }
+
+    if (
+      (customerId &&
+        !snapshot.customers.some(
+          (customer) => customer.id === customerId && customer.company_id === companyId,
+        )) ||
+      (leadId &&
+        !snapshot.leads.some(
+          (lead) => lead.id === leadId && lead.company_id === companyId,
+        )) ||
+      (estimateId &&
+        !snapshot.estimates.some(
+          (estimate) => estimate.id === estimateId && estimate.company_id === companyId,
+        )) ||
+      (scopeId &&
+        !snapshot.scopes.some(
+          (scope) => scope.id === scopeId && scope.company_id === companyId,
+        ))
+    ) {
+      onError("Choose customer, lead, estimate, and scope records from the same company.");
+      return;
+    }
+
     const input: JobInput = {
       company_id: companyId,
       customer_id: customerId,
@@ -8119,11 +8295,7 @@ function JobsView({
       business,
       location,
       title: getFormString(formData, "title", "New job"),
-      service_type: getFormString(
-        formData,
-        "service_type",
-        getDefaultServiceTypeForCompany(jobFormCompany),
-      ) as ServiceType,
+      service_type: serviceType,
       status: getFormString(formData, "status", "draft") as JobStatus,
       scheduled_start: scheduledStart,
       scheduled_end: scheduledEnd,
@@ -8172,6 +8344,256 @@ function JobsView({
           ? currentError.message
           : "Unable to update job status.",
       );
+    }
+  };
+
+  const handleCreateJobTask = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before adding checklist tasks.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const input: JobTaskInput = {
+      job_id: selectedJob.id,
+      title: getFormString(formData, "title"),
+      description: getOptionalFormString(formData, "description"),
+      status: getFormString(formData, "status", "todo") as JobTaskStatus,
+      sort_order: selectedJobTasks.length,
+    };
+
+    if (!input.title) {
+      onError("Add a checklist task title.");
+      return;
+    }
+
+    try {
+      setProductionAction("create-task");
+      await createJobTask(client, input);
+      event.currentTarget.reset();
+      await onReload();
+      onNotice("Checklist task added.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to add checklist task.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleCreateSuggestedJobTask = async (title: string) => {
+    if (!selectedJob) {
+      onError("Select or save a job before adding checklist tasks.");
+      return;
+    }
+
+    try {
+      setProductionAction(`suggest:${title}`);
+      await createJobTask(client, {
+        job_id: selectedJob.id,
+        title,
+        status: "todo",
+        sort_order: selectedJobTasks.length,
+      });
+      await onReload();
+      onNotice("Checklist task added.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to add checklist task.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleUpdateJobTaskStatus = async (
+    taskId: string,
+    status: JobTaskStatus,
+  ) => {
+    try {
+      setProductionAction(`status:${taskId}`);
+      await updateJobTask(client, taskId, { status });
+      await onReload();
+      onNotice(`Checklist task marked ${jobTaskStatusLabel(status)}.`);
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update checklist task.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleEditJobTask = async (
+    event: FormEvent<HTMLFormElement>,
+    taskId: string,
+  ) => {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const title = getFormString(formData, "title");
+
+    if (!title) {
+      onError("Add a checklist task title.");
+      return;
+    }
+
+    try {
+      setProductionAction(`edit:${taskId}`);
+      await updateJobTask(client, taskId, {
+        title,
+        description: getOptionalFormString(formData, "description"),
+        status: getFormString(formData, "status", "todo") as JobTaskStatus,
+      });
+      setEditingTaskId(null);
+      await onReload();
+      onNotice("Checklist task updated.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to update checklist task.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleDeleteJobTask = async (taskId: string) => {
+    if (!window.confirm("Delete this checklist task?")) {
+      return;
+    }
+
+    try {
+      setProductionAction(`delete:${taskId}`);
+      await deleteJobTask(client, taskId);
+      setEditingTaskId((currentId) => (currentId === taskId ? null : currentId));
+      await onReload();
+      onNotice("Checklist task deleted.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to delete checklist task.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleMoveJobTask = async (taskId: string, direction: -1 | 1) => {
+    const currentIndex = selectedJobTasks.findIndex((task) => task.id === taskId);
+    const nextIndex = currentIndex + direction;
+
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= selectedJobTasks.length) {
+      return;
+    }
+
+    const reorderedTasks = [...selectedJobTasks];
+    const [movedTask] = reorderedTasks.splice(currentIndex, 1);
+    reorderedTasks.splice(nextIndex, 0, movedTask);
+
+    try {
+      setProductionAction(`move:${taskId}`);
+      await reorderJobTasks(
+        client,
+        reorderedTasks.map((task, index) => ({
+          id: task.id,
+          sort_order: index,
+        })),
+      );
+      await onReload();
+      onNotice("Checklist order updated.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to reorder checklist tasks.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleAddJobNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before adding notes.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const input: JobNoteInput = {
+      job_id: selectedJob.id,
+      note: getFormString(formData, "note"),
+    };
+
+    if (!input.note) {
+      onError("Add a note before saving.");
+      return;
+    }
+
+    try {
+      setProductionAction("add-note");
+      await addJobNote(client, input);
+      event.currentTarget.reset();
+      await onReload();
+      onNotice("Job note added.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error ? currentError.message : "Unable to add job note.",
+      );
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleAddJobMaterial = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before adding materials.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const input: JobMaterialInput = {
+      job_id: selectedJob.id,
+      name: getFormString(formData, "name"),
+      quantity: getFormNumber(formData, "quantity") || 1,
+      unit: getFormString(formData, "unit", "each"),
+      notes: getOptionalFormString(formData, "notes"),
+    };
+
+    if (!input.name) {
+      onError("Add a material name before saving.");
+      return;
+    }
+
+    try {
+      setProductionAction("add-material");
+      await addJobMaterial(client, input);
+      event.currentTarget.reset();
+      await onReload();
+      onNotice("Job material added.");
+    } catch (currentError) {
+      onError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to add job material.",
+      );
+    } finally {
+      setProductionAction(null);
     }
   };
 
@@ -8418,6 +8840,451 @@ function JobsView({
       </section>
 
       <aside className="space-y-5">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">
+                {selectedJob ? selectedJob.title : "Job detail"}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                {selectedJob
+                  ? `${selectedJobCompany?.name ?? "Company"} - ${getJobTargetName(
+                      snapshot,
+                      selectedJob,
+                    )}`
+                  : "Select a job to review production details."}
+              </p>
+            </div>
+            {selectedJob ? (
+              <Badge
+                label={jobStatusLabel(selectedJob.status)}
+                tone={
+                  selectedJob.status === "completed" || selectedJob.status === "closed"
+                    ? "green"
+                    : selectedJob.status === "blocked" ||
+                        selectedJob.status === "cancelled"
+                      ? "amber"
+                      : "blue"
+                }
+              />
+            ) : null}
+          </div>
+
+          {selectedJob ? (
+            <div className="mt-5 space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ProfileStat
+                  label="Business"
+                  value={getJobDisplayBusiness(snapshot, selectedJob)}
+                />
+                <ProfileStat
+                  label="Location"
+                  value={getJobDisplayLocation(selectedJob)}
+                />
+                <ProfileStat
+                  label="Scheduled start"
+                  value={
+                    getJobScheduledStart(selectedJob)
+                      ? formatDateTime(getJobScheduledStart(selectedJob) ?? "")
+                      : "Not scheduled"
+                  }
+                />
+                <ProfileStat
+                  label="Scheduled end"
+                  value={
+                    getJobScheduledEnd(selectedJob)
+                      ? formatDateTime(getJobScheduledEnd(selectedJob) ?? "")
+                      : "Not scheduled"
+                  }
+                />
+                <ProfileStat
+                  label="Address"
+                  value={getJobDisplayAddress(selectedJob)}
+                />
+                <ProfileStat
+                  label="Total"
+                  value={formatMoney(selectedJobProductionTotal)}
+                />
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Scope of work</p>
+                <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
+                  {selectedJob.scope_of_work ??
+                    selectedJobScope?.scope_body ??
+                    "No linked scope of work yet."}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">Production checklist</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {selectedJobTaskCompletion.done} of {selectedJobTaskCompletion.total} done
+                    </p>
+                  </div>
+                  <Badge
+                    label={`${selectedJobTaskCompletionPercent}%`}
+                    tone={selectedJobTaskCompletionPercent === 100 ? "green" : "blue"}
+                  />
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-sky-600"
+                    style={{ width: `${selectedJobTaskCompletionPercent}%` }}
+                  />
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  {selectedJobTasks.map((task, taskIndex) => {
+                    const isEditingTask = editingTaskId === task.id;
+                    const isTaskBusy = productionAction?.includes(task.id) ?? false;
+
+                    return (
+                      <div
+                        key={task.id}
+                        className="rounded-lg border border-slate-200 bg-white p-3"
+                      >
+                        {isEditingTask ? (
+                          <form
+                            onSubmit={(event) => void handleEditJobTask(event, task.id)}
+                            className="grid gap-3"
+                          >
+                            <input
+                              required
+                              name="title"
+                              defaultValue={task.title}
+                              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                              placeholder="Checklist task"
+                            />
+                            <textarea
+                              name="description"
+                              defaultValue={task.description ?? ""}
+                              className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                              placeholder="Task details"
+                            />
+                            <select
+                              name="status"
+                              defaultValue={task.status}
+                              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                            >
+                              {jobTaskStatuses.map((status) => (
+                                <option key={status.value} value={status.value}>
+                                  {status.label}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <button
+                                type="submit"
+                                disabled={productionAction !== null}
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                              >
+                                <Save className="h-4 w-4" />
+                                {isTaskBusy ? "Saving" : "Save task"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingTaskId(null)}
+                                disabled={productionAction !== null}
+                                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <X className="h-4 w-4" />
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <>
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-semibold text-slate-950">{task.title}</p>
+                                {task.description ? (
+                                  <p className="mt-1 text-sm text-slate-500">
+                                    {task.description}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <Badge
+                                label={jobTaskStatusLabel(task.status)}
+                                tone={
+                                  task.status === "done"
+                                    ? "green"
+                                    : task.status === "in_progress"
+                                      ? "blue"
+                                      : "amber"
+                                }
+                              />
+                            </div>
+                            <div className="mt-3 grid grid-cols-[repeat(4,2.5rem)_1fr] gap-2">
+                              <button
+                                type="button"
+                                title="Move up"
+                                onClick={() => void handleMoveJobTask(task.id, -1)}
+                                disabled={taskIndex === 0 || productionAction !== null}
+                                className="grid h-9 w-9 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <ArrowUp className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Move down"
+                                onClick={() => void handleMoveJobTask(task.id, 1)}
+                                disabled={
+                                  taskIndex === selectedJobTasks.length - 1 ||
+                                  productionAction !== null
+                                }
+                                className="grid h-9 w-9 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <ArrowDown className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Edit task"
+                                onClick={() => setEditingTaskId(task.id)}
+                                disabled={productionAction !== null}
+                                className="grid h-9 w-9 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Delete task"
+                                onClick={() => void handleDeleteJobTask(task.id)}
+                                disabled={productionAction !== null}
+                                className="grid h-9 w-9 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                              <div className="grid min-w-0 gap-2 sm:grid-cols-3">
+                                {jobTaskStatuses.map((status) => (
+                                  <button
+                                    key={status.value}
+                                    type="button"
+                                    onClick={() =>
+                                      void handleUpdateJobTaskStatus(task.id, status.value)
+                                    }
+                                    disabled={
+                                      task.status === status.value ||
+                                      productionAction !== null
+                                    }
+                                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {productionAction === `status:${task.id}` &&
+                                    status.value !== task.status
+                                      ? "Saving"
+                                      : status.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!selectedJobTasks.length ? (
+                    <EmptyState label="No checklist tasks yet." />
+                  ) : null}
+                </div>
+
+                {selectedJobSuggestedTasks.length ? (
+                  <div className="mt-4 grid gap-2">
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      {selectedJobCompany?.short_name ?? selectedJobCompany?.name ?? "Company"} checklist starts
+                    </p>
+                    {selectedJobSuggestedTasks.slice(0, 4).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => void handleCreateSuggestedJobTask(item)}
+                        disabled={productionAction !== null}
+                        className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span>
+                          {productionAction === `suggest:${item}` ? "Adding" : item}
+                        </span>
+                        <Plus className="h-4 w-4 text-sky-600" />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                <form
+                  key={`task-${selectedJob.id}`}
+                  onSubmit={handleCreateJobTask}
+                  className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3"
+                >
+                  <input
+                    required
+                    name="title"
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Checklist task"
+                  />
+                  <textarea
+                    name="description"
+                    className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Task details"
+                  />
+                  <select
+                    name="status"
+                    defaultValue="todo"
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    {jobTaskStatuses.map((status) => (
+                      <option key={status.value} value={status.value}>
+                        {status.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                    {productionAction === "create-task" ? "Adding" : "Add checklist task"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Notes</p>
+                {selectedJob.notes ? (
+                  <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
+                    {selectedJob.notes}
+                  </p>
+                ) : null}
+                <div className="mt-3 grid gap-2">
+                  {selectedJobNotes.map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-md border border-slate-200 bg-white p-3"
+                    >
+                      <p className="text-sm text-slate-700">{note.note}</p>
+                      <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                        {formatDateTime(note.created_at)}
+                      </p>
+                    </div>
+                  ))}
+                  {!selectedJob.notes && !selectedJobNotes.length ? (
+                    <EmptyState label="No production notes yet." />
+                  ) : null}
+                </div>
+                <form
+                  key={`note-${selectedJob.id}`}
+                  onSubmit={handleAddJobNote}
+                  className="mt-4 grid gap-3"
+                >
+                  <textarea
+                    required
+                    name="note"
+                    className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Add job note"
+                  />
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    {productionAction === "add-note" ? "Adding" : "Add note"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">Materials list</p>
+                <div className="mt-3 grid gap-2">
+                  {selectedJobMaterials.map((material) => (
+                    <div
+                      key={material.id}
+                      className="rounded-md border border-slate-200 bg-white p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-950">{material.name}</p>
+                          {material.notes ? (
+                            <p className="mt-1 text-sm text-slate-500">
+                              {material.notes}
+                            </p>
+                          ) : null}
+                        </div>
+                        <p className="text-sm font-bold text-slate-700">
+                          {material.quantity} {material.unit}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  {!selectedJobMaterials.length ? (
+                    <EmptyState label="No job materials yet." />
+                  ) : null}
+                </div>
+                <form
+                  key={`material-${selectedJob.id}`}
+                  onSubmit={handleAddJobMaterial}
+                  className="mt-4 grid gap-3"
+                >
+                  <input
+                    required
+                    name="name"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Material name"
+                  />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input
+                      required
+                      name="quantity"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue="1"
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Quantity"
+                    />
+                    <input
+                      name="unit"
+                      defaultValue="each"
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      placeholder="Unit"
+                    />
+                  </div>
+                  <textarea
+                    name="notes"
+                    className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Material notes"
+                  />
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <Package className="h-4 w-4" />
+                    {productionAction === "add-material" ? "Adding" : "Add material"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-500">
+                    <Camera className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">Photos</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Job photos will be added here later. Current linked photo count: {selectedJobPhotos.length}.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <EmptyState label="Select a job to open production details." />
+          )}
+        </section>
+
         <section
           id="job-builder"
           className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm scroll-mt-5"
@@ -8437,7 +9304,18 @@ function JobsView({
               <select
                 name="company_id"
                 value={jobFormCompanyId}
-                onChange={(event) => setJobFormCompanyId(event.target.value)}
+                onChange={(event) => {
+                  const nextCompanyId = event.target.value;
+                  const nextCompany =
+                    companyMap.get(nextCompanyId) ??
+                    snapshot.companies.find(
+                      (company) => company.id === nextCompanyId,
+                    ) ??
+                    null;
+
+                  setJobFormCompanyId(nextCompanyId);
+                  setJobFormServiceType(getDefaultServiceTypeForCompany(nextCompany));
+                }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
                 {snapshot.companies.map((company) => (
@@ -8541,15 +9419,14 @@ function JobsView({
               </select>
               <select
                 name="service_type"
-                defaultValue={
-                  selectedJob && selectedJob.company_id === jobFormCompanyId
-                    ? selectedJob.service_type
-                    : getDefaultServiceTypeForCompany(jobFormCompany)
+                value={jobFormServiceType}
+                onChange={(event) =>
+                  setJobFormServiceType(event.target.value as ServiceType)
                 }
                 key={`service-${selectedJob?.id ?? "new"}-${jobFormCompanyId}`}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
-                {serviceTypes.map((service) => (
+                {jobFormServiceOptions.map((service) => (
                   <option key={service.value} value={service.value}>
                     {service.label}
                   </option>

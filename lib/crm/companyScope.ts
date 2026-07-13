@@ -76,6 +76,11 @@ export function scopeCrmSnapshotByCompany(
     ),
     scopes,
     jobs,
+    jobTasks: snapshot.jobTasks.filter((task) => jobIds.has(task.job_id)),
+    jobNotes: snapshot.jobNotes.filter((note) => jobIds.has(note.job_id)),
+    jobMaterials: snapshot.jobMaterials.filter((material) =>
+      jobIds.has(material.job_id),
+    ),
     scheduleEvents,
     jobPhotos: byCompany(snapshot.jobPhotos, companyId),
     invoices,
