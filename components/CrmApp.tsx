@@ -271,6 +271,9 @@ import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
 type CrmClient = SupabaseClient<Database>;
 type ThemeMode = "light" | "dark";
+type SnapshotLoadOptions = {
+  showLoading?: boolean;
+};
 type WorkspaceView =
   | "dashboard"
   | "inbox"
@@ -566,13 +569,19 @@ function companyInitials(company: CompanyRecord | null | undefined) {
 }
 
 function getCompanyBrandColor(company: CompanyRecord | null | undefined) {
-  const brandColor = company?.brand_color?.toLowerCase();
-
-  if (!brandColor || brandColor === "#0284c7" || brandColor === "#0ea5e9") {
-    return "var(--wt-primary)";
+  if (company && isPaintingCompany(company)) {
+    return "var(--wt-painting-brand)";
   }
 
-  return company?.brand_color ?? "var(--wt-primary)";
+  if (
+    !company ||
+    company.trade === "roofing" ||
+    company.workflow_profile === "roofing"
+  ) {
+    return "var(--wt-roofing-brand)";
+  }
+
+  return company.brand_color ?? "var(--wt-primary)";
 }
 
 function companyTradeLabel(company: CompanyRecord | null | undefined) {
@@ -723,6 +732,19 @@ function toDateTimeInputValue(value: string) {
 
 function fromDateTimeInputValue(value: string) {
   return new Date(value).toISOString();
+}
+
+function restoreWindowScrollPosition(left: number, top: number) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      const root = document.documentElement;
+      const previousScrollBehavior = root.style.scrollBehavior;
+
+      root.style.scrollBehavior = "auto";
+      window.scrollTo({ left, top, behavior: "auto" });
+      root.style.scrollBehavior = previousScrollBehavior;
+    });
+  });
 }
 
 function getEstimateLineItems(snapshot: CrmSnapshot, estimateId: string) {
@@ -1008,6 +1030,29 @@ function hasUpcomingScheduledEvent(events: ScheduleEventRecord[]) {
   );
 }
 
+function hasSavedJobSchedule(job: JobRecord) {
+  return Boolean(getJobScheduledStart(job) || getJobScheduledEnd(job));
+}
+
+function formatJobSchedule(job: JobRecord) {
+  const scheduledStart = getJobScheduledStart(job);
+  const scheduledEnd = getJobScheduledEnd(job);
+
+  if (scheduledStart && scheduledEnd) {
+    return `${formatDateTime(scheduledStart)} to ${formatDateTime(scheduledEnd)}`;
+  }
+
+  if (scheduledStart) {
+    return formatDateTime(scheduledStart);
+  }
+
+  if (scheduledEnd) {
+    return `Ends ${formatDateTime(scheduledEnd)}`;
+  }
+
+  return "Not scheduled";
+}
+
 function calculateProductionKpis(snapshot: CrmSnapshot) {
   const activeJobs = snapshot.jobs.filter(
     (job) =>
@@ -1015,8 +1060,10 @@ function calculateProductionKpis(snapshot: CrmSnapshot) {
       job.status === "in_progress" ||
       job.status === "blocked",
   );
-  const jobsWithUpcomingSchedule = activeJobs.filter((job) =>
-    hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+  const jobsWithUpcomingSchedule = activeJobs.filter(
+    (job) =>
+      hasSavedJobSchedule(job) ||
+      hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
   );
   const jobsWithCrew = activeJobs.filter(
     (job) => job.crew_name || getJobAssignments(snapshot, job.id).length > 0,
@@ -1047,7 +1094,9 @@ function calculateProductionKpis(snapshot: CrmSnapshot) {
     .filter((order) => order.job_id !== null)
     .reduce((total, order) => total + order.total, 0);
   const jobsMissingSchedule = activeJobs.filter(
-    (job) => !hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+    (job) =>
+      !hasSavedJobSchedule(job) &&
+      !hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
   );
   const jobsMissingCrew = activeJobs.filter(
     (job) => !job.crew_name && getJobAssignments(snapshot, job.id).length === 0,
@@ -1060,7 +1109,9 @@ function calculateProductionKpis(snapshot: CrmSnapshot) {
 
   return {
     activeJobs,
-    scheduledJobs: snapshot.jobs.filter((job) => job.status === "scheduled"),
+    scheduledJobs: snapshot.jobs.filter(
+      (job) => job.status === "scheduled" || hasSavedJobSchedule(job),
+    ),
     inProgressJobs: snapshot.jobs.filter((job) => job.status === "in_progress"),
     blockedJobs: snapshot.jobs.filter((job) => job.status === "blocked"),
     completedJobs: snapshot.jobs.filter(
@@ -1371,27 +1422,36 @@ export function CrmApp() {
     setTheme(nextTheme);
   };
 
-  const loadSnapshot = useCallback(async (crmClient: CrmClient) => {
-    setIsLoading(true);
-    setError("");
-
-    try {
-      const nextSnapshot = await fetchCrmSnapshot(crmClient);
-      setSnapshot(nextSnapshot);
-    } catch (currentError) {
-      logCaughtError("[CRM] CRM snapshot load failed", currentError);
-
-      if (demoFallbackEnabled) {
-        setSnapshot(createDemoCrmSnapshot());
-        setNotice("Using local demo CRM data because live Supabase CRM is unavailable.");
-        return;
+  const loadSnapshot = useCallback(
+    async (
+      crmClient: CrmClient,
+      { showLoading = true }: SnapshotLoadOptions = {},
+    ) => {
+      if (showLoading) {
+        setIsLoading(true);
       }
 
-      setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [demoFallbackEnabled]);
+      setError("");
+
+      try {
+        const nextSnapshot = await fetchCrmSnapshot(crmClient);
+        setSnapshot(nextSnapshot);
+      } catch (currentError) {
+        logCaughtError("[CRM] CRM snapshot load failed", currentError);
+
+        if (demoFallbackEnabled) {
+          setSnapshot(createDemoCrmSnapshot());
+          setNotice("Using local demo CRM data because live Supabase CRM is unavailable.");
+          return;
+        }
+
+        setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [demoFallbackEnabled],
+  );
 
   useEffect(() => {
     if (!client) {
@@ -1559,6 +1619,20 @@ export function CrmApp() {
           await loadSnapshot(client);
         } else {
           setSnapshot(createDemoCrmSnapshot());
+        }
+      }}
+      onJobsReload={async () => {
+        const scrollLeft = window.scrollX;
+        const scrollTop = window.scrollY;
+
+        try {
+          if (client && !isDemoWorkspace) {
+            await loadSnapshot(client, { showLoading: false });
+          } else {
+            setSnapshot(createDemoCrmSnapshot());
+          }
+        } finally {
+          restoreWindowScrollPosition(scrollLeft, scrollTop);
         }
       }}
       onDemoSnapshotChange={handleDemoSnapshotChange}
@@ -1844,6 +1918,7 @@ type CrmWorkspaceProps = {
   onViewChange: (view: WorkspaceView) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onReload: () => Promise<void>;
+  onJobsReload: () => Promise<void>;
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onSignOut: () => Promise<void>;
   onNotice: (message: string) => void;
@@ -1862,6 +1937,7 @@ function CrmWorkspace({
   onViewChange,
   onThemeChange,
   onReload,
+  onJobsReload,
   onDemoSnapshotChange,
   onSignOut,
   onNotice,
@@ -1958,7 +2034,13 @@ function CrmWorkspace({
   }, [onViewChange, shortcuts]);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-3 text-slate-950 sm:p-6">
+    <main
+      className={`min-h-screen bg-slate-50 p-3 text-slate-950 sm:p-6 ${
+        activeCompany && isPaintingCompany(activeCompany)
+          ? "wt-company-painting"
+          : ""
+      }`}
+    >
       <ToastViewport notice={notice} error={error} />
       <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:min-h-[calc(100vh-48px)]">
@@ -2252,7 +2334,7 @@ function CrmWorkspace({
               isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onReload}
+              onReload={onJobsReload}
               onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
@@ -2752,6 +2834,7 @@ function DashboardView({
   const jobsNeedingSchedule = snapshot.jobs.filter(
     (job) =>
       (job.status === "scheduled" || job.status === "in_progress") &&
+      !hasSavedJobSchedule(job) &&
       !activeJobIdsWithUpcomingEvents.has(job.id),
   );
   const estimatesMissingDocuments = snapshot.estimates.filter(
@@ -2898,7 +2981,7 @@ function DashboardView({
       ) : null}
 
       {!isOwnerDashboard && companySummaries[0] ? (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+        <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_420px]">
           <CompanyDashboardPanel
             summary={companySummaries[0]}
             onViewChange={onViewChange}
@@ -3073,7 +3156,7 @@ function DashboardView({
       ) : null}
 
       {paintingCompanyIds.size ? (
-        <>
+        <div className="space-y-5 wt-company-painting">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard
               label="IHC estimate value"
@@ -3097,7 +3180,7 @@ function DashboardView({
             />
           </div>
 
-          <section className="rounded-lg border border-violet-100 bg-white p-5 shadow-sm">
+          <section className="rounded-lg border border-sky-100 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
@@ -3137,7 +3220,7 @@ function DashboardView({
               />
             </div>
           </section>
-        </>
+        </div>
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
@@ -3377,7 +3460,7 @@ function OwnerDashboardPanel({
   );
 
   return (
-    <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+    <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_420px]">
       <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -3435,8 +3518,16 @@ function CompanyDashboardPanel({
   const brandColor = getCompanyBrandColor(summary.company);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+    <section
+      className={`relative overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm ${
+        isPainting ? "wt-company-painting" : ""
+      }`}
+    >
+      <span
+        className="absolute inset-x-0 top-0 h-1"
+        style={{ backgroundColor: brandColor }}
+      />
+      <div className="flex flex-col gap-4">
         <div className="flex items-start gap-3">
           <div
             className="grid h-12 w-12 place-items-center rounded-md text-base font-bold text-white"
@@ -3458,7 +3549,7 @@ function CompanyDashboardPanel({
             </p>
           </div>
         </div>
-        <div className="grid gap-2 sm:grid-cols-4">
+        <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
           <CompanyQuickAction
             label="Leads"
             icon={ClipboardList}
@@ -3489,7 +3580,7 @@ function CompanyDashboardPanel({
         <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
       </div>
 
-      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-bold text-slate-950">
@@ -3534,7 +3625,11 @@ function CompanyPerformanceCard({
   };
 
   return (
-    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div
+      className={`relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4 ${
+        isPainting ? "wt-company-painting" : ""
+      }`}
+    >
       <span
         className="absolute inset-x-0 top-0 h-1"
         style={{ backgroundColor: brandColor }}
@@ -3549,7 +3644,7 @@ function CompanyPerformanceCard({
           </h3>
         </div>
         {isPainting ? (
-          <Paintbrush className="h-5 w-5 text-violet-700" />
+          <Paintbrush className="h-5 w-5 text-sky-700" />
         ) : (
           <Home className="h-5 w-5 text-sky-700" />
         )}
@@ -3560,24 +3655,24 @@ function CompanyPerformanceCard({
         <ProfileStat label="Revenue" value={formatMoney(summary.revenue)} />
         <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-2">
         <CompanyQuickAction
           label="Leads"
           icon={ClipboardList}
           onClick={() => goTo("leads")}
         />
         <CompanyQuickAction
-          label="Estimate"
+          label="Estimates"
           icon={FileText}
           onClick={() => goTo("estimates")}
         />
         <CompanyQuickAction
-          label="Schedule"
+          label="Calendar"
           icon={CalendarClock}
           onClick={() => goTo("calendar")}
         />
         <CompanyQuickAction
-          label="Docs"
+          label="Documents"
           icon={FileText}
           onClick={() => goTo("documents")}
         />
@@ -3599,10 +3694,10 @@ function CompanyQuickAction({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+      className="inline-flex w-full min-w-0 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
     >
-      <Icon className="h-4 w-4" />
-      {label}
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
     </button>
   );
 }
@@ -6354,11 +6449,11 @@ function EstimateEditor({
       </section>
 
       {showPaintingWorkflow ? (
-        <section className="grid gap-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+        <section className="grid gap-4 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="inline-flex items-center gap-2 text-sm font-bold text-slate-950">
-                <Paintbrush className="h-4 w-4 text-violet-700" />
+                <Paintbrush className="h-4 w-4 text-sky-700" />
                 IHC painting details
               </p>
               <p className="mt-1 text-sm text-slate-600">
@@ -6525,9 +6620,9 @@ function EstimateEditor({
           </div>
 
           <div className="grid gap-3 md:grid-cols-[1fr_220px]">
-            <div className="grid gap-2 rounded-md border border-violet-100 bg-white p-3">
+            <div className="grid gap-2 rounded-md border border-sky-100 bg-white p-3">
               <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                <Palette className="h-4 w-4 text-violet-700" />
+                <Palette className="h-4 w-4 text-sky-700" />
                 Color workflow
               </p>
               <div className="grid gap-2 sm:grid-cols-4">
@@ -6539,7 +6634,7 @@ function EstimateEditor({
                       key={status.value}
                       className={`rounded-md border px-3 py-2 text-xs font-semibold ${
                         isActive
-                          ? "border-violet-300 bg-violet-100 text-violet-900"
+                          ? "border-sky-300 bg-sky-100 text-sky-800"
                           : "border-slate-200 bg-slate-50 text-slate-600"
                       }`}
                     >
@@ -6549,7 +6644,7 @@ function EstimateEditor({
                 })}
               </div>
             </div>
-            <label className="flex items-center justify-center gap-2 rounded-md border border-violet-100 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
+            <label className="flex items-center justify-center gap-2 rounded-md border border-sky-100 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
               <input
                 name="primer_required"
                 type="checkbox"
@@ -6618,7 +6713,7 @@ function EstimateEditor({
               <button
                 type="button"
                 onClick={addPaintingPackage}
-                className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100"
+                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100 wt-company-painting"
               >
                 <Paintbrush className="h-3.5 w-3.5" />
                 Painting package
@@ -6907,8 +7002,8 @@ function EstimatePdfPreview({
         </div>
 
         {showPaintingSpecs ? (
-          <div className="mx-5 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
-            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-violet-900">
+          <div className="mx-5 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
+            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-sky-800">
               <Paintbrush className="h-4 w-4" />
               Painting specifications
             </p>
@@ -7123,14 +7218,14 @@ function EstimateWorkflowPanel({
         ) : null}
       </div>
       {showPaintingHandoff ? (
-        <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+        <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="inline-flex items-center gap-2 text-sm font-bold text-violet-950">
+              <p className="inline-flex items-center gap-2 text-sm font-bold text-sky-800">
                 <Palette className="h-4 w-4" />
                 IHC color and coating readiness
               </p>
-              <p className="mt-1 text-sm text-violet-800">
+              <p className="mt-1 text-sm text-sky-700">
                 {estimate.paint_product_line ?? estimate.paint_brand} -{" "}
                 {paintFinishLabel(estimate.paint_finish)}
               </p>
@@ -8157,7 +8252,11 @@ function JobsView({
       item.trim() &&
       !selectedJobTaskTitles.has(item.trim().toLowerCase()),
   );
-  const selectedJobScheduleReady = hasUpcomingScheduledEvent(selectedJobEvents);
+  const selectedJobScheduleReady = Boolean(
+    selectedJob &&
+      (hasSavedJobSchedule(selectedJob) ||
+        hasUpcomingScheduledEvent(selectedJobEvents)),
+  );
   const selectedJobCrewReady =
     Boolean(selectedJob?.crew_name) || selectedJobAssignments.length > 0;
   const selectedJobFinancials = {
@@ -8178,8 +8277,8 @@ function JobsView({
           label: "Schedule",
           ready: selectedJobScheduleReady,
           detail: selectedJobScheduleReady
-            ? "Upcoming production event"
-            : "Needs an upcoming event",
+            ? "Production dates saved"
+            : "Needs production dates",
         },
         {
           label: "Crew",
@@ -8220,27 +8319,28 @@ function JobsView({
   defaultJobEventStart.setDate(defaultJobEventStart.getDate() + 1);
   defaultJobEventStart.setHours(8, 0, 0, 0);
   const defaultJobEventEnd = new Date(defaultJobEventStart.getTime() + 4 * 60 * 60 * 1000);
+  const selectedJobFormCompanyId =
+    selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
+  const selectedJobFormCompany =
+    companyMap.get(selectedJobFormCompanyId) ??
+    snapshot.companies.find(
+      (company) => company.id === selectedJobFormCompanyId,
+    ) ??
+    null;
+  const selectedJobFormServiceType =
+    selectedJob?.service_type ??
+    getDefaultServiceTypeForCompany(selectedJobFormCompany);
 
   useEffect(() => {
-    const nextCompanyId = selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
-    const nextCompany =
-      companyMap.get(nextCompanyId) ??
-      snapshot.companies.find((company) => company.id === nextCompanyId) ??
-      null;
-
-    setJobFormCompanyId(nextCompanyId);
-    setJobFormServiceType(
-      selectedJob?.service_type ?? getDefaultServiceTypeForCompany(nextCompany),
-    );
+    setJobFormCompanyId(selectedJobFormCompanyId);
+    setJobFormServiceType(selectedJobFormServiceType);
     setEditingTaskId(null);
     setProductionAction(null);
   }, [
-    companyMap,
     jobDraftVersion,
-    selectedJob?.company_id,
     selectedJob?.id,
-    selectedJob?.service_type,
-    snapshot.companies,
+    selectedJobFormCompanyId,
+    selectedJobFormServiceType,
   ]);
 
   useEffect(() => {
@@ -8284,7 +8384,6 @@ function JobsView({
     setJobFormServiceType(job.service_type);
     setEditingTaskId(null);
     setProductionAction(null);
-    focusJobBuilder();
   };
 
   const saveDemoJob = (input: JobInput) => {
@@ -8331,6 +8430,47 @@ function JobsView({
     }));
 
     return savedJob;
+  };
+
+  const saveDemoScheduleEvent = (
+    input: ScheduleEventInput,
+    scheduledStartDate: string,
+    scheduledEndDate: string,
+  ) => {
+    const now = new Date().toISOString();
+    const scheduleEvent: ScheduleEventRecord = {
+      id: `demo-event-${Date.now()}`,
+      company_id: input.company_id,
+      customer_id: input.customer_id ?? null,
+      lead_id: input.lead_id ?? null,
+      job_id: input.job_id ?? null,
+      title: input.title,
+      event_type: input.event_type,
+      status: input.status ?? "scheduled",
+      start_at: input.start_at,
+      end_at: input.end_at,
+      location: input.location ?? null,
+      notes: input.notes ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      scheduleEvents: [...currentSnapshot.scheduleEvents, scheduleEvent],
+      jobs: currentSnapshot.jobs.map((job) =>
+        job.id === input.job_id
+          ? {
+              ...job,
+              scheduled_start: input.start_at,
+              scheduled_end: input.end_at,
+              start_date: scheduledStartDate,
+              end_date: scheduledEndDate,
+              updated_at: now,
+            }
+          : job,
+      ),
+    }));
   };
 
   const handleSaveJob = async (event: FormEvent<HTMLFormElement>) => {
@@ -8387,6 +8527,12 @@ function JobsView({
       ? fromDateTimeInputValue(scheduledStartInput)
       : null;
     const scheduledEnd = scheduledEndInput ? fromDateTimeInputValue(scheduledEndInput) : null;
+
+    if (scheduledStart && scheduledEnd && scheduledEnd <= scheduledStart) {
+      onError("Scheduled end must be after scheduled start.");
+      return;
+    }
+
     const address =
       getOptionalFormString(formData, "address") ??
       selectedEstimate?.location ??
@@ -8455,8 +8601,8 @@ function JobsView({
       status: getFormString(formData, "status", "draft") as JobStatus,
       scheduled_start: scheduledStart,
       scheduled_end: scheduledEnd,
-      start_date: scheduledStart ? scheduledStart.slice(0, 10) : null,
-      end_date: scheduledEnd ? scheduledEnd.slice(0, 10) : null,
+      start_date: scheduledStartInput?.slice(0, 10) ?? null,
+      end_date: scheduledEndInput?.slice(0, 10) ?? null,
       crew_name: getOptionalFormString(formData, "crew_name"),
       project_manager: getOptionalFormString(formData, "project_manager"),
       address,
@@ -8515,7 +8661,8 @@ function JobsView({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: JobTaskInput = {
       job_id: selectedJob.id,
       title: getFormString(formData, "title"),
@@ -8532,7 +8679,7 @@ function JobsView({
     try {
       setProductionAction("create-task");
       await createJobTask(client, input);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
@@ -8692,7 +8839,8 @@ function JobsView({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: JobNoteInput = {
       job_id: selectedJob.id,
       note: getFormString(formData, "note"),
@@ -8706,7 +8854,7 @@ function JobsView({
     try {
       setProductionAction("add-note");
       await addJobNote(client, input);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Job note added.");
     } catch (currentError) {
@@ -8726,7 +8874,8 @@ function JobsView({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: JobMaterialInput = {
       job_id: selectedJob.id,
       name: getFormString(formData, "name"),
@@ -8743,7 +8892,7 @@ function JobsView({
     try {
       setProductionAction("add-material");
       await addJobMaterial(client, input);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Job material added.");
     } catch (currentError) {
@@ -8818,12 +8967,34 @@ function JobsView({
   const handleCreateJobEvent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
+    if (productionAction !== null) {
+      return;
+    }
+
     if (!selectedJob) {
       onError("Select or save a job before scheduling production.");
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    onError("");
+    const scheduledStartInput = getFormString(formData, "start_at");
+    const scheduledEndInput = getFormString(formData, "end_at");
+
+    if (!scheduledStartInput || !scheduledEndInput) {
+      onError("Choose both scheduled start and end times.");
+      return;
+    }
+
+    const scheduledStart = fromDateTimeInputValue(scheduledStartInput);
+    const scheduledEnd = fromDateTimeInputValue(scheduledEndInput);
+
+    if (scheduledEnd <= scheduledStart) {
+      onError("Scheduled end must be after scheduled start.");
+      return;
+    }
+
     const input: ScheduleEventInput = {
       company_id: selectedJob.company_id,
       customer_id: selectedJob.customer_id,
@@ -8836,16 +9007,50 @@ function JobsView({
         "status",
         "scheduled",
       ) as ScheduleEventStatus,
-      start_at: fromDateTimeInputValue(getFormString(formData, "start_at")),
-      end_at: fromDateTimeInputValue(getFormString(formData, "end_at")),
+      start_at: scheduledStart,
+      end_at: scheduledEnd,
       location: getOptionalFormString(formData, "location") ?? getJobDisplayAddress(selectedJob),
       notes: getOptionalFormString(formData, "notes"),
     };
 
     try {
-      await createScheduleEvent(client, input);
-      event.currentTarget.reset();
-      await onReload();
+      setProductionAction("add-schedule");
+
+      if (isDemoMode) {
+        saveDemoScheduleEvent(
+          input,
+          scheduledStartInput.slice(0, 10),
+          scheduledEndInput.slice(0, 10),
+        );
+      } else {
+        await updateJob(client, selectedJob.id, {
+          scheduled_start: scheduledStart,
+          scheduled_end: scheduledEnd,
+          start_date: scheduledStartInput.slice(0, 10),
+          end_date: scheduledEndInput.slice(0, 10),
+        });
+
+        try {
+          await createScheduleEvent(client, input);
+        } catch (eventError) {
+          await onReload();
+          onNotice("Job schedule dates saved.");
+          onError(
+            `The dates were saved, but the calendar event could not be created: ${getCaughtErrorMessage(
+              eventError,
+              "Unknown calendar error.",
+            )}`,
+          );
+          return;
+        }
+      }
+
+      form.reset();
+
+      if (!isDemoMode) {
+        await onReload();
+      }
+
       onNotice("Job scheduled.");
     } catch (currentError) {
       onError(
@@ -8853,6 +9058,8 @@ function JobsView({
           ? currentError.message
           : "Unable to schedule job.",
       );
+    } finally {
+      setProductionAction(null);
     }
   };
 
@@ -9048,7 +9255,9 @@ function JobsView({
                   value={
                     getJobScheduledStart(selectedJob)
                       ? formatDateTime(getJobScheduledStart(selectedJob) ?? "")
-                      : "Not scheduled"
+                      : getJobScheduledEnd(selectedJob)
+                        ? "Start not set"
+                        : "Not scheduled"
                   }
                 />
                 <ProfileStat
@@ -9056,7 +9265,9 @@ function JobsView({
                   value={
                     getJobScheduledEnd(selectedJob)
                       ? formatDateTime(getJobScheduledEnd(selectedJob) ?? "")
-                      : "Not scheduled"
+                      : getJobScheduledStart(selectedJob)
+                        ? "End not set"
+                        : "Not scheduled"
                   }
                 />
                 <ProfileStat
@@ -9462,10 +9673,16 @@ function JobsView({
             onSubmit={handleSaveJob}
             className="mt-4 grid gap-3"
           >
-            <div className="rounded-md border border-purple-100 bg-purple-50/70 p-3">
+            <div
+              className={`rounded-md border border-sky-100 bg-sky-50 p-3 ${
+                jobFormCompany && isPaintingCompany(jobFormCompany)
+                  ? "wt-company-painting"
+                  : ""
+              }`}
+            >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
                     Job setup
                   </p>
                   <p className="mt-1 text-sm font-bold text-slate-950">
@@ -9713,6 +9930,9 @@ function JobsView({
                   <label className="grid gap-1 text-sm font-medium text-slate-700">
                     Scheduled start
                     <input
+                      key={`scheduled-start-${selectedJob?.id ?? "new"}-${
+                        selectedJob ? getJobScheduledStart(selectedJob) ?? "none" : "none"
+                      }-${jobFormCompanyId}-${jobFormServiceType}`}
                       name="scheduled_start"
                       type="datetime-local"
                       defaultValue={
@@ -9728,6 +9948,9 @@ function JobsView({
                   <label className="grid gap-1 text-sm font-medium text-slate-700">
                     Scheduled end
                     <input
+                      key={`scheduled-end-${selectedJob?.id ?? "new"}-${
+                        selectedJob ? getJobScheduledEnd(selectedJob) ?? "none" : "none"
+                      }-${jobFormCompanyId}-${jobFormServiceType}`}
                       name="scheduled_end"
                       type="datetime-local"
                       defaultValue={
@@ -9834,11 +10057,7 @@ function JobsView({
                   <ProfileStat label="Total" value={formatMoney(selectedJob.total ?? 0)} />
                   <ProfileStat
                     label="Scheduled"
-                    value={
-                      getJobScheduledStart(selectedJob)
-                        ? formatDateTime(getJobScheduledStart(selectedJob) ?? "")
-                        : "Not scheduled"
-                    }
+                    value={formatJobSchedule(selectedJob)}
                   />
                 </div>
                 {selectedJob.scope_of_work ? (
@@ -10044,6 +10263,10 @@ function JobsView({
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-950">Schedule job</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Production dates are saved on the job without requiring a crew assignment.
+            Job workflow status remains separate.
+          </p>
           {selectedJob ? (
             <>
               <div className="mt-4 grid gap-3">
@@ -10136,10 +10359,11 @@ function JobsView({
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                  disabled={productionAction !== null}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <CalendarClock className="h-4 w-4" />
-                  Add schedule
+                  {productionAction === "add-schedule" ? "Adding" : "Add schedule"}
                 </button>
               </form>
             </>
@@ -17469,7 +17693,12 @@ function SettingsView({ snapshot }: { snapshot: CrmSnapshot }) {
             ).length;
 
             return (
-              <div key={company.id} className="rounded-lg border border-slate-200 p-4">
+              <div
+                key={company.id}
+                className={`rounded-lg border border-slate-200 p-4 ${
+                  isPaintingCompany(company) ? "wt-company-painting" : ""
+                }`}
+              >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div

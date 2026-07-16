@@ -21,6 +21,8 @@
   --wt-accent-soft: #ffedd5;
   --wt-accent-muted: #fed7aa;
   --wt-accent-ring: rgba(249, 115, 22, 0.24);
+  --wt-roofing-brand: #6d28d9;
+  --wt-painting-brand: #f97316;
   --wt-brand: var(--wt-primary);
   --wt-brand-strong: var(--wt-primary-strong);
   --wt-success: #059669;
@@ -49,9 +51,21 @@
   --wt-accent-soft: #3a2114;
   --wt-accent-muted: #9a5b2e;
   --wt-accent-ring: rgba(251, 146, 60, 0.28);
+  --wt-roofing-brand: #8b5cf6;
+  --wt-painting-brand: #fb923c;
   --wt-brand: var(--wt-primary);
   --wt-brand-strong: var(--wt-primary-strong);
   --wt-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.wt-company-painting {
+  --wt-primary: var(--wt-accent);
+  --wt-primary-strong: var(--wt-accent-strong);
+  --wt-primary-soft: var(--wt-accent-soft);
+  --wt-primary-muted: var(--wt-accent-muted);
+  --wt-primary-ring: var(--wt-accent-ring);
+  --wt-brand: var(--wt-accent);
+  --wt-brand-strong: var(--wt-accent-strong);
 }
 
 html {
