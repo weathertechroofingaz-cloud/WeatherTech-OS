@@ -271,9 +271,6 @@ import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
 type CrmClient = SupabaseClient<Database>;
 type ThemeMode = "light" | "dark";
-type SnapshotLoadOptions = {
-  showLoading?: boolean;
-};
 type WorkspaceView =
   | "dashboard"
   | "inbox"
@@ -570,7 +567,7 @@ function companyInitials(company: CompanyRecord | null | undefined) {
 
 function getCompanyBrandColor(company: CompanyRecord | null | undefined) {
   if (company && isPaintingCompany(company)) {
-    return "var(--wt-painting-brand)";
+    return "var(--wt-painting-orange)";
   }
 
   if (
@@ -578,10 +575,16 @@ function getCompanyBrandColor(company: CompanyRecord | null | undefined) {
     company.trade === "roofing" ||
     company.workflow_profile === "roofing"
   ) {
-    return "var(--wt-roofing-brand)";
+    return "var(--wt-roofing-purple)";
   }
 
-  return company.brand_color ?? "var(--wt-primary)";
+  const brandColor = company?.brand_color?.toLowerCase();
+
+  if (!brandColor || brandColor === "#0284c7" || brandColor === "#0ea5e9") {
+    return "var(--wt-roofing-purple)";
+  }
+
+  return company.brand_color ?? "var(--wt-roofing-purple)";
 }
 
 function companyTradeLabel(company: CompanyRecord | null | undefined) {
@@ -735,16 +738,34 @@ function fromDateTimeInputValue(value: string) {
 }
 
 function restoreWindowScrollPosition(left: number, top: number) {
+  const restore = () => {
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootScrollBehavior = root.style.scrollBehavior;
+    const previousBodyScrollBehavior = body.style.scrollBehavior;
+
+    root.style.scrollBehavior = "auto";
+    body.style.scrollBehavior = "auto";
+    window.scrollTo({ left, top, behavior: "auto" });
+    root.style.scrollBehavior = previousRootScrollBehavior;
+    body.style.scrollBehavior = previousBodyScrollBehavior;
+  };
+
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      const root = document.documentElement;
-      const previousScrollBehavior = root.style.scrollBehavior;
-
-      root.style.scrollBehavior = "auto";
-      window.scrollTo({ left, top, behavior: "auto" });
-      root.style.scrollBehavior = previousScrollBehavior;
+      restore();
+      window.setTimeout(restore, 50);
+      window.setTimeout(restore, 150);
     });
   });
+}
+
+function updateUiPreservingScrollPosition(update: () => void) {
+  const scrollLeft = window.scrollX;
+  const scrollTop = window.scrollY;
+
+  update();
+  restoreWindowScrollPosition(scrollLeft, scrollTop);
 }
 
 function getEstimateLineItems(snapshot: CrmSnapshot, estimateId: string) {
@@ -1382,6 +1403,27 @@ function logCaughtError(label: string, currentError: unknown) {
   });
 }
 
+async function withTimeout<Result>(
+  promise: Promise<Result>,
+  timeoutMs: number,
+  message: string,
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<Result>((_resolve, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export function CrmApp() {
   const demoFallbackEnabled = isCrmDemoFallbackEnabled();
   const demoUser = useMemo(
@@ -1422,36 +1464,29 @@ export function CrmApp() {
     setTheme(nextTheme);
   };
 
-  const loadSnapshot = useCallback(
-    async (
-      crmClient: CrmClient,
-      { showLoading = true }: SnapshotLoadOptions = {},
-    ) => {
-      if (showLoading) {
-        setIsLoading(true);
+  const loadSnapshot = useCallback(async (crmClient: CrmClient, showLoading = true) => {
+    if (showLoading) {
+      setIsLoading(true);
+    }
+    setError("");
+
+    try {
+      const nextSnapshot = await fetchCrmSnapshot(crmClient);
+      setSnapshot(nextSnapshot);
+    } catch (currentError) {
+      logCaughtError("[CRM] CRM snapshot load failed", currentError);
+
+      if (demoFallbackEnabled) {
+        setSnapshot(createDemoCrmSnapshot());
+        setNotice("Using local demo CRM data because live Supabase CRM is unavailable.");
+        return;
       }
 
-      setError("");
-
-      try {
-        const nextSnapshot = await fetchCrmSnapshot(crmClient);
-        setSnapshot(nextSnapshot);
-      } catch (currentError) {
-        logCaughtError("[CRM] CRM snapshot load failed", currentError);
-
-        if (demoFallbackEnabled) {
-          setSnapshot(createDemoCrmSnapshot());
-          setNotice("Using local demo CRM data because live Supabase CRM is unavailable.");
-          return;
-        }
-
-        setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [demoFallbackEnabled],
-  );
+      setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [demoFallbackEnabled]);
 
   useEffect(() => {
     if (!client) {
@@ -1468,8 +1503,11 @@ export function CrmApp() {
 
     let isMounted = true;
 
-    client.auth
-      .getSession()
+    withTimeout(
+      client.auth.getSession(),
+      8000,
+      "Supabase session check timed out.",
+    )
       .then(({ data }) => {
         if (!isMounted) {
           return;
@@ -1522,13 +1560,18 @@ export function CrmApp() {
 
       if (activeUser) {
         setUser(activeUser);
+        setAuthReady(true);
         void loadSnapshot(client);
       } else if (demoFallbackEnabled) {
         setUser(demoUser);
         setSnapshot(createDemoCrmSnapshot());
+        setAuthReady(true);
+        setIsLoading(false);
       } else {
         setUser(null);
         setSnapshot(null);
+        setAuthReady(true);
+        setIsLoading(false);
       }
     });
 
@@ -1621,13 +1664,13 @@ export function CrmApp() {
           setSnapshot(createDemoCrmSnapshot());
         }
       }}
-      onJobsReload={async () => {
+      onScrollPreservingReload={async () => {
         const scrollLeft = window.scrollX;
         const scrollTop = window.scrollY;
 
         try {
           if (client && !isDemoWorkspace) {
-            await loadSnapshot(client, { showLoading: false });
+            await loadSnapshot(client, false);
           } else {
             setSnapshot(createDemoCrmSnapshot());
           }
@@ -1918,7 +1961,7 @@ type CrmWorkspaceProps = {
   onViewChange: (view: WorkspaceView) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onReload: () => Promise<void>;
-  onJobsReload: () => Promise<void>;
+  onScrollPreservingReload: () => Promise<void>;
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onSignOut: () => Promise<void>;
   onNotice: (message: string) => void;
@@ -1937,7 +1980,7 @@ function CrmWorkspace({
   onViewChange,
   onThemeChange,
   onReload,
-  onJobsReload,
+  onScrollPreservingReload,
   onDemoSnapshotChange,
   onSignOut,
   onNotice,
@@ -2289,7 +2332,7 @@ function CrmWorkspace({
               client={client ?? ({} as CrmClient)}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onReload}
+              onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
             />
@@ -2311,7 +2354,7 @@ function CrmWorkspace({
               client={client}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onReload}
+              onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
             />
@@ -2334,7 +2377,8 @@ function CrmWorkspace({
               isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onJobsReload}
+              onReload={onReload}
+              onScrollPreservingReload={onScrollPreservingReload}
               onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
@@ -2346,7 +2390,7 @@ function CrmWorkspace({
               client={client}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onReload}
+              onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
             />
@@ -2444,7 +2488,7 @@ function CrmWorkspace({
               client={client}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
-              onReload={onReload}
+              onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
             />
@@ -3115,7 +3159,7 @@ function DashboardView({
                   Roof replacement, repair, underlayment, and production readiness.
                 </p>
               </div>
-              <Badge label="Roofing" tone="blue" />
+              <Badge label="Roofing" tone="amber" />
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <ActionCenterCard
@@ -3190,7 +3234,7 @@ function DashboardView({
                   Color approvals, coating scopes, and painting production readiness.
                 </p>
               </div>
-              <Badge label="Painting" tone="blue" />
+              <Badge label="Painting" tone="amber" />
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <ActionCenterCard
@@ -3646,7 +3690,7 @@ function CompanyPerformanceCard({
         {isPainting ? (
           <Paintbrush className="h-5 w-5 text-sky-700" />
         ) : (
-          <Home className="h-5 w-5 text-sky-700" />
+          <Home className="h-5 w-5 text-amber-700" />
         )}
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -4352,6 +4396,10 @@ function LeadsView({
       )
     : "";
 
+  const handleSelectLead = (leadId: string) => {
+    updateUiPreservingScrollPosition(() => setSelectedLeadId(leadId));
+  };
+
   const handleCreateLead = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -4533,7 +4581,7 @@ function LeadsView({
                   key={lead.id}
                   type="button"
                   aria-pressed={selectedLead?.id === lead.id}
-                  onClick={() => setSelectedLeadId(lead.id)}
+                  onClick={() => handleSelectLead(lead.id)}
                   className={`grid w-full cursor-pointer gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:grid-cols-[1fr_150px_130px_120px] lg:items-center ${
                     selectedLead?.id === lead.id
                       ? "border-l-sky-500 bg-sky-50"
@@ -5385,25 +5433,15 @@ function EstimatesView({
   );
   const isCreatingEstimate = selectedEstimateId === "new" || selectedEstimate === null;
 
-  const focusEstimateBuilder = () => {
-    if (typeof document !== "undefined") {
-      window.requestAnimationFrame(() => {
-        document
-          .getElementById("estimate-builder")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    }
-  };
-
   const handleStartNewEstimate = () => {
-    setSelectedEstimateId("new");
-    setEstimateDraftVersion((version) => version + 1);
-    focusEstimateBuilder();
+    updateUiPreservingScrollPosition(() => {
+      setSelectedEstimateId("new");
+      setEstimateDraftVersion((version) => version + 1);
+    });
   };
 
   const handleSelectEstimate = (estimateId: string) => {
-    setSelectedEstimateId(estimateId);
-    focusEstimateBuilder();
+    updateUiPreservingScrollPosition(() => setSelectedEstimateId(estimateId));
   };
 
   const handleSaveEstimate = async (
@@ -5417,7 +5455,9 @@ function EstimatesView({
         ? await updateEstimate(client, selectedEstimate.id, input, lineItems)
         : await createEstimate(client, input, lineItems);
 
-      setSelectedEstimateId(savedEstimate.id);
+      updateUiPreservingScrollPosition(() =>
+        setSelectedEstimateId(savedEstimate.id),
+      );
       await onReload();
       onNotice(
         selectedEstimate
@@ -6449,11 +6489,11 @@ function EstimateEditor({
       </section>
 
       {showPaintingWorkflow ? (
-        <section className="grid gap-4 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
+        <section className="grid gap-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="inline-flex items-center gap-2 text-sm font-bold text-slate-950">
-                <Paintbrush className="h-4 w-4 text-sky-700" />
+                <Paintbrush className="h-4 w-4 text-violet-700" />
                 IHC painting details
               </p>
               <p className="mt-1 text-sm text-slate-600">
@@ -6620,9 +6660,9 @@ function EstimateEditor({
           </div>
 
           <div className="grid gap-3 md:grid-cols-[1fr_220px]">
-            <div className="grid gap-2 rounded-md border border-sky-100 bg-white p-3">
+            <div className="grid gap-2 rounded-md border border-violet-100 bg-white p-3">
               <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                <Palette className="h-4 w-4 text-sky-700" />
+                <Palette className="h-4 w-4 text-violet-700" />
                 Color workflow
               </p>
               <div className="grid gap-2 sm:grid-cols-4">
@@ -6634,7 +6674,7 @@ function EstimateEditor({
                       key={status.value}
                       className={`rounded-md border px-3 py-2 text-xs font-semibold ${
                         isActive
-                          ? "border-sky-300 bg-sky-100 text-sky-800"
+                          ? "border-violet-300 bg-violet-100 text-violet-900"
                           : "border-slate-200 bg-slate-50 text-slate-600"
                       }`}
                     >
@@ -6644,7 +6684,7 @@ function EstimateEditor({
                 })}
               </div>
             </div>
-            <label className="flex items-center justify-center gap-2 rounded-md border border-sky-100 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
+            <label className="flex items-center justify-center gap-2 rounded-md border border-violet-100 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
               <input
                 name="primer_required"
                 type="checkbox"
@@ -6713,7 +6753,7 @@ function EstimateEditor({
               <button
                 type="button"
                 onClick={addPaintingPackage}
-                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100 wt-company-painting"
+                className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100"
               >
                 <Paintbrush className="h-3.5 w-3.5" />
                 Painting package
@@ -7002,8 +7042,8 @@ function EstimatePdfPreview({
         </div>
 
         {showPaintingSpecs ? (
-          <div className="mx-5 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
-            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-sky-800">
+          <div className="mx-5 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
+            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase text-violet-900">
               <Paintbrush className="h-4 w-4" />
               Painting specifications
             </p>
@@ -7218,14 +7258,14 @@ function EstimateWorkflowPanel({
         ) : null}
       </div>
       {showPaintingHandoff ? (
-        <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 p-4 wt-company-painting">
+        <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/60 p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="inline-flex items-center gap-2 text-sm font-bold text-sky-800">
+              <p className="inline-flex items-center gap-2 text-sm font-bold text-violet-950">
                 <Palette className="h-4 w-4" />
                 IHC color and coating readiness
               </p>
-              <p className="mt-1 text-sm text-sky-700">
+              <p className="mt-1 text-sm text-violet-800">
                 {estimate.paint_product_line ?? estimate.paint_brand} -{" "}
                 {paintFinishLabel(estimate.paint_finish)}
               </p>
@@ -8109,6 +8149,7 @@ type JobsViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
+  onScrollPreservingReload: () => Promise<void>;
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -8120,6 +8161,7 @@ function JobsView({
   snapshot,
   companyMap,
   onReload,
+  onScrollPreservingReload,
   onDemoSnapshotChange,
   onNotice,
   onError,
@@ -8277,7 +8319,7 @@ function JobsView({
           label: "Schedule",
           ready: selectedJobScheduleReady,
           detail: selectedJobScheduleReady
-            ? "Production dates saved"
+            ? "Production scheduled"
             : "Needs production dates",
         },
         {
@@ -8319,28 +8361,27 @@ function JobsView({
   defaultJobEventStart.setDate(defaultJobEventStart.getDate() + 1);
   defaultJobEventStart.setHours(8, 0, 0, 0);
   const defaultJobEventEnd = new Date(defaultJobEventStart.getTime() + 4 * 60 * 60 * 1000);
-  const selectedJobFormCompanyId =
-    selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
-  const selectedJobFormCompany =
-    companyMap.get(selectedJobFormCompanyId) ??
-    snapshot.companies.find(
-      (company) => company.id === selectedJobFormCompanyId,
-    ) ??
-    null;
-  const selectedJobFormServiceType =
-    selectedJob?.service_type ??
-    getDefaultServiceTypeForCompany(selectedJobFormCompany);
 
   useEffect(() => {
-    setJobFormCompanyId(selectedJobFormCompanyId);
-    setJobFormServiceType(selectedJobFormServiceType);
+    const nextCompanyId = selectedJob?.company_id ?? snapshot.companies[0]?.id ?? "";
+    const nextCompany =
+      companyMap.get(nextCompanyId) ??
+      snapshot.companies.find((company) => company.id === nextCompanyId) ??
+      null;
+
+    setJobFormCompanyId(nextCompanyId);
+    setJobFormServiceType(
+      selectedJob?.service_type ?? getDefaultServiceTypeForCompany(nextCompany),
+    );
     setEditingTaskId(null);
     setProductionAction(null);
   }, [
+    companyMap,
     jobDraftVersion,
+    selectedJob?.company_id,
     selectedJob?.id,
-    selectedJobFormCompanyId,
-    selectedJobFormServiceType,
+    selectedJob?.service_type,
+    snapshot.companies,
   ]);
 
   useEffect(() => {
@@ -8384,6 +8425,7 @@ function JobsView({
     setJobFormServiceType(job.service_type);
     setEditingTaskId(null);
     setProductionAction(null);
+    focusJobBuilder();
   };
 
   const saveDemoJob = (input: JobInput) => {
@@ -8680,7 +8722,7 @@ function JobsView({
       setProductionAction("create-task");
       await createJobTask(client, input);
       form.reset();
-      await onReload();
+      await onScrollPreservingReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(
@@ -8707,7 +8749,7 @@ function JobsView({
         status: "todo",
         sort_order: selectedJobTasks.length,
       });
-      await onReload();
+      await onScrollPreservingReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(
@@ -8727,7 +8769,7 @@ function JobsView({
     try {
       setProductionAction(`status:${taskId}`);
       await updateJobTask(client, taskId, { status });
-      await onReload();
+      await onScrollPreservingReload();
       onNotice(`Checklist task marked ${jobTaskStatusLabel(status)}.`);
     } catch (currentError) {
       onError(
@@ -8761,8 +8803,8 @@ function JobsView({
         description: getOptionalFormString(formData, "description"),
         status: getFormString(formData, "status", "todo") as JobTaskStatus,
       });
-      setEditingTaskId(null);
-      await onReload();
+      updateUiPreservingScrollPosition(() => setEditingTaskId(null));
+      await onScrollPreservingReload();
       onNotice("Checklist task updated.");
     } catch (currentError) {
       onError(
@@ -8783,8 +8825,10 @@ function JobsView({
     try {
       setProductionAction(`delete:${taskId}`);
       await deleteJobTask(client, taskId);
-      setEditingTaskId((currentId) => (currentId === taskId ? null : currentId));
-      await onReload();
+      updateUiPreservingScrollPosition(() =>
+        setEditingTaskId((currentId) => (currentId === taskId ? null : currentId)),
+      );
+      await onScrollPreservingReload();
       onNotice("Checklist task deleted.");
     } catch (currentError) {
       onError(
@@ -8818,7 +8862,7 @@ function JobsView({
           sort_order: index,
         })),
       );
-      await onReload();
+      await onScrollPreservingReload();
       onNotice("Checklist order updated.");
     } catch (currentError) {
       onError(
@@ -8855,7 +8899,7 @@ function JobsView({
       setProductionAction("add-note");
       await addJobNote(client, input);
       form.reset();
-      await onReload();
+      await onScrollPreservingReload();
       onNotice("Job note added.");
     } catch (currentError) {
       onError(
@@ -8893,7 +8937,7 @@ function JobsView({
       setProductionAction("add-material");
       await addJobMaterial(client, input);
       form.reset();
-      await onReload();
+      await onScrollPreservingReload();
       onNotice("Job material added.");
     } catch (currentError) {
       onError(
@@ -9033,7 +9077,7 @@ function JobsView({
         try {
           await createScheduleEvent(client, input);
         } catch (eventError) {
-          await onReload();
+          await onScrollPreservingReload();
           onNotice("Job schedule dates saved.");
           onError(
             `The dates were saved, but the calendar event could not be created: ${getCaughtErrorMessage(
@@ -9048,7 +9092,7 @@ function JobsView({
       form.reset();
 
       if (!isDemoMode) {
-        await onReload();
+        await onScrollPreservingReload();
       }
 
       onNotice("Job scheduled.");
@@ -9359,7 +9403,11 @@ function JobsView({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setEditingTaskId(null)}
+                                onClick={() =>
+                                  updateUiPreservingScrollPosition(() =>
+                                    setEditingTaskId(null),
+                                  )
+                                }
                                 disabled={productionAction !== null}
                                 className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                               >
@@ -9415,7 +9463,11 @@ function JobsView({
                               <button
                                 type="button"
                                 title="Edit task"
-                                onClick={() => setEditingTaskId(task.id)}
+                                onClick={() =>
+                                  updateUiPreservingScrollPosition(() =>
+                                    setEditingTaskId(task.id),
+                                  )
+                                }
                                 disabled={productionAction !== null}
                                 className="grid h-9 w-9 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                               >
@@ -9673,16 +9725,10 @@ function JobsView({
             onSubmit={handleSaveJob}
             className="mt-4 grid gap-3"
           >
-            <div
-              className={`rounded-md border border-sky-100 bg-sky-50 p-3 ${
-                jobFormCompany && isPaintingCompany(jobFormCompany)
-                  ? "wt-company-painting"
-                  : ""
-              }`}
-            >
+            <div className="rounded-md border border-purple-100 bg-purple-50/70 p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">
                     Job setup
                   </p>
                   <p className="mt-1 text-sm font-bold text-slate-950">
@@ -9694,7 +9740,7 @@ function JobsView({
                 </div>
                 <Badge
                   label={jobFormServiceLabel}
-                  tone={jobFormServiceType === "painting" ? "amber" : "blue"}
+                  tone="amber"
                 />
               </div>
             </div>
@@ -9932,7 +9978,7 @@ function JobsView({
                     <input
                       key={`scheduled-start-${selectedJob?.id ?? "new"}-${
                         selectedJob ? getJobScheduledStart(selectedJob) ?? "none" : "none"
-                      }-${jobFormCompanyId}-${jobFormServiceType}`}
+                      }`}
                       name="scheduled_start"
                       type="datetime-local"
                       defaultValue={
@@ -9950,7 +9996,7 @@ function JobsView({
                     <input
                       key={`scheduled-end-${selectedJob?.id ?? "new"}-${
                         selectedJob ? getJobScheduledEnd(selectedJob) ?? "none" : "none"
-                      }-${jobFormCompanyId}-${jobFormServiceType}`}
+                      }`}
                       name="scheduled_end"
                       type="datetime-local"
                       defaultValue={
@@ -10407,6 +10453,10 @@ function CalendarView({
   const productionKpis = calculateProductionKpis(snapshot);
   const selectedEvent =
     snapshot.scheduleEvents.find((event) => event.id === selectedEventId) ?? null;
+
+  const handleSelectCalendarEvent = (eventId: string) => {
+    updateUiPreservingScrollPosition(() => setSelectedEventId(eventId));
+  };
   const sortedEvents = [...snapshot.scheduleEvents].sort(
     (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime(),
   );
@@ -10530,7 +10580,7 @@ function CalendarView({
       const savedEvent = selectedEvent
         ? await updateScheduleEvent(client, selectedEvent.id, input)
         : await createScheduleEvent(client, input);
-      setSelectedEventId(savedEvent.id);
+      handleSelectCalendarEvent(savedEvent.id);
       await onReload();
       onNotice(selectedEvent ? "Schedule updated." : "Event scheduled.");
     } catch (currentError) {
@@ -10559,7 +10609,7 @@ function CalendarView({
             </div>
             <button
               type="button"
-              onClick={() => setSelectedEventId("new")}
+              onClick={() => handleSelectCalendarEvent("new")}
               className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700"
             >
               <Plus className="h-4 w-4" />
@@ -10658,7 +10708,7 @@ function CalendarView({
                         onDragStart={(dragEvent) =>
                           dragEvent.dataTransfer.setData("text/plain", event.id)
                         }
-                        onClick={() => setSelectedEventId(event.id)}
+                        onClick={() => handleSelectCalendarEvent(event.id)}
                         className={`rounded-md border bg-white p-2 text-left text-xs font-semibold text-slate-700 shadow-sm hover:border-sky-300 ${
                           conflictEventIds.has(event.id)
                             ? "border-amber-300"
@@ -10693,7 +10743,7 @@ function CalendarView({
               <button
                 key={event.id}
                 type="button"
-                onClick={() => setSelectedEventId(event.id)}
+                onClick={() => handleSelectCalendarEvent(event.id)}
                 className={`rounded-lg border p-4 text-left transition hover:border-sky-300 hover:bg-sky-50 ${
                   selectedEvent?.id === event.id
                     ? "border-sky-300 bg-sky-50"
@@ -14161,6 +14211,10 @@ function DocumentsAndSignaturesView({
     }
   }, [selectedDocumentId, snapshot.documents]);
 
+  const handleSelectDocument = (documentId: string) => {
+    updateUiPreservingScrollPosition(() => setSelectedDocumentId(documentId));
+  };
+
   const signDocument = async (signature: SignatureRecord, form: HTMLFormElement) => {
     const formData = new FormData(form);
 
@@ -14198,8 +14252,8 @@ function DocumentsAndSignaturesView({
         file_url: generatedDraft.file_url,
         body: generatedDraft.body,
       });
-      setSelectedDocumentId(savedDocument.id);
       await onReload();
+      handleSelectDocument(savedDocument.id);
       onNotice(status === "draft" ? "Document draft saved." : "Document marked ready.");
     } catch (currentError) {
       onError(
@@ -14266,7 +14320,8 @@ function DocumentsAndSignaturesView({
 
   const handleCreateDocument = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: DocumentInput = {
       company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
       customer_id: getOptionalRelation(formData, "customer_id"),
@@ -14284,9 +14339,9 @@ function DocumentsAndSignaturesView({
 
     try {
       const savedDocument = await createDocument(client, input);
-      setSelectedDocumentId(savedDocument.id);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
+      handleSelectDocument(savedDocument.id);
       onNotice("Document draft saved.");
     } catch (currentError) {
       onError(
@@ -14401,7 +14456,7 @@ function DocumentsAndSignaturesView({
                 <button
                   key={document.id}
                   type="button"
-                  onClick={() => setSelectedDocumentId(document.id)}
+                  onClick={() => handleSelectDocument(document.id)}
                   className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_120px_160px] xl:items-center ${
                     selectedDocument?.id === document.id ? "bg-sky-50" : "bg-white"
                   }`}
@@ -17693,12 +17748,7 @@ function SettingsView({ snapshot }: { snapshot: CrmSnapshot }) {
             ).length;
 
             return (
-              <div
-                key={company.id}
-                className={`rounded-lg border border-slate-200 p-4 ${
-                  isPaintingCompany(company) ? "wt-company-painting" : ""
-                }`}
-              >
+              <div key={company.id} className="rounded-lg border border-slate-200 p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div

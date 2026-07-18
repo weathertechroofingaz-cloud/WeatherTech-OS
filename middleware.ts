@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import type { Database } from "./lib/crm/types";
 import { getSupabaseConfig } from "./lib/supabase/config";
 
-export async function proxy(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const config = getSupabaseConfig();
   let response = NextResponse.next({ request });
 
@@ -26,7 +26,11 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  try {
+    await supabase.auth.getUser();
+  } catch {
+    // The client-side auth flow can still show demo fallback if refresh is unavailable.
+  }
 
   return response;
 }

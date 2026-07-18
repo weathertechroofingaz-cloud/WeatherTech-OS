@@ -116,7 +116,6 @@ function throwCrmTableError(tableName: string, error: unknown): never {
   console.error("[CRM] Supabase table load failed", {
     tableName,
     message,
-    error,
   });
 
   throw wrappedError;
