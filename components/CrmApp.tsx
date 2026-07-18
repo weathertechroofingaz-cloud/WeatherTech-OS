@@ -295,6 +295,75 @@ type WorkspaceView =
   | "integrations"
   | "settings";
 
+type NavigationItem = {
+  view: WorkspaceView;
+  label: string;
+  icon: typeof Home;
+};
+
+type NavigationGroup = {
+  label: string;
+  items: NavigationItem[];
+};
+
+const workspaceNavigationGroups: NavigationGroup[] = [
+  {
+    label: "Overview",
+    items: [{ view: "dashboard", label: "Dashboard", icon: Home }],
+  },
+  {
+    label: "CRM",
+    items: [
+      { view: "inbox", label: "Inbox", icon: MessageSquare },
+      { view: "leads", label: "Leads", icon: ClipboardList },
+      { view: "customers", label: "Customers", icon: Users },
+      { view: "estimates", label: "Estimates", icon: FileText },
+      { view: "scopes", label: "Scopes", icon: WandSparkles },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { view: "jobs", label: "Jobs", icon: CalendarClock },
+      { view: "calendar", label: "Calendar", icon: CalendarClock },
+      { view: "photos", label: "Photos", icon: Camera },
+      { view: "orders", label: "Materials", icon: Package },
+      { view: "routes", label: "Routes", icon: MapPin },
+    ],
+  },
+  {
+    label: "Financial",
+    items: [
+      { view: "invoices", label: "Invoices", icon: ReceiptText },
+      { view: "changeOrders", label: "Change Orders", icon: FileText },
+      { view: "analytics", label: "Analytics", icon: DollarSign },
+    ],
+  },
+  {
+    label: "Portals",
+    items: [
+      { view: "customerPortal", label: "Customer Portal", icon: UserRound },
+      { view: "employeePortal", label: "Employee Portal", icon: ShieldCheck },
+    ],
+  },
+  {
+    label: "Intelligence",
+    items: [
+      { view: "ai", label: "AI Tools", icon: Bot },
+      { view: "weather", label: "Weather", icon: CloudSun },
+      { view: "notifications", label: "Notifications", icon: Mail },
+    ],
+  },
+  {
+    label: "Administration",
+    items: [
+      { view: "documents", label: "Documents", icon: FileText },
+      { view: "integrations", label: "Integrations", icon: ShieldCheck },
+      { view: "settings", label: "Settings", icon: Building2 },
+    ],
+  },
+];
+
 const leadStatuses: { value: LeadStatus; label: string }[] = [
   { value: "new", label: "New" },
   { value: "contacted", label: "Contacted" },
@@ -2104,139 +2173,26 @@ function CrmWorkspace({
             </div>
           </div>
 
-          <nav className="mt-5 grid gap-1">
-            <NavButton
-              icon={Home}
-              label="Dashboard"
-              isActive={view === "dashboard"}
-              onClick={() => onViewChange("dashboard")}
-            />
-            <NavButton
-              icon={MessageSquare}
-              label="Inbox"
-              isActive={view === "inbox"}
-              onClick={() => onViewChange("inbox")}
-            />
-            <NavButton
-              icon={ClipboardList}
-              label="Leads"
-              isActive={view === "leads"}
-              onClick={() => onViewChange("leads")}
-            />
-            <NavButton
-              icon={Users}
-              label="Customers"
-              isActive={view === "customers"}
-              onClick={() => onViewChange("customers")}
-            />
-            <NavButton
-              icon={FileText}
-              label="Estimates"
-              isActive={view === "estimates"}
-              onClick={() => onViewChange("estimates")}
-            />
-            <NavButton
-              icon={WandSparkles}
-              label="Scopes"
-              isActive={view === "scopes"}
-              onClick={() => onViewChange("scopes")}
-            />
-            <NavButton
-              icon={CalendarClock}
-              label="Jobs"
-              isActive={view === "jobs"}
-              onClick={() => onViewChange("jobs")}
-            />
-            <NavButton
-              icon={CalendarClock}
-              label="Calendar"
-              isActive={view === "calendar"}
-              onClick={() => onViewChange("calendar")}
-            />
-            <NavButton
-              icon={Camera}
-              label="Photos"
-              isActive={view === "photos"}
-              onClick={() => onViewChange("photos")}
-            />
-            <NavButton
-              icon={ReceiptText}
-              label="Invoices"
-              isActive={view === "invoices"}
-              onClick={() => onViewChange("invoices")}
-            />
-            <NavButton
-              icon={Package}
-              label="Materials"
-              isActive={view === "orders"}
-              onClick={() => onViewChange("orders")}
-            />
-            <NavButton
-              icon={Bot}
-              label="AI Tools"
-              isActive={view === "ai"}
-              onClick={() => onViewChange("ai")}
-            />
-            <NavButton
-              icon={CloudSun}
-              label="Weather"
-              isActive={view === "weather"}
-              onClick={() => onViewChange("weather")}
-            />
-            <NavButton
-              icon={UserRound}
-              label="Customer Portal"
-              isActive={view === "customerPortal"}
-              onClick={() => onViewChange("customerPortal")}
-            />
-            <NavButton
-              icon={ShieldCheck}
-              label="Employee Portal"
-              isActive={view === "employeePortal"}
-              onClick={() => onViewChange("employeePortal")}
-            />
-            <NavButton
-              icon={MapPin}
-              label="Routes"
-              isActive={view === "routes"}
-              onClick={() => onViewChange("routes")}
-            />
-            <NavButton
-              icon={FileText}
-              label="Change Orders"
-              isActive={view === "changeOrders"}
-              onClick={() => onViewChange("changeOrders")}
-            />
-            <NavButton
-              icon={FileText}
-              label="Documents"
-              isActive={view === "documents"}
-              onClick={() => onViewChange("documents")}
-            />
-            <NavButton
-              icon={DollarSign}
-              label="Analytics"
-              isActive={view === "analytics"}
-              onClick={() => onViewChange("analytics")}
-            />
-            <NavButton
-              icon={Mail}
-              label="Notifications"
-              isActive={view === "notifications"}
-              onClick={() => onViewChange("notifications")}
-            />
-            <NavButton
-              icon={ShieldCheck}
-              label="Integrations"
-              isActive={view === "integrations"}
-              onClick={() => onViewChange("integrations")}
-            />
-            <NavButton
-              icon={Building2}
-              label="Settings"
-              isActive={view === "settings"}
-              onClick={() => onViewChange("settings")}
-            />
+          <nav className="mt-5 grid gap-4" aria-label="WeatherTech OS navigation">
+            {workspaceNavigationGroups.map((group) => (
+              <div key={group.label} className="grid gap-1.5">
+                <p className="px-3 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  {group.label}
+                </p>
+                <div className="grid gap-1">
+                  {group.items.map((item) => (
+                    <NavButton
+                      key={item.view}
+                      icon={item.icon}
+                      label={item.label}
+                      isActive={view === item.view}
+                      activeColor={getCompanyBrandColor(activeCompany)}
+                      onClick={() => onViewChange(item.view)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </nav>
 
           <div className="mt-6 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
@@ -2533,17 +2489,19 @@ type NavButtonProps = {
   icon: typeof Home;
   label: string;
   isActive: boolean;
+  activeColor: string;
   onClick: () => void;
 };
 
-function NavButton({ icon: Icon, label, isActive, onClick }: NavButtonProps) {
+function NavButton({ icon: Icon, label, isActive, activeColor, onClick }: NavButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
+      style={isActive ? { backgroundColor: activeColor } : undefined}
       className={`flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition ${
         isActive
-          ? "bg-sky-500 text-white"
+          ? "text-white shadow-sm"
           : "text-slate-300 hover:bg-slate-800 hover:text-white"
       }`}
     >
