@@ -1,3 +1,8 @@
+import {
+  createCipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +13,7 @@ const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
 const DEFAULT_GROUPS = [
   "dashboard",
   "crm",
+  "lead-intake",
   "themes",
   "layout",
   "job-builder",
@@ -30,6 +36,32 @@ function readLocalEnv(cwd) {
   }
 
   return env;
+}
+
+function buildEncryptedLeadIntakeRetryPayload(env, payload) {
+  const secret = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!secret) {
+    throw new Error("Supabase service role key is required to encrypt retry payloads.");
+  }
+
+  const key = createHash("sha256")
+    .update(`weathertech-lead-intake-retry:${secret}`)
+    .digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+
+  return {
+    v: 1,
+    alg: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: encrypted.toString("base64"),
+  };
 }
 
 function colorKind(rgbText) {
@@ -199,8 +231,15 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const estimateIds = scopedEstimates.map((estimate) => estimate.id);
   const leadIds = scopedLeads.map((lead) => lead.id);
 
+  await deleteByLike(env, "integration_sync_logs", "external_id");
+
   if (!jobIds.length && !estimateIds.length && !leadIds.length) {
-    return { jobsDeleted: 0, estimatesDeleted: 0, leadsDeleted: 0 };
+    return {
+      jobsDeleted: 0,
+      estimatesDeleted: 0,
+      leadsDeleted: 0,
+      integrationLogsDeleted: "requested",
+    };
   }
 
   await deleteByLike(env, "schedule_events", "title");
@@ -220,6 +259,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     jobsDeleted: jobIds.length,
     estimatesDeleted: estimateIds.length,
     leadsDeleted: leadIds.length,
+    integrationLogsDeleted: "requested",
   };
 }
 
@@ -273,6 +313,82 @@ async function findLeadByContactName(env, contactName, leadNameColumn) {
   return rows[0] ?? null;
 }
 
+async function findLeadsByContactName(env, contactName, leadNameColumn) {
+  return restRequest(
+    env,
+    `leads?select=*&${leadNameColumn}=eq.${encodeURIComponent(contactName)}`,
+  );
+}
+
+function getLeadRowName(lead) {
+  return lead.contact_name ?? lead.customer_name ?? lead.name ?? "";
+}
+
+function getLeadRowSource(lead) {
+  return lead.source ?? lead.lead_source ?? "";
+}
+
+function getLeadRowServiceType(lead) {
+  return lead.service_type ?? lead.service_needed ?? "";
+}
+
+async function findIntegrationLogsByExternalId(env, provider, externalId) {
+  return restRequest(
+    env,
+    `integration_sync_logs?select=*&provider=eq.${encodeURIComponent(provider)}&external_id=eq.${encodeURIComponent(externalId)}&order=created_at.desc`,
+  );
+}
+
+async function postAppJson(baseUrl, path, payload) {
+  const response = await fetch(new URL(path, baseUrl), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  const body = text ? JSON.parse(text) : null;
+
+  return {
+    status: response.status,
+    ok: response.ok,
+    body,
+  };
+}
+
+async function postAppRaw(baseUrl, path, body) {
+  const response = await fetch(new URL(path, baseUrl), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body,
+  });
+  const text = await response.text();
+
+  return {
+    status: response.status,
+    ok: response.ok,
+    body: text ? JSON.parse(text) : null,
+  };
+}
+
+function assertNoSensitiveRequestSummary(log, sensitiveValues, label) {
+  const requestSummary = JSON.stringify(log.request_summary ?? {});
+  const leaked = sensitiveValues.filter((value) =>
+    value && requestSummary.includes(value),
+  );
+
+  if (leaked.length > 0) {
+    throw new Error(
+      `${label} request_summary contained sensitive plaintext: ${leaked.join(", ")}`,
+    );
+  }
+}
+
 async function findEstimateByTitle(env, title) {
   const rows = await restRequest(
     env,
@@ -305,11 +421,20 @@ async function getTab(browser) {
   const selected = await browser.tabs.selected();
 
   if (selected) {
-    return selected;
+    const selectedUrl = await selected.url().catch(() => "");
+
+    if (selectedUrl && !selectedUrl.startsWith("data:")) {
+      return selected;
+    }
   }
 
-  if (tabs[0]) {
-    return browser.tabs.get(tabs[0].id);
+  const appTab = tabs.find((tab) =>
+    tab.url?.startsWith("http://localhost:3000") ||
+    tab.url?.startsWith("http://127.0.0.1:3000"),
+  );
+
+  if (appTab) {
+    return browser.tabs.get(appTab.id);
   }
 
   return browser.tabs.new();
@@ -698,6 +823,324 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     leadName,
     pipelineStage: savedLead.pipeline_stage,
     priority: savedLead.priority,
+  };
+}
+
+async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNameColumn, progress) {
+  const websiteExternalId = `${TEST_PREFIX} ${runId} WEBSITE EXT`;
+  const websiteLeadName = `${TEST_PREFIX} ${runId} WEBSITE INTAKE`;
+  const yelpExternalId = `${TEST_PREFIX} ${runId} YELP EXT`;
+  const yelpLeadName = `${TEST_PREFIX} ${runId} YELP INTAKE`;
+  const retryExternalId = `${TEST_PREFIX} ${runId} RETRY EXT`;
+  const retryLeadName = `${TEST_PREFIX} ${runId} RETRY INTAKE`;
+  const submittedAt = new Date().toISOString();
+
+  progress("lead-intake:invalid-json:start");
+  for (const path of ["/api/leads/website", "/api/leads/yelp"]) {
+    const invalidJson = await postAppRaw(baseUrl, path, "{");
+
+    if (invalidJson.status !== 400 || invalidJson.body?.status !== "invalid_json") {
+      throw new Error(
+        `${path} invalid JSON status was ${invalidJson.status} ${JSON.stringify(invalidJson.body)}`,
+      );
+    }
+  }
+  progress("lead-intake:invalid-json:done");
+
+  progress("lead-intake:website:create:start");
+  const websitePayload = {
+    business: "WeatherTech",
+    websiteUrl: "https://weathertechroofingaz.com/test-intake",
+    source: "Website",
+    utmSource: "test-suite",
+    utmMedium: "form",
+    utmCampaign: `${TEST_PREFIX} ${runId} CAMPAIGN`,
+    externalLeadId: websiteExternalId,
+    submittedAt,
+    name: websiteLeadName,
+    phone: "6025550111",
+    email: `website-${runId}@example.test`,
+    address: "111 TEST Website Intake Way, Phoenix, AZ",
+    location: "Phoenix",
+    serviceType: "roofing",
+    message: `${TEST_PREFIX} ${runId} website intake message`,
+  };
+  const websiteSensitiveValues = [
+    websiteLeadName,
+    websitePayload.phone,
+    websitePayload.email,
+    websitePayload.address,
+    websitePayload.message,
+  ];
+  const websiteCreate = await postAppJson(baseUrl, "/api/leads/website", websitePayload);
+
+  if (websiteCreate.status !== 201 || !websiteCreate.body?.ok) {
+    throw new Error(`Website intake create failed: ${websiteCreate.status} ${JSON.stringify(websiteCreate.body)}`);
+  }
+
+  if (!websiteCreate.body.leadId) {
+    throw new Error("Website intake did not return a leadId.");
+  }
+  progress("lead-intake:website:create:done");
+
+  progress("lead-intake:website:duplicate:start");
+  const websiteDuplicate = await postAppJson(baseUrl, "/api/leads/website", websitePayload);
+
+  if (websiteDuplicate.status !== 200 || !websiteDuplicate.body?.ok) {
+    throw new Error(`Website intake duplicate failed: ${websiteDuplicate.status} ${JSON.stringify(websiteDuplicate.body)}`);
+  }
+
+  if (!String(websiteDuplicate.body.status).includes("duplicate")) {
+    throw new Error(`Website duplicate status was ${websiteDuplicate.body.status}.`);
+  }
+
+  if (websiteDuplicate.body.leadId !== websiteCreate.body.leadId) {
+    throw new Error("Website duplicate did not return the original leadId.");
+  }
+  progress("lead-intake:website:duplicate:done");
+
+  const websiteLeads = await findLeadsByContactName(env, websiteLeadName, leadNameColumn);
+
+  if (websiteLeads.length !== 1) {
+    throw new Error(`Website intake created ${websiteLeads.length} matching leads, expected 1.`);
+  }
+
+  const websiteLead = websiteLeads[0];
+
+  if (websiteLead.company_id !== companies.weatherTech.id) {
+    throw new Error("Website intake did not route to WeatherTech Roofing LLC.");
+  }
+
+  if (!getLeadRowSource(websiteLead).toLowerCase().includes("website")) {
+    throw new Error(`Website lead source was ${getLeadRowSource(websiteLead)}.`);
+  }
+
+  if (!String(websiteLead.notes ?? "").includes(websiteExternalId)) {
+    throw new Error("Website lead notes did not preserve external lead ID.");
+  }
+
+  const websiteLogs = await findIntegrationLogsByExternalId(env, "website", websiteExternalId);
+  const websiteStatuses = websiteLogs.map((log) => log.status);
+
+  if (!websiteStatuses.includes("succeeded") || !websiteStatuses.includes("skipped")) {
+    throw new Error(`Website intake logs did not include succeeded and skipped statuses: ${websiteStatuses.join(", ")}`);
+  }
+
+  const websiteSuccessLog = websiteLogs.find((log) => log.status === "succeeded");
+
+  if (!websiteSuccessLog?.request_fingerprint) {
+    throw new Error("Website intake success log did not store a request fingerprint.");
+  }
+
+  if (websiteSuccessLog.related_record_id !== websiteCreate.body.leadId) {
+    throw new Error("Website intake success log was not associated with the created lead.");
+  }
+
+  for (const log of websiteLogs) {
+    assertNoSensitiveRequestSummary(log, websiteSensitiveValues, "Website intake");
+  }
+
+  progress("lead-intake:yelp:create:start");
+  const yelpPayload = {
+    business: "IHC",
+    source: "Yelp",
+    yelpBusinessId: `${TEST_PREFIX} ${runId} IHC YELP ACCOUNT`,
+    yelpConversationId: `${TEST_PREFIX} ${runId} YELP CONVERSATION`,
+    yelpLeadId: yelpExternalId,
+    submittedAt,
+    name: yelpLeadName,
+    phone: "6025550222",
+    email: `yelp-${runId}@example.test`,
+    location: "Tempe",
+    serviceType: "painting",
+    message: `${TEST_PREFIX} ${runId} Yelp intake message`,
+  };
+  const yelpSensitiveValues = [
+    yelpLeadName,
+    yelpPayload.phone,
+    yelpPayload.email,
+    yelpPayload.message,
+  ];
+  const yelpCreate = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload);
+
+  if (yelpCreate.status !== 201 || !yelpCreate.body?.ok) {
+    throw new Error(`Yelp intake create failed: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
+  }
+
+  const yelpLeads = await findLeadsByContactName(env, yelpLeadName, leadNameColumn);
+
+  if (yelpLeads.length !== 1) {
+    throw new Error(`Yelp intake created ${yelpLeads.length} matching leads, expected 1.`);
+  }
+
+  const yelpLead = yelpLeads[0];
+
+  if (yelpLead.company_id !== companies.ihc.id) {
+    throw new Error("Yelp intake did not route to IHC Painting.");
+  }
+
+  if (!getLeadRowSource(yelpLead).toLowerCase().includes("yelp")) {
+    throw new Error(`Yelp lead source was ${getLeadRowSource(yelpLead)}.`);
+  }
+
+  if (!getLeadRowServiceType(yelpLead).toLowerCase().includes("paint")) {
+    throw new Error(`Yelp service type was ${getLeadRowServiceType(yelpLead)}.`);
+  }
+
+  const yelpLogs = await findIntegrationLogsByExternalId(env, "yelp", yelpExternalId);
+
+  if (!yelpLogs.some((log) => log.status === "succeeded")) {
+    throw new Error("Yelp intake did not write a succeeded sync log.");
+  }
+
+  for (const log of yelpLogs) {
+    assertNoSensitiveRequestSummary(log, yelpSensitiveValues, "Yelp intake");
+  }
+  progress("lead-intake:yelp:create:done");
+
+  progress("lead-intake:retry:start");
+  const retryPayload = {
+    provider: "website",
+    business: "WeatherTech",
+    source: "Website",
+    contactName: retryLeadName,
+    phone: "6025550333",
+    email: `retry-${runId}@example.test`,
+    propertyAddress: "333 TEST Retry Intake Way, Phoenix, AZ",
+    location: "Phoenix",
+    serviceType: "roofing",
+    message: `${TEST_PREFIX} ${runId} retry intake message`,
+    externalLeadId: retryExternalId,
+    submittedAt,
+    sourceAccount: "https://weathertechroofingaz.com/test-retry",
+    websiteUrl: "https://weathertechroofingaz.com/test-retry",
+    yelpBusinessId: null,
+    yelpConversationId: null,
+    yelpLeadId: null,
+    utmSource: "test-suite",
+    utmCampaign: `${TEST_PREFIX} ${runId} RETRY CAMPAIGN`,
+    utmMedium: "retry",
+  };
+  const [failedLog] = await restRequest(env, "integration_sync_logs", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      provider: "website",
+      direction: "provider_to_weathertech",
+      event_type: "website.lead.created",
+      status: "failed",
+      related_table: "leads",
+      related_record_id: null,
+      external_id: retryExternalId,
+      attempt_count: 1,
+      max_attempts: 3,
+      request_fingerprint: `test-${runId}-retry`,
+      request_summary: {
+        provider: "website",
+        testRunId: runId,
+        retry: {
+          encrypted: true,
+          payloadVersion: 1,
+        },
+        retryPayloadEncrypted: buildEncryptedLeadIntakeRetryPayload(env, retryPayload),
+      },
+      response_summary: {
+        testSeed: true,
+      },
+      error_code: "test_seed_failure",
+      error_message: "TEST seeded failed intake log.",
+    }),
+  });
+  assertNoSensitiveRequestSummary(
+    failedLog,
+    [
+      retryLeadName,
+      retryPayload.phone,
+      retryPayload.email,
+      retryPayload.propertyAddress,
+      retryPayload.message,
+    ],
+    "Retry seed",
+  );
+
+  const retryResponse = await postAppJson(baseUrl, "/api/leads/intake/retry", {
+    syncLogId: failedLog.id,
+  });
+
+  if (retryResponse.status !== 201 || !retryResponse.body?.ok) {
+    throw new Error(`Lead intake retry failed: ${retryResponse.status} ${JSON.stringify(retryResponse.body)}`);
+  }
+
+  const retryLead = await findLeadByContactName(env, retryLeadName, leadNameColumn);
+
+  if (!retryLead) {
+    throw new Error("Lead intake retry did not create a CRM lead.");
+  }
+
+  const [updatedRetryLog] = await restRequest(
+    env,
+    `integration_sync_logs?select=*&id=eq.${encodeURIComponent(failedLog.id)}`,
+  );
+
+  if (updatedRetryLog.status !== "succeeded") {
+    throw new Error(`Retry log status was ${updatedRetryLog.status}.`);
+  }
+
+  if (updatedRetryLog.related_record_id !== retryLead.id) {
+    throw new Error("Retry log was not associated with the retried lead.");
+  }
+  progress("lead-intake:retry:done");
+
+  progress("lead-intake:ui:start");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, baseUrl, progress);
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Inbox");
+  await waitFor(
+    tab,
+    ({ websiteName, yelpName }) => {
+      const text = document.body.innerText;
+
+      return (
+        text.includes(websiteName) &&
+        text.includes(yelpName) &&
+        text.includes("Website") &&
+        text.includes("Yelp")
+      );
+    },
+    "Website and Yelp intake records in Inbox",
+    15000,
+    { websiteName: websiteLeadName, yelpName: yelpLeadName },
+  );
+
+  await clickNav(tab, "Leads");
+  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), websiteLeadName, "website lead search");
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name) && document.body.innerText.includes("Website"),
+    "Website source badge in Leads",
+    15000,
+    websiteLeadName,
+  );
+  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), yelpLeadName, "Yelp lead search");
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name) && document.body.innerText.includes("Yelp"),
+    "Yelp source badge in Leads",
+    15000,
+    yelpLeadName,
+  );
+  progress("lead-intake:ui:done");
+
+  return {
+    websiteLeadId: websiteCreate.body.leadId,
+    websiteDuplicateStatus: websiteDuplicate.body.status,
+    yelpLeadId: yelpCreate.body.leadId,
+    retryLeadId: retryLead.id,
+    retryLogId: failedLog.id,
+    websiteLogStatuses: websiteStatuses,
   };
 }
 
@@ -1311,7 +1754,8 @@ export async function runWeatherTechOsRegression({
     progress("cleanup:before:start");
     cleanup.before = await cleanupTestRecords(env, "", leadNameColumn);
     progress("cleanup:before:done");
-    const { weatherTech } = await findCompanies(env);
+    const companies = await findCompanies(env);
+    const { weatherTech } = companies;
     progress("seed:start");
     seededJob = await seedTestJob(env, weatherTech.id, runId);
     progress("seed:done");
@@ -1349,6 +1793,20 @@ export async function runWeatherTechOsRegression({
 
         return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId);
       });
+    }
+
+    if (enabledGroups.has("lead-intake")) {
+      await record("Unified Website and Yelp lead intake routes, deduplicates, logs, retries, and appears in CRM", () =>
+        testUnifiedLeadIntake(
+          tab,
+          env,
+          companies,
+          runId,
+          baseUrl,
+          leadNameColumn,
+          progress,
+        ),
+      );
     }
 
     if (enabledGroups.has("themes")) {

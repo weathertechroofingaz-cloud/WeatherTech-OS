@@ -4534,35 +4534,50 @@ function LeadsView({
                 </div>
                 <Badge label={stage.value} tone="blue" />
               </div>
-              {stage.leads.map((lead) => (
-                <button
-                  key={lead.id}
-                  type="button"
-                  aria-pressed={selectedLead?.id === lead.id}
-                  onClick={() => handleSelectLead(lead.id)}
-                  className={`grid w-full cursor-pointer gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:grid-cols-[1fr_150px_130px_120px] lg:items-center ${
-                    selectedLead?.id === lead.id
-                      ? "border-l-sky-500 bg-sky-50"
-                      : "border-l-transparent bg-white"
-                  }`}
-                >
-                  <div>
-                    <p className="font-semibold text-slate-950">{lead.contact_name}</p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {lead.property_address}
-                    </p>
-                  </div>
-                  <span className="text-sm text-slate-600">
-                    {lead.phone ?? lead.email ?? "No contact"}
-                  </span>
-                  <span className="text-sm text-slate-600">
-                    {companyMap.get(lead.company_id)?.name ?? "Company"}
-                  </span>
-                  <span className="text-sm font-semibold text-slate-950">
-                    {formatMoney(lead.estimated_value)}
-                  </span>
-                </button>
-              ))}
+              {stage.leads.map((lead) => {
+                const provider = getLeadInboxProvider(lead);
+
+                return (
+                  <button
+                    key={lead.id}
+                    type="button"
+                    aria-pressed={selectedLead?.id === lead.id}
+                    onClick={() => handleSelectLead(lead.id)}
+                    className={`grid w-full cursor-pointer gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:grid-cols-[1fr_150px_140px_130px_120px] lg:items-center ${
+                      selectedLead?.id === lead.id
+                        ? "border-l-sky-500 bg-sky-50"
+                        : "border-l-transparent bg-white"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-slate-950">
+                          {lead.contact_name}
+                        </p>
+                        <Badge
+                          label={inboxProviderLabels[provider]}
+                          tone={getInboxProviderTone(provider)}
+                        />
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {lead.property_address}
+                      </p>
+                    </div>
+                    <span className="text-sm text-slate-600">
+                      {lead.phone ?? lead.email ?? "No contact"}
+                    </span>
+                    <span className="text-sm text-slate-600">
+                      {lead.source}
+                    </span>
+                    <span className="text-sm text-slate-600">
+                      {companyMap.get(lead.company_id)?.name ?? "Company"}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-950">
+                      {formatMoney(lead.estimated_value)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           ))}
 
@@ -4590,6 +4605,12 @@ function LeadsView({
                   label={pipelineStageLabel(selectedLead.pipeline_stage)}
                   tone="blue"
                 />
+                {selectedLeadProvider ? (
+                  <Badge
+                    label={inboxProviderLabels[selectedLeadProvider]}
+                    tone={getInboxProviderTone(selectedLeadProvider)}
+                  />
+                ) : null}
                 <Badge label={selectedLead.priority} tone="amber" />
               </div>
             </div>

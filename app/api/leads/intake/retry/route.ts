@@ -2,22 +2,19 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getLeadIntakeHttpStatus,
-  normalizeYelpLeadBody,
-  processLeadIntake,
+  retryLeadIntake,
   type LeadIntakeResponse,
-  type YelpLeadRequestBody,
-} from "../../../../lib/crm/leadIntake";
-import { sanitizeIntegrationSyncLogText } from "../../../../lib/crm/integrations";
-import type { Database } from "../../../../lib/crm/types";
+} from "../../../../../lib/crm/leadIntake";
+import { sanitizeIntegrationSyncLogText } from "../../../../../lib/crm/integrations";
+import type { Database } from "../../../../../lib/crm/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type CrmClient = SupabaseClient<Database>;
 
-type YelpLeadResponse = LeadIntakeResponse & {
-  route?: "/api/leads/yelp";
-  accepts?: "POST";
+type LeadIntakeRetryBody = {
+  syncLogId?: unknown;
 };
 
 function getServiceSupabaseClient(): CrmClient | null {
@@ -35,8 +32,8 @@ function getServiceSupabaseClient(): CrmClient | null {
   });
 }
 
-function createJsonResponse(body: YelpLeadResponse, status = 200) {
-  return NextResponse.json(body, { status });
+function getString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function describeSafeError(error: unknown) {
@@ -61,12 +58,12 @@ function describeSafeError(error: unknown) {
 
 async function getJsonBody(
   request: NextRequest,
-): Promise<{ body: YelpLeadRequestBody | null; error: string | null }> {
+): Promise<{ body: LeadIntakeRetryBody | null; error: string | null }> {
   try {
     const body: unknown = await request.json();
 
     if (body && typeof body === "object" && !Array.isArray(body)) {
-      return { body: body as YelpLeadRequestBody, error: null };
+      return { body: body as LeadIntakeRetryBody, error: null };
     }
 
     return { body: null, error: "Request body must be a JSON object." };
@@ -75,40 +72,20 @@ async function getJsonBody(
   }
 }
 
-export async function GET() {
-  return createJsonResponse({
-    ok: true,
-    route: "/api/leads/yelp",
-    accepts: "POST",
-    status: "healthy",
-    warnings: [],
-  });
+function createJsonResponse(body: LeadIntakeResponse, status = 200) {
+  return NextResponse.json(body, { status });
 }
 
 export async function POST(request: NextRequest) {
   const { body, error: jsonError } = await getJsonBody(request);
+  const syncLogId = body ? getString(body.syncLogId) : null;
 
-  if (!body) {
+  if (!body || !syncLogId) {
     return createJsonResponse(
       {
         ok: false,
-        route: "/api/leads/yelp",
-        status: "invalid_json",
-        warnings: [jsonError ?? "Request body must be valid JSON."],
-      },
-      400,
-    );
-  }
-
-  const normalized = normalizeYelpLeadBody(body);
-
-  if (!normalized.lead) {
-    return createJsonResponse(
-      {
-        ok: false,
-        route: "/api/leads/yelp",
         status: "validation_failed",
-        warnings: [...normalized.warnings, ...normalized.errors],
+        warnings: [jsonError ?? "A retry syncLogId is required."],
       },
       400,
     );
@@ -120,10 +97,9 @@ export async function POST(request: NextRequest) {
     return createJsonResponse(
       {
         ok: false,
-        route: "/api/leads/yelp",
         status: "crm_not_configured",
         warnings: [
-          "Supabase service-role access is not configured, so Yelp lead intake cannot create CRM leads yet.",
+          "Supabase service-role access is not configured, so lead intake retry cannot run yet.",
         ],
       },
       503,
@@ -131,25 +107,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await processLeadIntake(client, normalized.lead);
+    const result = await retryLeadIntake(client, syncLogId);
 
-    return createJsonResponse(
-      {
-        route: "/api/leads/yelp",
-        ...result,
-      },
-      getLeadIntakeHttpStatus(result),
-    );
+    return createJsonResponse(result, getLeadIntakeHttpStatus(result));
   } catch (error) {
     const message = describeSafeError(error);
 
-    console.error("[CRM] Yelp lead intake failed", { message });
+    console.error("[CRM] Lead intake retry failed", { message });
 
     return createJsonResponse(
       {
         ok: false,
-        route: "/api/leads/yelp",
-        provider: "yelp",
         status: "error",
         warnings: [message],
       },
