@@ -16,6 +16,7 @@ const DEFAULT_GROUPS = [
   "lead-intake",
   "themes",
   "layout",
+  "jobs-workspace",
   "job-builder",
   "job-production",
 ];
@@ -218,6 +219,10 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     env,
     `leads?select=id,${resolvedLeadNameColumn}&${resolvedLeadNameColumn}=like.${prefixFilter}`,
   );
+  const customers = await restRequest(
+    env,
+    `customers?select=id,display_name&display_name=like.${prefixFilter}`,
+  );
   const scopedJobs = runId
     ? jobs.filter((job) => job.title.includes(runId))
     : jobs;
@@ -227,17 +232,22 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const scopedLeads = runId
     ? leads.filter((lead) => String(lead[resolvedLeadNameColumn] ?? "").includes(runId))
     : leads;
+  const scopedCustomers = runId
+    ? customers.filter((customer) => String(customer.display_name ?? "").includes(runId))
+    : customers;
   const jobIds = scopedJobs.map((job) => job.id);
   const estimateIds = scopedEstimates.map((estimate) => estimate.id);
   const leadIds = scopedLeads.map((lead) => lead.id);
+  const customerIds = scopedCustomers.map((customer) => customer.id);
 
   await deleteByLike(env, "integration_sync_logs", "external_id");
 
-  if (!jobIds.length && !estimateIds.length && !leadIds.length) {
+  if (!jobIds.length && !estimateIds.length && !leadIds.length && !customerIds.length) {
     return {
       jobsDeleted: 0,
       estimatesDeleted: 0,
       leadsDeleted: 0,
+      customersDeleted: 0,
       integrationLogsDeleted: "requested",
     };
   }
@@ -254,11 +264,13 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   await deleteByIds(env, "estimate_line_items", "estimate_id", estimateIds);
   await deleteByIds(env, "estimates", "id", estimateIds);
   await deleteByIds(env, "leads", "id", leadIds);
+  await deleteByIds(env, "customers", "id", customerIds);
 
   return {
     jobsDeleted: jobIds.length,
     estimatesDeleted: estimateIds.length,
     leadsDeleted: leadIds.length,
+    customersDeleted: customerIds.length,
     integrationLogsDeleted: "requested",
   };
 }
@@ -407,6 +419,15 @@ async function findJobByTitle(env, title) {
   return rows[0] ?? null;
 }
 
+async function findCustomerByDisplayName(env, displayName) {
+  const rows = await restRequest(
+    env,
+    `customers?select=*&display_name=eq.${encodeURIComponent(displayName)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
+}
+
 async function countEstimateLineItems(env, estimateId) {
   const rows = await restRequest(
     env,
@@ -509,6 +530,23 @@ async function waitFor(tab, predicate, label, timeoutMs = 10000, arg = undefined
     }
 
     await tab.playwright.waitForTimeout(250);
+  }
+
+  throw new Error(`Timed out waiting for ${label}.`);
+}
+
+async function waitForAsync(predicate, label, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let lastResult = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastResult = await predicate();
+
+    if (lastResult) {
+      return lastResult;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   throw new Error(`Timed out waiting for ${label}.`);
@@ -823,6 +861,279 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     leadName,
     pipelineStage: savedLead.pipeline_stage,
     priority: savedLead.priority,
+  };
+}
+
+async function testCustomersWorkflow(tab, env, company, runId) {
+  const displayName = `${TEST_PREFIX} ${runId} CUSTOMER`;
+  const updatedDisplayName = `${TEST_PREFIX} ${runId} CUSTOMER UPDATED`;
+  const updatedContact = `${TEST_PREFIX} ${runId} CONTACT UPDATED`;
+  const updatedNotes = `${TEST_PREFIX} ${runId} CUSTOMER NOTES UPDATED`;
+  const profileForm = 'xpath=//form[.//button[contains(normalize-space(.), "Save customer")]]';
+
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Customers");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Customer management"),
+    "customers screen",
+    15000,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//select[@name="company_id"]'),
+    company.id,
+    "customer company",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="display_name"]'),
+    displayName,
+    "customer display name",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="contact_name"]'),
+    `${TEST_PREFIX} ${runId} CUSTOMER CONTACT`,
+    "customer contact",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="property_address"]'),
+    "789 TEST Customer Profile Dr, Phoenix, AZ",
+    "customer property address",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="phone"]'),
+    "6025550444",
+    "customer phone",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="email"]'),
+    `customer-${runId}@example.test`,
+    "customer email",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="city"]'),
+    "Phoenix",
+    "customer city",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="postal_code"]'),
+    "85001",
+    "customer ZIP",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//button[@type="submit"]'),
+    "Create customer",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `created customer ${displayName}`,
+    15000,
+    displayName,
+  );
+
+  const createdCustomer = await waitForAsync(
+    () => findCustomerByDisplayName(env, displayName),
+    `Supabase customer ${displayName}`,
+    15000,
+  );
+
+  if (createdCustomer.company_id !== company.id) {
+    throw new Error("Customer was not saved to the selected company.");
+  }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    displayName,
+    "customers search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customers-company-filter"]'),
+    company.id,
+    "customers company filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customers-status-filter"]'),
+    "active",
+    "customers status filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customers-type-filter"]'),
+    "homeowner",
+    "customers type filter",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `filtered customer ${displayName}`,
+    10000,
+    displayName,
+  );
+  await clickUnique(buttonContainingText(tab, displayName), `customer row ${displayName}`);
+
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="display_name"]`),
+    updatedDisplayName,
+    "updated customer display name",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="contact_name"]`),
+    updatedContact,
+    "updated customer contact",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="phone"]`),
+    "6025550555",
+    "updated customer phone",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="email"]`),
+    `customer-updated-${runId}@example.test`,
+    "updated customer email",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="property_address"]`),
+    "790 TEST Customer Profile Dr, Phoenix, AZ",
+    "updated customer address",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="city"]`),
+    "Scottsdale",
+    "updated customer city",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//input[@name="postal_code"]`),
+    "85251",
+    "updated customer ZIP",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${profileForm}//select[@name="status"]`),
+    "prospect",
+    "updated customer status",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${profileForm}//select[@name="customer_type"]`),
+    "commercial",
+    "updated customer type",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${profileForm}//textarea[@name="notes"]`),
+    updatedNotes,
+    "updated customer notes",
+  );
+  await clickUnique(tab.playwright.getByRole("button", { name: "Save customer" }), "Save customer");
+  await waitFor(
+    tab,
+    ({ name, notes }) => {
+      const profileForm = [...document.querySelectorAll("form")].find((form) =>
+        [...form.querySelectorAll("button")]
+          .some((button) => button.textContent?.trim().includes("Save customer")),
+      );
+      const displayNameInput = profileForm?.querySelector('input[name="display_name"]');
+      const notesTextarea = profileForm?.querySelector('textarea[name="notes"]');
+      const text = document.body.innerText;
+
+      return (
+        text.includes(name) &&
+        displayNameInput?.tagName === "INPUT" &&
+        displayNameInput.value === name &&
+        notesTextarea?.tagName === "TEXTAREA" &&
+        notesTextarea.value === notes
+      );
+    },
+    "updated customer profile",
+    15000,
+    { name: updatedDisplayName, notes: updatedNotes },
+  );
+
+  const updatedCustomer = await waitForAsync(
+    () => findCustomerByDisplayName(env, updatedDisplayName),
+    `Supabase updated customer ${updatedDisplayName}`,
+    15000,
+  );
+
+  if (updatedCustomer.status !== "prospect") {
+    throw new Error(`Updated customer status was ${updatedCustomer.status}.`);
+  }
+
+  if (updatedCustomer.customer_type !== "commercial") {
+    throw new Error(`Updated customer type was ${updatedCustomer.customer_type}.`);
+  }
+
+  if (updatedCustomer.notes !== updatedNotes) {
+    throw new Error("Updated customer notes did not persist.");
+  }
+
+  return {
+    customerId: updatedCustomer.id,
+    companyId: updatedCustomer.company_id,
+    status: updatedCustomer.status,
+    customerType: updatedCustomer.customer_type,
+  };
+}
+
+async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Inbox");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Lead and communication activity"),
+    "unified inbox",
+    15000,
+  );
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inbox-search"]'),
+    leadWorkflow.leadName,
+    "inbox search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="inbox-kind-filter"]'),
+    "Lead",
+    "inbox activity type filter",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//button[contains(normalize-space(.), "Website")]'),
+    "Website inbox source filter",
+  );
+  await waitFor(
+    tab,
+    (leadName) => {
+      const text = document.body.innerText;
+
+      return (
+        text.includes(leadName) &&
+        text.includes("Website") &&
+        text.includes("Lead")
+      );
+    },
+    "filtered inbox lead",
+    10000,
+    leadWorkflow.leadName,
+  );
+  await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear inbox filters");
+  await waitFor(
+    tab,
+    () => {
+      const search = document.querySelector('[data-testid="inbox-search"]');
+      const kind = document.querySelector('[data-testid="inbox-kind-filter"]');
+
+      return (
+        document.body.innerText.includes("Recent activity") &&
+        search?.tagName === "INPUT" &&
+        search.value === "" &&
+        kind?.tagName === "SELECT" &&
+        kind.value === "all"
+      );
+    },
+    "cleared inbox filters",
+    10000,
+  );
+
+  return {
+    search: "passed",
+    kindFilter: "Lead",
+    providerFilter: "Website",
   };
 }
 
@@ -1352,6 +1663,91 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   return overlaps;
 }
 
+async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
+  await selectTestJob(tab, testJob.title);
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="jobs-search"]'),
+    testJob.title,
+    "jobs workspace search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="jobs-company-filter"]'),
+    company.id,
+    "jobs company filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="jobs-service-filter"]'),
+    "roofing",
+    "jobs service filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="jobs-crew-filter"]'),
+    "assigned",
+    "jobs crew filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="jobs-schedule-filter"]'),
+    "unscheduled",
+    "jobs schedule filter",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title),
+    "filtered seeded job",
+    10000,
+    testJob.title,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="jobs-schedule-filter"]'),
+    "scheduled",
+    "jobs scheduled no-results filter",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("No jobs match these filters."),
+    "jobs no-results state",
+    10000,
+  );
+
+  await clickUnique(tab.playwright.getByRole("button", { name: "Clear filters" }), "Clear filters");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="jobs-search"]'),
+    testJob.title,
+    "jobs workspace search after clear",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title),
+    "seeded job after clearing filters",
+    10000,
+    testJob.title,
+  );
+
+  const sections = ["Overview", "Checklist", "Schedule", "Crew", "Activity", "Materials", "Financial", "Files"];
+
+  for (const section of sections) {
+    await clickUnique(tab.playwright.getByRole("tab", { name: section }), `job workspace ${section} tab`);
+    await waitFor(
+      tab,
+      (label) => {
+        const selected = document.querySelector('[role="tab"][aria-selected="true"]');
+        return selected?.textContent?.trim() === label;
+      },
+      `selected ${section} job workspace tab`,
+      10000,
+      section,
+    );
+  }
+
+  return {
+    search: "passed",
+    filters: ["company", "service", "crew", "schedule"],
+    sections,
+  };
+}
+
 async function runUiMutationTests(tab, testJob, runId, progress) {
   const addedTaskTitle = `${TEST_PREFIX} ${runId} ADDED TASK`;
   const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;
@@ -1763,7 +2159,11 @@ export async function runWeatherTechOsRegression({
     const tab = await getTab(browser);
     await ensureAppShell(tab, baseUrl, progress);
 
-    if (enabledGroups.has("job-builder") || enabledGroups.has("job-production")) {
+    if (
+      enabledGroups.has("jobs-workspace") ||
+      enabledGroups.has("job-builder") ||
+      enabledGroups.has("job-production")
+    ) {
       progress("seeded-job:reload:start");
       await tab.reload();
       await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
@@ -1792,6 +2192,18 @@ export async function runWeatherTechOsRegression({
         }
 
         return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId);
+      });
+
+      await record("Customers list opens and isolated customer can be created and updated", () =>
+        testCustomersWorkflow(tab, env, weatherTech, runId),
+      );
+
+      await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
+        if (!leadWorkflow) {
+          throw new Error("Lead workflow did not produce a test lead.");
+        }
+
+        return testUnifiedInboxSearchAndFilters(tab, leadWorkflow);
       });
     }
 
@@ -1822,6 +2234,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("layout")) {
       await record("Dashboard quick actions do not overlap at laptop width", () =>
         testQuickActionsDoNotOverlap(browser, tab),
+      );
+    }
+
+    if (enabledGroups.has("jobs-workspace")) {
+      await record("Jobs workspace filters and section navigation render", () =>
+        testJobsWorkspaceFiltersAndSections(tab, weatherTech, seededJob),
       );
     }
 

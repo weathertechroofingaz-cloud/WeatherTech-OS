@@ -195,6 +195,7 @@ import type {
   ChangeOrderRecord,
   ChangeOrderStatus,
   CustomerRecord,
+  CustomerInput,
   CustomerStatus,
   CustomerType,
   DailyLogInput,
@@ -449,6 +450,51 @@ const jobTaskStatuses: { value: JobTaskStatus; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
+type JobScheduleFilter = "all" | "unscheduled" | "scheduled" | "today" | "next_7";
+type JobCrewFilter = "all" | "assigned" | "unassigned";
+type JobWorkspaceTab =
+  | "overview"
+  | "checklist"
+  | "schedule"
+  | "crew"
+  | "activity"
+  | "materials"
+  | "financial"
+  | "files";
+
+type JobActivityItem = {
+  id: string;
+  label: string;
+  detail: string;
+  occurredAt: string | null;
+  meta?: string;
+};
+
+const jobScheduleFilters: { value: JobScheduleFilter; label: string }[] = [
+  { value: "all", label: "All dates" },
+  { value: "unscheduled", label: "Needs schedule" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "today", label: "Today" },
+  { value: "next_7", label: "Next 7 days" },
+];
+
+const jobCrewFilters: { value: JobCrewFilter; label: string }[] = [
+  { value: "all", label: "All crews" },
+  { value: "assigned", label: "Crew assigned" },
+  { value: "unassigned", label: "Needs crew" },
+];
+
+const jobWorkspaceTabs: { value: JobWorkspaceTab; label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "checklist", label: "Checklist" },
+  { value: "schedule", label: "Schedule" },
+  { value: "crew", label: "Crew" },
+  { value: "activity", label: "Activity" },
+  { value: "materials", label: "Materials" },
+  { value: "financial", label: "Financial" },
+  { value: "files", label: "Files" },
+];
+
 const scheduleEventTypes: { value: ScheduleEventType; label: string }[] = [
   { value: "inspection", label: "Inspection" },
   { value: "estimate", label: "Estimate" },
@@ -697,6 +743,10 @@ function customerStatusLabel(status: CustomerStatus) {
   return customerStatuses.find((item) => item.value === status)?.label ?? status;
 }
 
+function customerTypeLabel(type: CustomerType) {
+  return customerTypes.find((item) => item.value === type)?.label ?? type;
+}
+
 function estimateStatusLabel(status: EstimateStatus) {
   return estimateStatuses.find((item) => item.value === status)?.label ?? status;
 }
@@ -823,8 +873,9 @@ function restoreWindowScrollPosition(left: number, top: number) {
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
       restore();
-      window.setTimeout(restore, 50);
-      window.setTimeout(restore, 150);
+      [50, 150, 300, 500, 700, 850, 1000, 1200].forEach((delay) => {
+        window.setTimeout(restore, delay);
+      });
     });
   });
 }
@@ -1120,6 +1171,37 @@ function hasUpcomingScheduledEvent(events: ScheduleEventRecord[]) {
   );
 }
 
+function countScheduleEventConflicts(events: ScheduleEventRecord[]) {
+  const scheduledEvents = events
+    .filter((event) => event.status === "scheduled")
+    .map((event) => ({
+      id: event.id,
+      start: Date.parse(event.start_at),
+      end: Date.parse(event.end_at),
+    }))
+    .filter((event) => Number.isFinite(event.start) && Number.isFinite(event.end))
+    .sort((a, b) => a.start - b.start);
+
+  let conflictCount = 0;
+
+  for (let index = 0; index < scheduledEvents.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < scheduledEvents.length; otherIndex += 1) {
+      const current = scheduledEvents[index];
+      const next = scheduledEvents[otherIndex];
+
+      if (next.start >= current.end) {
+        break;
+      }
+
+      if (current.id !== next.id && current.start < next.end && next.start < current.end) {
+        conflictCount += 1;
+      }
+    }
+  }
+
+  return conflictCount;
+}
+
 function hasSavedJobSchedule(job: JobRecord) {
   return Boolean(getJobScheduledStart(job) || getJobScheduledEnd(job));
 }
@@ -1141,6 +1223,222 @@ function formatJobSchedule(job: JobRecord) {
   }
 
   return "Not scheduled";
+}
+
+function getJobScheduleSummary(snapshot: CrmSnapshot, job: JobRecord) {
+  const savedSchedule = formatJobSchedule(job);
+
+  if (savedSchedule !== "Not scheduled") {
+    return savedSchedule;
+  }
+
+  const nextEvent =
+    getJobScheduleEvents(snapshot, job.id).find(
+      (event) => event.status === "scheduled" && event.start_at.slice(0, 10) >= todayIsoDate(),
+    ) ?? getJobScheduleEvents(snapshot, job.id)[0];
+
+  return nextEvent ? formatDateTime(nextEvent.start_at) : "Not scheduled";
+}
+
+function getJobAssignedEmployeeNames(snapshot: CrmSnapshot, jobId: string) {
+  return getJobAssignments(snapshot, jobId)
+    .map((assignment) => getEmployeeName(snapshot, assignment.employee_id))
+    .filter((name): name is string => Boolean(name));
+}
+
+function jobHasCrew(snapshot: CrmSnapshot, job: JobRecord) {
+  return (
+    Boolean(job.crew_name?.trim()) ||
+    getJobAssignments(snapshot, job.id).some(
+      (assignment) => assignment.status === "assigned" || assignment.status === "accepted",
+    )
+  );
+}
+
+function getJobCrewLabel(snapshot: CrmSnapshot, job: JobRecord) {
+  if (job.crew_name?.trim()) {
+    return job.crew_name;
+  }
+
+  const names = getJobAssignedEmployeeNames(snapshot, job.id);
+
+  if (names.length === 1) {
+    return names[0];
+  }
+
+  if (names.length > 1) {
+    return `${names.length} assigned`;
+  }
+
+  return "Crew needed";
+}
+
+function getJobScheduleDateParts(snapshot: CrmSnapshot, job: JobRecord) {
+  return [
+    getJobScheduledStart(job),
+    getJobScheduledEnd(job),
+    ...getJobScheduleEvents(snapshot, job.id).map((event) => event.start_at),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.slice(0, 10));
+}
+
+function addDaysToIsoDate(isoDate: string, days: number) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  date.setDate(date.getDate() + days);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function jobMatchesScheduleFilter(
+  snapshot: CrmSnapshot,
+  job: JobRecord,
+  filter: JobScheduleFilter,
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  const scheduleDates = getJobScheduleDateParts(snapshot, job);
+
+  if (filter === "unscheduled") {
+    return scheduleDates.length === 0;
+  }
+
+  if (filter === "scheduled") {
+    return scheduleDates.length > 0;
+  }
+
+  const today = todayIsoDate();
+
+  if (filter === "today") {
+    return scheduleDates.some((date) => date === today);
+  }
+
+  const weekEnd = addDaysToIsoDate(today, 7);
+
+  return scheduleDates.some((date) => date >= today && date <= weekEnd);
+}
+
+function buildJobActivityItems(snapshot: CrmSnapshot, job: JobRecord): JobActivityItem[] {
+  const items: JobActivityItem[] = [
+    {
+      id: `job-created-${job.id}`,
+      label: "Job created",
+      detail: job.title,
+      occurredAt: job.created_at,
+      meta: getJobTargetName(snapshot, job),
+    },
+  ];
+
+  if (job.updated_at !== job.created_at) {
+    items.push({
+      id: `job-updated-${job.id}`,
+      label: "Job updated",
+      detail: `Current status: ${jobStatusLabel(job.status)}`,
+      occurredAt: job.updated_at,
+      meta: getJobCrewLabel(snapshot, job),
+    });
+  }
+
+  getJobScheduleEvents(snapshot, job.id).forEach((event) => {
+    items.push({
+      id: `schedule-${event.id}`,
+      label: `${scheduleEventTypeLabel(event.event_type)} scheduled`,
+      detail: event.title,
+      occurredAt: event.start_at,
+      meta: scheduleEventStatusLabel(event.status),
+    });
+  });
+
+  getJobNotes(snapshot, job.id).forEach((note) => {
+    items.push({
+      id: `note-${note.id}`,
+      label: "Production note",
+      detail: note.note,
+      occurredAt: note.created_at,
+      meta: "Note",
+    });
+  });
+
+  getJobTasks(snapshot, job.id).forEach((task) => {
+    items.push({
+      id: `task-${task.id}`,
+      label: "Checklist task",
+      detail: task.title,
+      occurredAt: task.updated_at,
+      meta: jobTaskStatusLabel(task.status),
+    });
+  });
+
+  getJobMaterials(snapshot, job.id).forEach((material) => {
+    items.push({
+      id: `material-${material.id}`,
+      label: "Material added",
+      detail: `${material.quantity} ${material.unit} - ${material.name}`,
+      occurredAt: material.created_at,
+      meta: "Material",
+    });
+  });
+
+  getJobAssignments(snapshot, job.id).forEach((assignment) => {
+    items.push({
+      id: `assignment-${assignment.id}`,
+      label: "Crew assignment",
+      detail: assignment.title,
+      occurredAt: assignment.updated_at || assignment.assigned_date,
+      meta: getEmployeeName(snapshot, assignment.employee_id) ?? assignmentStatusLabel(assignment.status),
+    });
+  });
+
+  getJobInvoices(snapshot, job.id).forEach((invoice) => {
+    items.push({
+      id: `invoice-${invoice.id}`,
+      label: "Invoice linked",
+      detail: `${invoice.invoice_number} - ${formatMoney(invoice.total)}`,
+      occurredAt: invoice.issue_date,
+      meta: invoiceStatusLabel(invoice.status),
+    });
+  });
+
+  getJobChangeOrders(snapshot, job.id).forEach((changeOrder) => {
+    items.push({
+      id: `change-order-${changeOrder.id}`,
+      label: "Change order",
+      detail: `${changeOrder.title} - ${formatMoney(changeOrder.total)}`,
+      occurredAt: changeOrder.updated_at,
+      meta: changeOrderStatusLabel(changeOrder.status),
+    });
+  });
+
+  getJobDocuments(snapshot, job).forEach((document) => {
+    items.push({
+      id: `document-${document.id}`,
+      label: "Document linked",
+      detail: document.title,
+      occurredAt: document.updated_at,
+      meta: documentCategoryLabel(document.category),
+    });
+  });
+
+  getJobPhotos(snapshot, job.id).forEach((photo) => {
+    items.push({
+      id: `photo-${photo.id}`,
+      label: "Photo added",
+      detail: photo.caption ?? "Job photo",
+      occurredAt: photo.taken_at ?? photo.created_at,
+      meta: "Photo",
+    });
+  });
+
+  return items
+    .sort((a, b) => {
+      const left = a.occurredAt ? Date.parse(a.occurredAt) : 0;
+      const right = b.occurredAt ? Date.parse(b.occurredAt) : 0;
+
+      return right - left;
+    })
+    .slice(0, 16);
 }
 
 function calculateProductionKpis(snapshot: CrmSnapshot) {
@@ -3922,10 +4220,20 @@ type UnifiedInboxItem = {
   status: string;
 };
 
+type InboxKindFilter = "all" | UnifiedInboxItem["kind"];
+
 type UnifiedInboxViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
 };
+
+const inboxKindFilters: { value: InboxKindFilter; label: string }[] = [
+  { value: "all", label: "All activity" },
+  { value: "Lead", label: "Leads" },
+  { value: "SMS", label: "SMS" },
+  { value: "Email", label: "Email" },
+  { value: "Integration", label: "Integrations" },
+];
 
 function getInboxProviderTone(provider: InboxProvider) {
   return provider === "website"
@@ -4152,13 +4460,42 @@ function buildUnifiedInboxItems(
 
 function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
   const [providerFilter, setProviderFilter] = useState<InboxFilter>("all");
+  const [kindFilter, setKindFilter] = useState<InboxKindFilter>("all");
+  const [search, setSearch] = useState("");
   const inboxItems = useMemo(
     () => buildUnifiedInboxItems(snapshot, companyMap),
     [companyMap, snapshot],
   );
-  const filteredItems = inboxItems.filter(
-    (item) => providerFilter === "all" || item.provider === providerFilter,
-  );
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return inboxItems.filter((item) => {
+      const searchableText = [
+        item.customerName,
+        item.contact,
+        item.businessLocation,
+        item.sourceLabel,
+        item.serviceType,
+        item.summary,
+        item.status,
+        item.kind,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        (providerFilter === "all" || item.provider === providerFilter) &&
+        (kindFilter === "all" || item.kind === kindFilter) &&
+        (!query || searchableText.includes(query))
+      );
+    });
+  }, [inboxItems, kindFilter, providerFilter, search]);
+  const {
+    page: inboxPage,
+    pageCount: inboxPageCount,
+    setPage: setInboxPage,
+    pagedItems: pagedInboxItems,
+  } = usePagination(filteredItems);
   const counts = useMemo(
     () =>
       inboxFilters.reduce(
@@ -4173,6 +4510,10 @@ function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
       ),
     [inboxItems],
   );
+
+  useEffect(() => {
+    setInboxPage(1);
+  }, [kindFilter, providerFilter, search, setInboxPage]);
 
   return (
     <section className="space-y-5">
@@ -4199,6 +4540,7 @@ function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
               key={filter.value}
               type="button"
               onClick={() => setProviderFilter(filter.value)}
+              aria-pressed={providerFilter === filter.value}
               className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${
                 providerFilter === filter.value
                   ? "border-sky-400 bg-sky-50 text-sky-800"
@@ -4209,6 +4551,53 @@ function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
             </button>
           ))}
         </div>
+        <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_220px_auto] lg:items-end">
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            Search inbox
+            <span className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                aria-label="Search inbox activity"
+                data-testid="inbox-search"
+                className="w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm font-medium normal-case text-slate-700 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                placeholder="Search names, source, status, message"
+              />
+            </span>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            Activity type
+            <select
+              value={kindFilter}
+              onChange={(event) => setKindFilter(event.target.value as InboxKindFilter)}
+              data-testid="inbox-kind-filter"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+            >
+              {inboxKindFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex flex-wrap items-center justify-between gap-2 lg:justify-end">
+            <span className="text-sm font-semibold text-slate-600">
+              {filteredItems.length} shown
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setProviderFilter("all");
+                setKindFilter("all");
+                setSearch("");
+              }}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -4216,7 +4605,7 @@ function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
           <p className="text-sm font-bold text-slate-950">Recent activity</p>
         </div>
         <div className="divide-y divide-slate-100">
-          {filteredItems.map((item) => (
+          {pagedInboxItems.map((item) => (
             <article
               key={item.id}
               className="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_160px_150px]"
@@ -4267,6 +4656,12 @@ function UnifiedInboxView({ snapshot, companyMap }: UnifiedInboxViewProps) {
             </div>
           ) : null}
         </div>
+        <PaginationControls
+          page={inboxPage}
+          pageCount={inboxPageCount}
+          total={filteredItems.length}
+          onPageChange={setInboxPage}
+        />
       </div>
     </section>
   );
@@ -4360,6 +4755,10 @@ function LeadsView({
 
   const handleCreateLead = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isCreating) {
+      return;
+    }
+
     const form = event.currentTarget;
     setIsCreating(true);
     onError("");
@@ -4388,9 +4787,7 @@ function LeadsView({
       await onReload();
       onNotice("Lead created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to create lead.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to create lead."));
     } finally {
       setIsCreating(false);
     }
@@ -4426,9 +4823,7 @@ function LeadsView({
       await onReload();
       onNotice("Lead updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to update lead.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update lead."));
     }
   };
 
@@ -4442,11 +4837,7 @@ function LeadsView({
       await onReload();
       onNotice("Lead converted to customer.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to convert lead.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to convert lead."));
     }
   };
 
@@ -4892,19 +5283,43 @@ function CustomersView({
     snapshot.customers[0]?.id ?? "",
   );
   const [search, setSearch] = useState("");
-  const selectedCustomer =
-    snapshot.customers.find((customer) => customer.id === selectedCustomerId) ??
-    snapshot.customers[0];
+  const [companyFilter, setCompanyFilter] = useState<CompanyScopeId>("all");
+  const [statusFilter, setStatusFilter] = useState<CustomerStatus | "all">("all");
+  const [typeFilter, setTypeFilter] = useState<CustomerType | "all">("all");
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+  const [isUpdatingCustomer, setIsUpdatingCustomer] = useState(false);
 
-  const filteredCustomers = snapshot.customers.filter((customer) => {
-    const query = search.toLowerCase();
-    return (
-      !query ||
-      customer.display_name.toLowerCase().includes(query) ||
-      customer.contact_name.toLowerCase().includes(query) ||
-      customer.property_address.toLowerCase().includes(query)
-    );
-  });
+  const filteredCustomers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return snapshot.customers.filter((customer) => {
+      const company = companyMap.get(customer.company_id);
+      const searchableText = [
+        customer.display_name,
+        customer.contact_name,
+        customer.phone,
+        customer.email,
+        customer.property_address,
+        customer.city,
+        customer.state,
+        customer.postal_code,
+        company?.name,
+        customerStatusLabel(customer.status),
+        customerTypeLabel(customer.customer_type),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        (!query || searchableText.includes(query)) &&
+        (companyFilter === "all" || customer.company_id === companyFilter) &&
+        (statusFilter === "all" || customer.status === statusFilter) &&
+        (typeFilter === "all" || customer.customer_type === typeFilter)
+      );
+    });
+  }, [companyFilter, companyMap, search, snapshot.customers, statusFilter, typeFilter]);
+
   const {
     page: customerPage,
     pageCount: customerPageCount,
@@ -4912,73 +5327,114 @@ function CustomersView({
     pagedItems: pagedCustomers,
   } = usePagination(filteredCustomers);
 
+  const selectedCustomer =
+    snapshot.customers.find((customer) => customer.id === selectedCustomerId) ??
+    filteredCustomers[0] ??
+    snapshot.customers[0];
+  const customerFilterSummary = `${filteredCustomers.length} of ${snapshot.customers.length} customers`;
+
+  useEffect(() => {
+    setCustomerPage(1);
+  }, [companyFilter, search, setCustomerPage, statusFilter, typeFilter]);
+
+  useEffect(() => {
+    if (
+      filteredCustomers.length &&
+      !filteredCustomers.some((customer) => customer.id === selectedCustomerId)
+    ) {
+      setSelectedCustomerId(filteredCustomers[0].id);
+    }
+  }, [filteredCustomers, selectedCustomerId]);
+
   const handleCreateCustomer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (isCreatingCustomer) {
+      return;
+    }
+
     const form = event.currentTarget;
     onError("");
 
+    const formData = new FormData(form);
+    const input: CustomerInput = {
+      company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
+      display_name: getFormString(formData, "display_name"),
+      contact_name: getFormString(formData, "contact_name"),
+      phone: getOptionalFormString(formData, "phone"),
+      email: getOptionalFormString(formData, "email"),
+      property_address: getFormString(formData, "property_address"),
+      city: getOptionalFormString(formData, "city"),
+      state: getFormString(formData, "state", "AZ"),
+      postal_code: getOptionalFormString(formData, "postal_code"),
+      customer_type: getFormString(formData, "customer_type", "homeowner") as CustomerType,
+      status: getFormString(formData, "status", "active") as CustomerStatus,
+      notes: getOptionalFormString(formData, "notes"),
+    };
+
+    if (!input.company_id || !input.display_name || !input.contact_name || !input.property_address) {
+      onError("Customer company, name, contact, and property address are required.");
+      return;
+    }
+
     try {
-      const formData = new FormData(form);
-      await createCustomer(client, {
-        company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-        display_name: getFormString(formData, "display_name"),
-        contact_name: getFormString(formData, "contact_name"),
-        phone: getOptionalFormString(formData, "phone"),
-        email: getOptionalFormString(formData, "email"),
-        property_address: getFormString(formData, "property_address"),
-        city: getOptionalFormString(formData, "city"),
-        state: getFormString(formData, "state", "AZ"),
-        postal_code: getOptionalFormString(formData, "postal_code"),
-        customer_type: getFormString(
-          formData,
-          "customer_type",
-          "homeowner",
-        ) as CustomerType,
-        status: getFormString(formData, "status", "active") as CustomerStatus,
-        notes: getOptionalFormString(formData, "notes"),
-      });
+      setIsCreatingCustomer(true);
+      await createCustomer(client, input);
       form.reset();
       await onReload();
       onNotice("Customer created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to create customer.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to create customer."));
+    } finally {
+      setIsCreatingCustomer(false);
     }
   };
 
   const handleUpdateCustomer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!selectedCustomer) {
+    if (!selectedCustomer || isUpdatingCustomer) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const updates: CustomerInput = {
+      company_id: selectedCustomer.company_id,
+      display_name: getFormString(formData, "display_name", selectedCustomer.display_name),
+      contact_name: getFormString(formData, "contact_name", selectedCustomer.contact_name),
+      phone: getOptionalFormString(formData, "phone"),
+      email: getOptionalFormString(formData, "email"),
+      property_address: getFormString(
+        formData,
+        "property_address",
+        selectedCustomer.property_address,
+      ),
+      city: getOptionalFormString(formData, "city"),
+      state: getFormString(formData, "state", selectedCustomer.state || "AZ"),
+      postal_code: getOptionalFormString(formData, "postal_code"),
+      status: getFormString(formData, "status", selectedCustomer.status) as CustomerStatus,
+      customer_type: getFormString(
+        formData,
+        "customer_type",
+        selectedCustomer.customer_type,
+      ) as CustomerType,
+      notes: getOptionalFormString(formData, "notes"),
+    };
+
+    if (!updates.display_name || !updates.contact_name || !updates.property_address) {
+      onError("Customer name, contact, and property address are required.");
       return;
     }
 
     try {
-      const formData = new FormData(event.currentTarget);
-      await updateCustomer(client, selectedCustomer.id, {
-        status: getFormString(
-          formData,
-          "status",
-          selectedCustomer.status,
-        ) as CustomerStatus,
-        customer_type: getFormString(
-          formData,
-          "customer_type",
-          selectedCustomer.customer_type,
-        ) as CustomerType,
-        notes: getOptionalFormString(formData, "notes"),
-      });
+      setIsUpdatingCustomer(true);
+      await updateCustomer(client, selectedCustomer.id, updates);
       await onReload();
       onNotice("Customer updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update customer.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update customer."));
+    } finally {
+      setIsUpdatingCustomer(false);
     }
   };
 
@@ -5000,9 +5456,78 @@ function CustomersView({
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
+                aria-label="Search customers"
+                data-testid="customers-search"
                 className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-80"
                 placeholder="Search customers"
               />
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] xl:items-end">
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Company
+              <select
+                value={companyFilter}
+                onChange={(event) => setCompanyFilter(event.target.value as CompanyScopeId)}
+                data-testid="customers-company-filter"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                <option value="all">All companies</option>
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Status
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as CustomerStatus | "all")}
+                data-testid="customers-status-filter"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                <option value="all">All statuses</option>
+                {customerStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Type
+              <select
+                value={typeFilter}
+                onChange={(event) => setTypeFilter(event.target.value as CustomerType | "all")}
+                data-testid="customers-type-filter"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                <option value="all">All types</option>
+                {customerTypes.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 xl:justify-end">
+              <span className="text-sm font-semibold text-slate-600">
+                {customerFilterSummary}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setCompanyFilter("all");
+                  setStatusFilter("all");
+                  setTypeFilter("all");
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Clear
+              </button>
             </div>
           </div>
         </div>
@@ -5013,8 +5538,11 @@ function CustomersView({
               key={customer.id}
               type="button"
               onClick={() => setSelectedCustomerId(customer.id)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 lg:grid-cols-[1fr_130px_140px] lg:items-center ${
-                selectedCustomer?.id === customer.id ? "bg-sky-50" : "bg-white"
+              aria-pressed={selectedCustomer?.id === customer.id}
+              className={`grid w-full gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 lg:grid-cols-[1fr_140px_130px_150px] lg:items-center ${
+                selectedCustomer?.id === customer.id
+                  ? "border-l-sky-500 bg-sky-50"
+                  : "border-l-transparent bg-white"
               }`}
             >
               <div>
@@ -5024,8 +5552,19 @@ function CustomersView({
                 <p className="mt-1 text-sm text-slate-500">
                   {customer.property_address}
                 </p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                  {customer.contact_name}
+                  {customer.phone ? ` - ${customer.phone}` : ""}
+                  {customer.email ? ` - ${customer.email}` : ""}
+                </p>
               </div>
-              <Badge label={customerStatusLabel(customer.status)} tone="green" />
+              <Badge
+                label={customerStatusLabel(customer.status)}
+                tone={customer.status === "inactive" ? "amber" : "green"}
+              />
+              <span className="text-sm font-semibold text-slate-600">
+                {customerTypeLabel(customer.customer_type)}
+              </span>
               <span className="text-sm text-slate-600">
                 {companyMap.get(customer.company_id)?.name ?? "Company"}
               </span>
@@ -5047,7 +5586,11 @@ function CustomersView({
       <aside className="space-y-5">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-950">New customer</h3>
-          <CustomerCreateForm companies={snapshot.companies} onSubmit={handleCreateCustomer} />
+          <CustomerCreateForm
+            companies={snapshot.companies}
+            isSubmitting={isCreatingCustomer}
+            onSubmit={handleCreateCustomer}
+          />
         </section>
 
         {selectedCustomer ? (
@@ -5064,7 +5607,85 @@ function CustomersView({
               <ContactLine icon={Building2} value={selectedCustomer.property_address} />
             </div>
 
-            <form onSubmit={handleUpdateCustomer} className="mt-5 grid gap-3">
+            <form
+              key={selectedCustomer.id}
+              onSubmit={handleUpdateCustomer}
+              className="mt-5 grid gap-3"
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Display name
+                  <input
+                    name="display_name"
+                    required
+                    defaultValue={selectedCustomer.display_name}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Primary contact
+                  <input
+                    name="contact_name"
+                    required
+                    defaultValue={selectedCustomer.contact_name}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Phone
+                  <input
+                    name="phone"
+                    defaultValue={selectedCustomer.phone ?? ""}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Email
+                  <input
+                    name="email"
+                    type="email"
+                    defaultValue={selectedCustomer.email ?? ""}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Property address
+                <input
+                  name="property_address"
+                  required
+                  defaultValue={selectedCustomer.property_address}
+                  className="rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  City
+                  <input
+                    name="city"
+                    defaultValue={selectedCustomer.city ?? ""}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  State
+                  <input
+                    name="state"
+                    defaultValue={selectedCustomer.state}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  ZIP
+                  <input
+                    name="postal_code"
+                    defaultValue={selectedCustomer.postal_code ?? ""}
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-sm font-medium text-slate-700">
                   Status
@@ -5105,9 +5726,10 @@ function CustomersView({
               </label>
               <button
                 type="submit"
-                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                disabled={isUpdatingCustomer}
+                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
-                Save customer
+                {isUpdatingCustomer ? "Saving customer" : "Save customer"}
               </button>
             </form>
             <CustomerProfilePanel snapshot={snapshot} customer={selectedCustomer} />
@@ -5241,10 +5863,15 @@ function RelatedList({
 
 type CustomerCreateFormProps = {
   companies: CompanyRecord[];
+  isSubmitting: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
-function CustomerCreateForm({ companies, onSubmit }: CustomerCreateFormProps) {
+function CustomerCreateForm({
+  companies,
+  isSubmitting,
+  onSubmit,
+}: CustomerCreateFormProps) {
   return (
     <form onSubmit={onSubmit} className="mt-4 grid gap-3">
       <select
@@ -5336,10 +5963,11 @@ function CustomerCreateForm({ companies, onSubmit }: CustomerCreateFormProps) {
       />
       <button
         type="submit"
-        className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+        disabled={isSubmitting}
+        className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         <Plus className="h-4 w-4" />
-        Create customer
+        {isSubmitting ? "Creating customer" : "Create customer"}
       </button>
     </form>
   );
@@ -5444,11 +6072,7 @@ function EstimatesView({
           : "Draft estimate saved.",
       );
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save estimate.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save estimate."));
     }
   };
 
@@ -5470,11 +6094,7 @@ function EstimatesView({
       await onReload();
       onNotice(`Job created: ${job.title}`);
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to create job from estimate.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to create job from estimate."));
     }
   };
 
@@ -5491,11 +6111,7 @@ function EstimatesView({
       await onReload();
       onNotice("Estimate packet saved to documents.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save estimate packet.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save estimate packet."));
     }
   };
 
@@ -5546,11 +6162,7 @@ function EstimatesView({
       await onReload();
       onNotice("Scope of Work generated and saved to documents.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to generate scope of work.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to generate scope of work."));
     }
   };
 
@@ -5615,11 +6227,7 @@ function EstimatesView({
       await onReload();
       onNotice("Customer signature requested for the estimate packet.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to request customer signature.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to request customer signature."));
     }
   };
 
@@ -7546,11 +8154,7 @@ function ScopeGeneratorView({
       await onReload();
       onNotice("Scope packet saved to documents.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save scope packet.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save scope packet."));
     }
   };
 
@@ -7583,11 +8187,7 @@ function ScopeGeneratorView({
       await onReload();
       onNotice(templateEditorRecord ? "Scope template updated." : "Scope template created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save scope template.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save scope template."));
     }
   };
 
@@ -7628,9 +8228,7 @@ function ScopeGeneratorView({
       await onReload();
       onNotice(draft.id ? "Scope updated." : "Scope created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save scope.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save scope."));
     } finally {
       setIsSaving(false);
     }
@@ -8161,6 +8759,11 @@ function JobsView({
   });
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<JobStatus | "all">("all");
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [serviceFilter, setServiceFilter] = useState<ServiceType | "all">("all");
+  const [crewFilter, setCrewFilter] = useState<JobCrewFilter>("all");
+  const [scheduleFilter, setScheduleFilter] = useState<JobScheduleFilter>("all");
+  const [workspaceTab, setWorkspaceTab] = useState<JobWorkspaceTab>("overview");
   const [isSaving, setIsSaving] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [productionAction, setProductionAction] = useState<string | null>(null);
@@ -8202,7 +8805,8 @@ function JobsView({
         ? "Roofing estimates, scopes, and checklist defaults only."
         : "Shared company records are available for this job.";
   const filteredJobs = snapshot.jobs.filter((job) => {
-    const query = search.toLowerCase();
+    const assignmentNames = getJobAssignedEmployeeNames(snapshot, job.id).join(" ");
+    const query = search.trim().toLowerCase();
     const matchesSearch =
       !query ||
       job.title.toLowerCase().includes(query) ||
@@ -8212,9 +8816,25 @@ function JobsView({
       (job.scope_of_work ?? "").toLowerCase().includes(query) ||
       (job.crew_name ?? "").toLowerCase().includes(query) ||
       (job.project_manager ?? "").toLowerCase().includes(query) ||
-      getJobTargetName(snapshot, job).toLowerCase().includes(query);
+      getJobTargetName(snapshot, job).toLowerCase().includes(query) ||
+      assignmentNames.toLowerCase().includes(query);
     const matchesStatus = statusFilter === "all" || job.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesCompany = companyFilter === "all" || job.company_id === companyFilter;
+    const matchesService = serviceFilter === "all" || job.service_type === serviceFilter;
+    const matchesCrew =
+      crewFilter === "all" ||
+      (crewFilter === "assigned" && jobHasCrew(snapshot, job)) ||
+      (crewFilter === "unassigned" && !jobHasCrew(snapshot, job));
+    const matchesSchedule = jobMatchesScheduleFilter(snapshot, job, scheduleFilter);
+
+    return (
+      matchesSearch &&
+      matchesStatus &&
+      matchesCompany &&
+      matchesService &&
+      matchesCrew &&
+      matchesSchedule
+    );
   });
   const {
     page: jobPage,
@@ -8222,9 +8842,23 @@ function JobsView({
     setPage: setJobPage,
     pagedItems: pagedJobs,
   } = usePagination(filteredJobs);
+
+  useEffect(() => {
+    setJobPage(1);
+  }, [
+    companyFilter,
+    crewFilter,
+    scheduleFilter,
+    search,
+    serviceFilter,
+    setJobPage,
+    statusFilter,
+  ]);
+
   const selectedJobEvents = selectedJob
     ? getJobScheduleEvents(snapshot, selectedJob.id)
     : [];
+  const selectedJobScheduleConflictCount = countScheduleEventConflicts(selectedJobEvents);
   const selectedJobTasks = selectedJob ? getJobTasks(snapshot, selectedJob.id) : [];
   const selectedJobNotes = selectedJob ? getJobNotes(snapshot, selectedJob.id) : [];
   const selectedJobMaterials = selectedJob ? getJobMaterials(snapshot, selectedJob.id) : [];
@@ -8242,14 +8876,37 @@ function JobsView({
     ? getJobChangeOrders(snapshot, selectedJob.id)
     : [];
   const selectedJobPhotos = selectedJob ? getJobPhotos(snapshot, selectedJob.id) : [];
+  const selectedJobActivityItems = selectedJob
+    ? buildJobActivityItems(snapshot, selectedJob)
+    : [];
   const selectedJobCompany = selectedJob
     ? companyMap.get(selectedJob.company_id) ??
       snapshot.companies.find((company) => company.id === selectedJob.company_id) ??
       null
     : null;
+  const selectedJobCustomer = selectedJob?.customer_id
+    ? snapshot.customers.find((customer) => customer.id === selectedJob.customer_id) ?? null
+    : null;
+  const selectedJobLead = selectedJob?.lead_id
+    ? snapshot.leads.find((lead) => lead.id === selectedJob.lead_id) ?? null
+    : null;
   const selectedJobEstimate = selectedJob?.estimate_id
     ? snapshot.estimates.find((estimate) => estimate.id === selectedJob.estimate_id) ?? null
     : null;
+  const selectedJobPaymentTotal = selectedJobInvoices.reduce((total, invoice) => {
+    const invoicePayments = snapshot.payments.filter(
+      (payment) => payment.invoice_id === invoice.id,
+    );
+
+    return (
+      total +
+      invoicePayments.reduce((paymentTotal, payment) => paymentTotal + payment.amount, 0)
+    );
+  }, 0);
+  const filteredJobSummary =
+    filteredJobs.length === snapshot.jobs.length
+      ? `${snapshot.jobs.length} job${snapshot.jobs.length === 1 ? "" : "s"}`
+      : `${filteredJobs.length} of ${snapshot.jobs.length} jobs`;
   const selectedJobScope = selectedJob
     ? snapshot.scopes.find((scope) => scope.id === selectedJob.scope_id) ??
       snapshot.scopes.find(
@@ -8392,6 +9049,11 @@ function JobsView({
     setJobFormServiceType(getDefaultServiceTypeForCompany(firstCompany));
     setSearch("");
     setStatusFilter("all");
+    setCompanyFilter("all");
+    setServiceFilter("all");
+    setCrewFilter("all");
+    setScheduleFilter("all");
+    setWorkspaceTab("overview");
     setEditingTaskId(null);
     setProductionAction(null);
     setJobDraftVersion((version) => version + 1);
@@ -8402,6 +9064,7 @@ function JobsView({
     setSelectedJobId(job.id);
     setJobFormCompanyId(job.company_id);
     setJobFormServiceType(job.service_type);
+    setWorkspaceTab("overview");
     setEditingTaskId(null);
     setProductionAction(null);
     focusJobBuilder();
@@ -8650,7 +9313,7 @@ function JobsView({
       }
       onNotice(selectedJob ? "Job updated." : "Draft job created.");
     } catch (currentError) {
-      onError(currentError instanceof Error ? currentError.message : "Unable to save job.");
+      onError(getCaughtErrorMessage(currentError, "Unable to save job."));
     } finally {
       setIsSaving(false);
     }
@@ -8666,11 +9329,7 @@ function JobsView({
       await onReload();
       onNotice(`Job moved to ${jobStatusLabel(status)}.`);
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update job status.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update job status."));
     }
   };
 
@@ -8704,11 +9363,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to add checklist task.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to add checklist task."));
     } finally {
       setProductionAction(null);
     }
@@ -8731,11 +9386,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Checklist task added.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to add checklist task.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to add checklist task."));
     } finally {
       setProductionAction(null);
     }
@@ -8751,11 +9402,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice(`Checklist task marked ${jobTaskStatusLabel(status)}.`);
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update checklist task.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update checklist task."));
     } finally {
       setProductionAction(null);
     }
@@ -8786,11 +9433,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Checklist task updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update checklist task.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update checklist task."));
     } finally {
       setProductionAction(null);
     }
@@ -8810,11 +9453,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Checklist task deleted.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to delete checklist task.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to delete checklist task."));
     } finally {
       setProductionAction(null);
     }
@@ -8844,11 +9483,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Checklist order updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to reorder checklist tasks.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to reorder checklist tasks."));
     } finally {
       setProductionAction(null);
     }
@@ -8881,9 +9516,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Job note added.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to add job note.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to add job note."));
     } finally {
       setProductionAction(null);
     }
@@ -8919,11 +9552,7 @@ function JobsView({
       await onScrollPreservingReload();
       onNotice("Job material added.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to add job material.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to add job material."));
     } finally {
       setProductionAction(null);
     }
@@ -8932,12 +9561,17 @@ function JobsView({
   const handleCreateAssignment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
+    if (productionAction !== null) {
+      return;
+    }
+
     if (!selectedJob) {
       onError("Select or save a job before assigning crew.");
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const employeeId = getFormString(formData, "employee_id");
 
     if (!employeeId) {
@@ -8957,16 +9591,17 @@ function JobsView({
     };
 
     try {
+      setProductionAction("assign-crew");
       await createJobAssignment(client, input);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Crew assignment created.");
     } catch (currentError) {
       onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to create crew assignment.",
+        getCaughtErrorMessage(currentError, "Unable to create crew assignment."),
       );
+    } finally {
+      setProductionAction(null);
     }
   };
 
@@ -8979,11 +9614,7 @@ function JobsView({
       await onReload();
       onNotice("Crew assignment updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update crew assignment.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update crew assignment."));
     }
   };
 
@@ -9076,14 +9707,24 @@ function JobsView({
 
       onNotice("Job scheduled.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to schedule job.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to schedule job."));
     } finally {
       setProductionAction(null);
     }
+  };
+
+  const handleOpenJobWorkspaceTab = (tab: JobWorkspaceTab) => {
+    setWorkspaceTab(tab);
+
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`job-section-${tab}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   return (
@@ -9101,6 +9742,8 @@ function JobsView({
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
+                  aria-label="Search jobs"
+                  data-testid="jobs-search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-72"
@@ -9108,6 +9751,8 @@ function JobsView({
                 />
               </div>
               <select
+                aria-label="Filter jobs by status"
+                data-testid="jobs-status-filter"
                 value={statusFilter}
                 onChange={(event) =>
                   setStatusFilter(event.target.value as JobStatus | "all")
@@ -9176,52 +9821,158 @@ function JobsView({
               );
             })}
           </div>
+          <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-5">
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Company
+              <select
+                aria-label="Filter jobs by company"
+                data-testid="jobs-company-filter"
+                value={companyFilter}
+                onChange={(event) => setCompanyFilter(event.target.value)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                <option value="all">All companies</option>
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Service
+              <select
+                aria-label="Filter jobs by service"
+                data-testid="jobs-service-filter"
+                value={serviceFilter}
+                onChange={(event) =>
+                  setServiceFilter(event.target.value as ServiceType | "all")
+                }
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                <option value="all">All services</option>
+                {serviceTypes.map((service) => (
+                  <option key={service.value} value={service.value}>
+                    {service.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Schedule
+              <select
+                aria-label="Filter jobs by schedule"
+                data-testid="jobs-schedule-filter"
+                value={scheduleFilter}
+                onChange={(event) =>
+                  setScheduleFilter(event.target.value as JobScheduleFilter)
+                }
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                {jobScheduleFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+              Crew
+              <select
+                aria-label="Filter jobs by crew"
+                data-testid="jobs-crew-filter"
+                value={crewFilter}
+                onChange={(event) =>
+                  setCrewFilter(event.target.value as JobCrewFilter)
+                }
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700"
+              >
+                {jobCrewFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-col justify-end gap-2">
+              <span className="text-sm font-semibold text-slate-600">
+                {filteredJobSummary}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("all");
+                  setCompanyFilter("all");
+                  setServiceFilter("all");
+                  setScheduleFilter("all");
+                  setCrewFilter("all");
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Clear filters
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">
-          {pagedJobs.map((job) => (
-            <button
-              key={job.id}
-              type="button"
-              onClick={() => handleSelectJob(job)}
-              className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_130px_150px_150px_120px] xl:items-center ${
-                selectedJob?.id === job.id ? "bg-sky-50" : "bg-white"
-              }`}
-            >
-              <div>
-                <p className="font-semibold text-slate-950">{job.title}</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {getJobDisplayLocation(job)}
-                </p>
-                <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
-                  {getJobTargetName(snapshot, job)} - {serviceLabel(job.service_type)}
-                </p>
-              </div>
-              <Badge
-                label={jobStatusLabel(job.status)}
-                tone={
-                  job.status === "completed" || job.status === "closed"
-                    ? "green"
-                    : job.status === "blocked" || job.status === "cancelled"
-                      ? "amber"
-                      : "blue"
-                }
-              />
-              <span className="text-sm text-slate-600">
-                {getJobDisplayBusiness(snapshot, job)}
-              </span>
-              <span className="text-sm text-slate-600">
-                {job.crew_name ?? getJobAssignments(snapshot, job.id).length
-                  ? `${job.crew_name ?? "Assigned crew"}`
-                  : "Crew needed"}
-              </span>
-              <span className="text-sm font-semibold text-slate-950">
-                {job.total ? formatMoney(job.total) : formatDate(job.start_date)}
-              </span>
-            </button>
-          ))}
+          {pagedJobs.map((job) => {
+            const scheduleSummary = getJobScheduleSummary(snapshot, job);
+            const crewLabel = getJobCrewLabel(snapshot, job);
+            const isSelected = selectedJob?.id === job.id;
 
-          {!filteredJobs.length ? <EmptyState label="No jobs match this view." /> : null}
+            return (
+              <button
+                key={job.id}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => handleSelectJob(job)}
+                className={`grid w-full gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_130px_150px_150px_120px] xl:items-center ${
+                  isSelected ? "border-l-sky-500 bg-sky-50" : "border-l-transparent bg-white"
+                }`}
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-slate-950">{job.title}</p>
+                  <p className="mt-1 truncate text-sm text-slate-500">
+                    {getJobDisplayLocation(job)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
+                    {getJobTargetName(snapshot, job)} - {serviceLabel(job.service_type)}
+                  </p>
+                </div>
+                <Badge
+                  label={jobStatusLabel(job.status)}
+                  tone={
+                    job.status === "completed" || job.status === "closed"
+                      ? "green"
+                      : job.status === "blocked" || job.status === "cancelled"
+                        ? "amber"
+                        : "blue"
+                  }
+                />
+                <span className="text-sm text-slate-600">
+                  {getJobDisplayBusiness(snapshot, job)}
+                </span>
+                <span className="text-sm text-slate-600">
+                  {crewLabel}
+                </span>
+                <span className="text-sm font-semibold text-slate-950">
+                  {job.total ? formatMoney(job.total) : scheduleSummary}
+                </span>
+              </button>
+            );
+          })}
+
+          {!filteredJobs.length ? (
+            <EmptyState
+              label={
+                snapshot.jobs.length
+                  ? "No jobs match these filters."
+                  : "No jobs yet. Create a draft job to start production tracking."
+              }
+            />
+          ) : null}
         </div>
         <PaginationControls
           page={jobPage}
@@ -9303,6 +10054,69 @@ function JobsView({
                 />
               </div>
 
+              <div
+                role="tablist"
+                aria-label="Job workspace sections"
+                className="flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-1"
+              >
+                {jobWorkspaceTabs.map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={workspaceTab === tab.value}
+                    onClick={() => handleOpenJobWorkspaceTab(tab.value)}
+                    className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-bold transition ${
+                      workspaceTab === tab.value
+                        ? "bg-white text-sky-800 shadow-sm"
+                        : "text-slate-600 hover:bg-white/70 hover:text-slate-950"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div
+                id="job-section-overview"
+                className="scroll-mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">
+                      Customer and property
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {selectedJobCustomer?.display_name ??
+                        selectedJobLead?.contact_name ??
+                        "No customer record linked"}
+                    </p>
+                  </div>
+                  <Badge
+                    label={selectedJobCustomer ? "Customer" : selectedJobLead ? "Lead" : "Unassigned"}
+                    tone={selectedJobCustomer || selectedJobLead ? "blue" : "amber"}
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                  <ContactLine
+                    icon={MapPin}
+                    value={
+                      selectedJobCustomer?.property_address ??
+                      selectedJobLead?.property_address ??
+                      getJobDisplayAddress(selectedJob)
+                    }
+                  />
+                  <ContactLine
+                    icon={Phone}
+                    value={selectedJobCustomer?.phone ?? selectedJobLead?.phone ?? null}
+                  />
+                  <ContactLine
+                    icon={Mail}
+                    value={selectedJobCustomer?.email ?? selectedJobLead?.email ?? null}
+                  />
+                </div>
+              </div>
+
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p className="text-sm font-bold text-slate-950">Scope of work</p>
                 <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
@@ -9312,7 +10126,10 @@ function JobsView({
                 </p>
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div
+                id="job-section-checklist"
+                className="scroll-mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-bold text-slate-950">Production checklist</p>
@@ -9553,13 +10370,47 @@ function JobsView({
                 </form>
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-bold text-slate-950">Notes</p>
+              <div
+                id="job-section-activity"
+                className="scroll-mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
+                <p className="text-sm font-bold text-slate-950">Notes and activity</p>
                 {selectedJob.notes ? (
                   <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
                     {selectedJob.notes}
                   </p>
                 ) : null}
+                <div className="mt-4 grid gap-2">
+                  <p className="text-xs font-semibold uppercase text-slate-500">
+                    Activity timeline
+                  </p>
+                  {selectedJobActivityItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-md border border-slate-200 bg-white p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {item.label}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {item.detail}
+                          </p>
+                        </div>
+                        {item.meta ? <Badge label={item.meta} tone="blue" /> : null}
+                      </div>
+                      {item.occurredAt ? (
+                        <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                          {formatDateTime(item.occurredAt)}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                  {!selectedJobActivityItems.length ? (
+                    <EmptyState label="No job activity yet." />
+                  ) : null}
+                </div>
                 <div className="mt-3 grid gap-2">
                   {selectedJobNotes.map((note) => (
                     <div
@@ -9598,7 +10449,10 @@ function JobsView({
                 </form>
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div
+                id="job-section-materials"
+                className="scroll-mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
                 <p className="text-sm font-bold text-slate-950">Materials list</p>
                 <div className="mt-3 grid gap-2">
                   {selectedJobMaterials.map((material) => (
@@ -9670,7 +10524,10 @@ function JobsView({
                 </form>
               </div>
 
-              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+              <div
+                id="job-section-files"
+                className="scroll-mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4"
+              >
                 <div className="flex items-start gap-3">
                   <div className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-500">
                     <Camera className="h-5 w-5" />
@@ -9678,10 +10535,60 @@ function JobsView({
                   <div>
                     <p className="text-sm font-bold text-slate-950">Photos</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      Job photos will be added here later. Current linked photo count: {selectedJobPhotos.length}.
+                      Linked job photos and documents from the existing CRM record.
                     </p>
                   </div>
                 </div>
+                {selectedJobPhotos.length ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {selectedJobPhotos.slice(0, 4).map((photo) => (
+                      <a
+                        key={photo.id}
+                        href={photo.file_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-3 hover:bg-slate-50"
+                      >
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-500">
+                          <Camera className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-bold text-slate-950">
+                            {photo.caption ?? "Job photo"}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                            {formatDate(photo.taken_at ?? photo.created_at)}
+                          </p>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState label="No linked job photos yet." />
+                )}
+                {selectedJobDocuments.length ? (
+                  <div className="mt-4 grid gap-2">
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      Documents
+                    </p>
+                    {selectedJobDocuments.slice(0, 5).map((document) => (
+                      <div
+                        key={document.id}
+                        className="flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-white p-3"
+                      >
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {document.title}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                            {documentCategoryLabel(document.category)}
+                          </p>
+                        </div>
+                        <Badge label={documentStatusLabel(document.status)} tone="blue" />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -10123,13 +11030,17 @@ function JobsView({
           )}
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section
+          id="job-section-financial"
+          className="scroll-mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+        >
           <h3 className="text-lg font-bold text-slate-950">Production readiness</h3>
           {selectedJob ? (
             <>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <ProfileStat label="Invoices" value={formatMoney(selectedJobFinancials.invoiced)} />
                 <ProfileStat label="Balance" value={formatMoney(selectedJobFinancials.balance)} />
+                <ProfileStat label="Payments" value={formatMoney(selectedJobPaymentTotal)} />
                 <ProfileStat label="Materials" value={formatMoney(selectedJobFinancials.materials)} />
                 <ProfileStat label="Photos" value={selectedJobPhotos.length} />
               </div>
@@ -10160,7 +11071,10 @@ function JobsView({
           )}
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section
+          id="job-section-crew"
+          className="scroll-mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+        >
           <h3 className="text-lg font-bold text-slate-950">Crew assignments</h3>
           {selectedJob ? (
             <>
@@ -10274,10 +11188,11 @@ function JobsView({
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                  disabled={productionAction !== null}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Users className="h-4 w-4" />
-                  Assign crew
+                  {productionAction === "assign-crew" ? "Assigning" : "Assign crew"}
                 </button>
               </form>
             </>
@@ -10286,7 +11201,10 @@ function JobsView({
           )}
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section
+          id="job-section-schedule"
+          className="scroll-mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+        >
           <h3 className="text-lg font-bold text-slate-950">Schedule job</h3>
           <p className="mt-1 text-sm text-slate-500">
             Production dates are saved on the job without requiring a crew assignment.
@@ -10294,6 +11212,13 @@ function JobsView({
           </p>
           {selectedJob ? (
             <>
+              {selectedJobScheduleConflictCount > 0 ? (
+                <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                  {selectedJobScheduleConflictCount} overlapping scheduled event
+                  {selectedJobScheduleConflictCount === 1 ? "" : "s"} detected for
+                  this job.
+                </div>
+              ) : null}
               <div className="mt-4 grid gap-3">
                 {selectedJobEvents.map((event) => (
                   <div
@@ -10523,14 +11448,16 @@ function CalendarView({
       await onReload();
       onNotice("Event moved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to move event.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to move event."));
     }
   };
 
   const handleSaveEvent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isSaving) {
+      return;
+    }
+
     const formData = new FormData(event.currentTarget);
     const input: ScheduleEventInput = {
       company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
@@ -10563,9 +11490,7 @@ function CalendarView({
       await onReload();
       onNotice(selectedEvent ? "Schedule updated." : "Event scheduled.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save event.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save event."));
     } finally {
       setIsSaving(false);
     }
@@ -11061,7 +11986,12 @@ function PhotosView({
 
   const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    if (isUploading) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
     try {
       setIsUploading(true);
@@ -11077,14 +12007,12 @@ function PhotosView({
         },
         file,
       );
-      event.currentTarget.reset();
+      form.reset();
       setFile(null);
       await onReload();
       onNotice("Photo uploaded.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to upload photo.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to upload photo."));
     } finally {
       setIsUploading(false);
     }
@@ -11389,9 +12317,7 @@ function InvoicesView({
       await onReload();
       onNotice(selectedInvoice ? "Invoice updated." : "Invoice created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save invoice.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save invoice."));
     }
   };
 
@@ -11954,11 +12880,7 @@ function MaterialOrdersView({
       await onReload();
       onNotice(selectedOrder ? "Material order updated." : "Material order created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save material order.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save material order."));
     }
   };
 
@@ -12371,9 +13293,7 @@ function AiToolsView({
       await onReload();
       onNotice("AI scope draft and document saved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save scope.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save scope."));
     }
   };
 
@@ -12469,9 +13389,7 @@ function AiToolsView({
       await onReload();
       onNotice("AI estimate and PDF-ready document saved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save estimate.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save estimate."));
     }
   };
 
@@ -12735,11 +13653,7 @@ function WeatherDashboardView({ snapshot }: { snapshot: CrmSnapshot }) {
       })
       .catch((currentError) => {
         if (isMounted) {
-          setWeatherError(
-            currentError instanceof Error
-              ? currentError.message
-              : "Unable to load weather.",
-          );
+          setWeatherError(getCaughtErrorMessage(currentError, "Unable to load weather."));
           setForecast(null);
         }
       })
@@ -12921,9 +13835,7 @@ function CustomerPortalView({
       await onReload();
       onNotice("Payment posted.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to post payment.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to post payment."));
     }
   };
 
@@ -13110,6 +14022,9 @@ function EmployeePortalView({
     snapshot.employees[0]?.id ?? "",
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [isCreatingEmployee, setIsCreatingEmployee] = useState(false);
+  const [isSavingDailyLog, setIsSavingDailyLog] = useState(false);
+  const [isSavingInspection, setIsSavingInspection] = useState(false);
   const employee =
     snapshot.employees.find((item) => item.id === selectedEmployeeId) ??
     snapshot.employees[0];
@@ -13124,7 +14039,12 @@ function EmployeePortalView({
 
   const handleCreateEmployee = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    if (isCreatingEmployee) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: EmployeeInput = {
       company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
       full_name: getFormString(formData, "full_name"),
@@ -13135,15 +14055,16 @@ function EmployeePortalView({
     };
 
     try {
+      setIsCreatingEmployee(true);
       const created = await createEmployee(client, input);
       setSelectedEmployeeId(created.id);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Employee created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to create employee.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to create employee."));
+    } finally {
+      setIsCreatingEmployee(false);
     }
   };
 
@@ -13177,7 +14098,7 @@ function EmployeePortalView({
       }
       await onReload();
     } catch (currentError) {
-      onError(currentError instanceof Error ? currentError.message : "Unable to update time.");
+      onError(getCaughtErrorMessage(currentError, "Unable to update time."));
     } finally {
       setIsSaving(false);
     }
@@ -13189,9 +14110,15 @@ function EmployeePortalView({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    if (isSavingDailyLog) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
     try {
+      setIsSavingDailyLog(true);
       await createDailyLog(client, {
         company_id: employee.company_id,
         employee_id: employee.id,
@@ -13202,11 +14129,13 @@ function EmployeePortalView({
         blockers: getOptionalFormString(formData, "blockers"),
         tomorrow_plan: getOptionalFormString(formData, "tomorrow_plan"),
       });
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Daily log saved.");
     } catch (currentError) {
-      onError(currentError instanceof Error ? currentError.message : "Unable to save log.");
+      onError(getCaughtErrorMessage(currentError, "Unable to save log."));
+    } finally {
+      setIsSavingDailyLog(false);
     }
   };
 
@@ -13216,9 +14145,15 @@ function EmployeePortalView({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
+    if (isSavingInspection) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
     try {
+      setIsSavingInspection(true);
       await createInspection(client, {
         company_id: employee.company_id,
         employee_id: employee.id,
@@ -13230,13 +14165,13 @@ function EmployeePortalView({
           getFormString(formData, "status") === "passed" ? new Date().toISOString() : null,
         notes: getOptionalFormString(formData, "notes"),
       });
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Inspection saved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save inspection.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save inspection."));
+    } finally {
+      setIsSavingInspection(false);
     }
   };
 
@@ -13249,11 +14184,7 @@ function EmployeePortalView({
       await onReload();
       onNotice("Assignment updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update assignment.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update assignment."));
     }
   };
 
@@ -13380,7 +14311,13 @@ function EmployeePortalView({
               <textarea required name="work_completed" className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Work completed" />
               <textarea name="blockers" className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Blockers" />
               <textarea name="tomorrow_plan" className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Tomorrow plan" />
-              <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save daily log</button>
+              <button
+                type="submit"
+                disabled={!employee || isSavingDailyLog}
+                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {isSavingDailyLog ? "Saving daily log" : "Save daily log"}
+              </button>
             </form>
           </section>
 
@@ -13400,7 +14337,13 @@ function EmployeePortalView({
               </select>
               <textarea required name="checklist" className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Checklist" />
               <textarea name="notes" className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Notes" />
-              <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save inspection</button>
+              <button
+                type="submit"
+                disabled={!employee || isSavingInspection}
+                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {isSavingInspection ? "Saving inspection" : "Save inspection"}
+              </button>
             </form>
           </section>
         </div>
@@ -13423,7 +14366,13 @@ function EmployeePortalView({
             </select>
             <input name="phone" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Phone" />
             <input name="email" type="email" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Email" />
-            <button type="submit" className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">Create employee</button>
+            <button
+              type="submit"
+              disabled={isCreatingEmployee}
+              className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isCreatingEmployee ? "Creating employee" : "Create employee"}
+            </button>
           </form>
         </section>
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -13522,9 +14471,7 @@ function RoutePlannerView({
       await onReload();
       onNotice(`Applied optimized times to ${scheduled.length} scheduled stops.`);
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to optimize route.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to optimize route."));
     }
   };
 
@@ -13563,9 +14510,7 @@ function RoutePlannerView({
       await onReload();
       onNotice("Route preview saved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save route.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save route."));
     }
   };
 
@@ -13905,11 +14850,7 @@ function ChangeOrdersView({
       await onReload();
       onNotice(selected ? "Change order updated." : "Change order created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save change order.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save change order."));
     } finally {
       setIsSaving(false);
     }
@@ -13931,11 +14872,7 @@ function ChangeOrdersView({
       await onReload();
       onNotice("Signature requested.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to request signature.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to request signature."));
     }
   };
 
@@ -14206,7 +15143,7 @@ function DocumentsAndSignaturesView({
       await onReload();
       onNotice("Signature captured.");
     } catch (currentError) {
-      onError(currentError instanceof Error ? currentError.message : "Unable to sign.");
+      onError(getCaughtErrorMessage(currentError, "Unable to sign."));
     }
   };
 
@@ -14235,11 +15172,7 @@ function DocumentsAndSignaturesView({
       handleSelectDocument(savedDocument.id);
       onNotice(status === "draft" ? "Document draft saved." : "Document marked ready.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to save generated document.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save generated document."));
     }
   };
 
@@ -14252,11 +15185,7 @@ function DocumentsAndSignaturesView({
       await onReload();
       onNotice(`Document marked ${documentStatusLabel(status)}.`);
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update document status.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update document status."));
     }
   };
 
@@ -14289,11 +15218,7 @@ function DocumentsAndSignaturesView({
       await onReload();
       onNotice("Document draft updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update document.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update document."));
     }
   };
 
@@ -14323,9 +15248,7 @@ function DocumentsAndSignaturesView({
       handleSelectDocument(savedDocument.id);
       onNotice("Document draft saved.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error ? currentError.message : "Unable to save document.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to save document."));
     }
   };
 
@@ -15012,6 +15935,20 @@ function AnalyticsView({
     .reduce((total, estimate) => total + estimate.total, 0);
   const invoiceTotal = snapshot.invoices.reduce((total, invoice) => total + invoice.total, 0);
   const materialSpend = snapshot.materialOrders.reduce((total, order) => total + order.total, 0);
+  const companySummaries = snapshot.companies.map((company) =>
+    buildCompanyDashboardSummary(snapshot, company),
+  );
+  const productionKpis = calculateProductionKpis(snapshot);
+  const pendingDocuments = snapshot.documents.filter(
+    (document) => document.status === "draft" || document.status === "ready",
+  );
+  const pendingChangeOrders = snapshot.changeOrders.filter(
+    (changeOrder) => changeOrder.status === "draft" || changeOrder.status === "sent",
+  );
+  const overdueInvoices = snapshot.invoices.filter(
+    (invoice) => invoice.status === "overdue",
+  );
+  const scheduleConflictCount = countScheduleEventConflicts(snapshot.scheduleEvents);
 
   return (
     <div className="space-y-5">
@@ -15025,6 +15962,25 @@ function AnalyticsView({
           <MetricCard label="Close rate" value={`${metrics.closeRate}%`} icon={CheckCircle2} />
           <MetricCard label="Production complete" value={`${metrics.productionCompletion}%`} icon={CalendarClock} />
           <MetricCard label="Gross profit" value={formatMoney(metrics.grossProfit)} icon={DollarSign} />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Company performance</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Side-by-side operating health for WeatherTech Roofing LLC and IHC.
+            </p>
+          </div>
+          <span className="text-sm font-semibold text-slate-500">
+            {companySummaries.length} active workspaces
+          </span>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {companySummaries.map((summary) => (
+            <CompanyAnalyticsCard key={summary.company.id} summary={summary} />
+          ))}
         </div>
       </section>
 
@@ -15046,6 +16002,17 @@ function AnalyticsView({
             { label: "Gross profit", value: metrics.grossProfit },
           ]}
         />
+        <AnalyticsPanel
+          title="Operational attention"
+          rows={[
+            { label: "Jobs needing schedule", value: productionKpis.jobsMissingSchedule.length },
+            { label: "Schedule conflicts", value: scheduleConflictCount },
+            { label: "Pending documents", value: pendingDocuments.length },
+            { label: "Pending change orders", value: pendingChangeOrders.length },
+            { label: "Overdue invoices", value: overdueInvoices.length },
+          ]}
+          valueFormat="number"
+        />
       </div>
     </div>
   );
@@ -15054,9 +16021,11 @@ function AnalyticsView({
 function AnalyticsPanel({
   title,
   rows,
+  valueFormat = "money",
 }: {
   title: string;
   rows: { label: string; value: number }[];
+  valueFormat?: "money" | "number";
 }) {
   const max = Math.max(...rows.map((row) => row.value), 1);
 
@@ -15068,7 +16037,9 @@ function AnalyticsPanel({
           <div key={row.label}>
             <div className="flex items-center justify-between text-sm">
               <span className="font-semibold text-slate-700">{row.label}</span>
-              <span className="font-bold text-slate-950">{formatMoney(row.value)}</span>
+              <span className="font-bold text-slate-950">
+                {valueFormat === "money" ? formatMoney(row.value) : row.value}
+              </span>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
               <div
@@ -15080,6 +16051,50 @@ function AnalyticsPanel({
         ))}
       </div>
     </section>
+  );
+}
+
+function CompanyAnalyticsCard({ summary }: { summary: CompanyDashboardSummary }) {
+  const accent =
+    summary.company.trade === "painting"
+      ? "border-orange-200 bg-orange-50 text-orange-900"
+      : "border-indigo-200 bg-indigo-50 text-indigo-900";
+
+  return (
+    <article className={`rounded-lg border p-4 ${accent}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase opacity-70">
+            {summary.company.short_name ?? summary.company.workflow_profile}
+          </p>
+          <h4 className="mt-1 text-lg font-bold">{summary.company.name}</h4>
+        </div>
+        <Badge
+          label={`${summary.metrics.closeRate}% close rate`}
+          tone={summary.metrics.closeRate >= 40 ? "green" : "blue"}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <ProfileStat label="Open estimates" value={summary.openEstimates} />
+        <ProfileStat label="Active jobs" value={summary.activeJobs} />
+        <ProfileStat label="Scheduled work" value={summary.scheduledWork} />
+        <ProfileStat label="Pending documents" value={summary.pendingDocuments} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-70">Pipeline</p>
+          <p className="mt-1 text-2xl font-bold">
+            {formatMoney(summary.metrics.pipelineValue)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-70">Revenue</p>
+          <p className="mt-1 text-2xl font-bold">
+            {formatMoney(summary.revenue)}
+          </p>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -15098,6 +16113,8 @@ function NotificationsView({
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 }) {
+  const [isCreatingNotification, setIsCreatingNotification] = useState(false);
+
   const markNotification = async (
     notification: NotificationRecord,
     status: NotificationStatus,
@@ -15107,17 +16124,18 @@ function NotificationsView({
       await onReload();
       onNotice("Notification updated.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to update notification.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to update notification."));
     }
   };
 
   const handleCreateNotification = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    if (isCreatingNotification) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const input: NotificationInput = {
       company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
       customer_id: getOptionalRelation(formData, "customer_id"),
@@ -15132,16 +16150,15 @@ function NotificationsView({
     };
 
     try {
+      setIsCreatingNotification(true);
       await createNotification(client, input);
-      event.currentTarget.reset();
+      form.reset();
       await onReload();
       onNotice("Notification created.");
     } catch (currentError) {
-      onError(
-        currentError instanceof Error
-          ? currentError.message
-          : "Unable to create notification.",
-      );
+      onError(getCaughtErrorMessage(currentError, "Unable to create notification."));
+    } finally {
+      setIsCreatingNotification(false);
     }
   };
 
@@ -15221,7 +16238,13 @@ function NotificationsView({
             </select>
           </div>
           <input name="remind_at" type="datetime-local" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
-          <button type="submit" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Create reminder</button>
+          <button
+            type="submit"
+            disabled={isCreatingNotification}
+            className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isCreatingNotification ? "Creating reminder" : "Create reminder"}
+          </button>
         </form>
       </aside>
     </div>
