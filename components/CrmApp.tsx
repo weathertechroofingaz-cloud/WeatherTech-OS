@@ -46,6 +46,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -241,6 +242,7 @@ import type {
   JobTaskInput,
   JobTaskStatus,
   LeadPriority,
+  LeadInput,
   LeadRecord,
   LeadStatus,
   MaterialOrderInput,
@@ -2883,6 +2885,7 @@ function CrmWorkspace({
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
+              onViewChange={onViewChange}
             />
           ) : null}
 
@@ -4974,6 +4977,9 @@ function LeadsView({
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<PipelineStage | "all">("all");
   const [isCreating, setIsCreating] = useState(false);
+  const [createdLeadFingerprints, setCreatedLeadFingerprints] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const selectedLead =
     snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? null;
@@ -5060,7 +5066,7 @@ function LeadsView({
 
     try {
       const formData = new FormData(form);
-      await createLead(client, {
+      const input: LeadInput = {
         company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
         contact_name: getFormString(formData, "contact_name"),
         phone: getOptionalFormString(formData, "phone"),
@@ -5077,6 +5083,27 @@ function LeadsView({
         estimated_value: getFormNumber(formData, "estimated_value"),
         next_follow_up: getOptionalFormString(formData, "next_follow_up"),
         notes: getOptionalFormString(formData, "notes"),
+      };
+      const duplicateLead = findPotentialLeadDuplicate(
+        uniqueById(selectedLead ? [...snapshot.leads, selectedLead] : snapshot.leads),
+        input,
+      );
+      const duplicateFingerprint = getLeadDuplicateFingerprint(input);
+
+      if (duplicateLead || createdLeadFingerprints.has(duplicateFingerprint)) {
+        onError(
+          duplicateLead
+            ? `Possible duplicate lead: ${duplicateLead.contact_name} already exists at ${duplicateLead.property_address}. Update the existing lead before creating another.`
+            : "Possible duplicate lead: this contact and property were just created. Refresh or update the existing lead before creating another.",
+        );
+        return;
+      }
+
+      await createLead(client, input);
+      setCreatedLeadFingerprints((current) => {
+        const next = new Set(current);
+        next.add(duplicateFingerprint);
+        return next;
       });
       form.reset();
       await onReload();
@@ -5564,7 +5591,518 @@ type CustomersViewProps = {
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  onViewChange: (view: WorkspaceView) => void;
 };
+
+type CustomerWorkspaceSection =
+  | "overview"
+  | "activity"
+  | "leads"
+  | "estimates"
+  | "inspections"
+  | "jobs"
+  | "invoices"
+  | "photos"
+  | "documents"
+  | "notes"
+  | "calendar"
+  | "communications";
+
+type CustomerRelatedRecords = {
+  leads: LeadRecord[];
+  estimates: EstimateRecord[];
+  scopes: ScopeRecord[];
+  inspections: InspectionRecord[];
+  jobs: JobRecord[];
+  invoices: InvoiceRecord[];
+  photos: JobPhotoRecord[];
+  documents: DocumentRecord[];
+  scheduleEvents: ScheduleEventRecord[];
+};
+
+type CustomerTimelineItem = {
+  id: string;
+  label: string;
+  description: string;
+  occurredAt: string;
+  user: string;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber" | "purple" | "slate";
+};
+
+const customerWorkspaceSections: {
+  value: CustomerWorkspaceSection;
+  label: string;
+}[] = [
+  { value: "overview", label: "Overview" },
+  { value: "activity", label: "Activity" },
+  { value: "leads", label: "Leads" },
+  { value: "estimates", label: "Estimates" },
+  { value: "inspections", label: "Inspections" },
+  { value: "jobs", label: "Jobs" },
+  { value: "invoices", label: "Invoices" },
+  { value: "photos", label: "Photos" },
+  { value: "documents", label: "Documents" },
+  { value: "notes", label: "Notes" },
+  { value: "calendar", label: "Calendar" },
+  { value: "communications", label: "Future Communications" },
+];
+
+function normalizeCrmLookup(value: string | null | undefined) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizePhoneDigits(value: string | null | undefined) {
+  return (value ?? "").replace(/\D/g, "");
+}
+
+function truncateTimelineText(value: string, maxLength = 120) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function uniqueById<T extends { id: string }>(records: T[]) {
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    if (seen.has(record.id)) {
+      return false;
+    }
+
+    seen.add(record.id);
+    return true;
+  });
+}
+
+function recordMatchesCustomerIdentity(
+  customer: CustomerRecord,
+  record: {
+    company_id?: string | null;
+    customer_id?: string | null;
+    contact_name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    property_address?: string | null;
+    location?: string | null;
+    address?: string | null;
+  },
+) {
+  if (record.customer_id === customer.id) {
+    return true;
+  }
+
+  if (record.company_id && record.company_id !== customer.company_id) {
+    return false;
+  }
+
+  const customerAddress = normalizeCrmLookup(customer.property_address);
+  const recordAddress = normalizeCrmLookup(
+    record.property_address ?? record.location ?? record.address,
+  );
+  const sameAddress = Boolean(customerAddress && customerAddress === recordAddress);
+  const customerPhone = normalizePhoneDigits(customer.phone);
+  const recordPhone = normalizePhoneDigits(record.phone);
+  const samePhone = Boolean(customerPhone && customerPhone === recordPhone);
+  const customerEmail = normalizeCrmLookup(customer.email);
+  const recordEmail = normalizeCrmLookup(record.email);
+  const sameEmail = Boolean(customerEmail && customerEmail === recordEmail);
+  const customerName = normalizeCrmLookup(customer.contact_name || customer.display_name);
+  const recordName = normalizeCrmLookup(record.contact_name);
+  const sameName = Boolean(customerName && customerName === recordName);
+
+  return sameAddress && (samePhone || sameEmail || sameName);
+}
+
+function getCustomerRelatedRecords(
+  snapshot: CrmSnapshot,
+  customer: CustomerRecord,
+): CustomerRelatedRecords {
+  const leads = uniqueById(
+    snapshot.leads.filter((lead) => recordMatchesCustomerIdentity(customer, lead)),
+  );
+  const leadIds = new Set(leads.map((lead) => lead.id));
+  const estimates = uniqueById(
+    snapshot.estimates.filter(
+      (estimate) =>
+        estimate.customer_id === customer.id ||
+        (estimate.lead_id !== null && leadIds.has(estimate.lead_id)),
+    ),
+  );
+  const estimateIds = new Set(estimates.map((estimate) => estimate.id));
+  const scopes = uniqueById(
+    snapshot.scopes.filter(
+      (scope) =>
+        scope.customer_id === customer.id ||
+        (scope.lead_id !== null && leadIds.has(scope.lead_id)) ||
+        (scope.estimate_id !== null && estimateIds.has(scope.estimate_id)),
+    ),
+  );
+  const jobs = uniqueById(
+    snapshot.jobs.filter(
+      (job) =>
+        recordMatchesCustomerIdentity(customer, job) ||
+        (job.lead_id !== null && leadIds.has(job.lead_id)) ||
+        (job.estimate_id !== null && estimateIds.has(job.estimate_id)),
+    ),
+  );
+  const jobIds = new Set(jobs.map((job) => job.id));
+  const inspections = uniqueById(
+    snapshot.inspections.filter(
+      (inspection) =>
+        recordMatchesCustomerIdentity(customer, inspection) ||
+        (inspection.lead_id !== null && leadIds.has(inspection.lead_id)) ||
+        (inspection.estimate_id !== null && estimateIds.has(inspection.estimate_id)) ||
+        (inspection.job_id !== null && jobIds.has(inspection.job_id)),
+    ),
+  );
+  const inspectionIds = new Set(inspections.map((inspection) => inspection.id));
+  const invoices = uniqueById(
+    snapshot.invoices.filter(
+      (invoice) =>
+        invoice.customer_id === customer.id ||
+        (invoice.job_id !== null && jobIds.has(invoice.job_id)) ||
+        (invoice.estimate_id !== null && estimateIds.has(invoice.estimate_id)),
+    ),
+  );
+  const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
+  const photos = uniqueById(
+    snapshot.jobPhotos.filter(
+      (photo) =>
+        photo.customer_id === customer.id ||
+        (photo.job_id !== null && jobIds.has(photo.job_id)) ||
+        (photo.estimate_id !== null && estimateIds.has(photo.estimate_id)) ||
+        (photo.inspection_id !== null && inspectionIds.has(photo.inspection_id)),
+    ),
+  );
+  const documents = uniqueById(
+    snapshot.documents.filter(
+      (document) =>
+        document.customer_id === customer.id ||
+        (document.job_id !== null && jobIds.has(document.job_id)) ||
+        (document.estimate_id !== null && estimateIds.has(document.estimate_id)) ||
+        (document.invoice_id !== null && invoiceIds.has(document.invoice_id)),
+    ),
+  );
+  const scheduleEvents = uniqueById(
+    snapshot.scheduleEvents.filter(
+      (event) =>
+        event.customer_id === customer.id ||
+        (event.lead_id !== null && leadIds.has(event.lead_id)) ||
+        (event.job_id !== null && jobIds.has(event.job_id)),
+    ),
+  );
+
+  return {
+    leads,
+    estimates,
+    scopes,
+    inspections,
+    jobs,
+    invoices,
+    photos,
+    documents,
+    scheduleEvents,
+  };
+}
+
+function buildCustomerSearchText(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+  customer: CustomerRecord,
+) {
+  const related = getCustomerRelatedRecords(snapshot, customer);
+  const company = companyMap.get(customer.company_id);
+
+  return [
+    customer.id,
+    customer.display_name,
+    customer.contact_name,
+    customer.phone,
+    normalizePhoneDigits(customer.phone),
+    customer.email,
+    customer.property_address,
+    customer.city,
+    customer.state,
+    customer.postal_code,
+    customer.notes,
+    company?.name,
+    company?.short_name,
+    customerStatusLabel(customer.status),
+    customerTypeLabel(customer.customer_type),
+    ...related.leads.flatMap((lead) => [
+      lead.id,
+      lead.contact_name,
+      lead.phone,
+      normalizePhoneDigits(lead.phone),
+      lead.email,
+      lead.property_address,
+      lead.source,
+      pipelineStageLabel(lead.pipeline_stage),
+    ]),
+    ...related.estimates.flatMap((estimate) => [
+      estimate.id,
+      estimate.title,
+      estimate.business,
+      estimate.location,
+      estimateStatusLabel(estimate.status),
+    ]),
+    ...related.inspections.flatMap((inspection) => [
+      inspection.id,
+      inspection.title,
+      inspection.property_address,
+      inspectionStatusLabel(inspection.status),
+    ]),
+    ...related.jobs.flatMap((job) => [
+      job.id,
+      job.title,
+      job.crew_name,
+      job.project_manager,
+      job.property_address,
+      jobStatusLabel(job.status),
+    ]),
+    ...related.invoices.flatMap((invoice) => [
+      invoice.id,
+      invoice.invoice_number,
+      invoice.title,
+      invoiceStatusLabel(invoice.status),
+    ]),
+    ...related.documents.flatMap((document) => [
+      document.id,
+      document.title,
+      documentCategoryLabel(document.category),
+      documentStatusLabel(document.status),
+    ]),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function findPotentialCustomerDuplicates(
+  customers: CustomerRecord[],
+  input: CustomerInput,
+  excludeCustomerId?: string,
+) {
+  const inputAddress = normalizeCrmLookup(input.property_address);
+  const inputPhone = normalizePhoneDigits(input.phone);
+  const inputEmail = normalizeCrmLookup(input.email);
+  const inputName = normalizeCrmLookup(input.contact_name || input.display_name);
+
+  return customers
+    .filter(
+      (customer) =>
+        customer.id !== excludeCustomerId && customer.company_id === input.company_id,
+    )
+    .map((customer) => {
+      const reasons: string[] = [];
+      const customerAddress = normalizeCrmLookup(customer.property_address);
+      const customerPhone = normalizePhoneDigits(customer.phone);
+      const customerEmail = normalizeCrmLookup(customer.email);
+      const customerName = normalizeCrmLookup(
+        customer.contact_name || customer.display_name,
+      );
+
+      if (inputAddress && customerAddress && inputAddress === customerAddress) {
+        reasons.push("same service address");
+      }
+
+      if (
+        inputEmail &&
+        customerEmail &&
+        inputEmail === customerEmail &&
+        (!inputName || !customerName || inputName === customerName)
+      ) {
+        reasons.push("same email");
+      }
+
+      if (
+        inputPhone &&
+        customerPhone &&
+        inputPhone === customerPhone &&
+        (!inputName || !customerName || inputName === customerName)
+      ) {
+        reasons.push("same phone");
+      }
+
+      return { customer, reasons };
+    })
+    .filter((match) => match.reasons.length > 0);
+}
+
+function findPotentialLeadDuplicate(
+  leads: LeadRecord[],
+  input: {
+    company_id: string;
+    contact_name: string;
+    phone?: string | null;
+    email?: string | null;
+    property_address: string;
+  },
+) {
+  const inputAddress = normalizeCrmLookup(input.property_address);
+  const inputPhone = normalizePhoneDigits(input.phone);
+  const inputEmail = normalizeCrmLookup(input.email);
+  const inputName = normalizeCrmLookup(input.contact_name);
+
+  return leads.find((lead) => {
+    if (lead.company_id !== input.company_id || lead.status === "lost") {
+      return false;
+    }
+
+    const leadAddress = normalizeCrmLookup(lead.property_address);
+    const sameAddress = Boolean(inputAddress && leadAddress && inputAddress === leadAddress);
+    const samePhone = Boolean(inputPhone && normalizePhoneDigits(lead.phone) === inputPhone);
+    const sameEmail = Boolean(inputEmail && normalizeCrmLookup(lead.email) === inputEmail);
+    const sameName = Boolean(inputName && normalizeCrmLookup(lead.contact_name) === inputName);
+
+    return sameAddress && (samePhone || sameEmail || sameName);
+  });
+}
+
+function getLeadDuplicateFingerprint(input: {
+  company_id: string;
+  contact_name: string;
+  phone?: string | null;
+  email?: string | null;
+  property_address: string;
+}) {
+  return [
+    input.company_id,
+    normalizeCrmLookup(input.property_address),
+    normalizePhoneDigits(input.phone),
+    normalizeCrmLookup(input.email),
+    normalizeCrmLookup(input.contact_name),
+  ].join("|");
+}
+
+function buildCustomerTimelineItems(
+  customer: CustomerRecord,
+  related: CustomerRelatedRecords,
+): CustomerTimelineItem[] {
+  const items: CustomerTimelineItem[] = [
+    {
+      id: `customer-created-${customer.id}`,
+      label: "Customer created",
+      description: customer.display_name,
+      occurredAt: customer.created_at,
+      user: "WeatherTech OS",
+      icon: Users,
+      tone: "slate",
+    },
+  ];
+
+  if (customer.notes) {
+    items.push({
+      id: `customer-note-${customer.id}`,
+      label: "Customer note",
+      description: truncateTimelineText(customer.notes),
+      occurredAt: customer.updated_at,
+      user: "Team",
+      icon: MessageSquare,
+      tone: "amber",
+    });
+  }
+
+  related.leads.forEach((lead) => {
+    items.push({
+      id: `lead-${lead.id}`,
+      label: "Lead created",
+      description: `${lead.contact_name} - ${pipelineStageLabel(lead.pipeline_stage)}`,
+      occurredAt: lead.created_at,
+      user: "CRM",
+      icon: UserRound,
+      tone: "blue",
+    });
+  });
+
+  related.estimates.forEach((estimate) => {
+    items.push({
+      id: `estimate-${estimate.id}`,
+      label: "Estimate",
+      description: `${estimate.title} - ${formatMoney(estimate.total)}`,
+      occurredAt: estimate.updated_at,
+      user: "Estimating",
+      icon: Calculator,
+      tone: estimate.status === "approved" ? "green" : "blue",
+    });
+  });
+
+  related.inspections.forEach((inspection) => {
+    items.push({
+      id: `inspection-${inspection.id}`,
+      label: "Inspection",
+      description: `${inspection.title} - ${inspectionStatusLabel(inspection.status)}`,
+      occurredAt: inspection.updated_at,
+      user: inspection.assigned_inspector ?? "Production",
+      icon: ClipboardList,
+      tone: inspection.status === "completed" ? "green" : "purple",
+    });
+  });
+
+  related.jobs.forEach((job) => {
+    items.push({
+      id: `job-${job.id}`,
+      label: "Job",
+      description: `${job.title} - ${jobStatusLabel(job.status)}`,
+      occurredAt: job.updated_at,
+      user: job.project_manager ?? job.crew_name ?? "Production",
+      icon: Building2,
+      tone: job.status === "completed" || job.status === "closed" ? "green" : "blue",
+    });
+  });
+
+  related.scheduleEvents.forEach((event) => {
+    items.push({
+      id: `schedule-${event.id}`,
+      label: scheduleEventTypeLabel(event.event_type),
+      description: `${event.title} - ${formatDateTime(event.start_at)}`,
+      occurredAt: event.start_at,
+      user: "Scheduler",
+      icon: CalendarClock,
+      tone: "purple",
+    });
+  });
+
+  related.invoices.forEach((invoice) => {
+    items.push({
+      id: `invoice-${invoice.id}`,
+      label: "Invoice",
+      description: `${invoice.invoice_number} - ${formatMoney(invoice.balance_due)} due`,
+      occurredAt: invoice.updated_at,
+      user: "Financial",
+      icon: ReceiptText,
+      tone: invoice.status === "paid" ? "green" : "amber",
+    });
+  });
+
+  related.documents.forEach((document) => {
+    items.push({
+      id: `document-${document.id}`,
+      label: "Document",
+      description: `${document.title} - ${documentCategoryLabel(document.category)}`,
+      occurredAt: document.updated_at,
+      user: "Documents",
+      icon: FileText,
+      tone: "slate",
+    });
+  });
+
+  related.photos.forEach((photo) => {
+    items.push({
+      id: `photo-${photo.id}`,
+      label: "Photo",
+      description: photo.caption ?? photo.label ?? "Jobsite photo",
+      occurredAt: photo.taken_at ?? photo.created_at,
+      user: "Field",
+      icon: Camera,
+      tone: photo.is_customer_visible ? "green" : "slate",
+    });
+  });
+
+  return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+}
 
 function CustomersView({
   client,
@@ -5573,6 +6111,7 @@ function CustomersView({
   onReload,
   onNotice,
   onError,
+  onViewChange,
 }: CustomersViewProps) {
   const [selectedCustomerId, setSelectedCustomerId] = useState(
     snapshot.customers[0]?.id ?? "",
@@ -5583,28 +6122,13 @@ function CustomersView({
   const [typeFilter, setTypeFilter] = useState<CustomerType | "all">("all");
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [isUpdatingCustomer, setIsUpdatingCustomer] = useState(false);
+  const customerNotesRef = useRef<HTMLTextAreaElement | null>(null);
 
   const filteredCustomers = useMemo(() => {
     const query = search.trim().toLowerCase();
 
     return snapshot.customers.filter((customer) => {
-      const company = companyMap.get(customer.company_id);
-      const searchableText = [
-        customer.display_name,
-        customer.contact_name,
-        customer.phone,
-        customer.email,
-        customer.property_address,
-        customer.city,
-        customer.state,
-        customer.postal_code,
-        company?.name,
-        customerStatusLabel(customer.status),
-        customerTypeLabel(customer.customer_type),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
+      const searchableText = buildCustomerSearchText(snapshot, companyMap, customer);
 
       return (
         (!query || searchableText.includes(query)) &&
@@ -5613,7 +6137,7 @@ function CustomersView({
         (typeFilter === "all" || customer.customer_type === typeFilter)
       );
     });
-  }, [companyFilter, companyMap, search, snapshot.customers, statusFilter, typeFilter]);
+  }, [companyFilter, companyMap, search, snapshot, statusFilter, typeFilter]);
 
   const {
     page: customerPage,
@@ -5672,6 +6196,17 @@ function CustomersView({
       return;
     }
 
+    const duplicates = findPotentialCustomerDuplicates(snapshot.customers, input);
+
+    if (duplicates.length) {
+      onError(
+        `Possible duplicate customer: ${duplicates[0].customer.display_name} already has ${duplicates[0].reasons.join(
+          " and ",
+        )}. Review the existing customer before creating another.`,
+      );
+      return;
+    }
+
     try {
       setIsCreatingCustomer(true);
       await createCustomer(client, input);
@@ -5694,7 +6229,7 @@ function CustomersView({
 
     const formData = new FormData(event.currentTarget);
     const updates: CustomerInput = {
-      company_id: selectedCustomer.company_id,
+      company_id: getFormString(formData, "company_id", selectedCustomer.company_id),
       display_name: getFormString(formData, "display_name", selectedCustomer.display_name),
       contact_name: getFormString(formData, "contact_name", selectedCustomer.contact_name),
       phone: getOptionalFormString(formData, "phone"),
@@ -5721,6 +6256,21 @@ function CustomersView({
       return;
     }
 
+    const duplicates = findPotentialCustomerDuplicates(
+      snapshot.customers,
+      updates,
+      selectedCustomer.id,
+    );
+
+    if (duplicates.length) {
+      onError(
+        `Possible duplicate customer: ${duplicates[0].customer.display_name} already has ${duplicates[0].reasons.join(
+          " and ",
+        )}. Review the existing customer before saving.`,
+      );
+      return;
+    }
+
     try {
       setIsUpdatingCustomer(true);
       await updateCustomer(client, selectedCustomer.id, updates);
@@ -5733,8 +6283,13 @@ function CustomersView({
     }
   };
 
+  const handleFocusCustomerNotes = () => {
+    customerNotesRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    customerNotesRef.current?.focus();
+  };
+
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)]">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -5907,6 +6462,20 @@ function CustomersView({
               onSubmit={handleUpdateCustomer}
               className="mt-5 grid gap-3"
             >
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Company
+                <select
+                  name="company_id"
+                  defaultValue={selectedCustomer.company_id}
+                  className="rounded-md border border-slate-300 px-3 py-2"
+                >
+                  {snapshot.companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-sm font-medium text-slate-700">
                   Display name
@@ -6014,6 +6583,7 @@ function CustomersView({
               <label className="grid gap-1 text-sm font-medium text-slate-700">
                 Notes
                 <textarea
+                  ref={customerNotesRef}
                   name="notes"
                   defaultValue={selectedCustomer.notes ?? ""}
                   className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
@@ -6027,7 +6597,13 @@ function CustomersView({
                 {isUpdatingCustomer ? "Saving customer" : "Save customer"}
               </button>
             </form>
-            <CustomerProfilePanel snapshot={snapshot} customer={selectedCustomer} />
+            <CustomerProfilePanel
+              snapshot={snapshot}
+              companyMap={companyMap}
+              customer={selectedCustomer}
+              onViewChange={onViewChange}
+              onAddNote={handleFocusCustomerNotes}
+            />
           </section>
         ) : null}
       </aside>
@@ -6037,82 +6613,462 @@ function CustomersView({
 
 function CustomerProfilePanel({
   snapshot,
+  companyMap,
   customer,
+  onViewChange,
+  onAddNote,
 }: {
   snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
   customer: CustomerRecord;
+  onViewChange: (view: WorkspaceView) => void;
+  onAddNote: () => void;
 }) {
-  const leads = snapshot.leads.filter((lead) => lead.customer_id === customer.id);
-  const estimates = snapshot.estimates.filter(
-    (estimate) => estimate.customer_id === customer.id,
+  const [activeSection, setActiveSection] =
+    useState<CustomerWorkspaceSection>("overview");
+  const related = useMemo(
+    () => getCustomerRelatedRecords(snapshot, customer),
+    [customer, snapshot],
   );
-  const jobs = snapshot.jobs.filter((job) => job.customer_id === customer.id);
-  const invoices = snapshot.invoices.filter(
-    (invoice) => invoice.customer_id === customer.id,
+  const timelineItems = useMemo(
+    () => buildCustomerTimelineItems(customer, related),
+    [customer, related],
   );
-  const scopes = snapshot.scopes.filter((scope) => scope.customer_id === customer.id);
-  const photos = snapshot.jobPhotos.filter((photo) => photo.customer_id === customer.id);
-  const invoiceBalance = invoices.reduce(
+  const duplicateMatches = useMemo(
+    () =>
+      findPotentialCustomerDuplicates(
+        snapshot.customers,
+        {
+          company_id: customer.company_id,
+          display_name: customer.display_name,
+          contact_name: customer.contact_name,
+          phone: customer.phone,
+          email: customer.email,
+          property_address: customer.property_address,
+          city: customer.city,
+          state: customer.state,
+          postal_code: customer.postal_code,
+          customer_type: customer.customer_type,
+          status: customer.status,
+          notes: customer.notes,
+        },
+        customer.id,
+      ),
+    [customer, snapshot.customers],
+  );
+  const company = companyMap.get(customer.company_id);
+  const invoiceBalance = related.invoices.reduce(
     (total, invoice) => total + invoice.balance_due,
     0,
   );
+  const sectionCounts: Record<CustomerWorkspaceSection, number | null> = {
+    overview: null,
+    activity: timelineItems.length,
+    leads: related.leads.length,
+    estimates: related.estimates.length,
+    inspections: related.inspections.length,
+    jobs: related.jobs.length,
+    invoices: related.invoices.length,
+    photos: related.photos.length,
+    documents: related.documents.length,
+    notes: customer.notes ? 1 : 0,
+    calendar: related.scheduleEvents.length,
+    communications: 0,
+  };
 
   return (
-    <div className="mt-5 border-t border-slate-200 pt-5">
-      <h4 className="text-sm font-bold uppercase text-slate-500">Customer profile</h4>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <ProfileStat label="Jobs" value={jobs.length} />
-        <ProfileStat label="Estimates" value={formatMoney(estimates.reduce((total, estimate) => total + estimate.total, 0))} />
+    <div
+      className="mt-5 border-t border-slate-200 pt-5"
+      data-testid="customer-workspace"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h4 className="text-sm font-bold uppercase text-slate-500">
+            Customer workspace
+          </h4>
+          <p className="mt-1 text-sm text-slate-600">
+            {company?.name ?? "Company"} - {customerStatusLabel(customer.status)}
+          </p>
+        </div>
+        <Badge
+          label={customerTypeLabel(customer.customer_type)}
+          tone={customer.status === "inactive" ? "amber" : "blue"}
+        />
+      </div>
+
+      <div
+        className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+        data-testid="customer-quick-actions"
+      >
+        <CustomerQuickAction
+          label="New Lead"
+          icon={UserRound}
+          onClick={() => onViewChange("leads")}
+        />
+        <CustomerQuickAction
+          label="New Estimate"
+          icon={Calculator}
+          onClick={() => onViewChange("estimates")}
+        />
+        <CustomerQuickAction
+          label="New Inspection"
+          icon={ClipboardList}
+          onClick={() => onViewChange("inspections")}
+        />
+        <CustomerQuickAction
+          label="Schedule"
+          icon={CalendarClock}
+          onClick={() => onViewChange("calendar")}
+        />
+        <CustomerQuickAction
+          label="New Job"
+          icon={Building2}
+          onClick={() => onViewChange("jobs")}
+        />
+        <CustomerQuickAction
+          label="Upload Photo"
+          icon={Camera}
+          onClick={() => onViewChange("photos")}
+        />
+        <CustomerQuickAction
+          label="Add Document"
+          icon={FileText}
+          onClick={() => onViewChange("documents")}
+        />
+        <CustomerQuickAction label="Add Note" icon={MessageSquare} onClick={onAddNote} />
+        <CustomerQuickAction
+          label="Generate Scope"
+          icon={WandSparkles}
+          onClick={() => onViewChange("scopes")}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <ProfileStat label="Open leads" value={related.leads.length} />
+        <ProfileStat
+          label="Estimates"
+          value={formatMoney(
+            related.estimates.reduce((total, estimate) => total + estimate.total, 0),
+          )}
+        />
+        <ProfileStat label="Active jobs" value={related.jobs.length} />
         <ProfileStat label="Balance" value={formatMoney(invoiceBalance)} />
       </div>
 
-      <div className="mt-4 grid gap-3">
-        <RelatedList
-          title="Active jobs"
-          emptyLabel="No jobs linked yet."
-          items={jobs.map((job) => ({
-            id: job.id,
-            title: job.title,
-            meta: `${jobStatusLabel(job.status)} - ${formatDate(job.start_date)}`,
-          }))}
-        />
-        <RelatedList
-          title="Invoices"
-          emptyLabel="No invoices linked yet."
-          items={invoices.map((invoice) => ({
-            id: invoice.id,
-            title: invoice.invoice_number,
-            meta: `${invoiceStatusLabel(invoice.status)} - ${formatMoney(invoice.balance_due)} due`,
-          }))}
-        />
-        <RelatedList
-          title="Scopes and photos"
-          emptyLabel="No scope or photo activity yet."
-          items={[
-            ...scopes.map((scope) => ({
-              id: scope.id,
-              title: scope.title,
-              meta: scopeStatusLabel(scope.status),
-            })),
-            ...photos.map((photo) => ({
-              id: photo.id,
-              title: photo.caption ?? "Job photo",
-              meta: formatDate(photo.taken_at),
-            })),
-          ]}
-        />
-        {leads.length ? (
+      {duplicateMatches.length ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-bold text-amber-900">Potential duplicate review</p>
+          <div className="mt-2 grid gap-2">
+            {duplicateMatches.slice(0, 3).map((match) => (
+              <p key={match.customer.id} className="text-sm text-amber-800">
+                {match.customer.display_name} has {match.reasons.join(" and ")}.
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+        {customerWorkspaceSections.map((section) => (
+          <button
+            key={section.value}
+            type="button"
+            onClick={() => setActiveSection(section.value)}
+            aria-pressed={activeSection === section.value}
+            className={`inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition ${
+              activeSection === section.value
+                ? "border-sky-400 bg-sky-50 text-sky-800"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {section.label}
+            {sectionCounts[section.value] !== null ? (
+              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                {sectionCounts[section.value]}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4" data-testid="customer-workspace-section">
+        {activeSection === "overview" ? (
+          <CustomerOverviewSection customer={customer} company={company} related={related} />
+        ) : null}
+
+        {activeSection === "activity" ? (
+          <CustomerTimeline items={timelineItems} />
+        ) : null}
+
+        {activeSection === "leads" ? (
           <RelatedList
-            title="Original leads"
-            emptyLabel="No linked leads."
-            items={leads.map((lead) => ({
+            title="Leads"
+            emptyLabel="No leads linked yet."
+            items={related.leads.map((lead) => ({
               id: lead.id,
               title: lead.contact_name,
-              meta: `${statusLabel(lead.status)} - ${formatMoney(lead.estimated_value)}`,
+              meta: `${pipelineStageLabel(lead.pipeline_stage)} - ${formatMoney(
+                lead.estimated_value,
+              )}`,
             }))}
           />
         ) : null}
+
+        {activeSection === "estimates" ? (
+          <RelatedList
+            title="Estimates"
+            emptyLabel="No estimates linked yet."
+            items={related.estimates.map((estimate) => ({
+              id: estimate.id,
+              title: estimate.title,
+              meta: `${estimateStatusLabel(estimate.status)} - ${formatMoney(
+                estimate.total,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "inspections" ? (
+          <RelatedList
+            title="Inspections"
+            emptyLabel="No inspections linked yet."
+            items={related.inspections.map((inspection) => ({
+              id: inspection.id,
+              title: inspection.title,
+              meta: `${inspectionStatusLabel(inspection.status)} - ${formatDateTime(
+                inspection.updated_at,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "jobs" ? (
+          <RelatedList
+            title="Jobs"
+            emptyLabel="No jobs linked yet."
+            items={related.jobs.map((job) => ({
+              id: job.id,
+              title: job.title,
+              meta: `${jobStatusLabel(job.status)} - ${formatDate(
+                job.start_date ?? job.scheduled_start,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "invoices" ? (
+          <RelatedList
+            title="Invoices"
+            emptyLabel="No invoices linked yet."
+            items={related.invoices.map((invoice) => ({
+              id: invoice.id,
+              title: invoice.invoice_number,
+              meta: `${invoiceStatusLabel(invoice.status)} - ${formatMoney(
+                invoice.balance_due,
+              )} due`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "photos" ? (
+          <RelatedList
+            title="Photos"
+            emptyLabel="No photos linked yet."
+            items={related.photos.map((photo) => ({
+              id: photo.id,
+              title: photo.caption ?? photo.label ?? "Job photo",
+              meta: `${photo.is_customer_visible ? "Customer visible" : "Internal"} - ${formatDate(
+                photo.taken_at ?? photo.created_at,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "documents" ? (
+          <RelatedList
+            title="Documents"
+            emptyLabel="No documents linked yet."
+            items={related.documents.map((document) => ({
+              id: document.id,
+              title: document.title,
+              meta: `${documentCategoryLabel(document.category)} - ${documentStatusLabel(
+                document.status,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "notes" ? (
+          <RelatedList
+            title="Notes"
+            emptyLabel="No customer notes yet."
+            items={
+              customer.notes
+                ? [
+                    {
+                      id: `note-${customer.id}`,
+                      title: "Customer notes",
+                      meta: truncateTimelineText(customer.notes, 180),
+                    },
+                  ]
+                : []
+            }
+          />
+        ) : null}
+
+        {activeSection === "calendar" ? (
+          <RelatedList
+            title="Calendar"
+            emptyLabel="No scheduled work linked yet."
+            items={related.scheduleEvents.map((event) => ({
+              id: event.id,
+              title: event.title,
+              meta: `${scheduleEventStatusLabel(event.status)} - ${formatDateTime(
+                event.start_at,
+              )}`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "communications" ? (
+          <RelatedList
+            title="Communications"
+            emptyLabel="No calls, texts, or email threads are linked yet."
+            items={[]}
+          />
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+function CustomerQuickAction({
+  label,
+  icon: Icon,
+  onClick,
+}: {
+  label: string;
+  icon: typeof Home;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function CustomerOverviewSection({
+  customer,
+  company,
+  related,
+}: {
+  customer: CustomerRecord;
+  company?: CompanyRecord;
+  related: CustomerRelatedRecords;
+}) {
+  const leadSources = uniqueById(
+    related.leads.map((lead) => ({ id: lead.source, label: lead.source })),
+  )
+    .map((lead) => lead.label)
+    .filter(Boolean);
+
+  return (
+    <div className="grid gap-3">
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p className="text-sm font-bold text-slate-950">Overview</p>
+        <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+          <CustomerDetail label="Customer" value={customer.display_name} />
+          <CustomerDetail label="Primary contact" value={customer.contact_name} />
+          <CustomerDetail label="Company" value={company?.name ?? "Company"} />
+          <CustomerDetail label="Status" value={customerStatusLabel(customer.status)} />
+          <CustomerDetail label="Primary phone" value={customer.phone ?? "No phone"} />
+          <CustomerDetail label="Primary email" value={customer.email ?? "No email"} />
+          <CustomerDetail
+            label="Service address"
+            value={[
+              customer.property_address,
+              customer.city,
+              customer.state,
+              customer.postal_code,
+            ]
+              .filter(Boolean)
+              .join(", ")}
+          />
+          <CustomerDetail
+            label="Lead source"
+            value={leadSources.length ? leadSources.join(", ") : "No linked source"}
+          />
+        </dl>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <ProfileStat label="Scopes" value={related.scopes.length} />
+        <ProfileStat label="Documents" value={related.documents.length} />
+        <ProfileStat label="Photos" value={related.photos.length} />
+      </div>
+    </div>
+  );
+}
+
+function CustomerDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
+      <dd className="mt-0.5 font-medium text-slate-800">{value}</dd>
+    </div>
+  );
+}
+
+function CustomerTimeline({ items }: { items: CustomerTimelineItem[] }) {
+  if (!items.length) {
+    return <EmptyState label="No customer activity yet." />;
+  }
+
+  return (
+    <div
+      className="divide-y divide-slate-100 rounded-lg border border-slate-200"
+      data-testid="customer-timeline"
+    >
+      {items.slice(0, 12).map((item) => {
+        const Icon = item.icon;
+        const toneClass =
+          item.tone === "green"
+            ? "bg-emerald-50 text-emerald-700"
+            : item.tone === "amber"
+              ? "bg-amber-50 text-amber-700"
+              : item.tone === "purple"
+                ? "bg-purple-50 text-purple-700"
+                : item.tone === "blue"
+                  ? "bg-sky-50 text-sky-700"
+                  : "bg-slate-100 text-slate-600";
+
+        return (
+          <div key={item.id} className="flex gap-3 p-3">
+            <div
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${toneClass}`}
+            >
+              <Icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <p className="font-semibold text-slate-950">{item.label}</p>
+                <p className="text-xs font-medium text-slate-500">
+                  {formatDateTime(item.occurredAt)}
+                </p>
+              </div>
+              <p className="mt-1 text-sm text-slate-600">{item.description}</p>
+              <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                {item.user}
+              </p>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -567,9 +567,17 @@ async function ensureAppShell(tab, baseUrl, progress) {
 
 async function waitFor(tab, predicate, label, timeoutMs = 10000, arg = undefined) {
   const startedAt = Date.now();
+  let lastError = null;
 
   while (Date.now() - startedAt < timeoutMs) {
-    const result = await tab.playwright.evaluate(predicate, arg);
+    let result = false;
+
+    try {
+      result = await tab.playwright.evaluate(predicate, arg);
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
 
     if (result) {
       return result;
@@ -578,7 +586,8 @@ async function waitFor(tab, predicate, label, timeoutMs = 10000, arg = undefined
     await tab.playwright.waitForTimeout(250);
   }
 
-  throw new Error(`Timed out waiting for ${label}.`);
+  const details = lastError instanceof Error ? ` Last browser error: ${lastError.message}` : "";
+  throw new Error(`Timed out waiting for ${label}.${details}`);
 }
 
 async function waitForAsync(predicate, label, timeoutMs = 10000) {
@@ -601,9 +610,17 @@ async function waitForAsync(predicate, label, timeoutMs = 10000) {
 async function waitForUniqueLocator(locator, label, timeoutMs = 10000) {
   const startedAt = Date.now();
   let count = 0;
+  let lastError = null;
 
   while (Date.now() - startedAt < timeoutMs) {
-    count = await locator.count();
+    try {
+      count = await locator.count();
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      continue;
+    }
 
     if (count === 1) {
       return;
@@ -616,12 +633,146 @@ async function waitForUniqueLocator(locator, label, timeoutMs = 10000) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(`${label} expected 1 match, found ${count}.`);
+  const details = lastError instanceof Error ? ` Last browser error: ${lastError.message}` : "";
+  throw new Error(`${label} expected 1 match, found ${count}.${details}`);
 }
 
-async function clickUnique(locator, label) {
+async function clickUnique(locator, label, options = {}) {
   await waitForUniqueLocator(locator, label);
-  await locator.click({ timeoutMs: 8000 });
+
+  if (!options.retryTransientClick) {
+    await locator.click({ timeoutMs: 8000 });
+    return;
+  }
+
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < 15000) {
+    try {
+      await locator.click({ timeoutMs: 5000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+
+  const details = lastError instanceof Error ? ` Last browser error: ${lastError.message}` : "";
+  throw new Error(`${label} could not be clicked.${details}`);
+}
+
+async function clickVisibleButtonByText(tab, selector, text, label, mode = "exact") {
+  const input = { selector, text, mode };
+  await waitFor(
+    tab,
+    (input) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const targetText = normalize(input.text);
+      const matchesTarget = (candidate) => {
+        const textContent = normalize(candidate.textContent);
+        const paragraphText = [...candidate.querySelectorAll("p")].some(
+          (paragraph) => normalize(paragraph.textContent) === targetText,
+        );
+
+        if (input.mode === "paragraph") {
+          return paragraphText || textContent.includes(targetText);
+        }
+
+        return textContent === targetText;
+      };
+      const hasRenderedBox = (candidate) => {
+        const style = window.getComputedStyle(candidate);
+        const rect = candidate.getBoundingClientRect();
+
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) !== 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      };
+      const buttons = [...document.querySelectorAll(input.selector)];
+      const button = buttons.find((candidate) => matchesTarget(candidate) && hasRenderedBox(candidate));
+
+      if (!button) {
+        return false;
+      }
+
+      button.scrollIntoView({ block: "center", behavior: "auto" });
+      return true;
+    },
+    `${label} scroll target`,
+    15000,
+    input,
+  );
+  await tab.playwright.waitForTimeout(200);
+
+  const box = await waitFor(
+    tab,
+    (input) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const targetText = normalize(input.text);
+      const matchesTarget = (candidate) => {
+        const textContent = normalize(candidate.textContent);
+        const paragraphText = [...candidate.querySelectorAll("p")].some(
+          (paragraph) => normalize(paragraph.textContent) === targetText,
+        );
+
+        if (input.mode === "paragraph") {
+          return paragraphText || textContent.includes(targetText);
+        }
+
+        return textContent === targetText;
+      };
+      const isVisible = (candidate) => {
+        const style = window.getComputedStyle(candidate);
+        const rect = candidate.getBoundingClientRect();
+
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) !== 0 &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.bottom >= 0 &&
+          rect.top <= window.innerHeight &&
+          rect.right >= 0 &&
+          rect.left <= window.innerWidth
+        );
+      };
+      const buttons = [...document.querySelectorAll(input.selector)];
+      const button = buttons.find((candidate) => matchesTarget(candidate) && isVisible(candidate));
+
+      if (!button) {
+        return null;
+      }
+
+      const rect = button.getBoundingClientRect();
+      const visibleLeft = Math.max(rect.left, 0);
+      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleTop = Math.max(rect.top, 0);
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
+
+      if (
+        visibleRight <= visibleLeft ||
+        visibleBottom <= visibleTop
+      ) {
+        return null;
+      }
+
+      return {
+        x: Math.round((visibleLeft + visibleRight) / 2),
+        y: Math.round((visibleTop + visibleBottom) / 2),
+      };
+    },
+    label,
+    15000,
+    input,
+  );
+
+  await tab.cua.click({ x: box.x, y: box.y });
 }
 
 async function fillUnique(locator, value, label) {
@@ -646,10 +797,40 @@ async function waitForNoSavingState(tab, label) {
 }
 
 async function clickNav(tab, label) {
-  await clickUnique(
-    tab.playwright.locator("nav").getByRole("button", { name: label }),
+  await tab.playwright.evaluate(() => window.scrollTo(0, 0));
+  await tab.playwright.waitForTimeout(200);
+  const box = await waitFor(
+    tab,
+    (targetLabel) => {
+      const button = [...document.querySelectorAll("nav button")].find(
+        (candidate) => candidate.textContent?.trim() === targetLabel,
+      );
+
+      if (!button) {
+        return null;
+      }
+
+      const rect = button.getBoundingClientRect();
+
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.bottom < 0 ||
+        rect.top > window.innerHeight
+      ) {
+        return null;
+      }
+
+      return {
+        x: Math.round(rect.x + rect.width / 2),
+        y: Math.round(rect.y + rect.height / 2),
+      };
+    },
     `nav ${label}`,
+    15000,
+    label,
   );
+  await tab.cua.click({ x: box.x, y: box.y });
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -682,10 +863,13 @@ function toDateTimeLocalValue(date) {
 }
 
 async function clickCompanyScope(tab, companyName) {
-  const button = tab.playwright.locator(
-    `xpath=//button[@aria-pressed and .//p[normalize-space(.)=${xpathString(companyName)}]]`,
+  await clickVisibleButtonByText(
+    tab,
+    "button[aria-pressed]",
+    companyName,
+    `company scope ${companyName}`,
+    "paragraph",
   );
-  await clickUnique(button, `company scope ${companyName}`);
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -811,6 +995,9 @@ async function testDashboardLiveMode(tab) {
 async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   const leadName = `${TEST_PREFIX} ${runId} LEAD`;
   const updatedNote = `${TEST_PREFIX} ${runId} LEAD UPDATED`;
+  const leadAddress = "456 TEST Regression Lead Ave, Phoenix, AZ";
+  const leadPhone = "6025550100";
+  const leadEmail = `regression-${runId}@example.test`;
 
   await clickNav(tab, "Leads");
   await waitFor(
@@ -831,17 +1018,17 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   );
   await fillUnique(
     tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="property_address"]'),
-    "456 TEST Regression Lead Ave, Phoenix, AZ",
+    leadAddress,
     "lead property address",
   );
   await fillUnique(
     tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="phone"]'),
-    "6025550100",
+    leadPhone,
     "lead phone",
   );
   await fillUnique(
     tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="email"]'),
-    `regression-${runId}@example.test`,
+    leadEmail,
     "lead email",
   );
   await fillUnique(
@@ -859,10 +1046,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     `${TEST_PREFIX} ${runId} lead note`,
     "lead notes",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//button[@type="submit"]'),
-    "Create lead",
-  );
+  await clickVisibleButtonByText(tab, "button", "Create lead", "Create lead");
   await waitFor(
     tab,
     (name) => document.body.innerText.includes(name),
@@ -873,7 +1057,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
 
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), leadName, "lead search");
   await tab.playwright.waitForTimeout(500);
-  await clickUnique(buttonContainingText(tab, leadName), `lead card ${leadName}`);
+  await clickVisibleButtonByText(tab, "button", leadName, `lead card ${leadName}`, "paragraph");
 
   await selectUnique(
     tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Save lead"]]//select[@name="pipeline_stage"]'),
@@ -890,7 +1074,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     updatedNote,
     "lead update notes",
   );
-  await clickUnique(tab.playwright.getByRole("button", { name: "Save lead" }), "Save lead");
+  await clickVisibleButtonByText(tab, "button", "Save lead", "Save lead");
   await waitFor(
     tab,
     (note) => document.body.innerText.includes(note),
@@ -913,6 +1097,44 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     throw new Error("Saved lead note did not persist.");
   }
 
+  await selectUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//select[@name="company_id"]'),
+    company.id,
+    "duplicate lead company",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="contact_name"]'),
+    leadName,
+    "duplicate lead contact name",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="property_address"]'),
+    leadAddress,
+    "duplicate lead property address",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="phone"]'),
+    leadPhone,
+    "duplicate lead phone",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//input[@name="email"]'),
+    leadEmail,
+    "duplicate lead email",
+  );
+  await clickVisibleButtonByText(
+    tab,
+    "button",
+    "Create lead",
+    "Create duplicate lead",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Possible duplicate lead"),
+    "duplicate lead protection",
+    10000,
+  );
+
   return {
     leadId: savedLead.id,
     leadName,
@@ -926,6 +1148,10 @@ async function testCustomersWorkflow(tab, env, company, runId) {
   const updatedDisplayName = `${TEST_PREFIX} ${runId} CUSTOMER UPDATED`;
   const updatedContact = `${TEST_PREFIX} ${runId} CONTACT UPDATED`;
   const updatedNotes = `${TEST_PREFIX} ${runId} CUSTOMER NOTES UPDATED`;
+  const updatedPhone = "(602) 555-0555";
+  const updatedPhoneSearch = "6025550555";
+  const updatedEmail = `customer-updated-${runId}@example.test`;
+  const updatedAddress = "790 TEST Customer Profile Dr, Phoenix, AZ";
   const profileForm = 'xpath=//form[.//button[contains(normalize-space(.), "Save customer")]]';
 
   await clickCompanyScope(tab, "All companies");
@@ -977,10 +1203,7 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     "85001",
     "customer ZIP",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//button[@type="submit"]'),
-    "Create customer",
-  );
+  await clickVisibleButtonByText(tab, "button", "Create customer", "Create customer");
   await waitFor(
     tab,
     (name) => document.body.innerText.includes(name),
@@ -1026,7 +1249,13 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     10000,
     displayName,
   );
-  await clickUnique(buttonContainingText(tab, displayName), `customer row ${displayName}`);
+  await clickVisibleButtonByText(
+    tab,
+    "button",
+    displayName,
+    `customer row ${displayName}`,
+    "paragraph",
+  );
 
   await fillUnique(
     tab.playwright.locator(`${profileForm}//input[@name="display_name"]`),
@@ -1040,17 +1269,17 @@ async function testCustomersWorkflow(tab, env, company, runId) {
   );
   await fillUnique(
     tab.playwright.locator(`${profileForm}//input[@name="phone"]`),
-    "6025550555",
+    updatedPhone,
     "updated customer phone",
   );
   await fillUnique(
     tab.playwright.locator(`${profileForm}//input[@name="email"]`),
-    `customer-updated-${runId}@example.test`,
+    updatedEmail,
     "updated customer email",
   );
   await fillUnique(
     tab.playwright.locator(`${profileForm}//input[@name="property_address"]`),
-    "790 TEST Customer Profile Dr, Phoenix, AZ",
+    updatedAddress,
     "updated customer address",
   );
   await fillUnique(
@@ -1078,7 +1307,7 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     updatedNotes,
     "updated customer notes",
   );
-  await clickUnique(tab.playwright.getByRole("button", { name: "Save customer" }), "Save customer");
+  await clickVisibleButtonByText(tab, "button", "Save customer", "Save customer");
   await waitFor(
     tab,
     ({ name, notes }) => {
@@ -1120,6 +1349,131 @@ async function testCustomersWorkflow(tab, env, company, runId) {
   if (updatedCustomer.notes !== updatedNotes) {
     throw new Error("Updated customer notes did not persist.");
   }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    updatedPhoneSearch,
+    "customers phone search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `phone search customer ${updatedDisplayName}`,
+    10000,
+    updatedDisplayName,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    "85251",
+    "customers ZIP search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `ZIP search customer ${updatedDisplayName}`,
+    10000,
+    updatedDisplayName,
+  );
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="customer-workspace"]');
+      const quickActions = workspace?.querySelector('[data-testid="customer-quick-actions"]');
+      const workspaceText = workspace?.textContent ?? "";
+      const quickActionText = quickActions?.textContent ?? "";
+
+      return (
+        workspaceText.includes("Customer workspace") &&
+        quickActionText.includes("New Estimate") &&
+        workspaceText.includes("Future Communications")
+      );
+    },
+    "customer workspace sections and quick actions",
+    10000,
+  );
+
+  await clickUnique(
+    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Activity")]'),
+    "customer activity workspace tab",
+  );
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Customer note") &&
+      document.body.innerText.includes("Customer created"),
+    "customer activity timeline",
+    10000,
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Notes")]'),
+    "customer notes workspace tab",
+  );
+  await waitFor(
+    tab,
+    (notes) => document.body.innerText.includes(notes),
+    "customer notes workspace section",
+    10000,
+    updatedNotes,
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Add Note")]'),
+    "customer add note quick action",
+  );
+  await waitFor(
+    tab,
+    () => document.activeElement?.getAttribute("name") === "notes",
+    "customer add note focuses notes field",
+    10000,
+  );
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    "",
+    "clear customers search before duplicate test",
+  );
+  await selectUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//select[@name="company_id"]'),
+    company.id,
+    "duplicate customer company",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="display_name"]'),
+    `${displayName} DUPLICATE`,
+    "duplicate customer display name",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="contact_name"]'),
+    updatedContact,
+    "duplicate customer contact",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="property_address"]'),
+    updatedAddress,
+    "duplicate customer property address",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="phone"]'),
+    updatedPhone,
+    "duplicate customer phone",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//h3[normalize-space(.)="New customer"]/ancestor::section[1]//input[@name="email"]'),
+    updatedEmail,
+    "duplicate customer email",
+  );
+  await clickVisibleButtonByText(
+    tab,
+    "button",
+    "Create customer",
+    "Create duplicate customer",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Possible duplicate customer"),
+    "duplicate customer protection",
+    10000,
+  );
 
   return {
     customerId: updatedCustomer.id,
@@ -1549,7 +1903,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
 
   const newEstimateButton = tab.playwright.locator('xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]');
   if ((await newEstimateButton.count()) === 1) {
-    await newEstimateButton.click({ timeoutMs: 8000 });
+    await clickVisibleButtonByText(tab, "button", "New Estimate", "New Estimate");
     await tab.playwright.waitForTimeout(500);
   }
 
@@ -1623,10 +1977,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     `${TEST_PREFIX} ${runId} estimate notes`,
     "estimate notes",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//section[@id="estimate-builder"]//form//button[@type="submit"]'),
-    "Create estimate",
-  );
+  await clickVisibleButtonByText(tab, "button", "Create estimate", "Create estimate");
   await waitFor(
     tab,
     (title) => document.body.innerText.includes(title),
@@ -2611,12 +2962,13 @@ export async function runWeatherTechOsRegression({
       results.push({ name, status: "passed", details });
       progress(`record:${name}:passed`);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       results.push({
         name,
         status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
-      progress(`record:${name}:failed`);
+      progress(`record:${name}:failed:${message}`);
     }
   };
 
@@ -2657,13 +3009,26 @@ export async function runWeatherTechOsRegression({
 
     let leadWorkflow = null;
     let jobBuilderWorkflow = null;
+    const shouldRunLeadWorkflow =
+      enabledGroups.has("crm") ||
+      enabledGroups.has("crm-leads") ||
+      enabledGroups.has("crm-estimates") ||
+      enabledGroups.has("crm-inbox");
+    const shouldRunEstimatesWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-estimates");
+    const shouldRunCustomersWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-customers");
+    const shouldRunInboxWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-inbox");
 
-    if (enabledGroups.has("crm")) {
+    if (shouldRunLeadWorkflow) {
       await record("Leads list opens and isolated lead can be created and updated", async () => {
         leadWorkflow = await testLeadsWorkflow(tab, env, weatherTech, runId, leadNameColumn);
         return leadWorkflow;
       });
+    }
 
+    if (shouldRunEstimatesWorkflow) {
       await record("Estimates screen opens and isolated draft estimate can be created", async () => {
         if (!leadWorkflow) {
           throw new Error("Lead workflow did not produce a test lead.");
@@ -2671,11 +3036,15 @@ export async function runWeatherTechOsRegression({
 
         return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId);
       });
+    }
 
+    if (shouldRunCustomersWorkflow) {
       await record("Customers list opens and isolated customer can be created and updated", () =>
         testCustomersWorkflow(tab, env, weatherTech, runId),
       );
+    }
 
+    if (shouldRunInboxWorkflow) {
       await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
         if (!leadWorkflow) {
           throw new Error("Lead workflow did not produce a test lead.");
