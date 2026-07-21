@@ -82,6 +82,7 @@ import {
   fetchCrmSnapshot,
   updateIntegrationConnection,
   updateIntegrationSyncLog,
+  updateInspection,
   updateChangeOrder,
   updateInvoice,
   updateEstimate,
@@ -213,8 +214,16 @@ import type {
   EstimateLineItemRecord,
   EstimateRecord,
   EstimateStatus,
+  InspectionActivityItem,
+  InspectionFinding,
   InspectionInput,
+  InspectionMeasurement,
+  InspectionOutcome,
+  InspectionRecord,
+  InspectionServiceCategory,
+  InspectionSeverity,
   InspectionStatus,
+  InspectionType,
   InvoiceInput,
   InvoiceLineItemInput,
   InvoiceLineItemRecord,
@@ -280,6 +289,7 @@ type WorkspaceView =
   | "estimates"
   | "scopes"
   | "jobs"
+  | "inspections"
   | "calendar"
   | "photos"
   | "invoices"
@@ -326,6 +336,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     label: "Operations",
     items: [
       { view: "jobs", label: "Jobs", icon: CalendarClock },
+      { view: "inspections", label: "Inspections", icon: ClipboardList },
       { view: "calendar", label: "Calendar", icon: CalendarClock },
       { view: "photos", label: "Photos", icon: Camera },
       { view: "orders", label: "Materials", icon: Package },
@@ -542,10 +553,246 @@ const assignmentStatuses: { value: AssignmentStatus; label: string }[] = [
 ];
 
 const inspectionStatuses: { value: InspectionStatus; label: string }[] = [
+  { value: "draft", label: "Draft" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "in_progress", label: "In progress" },
+  { value: "completed", label: "Completed" },
+  { value: "follow_up_required", label: "Follow-up required" },
+  { value: "no_work_needed", label: "No work needed" },
+  { value: "canceled", label: "Canceled" },
   { value: "pending", label: "Pending" },
   { value: "passed", label: "Passed" },
   { value: "failed", label: "Failed" },
   { value: "needs_review", label: "Needs review" },
+];
+
+const legacyJobInspectionStatuses: { value: InspectionStatus; label: string }[] = [
+  { value: "pending", label: "Pending" },
+  { value: "passed", label: "Passed" },
+  { value: "failed", label: "Failed" },
+  { value: "needs_review", label: "Needs review" },
+];
+
+const inspectionTypes: { value: InspectionType; label: string }[] = [
+  { value: "site_inspection", label: "Site inspection" },
+  { value: "roof_inspection", label: "Roof inspection" },
+  { value: "roof_repair", label: "Roof repair" },
+  { value: "maintenance", label: "Maintenance" },
+  { value: "insurance_hoa", label: "Insurance / HOA" },
+  { value: "painting_exterior", label: "Exterior painting" },
+  { value: "painting_interior", label: "Interior painting" },
+  { value: "cabinet_refinishing", label: "Cabinet refinishing" },
+  { value: "follow_up", label: "Follow-up" },
+];
+
+const inspectionServiceCategories: {
+  value: InspectionServiceCategory;
+  label: string;
+}[] = [
+  { value: "roofing", label: "Roofing" },
+  { value: "roof_repair", label: "Roof repair" },
+  { value: "tile_underlayment", label: "Tile underlayment" },
+  { value: "exterior_painting", label: "Exterior painting" },
+  { value: "interior_painting", label: "Interior painting" },
+  { value: "cabinet_refinishing", label: "Cabinet refinishing" },
+  { value: "general_exterior", label: "General exterior" },
+];
+
+const inspectionOutcomes: { value: InspectionOutcome; label: string }[] = [
+  { value: "estimate_only", label: "Estimate only" },
+  { value: "roof_report", label: "Create roof inspection report" },
+  { value: "maintenance_report", label: "Create maintenance report" },
+  { value: "insurance_hoa_documentation", label: "Insurance / HOA documentation" },
+  { value: "schedule_follow_up", label: "Schedule follow-up" },
+  { value: "no_work_needed", label: "No work needed" },
+  { value: "internal_only", label: "Save internal inspection only" },
+  { value: "save_and_close", label: "Save and close" },
+];
+
+const inspectionSeverities: { value: InspectionSeverity; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "moderate", label: "Moderate" },
+  { value: "high", label: "High" },
+  { value: "urgent", label: "Urgent" },
+];
+
+type InspectionQuickFindingTemplate = {
+  label: string;
+  area: string;
+  category: string;
+  observation: string;
+  recommendation: string;
+  severity: InspectionSeverity;
+  priority: LeadPriority;
+  actionRequired?: boolean;
+  includeInEstimate?: boolean;
+  customerVisible?: boolean;
+  includeInReport?: boolean;
+};
+
+const roofingFindingCategories = [
+  "Broken or cracked tiles",
+  "Slipped tiles",
+  "Missing tiles",
+  "Exposed underlayment",
+  "Deteriorated underlayment",
+  "Flashing deterioration",
+  "Valley metal or debris",
+  "Roof penetration or sealant",
+  "Pipe jack or vent flashing",
+  "Foam deterioration",
+  "Coating deterioration",
+  "Membrane condition",
+  "Ponding or drainage concern",
+  "Debris accumulation",
+  "Wind or impact damage",
+  "Fascia or wood rot",
+  "Skylight or curb condition",
+  "Gutter or edge metal condition",
+  "General maintenance item",
+  "Leak source or water entry",
+];
+
+const paintingFindingCategories = [
+  "Stucco cracks",
+  "Peeling or failing coating",
+  "Chalking",
+  "Caulking failure",
+  "Fascia or wood repair",
+  "Block-wall condition",
+  "Wood rot or substrate repair",
+  "Surface preparation",
+  "Patio ceiling prep",
+  "Trim condition",
+  "Previous coating failure",
+  "Color sample or approval",
+  "Cabinet adhesion or finish issue",
+];
+
+const roofingQuickFindings: InspectionQuickFindingTemplate[] = [
+  {
+    label: "Broken tile",
+    area: "Roof field",
+    category: "Broken or cracked tiles",
+    observation: "Broken or cracked tile observed.",
+    recommendation: "Replace damaged tile and verify surrounding underlayment condition.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Slipped tile",
+    area: "Roof field",
+    category: "Slipped tiles",
+    observation: "Slipped tile observed with weather exposure risk.",
+    recommendation: "Reset tile and inspect exposed underlayment before pricing is finalized.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Pipe jack",
+    area: "Roof penetration",
+    category: "Pipe jack or vent flashing",
+    observation: "Pipe jack or penetration flashing needs attention.",
+    recommendation: "Replace or reseal penetration assembly as part of the repair scope.",
+    severity: "high",
+    priority: "high",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Valley debris",
+    area: "Roof valley",
+    category: "Valley metal or debris",
+    observation: "Valley has debris or flow restriction.",
+    recommendation: "Clear valley, inspect valley metal, and include any needed repairs in the estimate.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Underlayment",
+    area: "Tile underlayment",
+    category: "Deteriorated underlayment",
+    observation: "Underlayment condition should be reviewed for repair or replacement scope.",
+    recommendation: "Document affected area and include underlayment repair or replacement allowances.",
+    severity: "high",
+    priority: "high",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Leak source",
+    area: "Leak area",
+    category: "Leak source or water entry",
+    observation: "Possible leak source or water-entry condition observed.",
+    recommendation: "Trace source, photograph surrounding conditions, and price targeted repair.",
+    severity: "high",
+    priority: "urgent",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+];
+
+const paintingQuickFindings: InspectionQuickFindingTemplate[] = [
+  {
+    label: "Stucco crack",
+    area: "Exterior elevation",
+    category: "Stucco cracks",
+    observation: "Stucco cracking observed.",
+    recommendation: "Patch and prep affected areas before finish coats.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Peeling paint",
+    area: "Painted surface",
+    category: "Peeling or failing coating",
+    observation: "Peeling or failing coating observed.",
+    recommendation: "Scrape, sand, prime, and coat affected areas per product specification.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Caulking gaps",
+    area: "Trim or joint",
+    category: "Caulking failure",
+    observation: "Open or failing caulking observed.",
+    recommendation: "Remove failing sealant and recaulk before painting.",
+    severity: "moderate",
+    priority: "normal",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
+  {
+    label: "Wood repair",
+    area: "Wood trim",
+    category: "Fascia or wood repair",
+    observation: "Wood repair or replacement may be needed before painting.",
+    recommendation: "Confirm repair quantity and include prep or carpentry allowance.",
+    severity: "high",
+    priority: "high",
+    actionRequired: true,
+    includeInEstimate: true,
+    customerVisible: true,
+  },
 ];
 
 const changeOrderStatuses: { value: ChangeOrderStatus; label: string }[] = [
@@ -793,6 +1040,42 @@ function assignmentStatusLabel(status: AssignmentStatus) {
 
 function inspectionStatusLabel(status: InspectionStatus) {
   return inspectionStatuses.find((item) => item.value === status)?.label ?? status;
+}
+
+function inspectionTypeLabel(type: InspectionType) {
+  return inspectionTypes.find((item) => item.value === type)?.label ?? type;
+}
+
+function inspectionServiceCategoryLabel(category: InspectionServiceCategory) {
+  return (
+    inspectionServiceCategories.find((item) => item.value === category)?.label ??
+    category
+  );
+}
+
+function inspectionOutcomeLabel(outcome: InspectionOutcome | null) {
+  if (!outcome) {
+    return "Outcome not selected";
+  }
+
+  return inspectionOutcomes.find((item) => item.value === outcome)?.label ?? outcome;
+}
+
+function inspectionStatusTone(status: InspectionStatus): "blue" | "green" | "amber" {
+  if (status === "completed" || status === "passed" || status === "no_work_needed") {
+    return "green";
+  }
+
+  if (
+    status === "follow_up_required" ||
+    status === "needs_review" ||
+    status === "failed" ||
+    status === "canceled"
+  ) {
+    return "amber";
+  }
+
+  return "blue";
 }
 
 function changeOrderStatusLabel(status: ChangeOrderStatus) {
@@ -2636,6 +2919,18 @@ function CrmWorkspace({
               onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
+            />
+          ) : null}
+
+          {view === "inspections" ? (
+            <InspectionsView
+              client={client}
+              snapshot={scopedSnapshot}
+              companyMap={companyMap}
+              onReload={onScrollPreservingReload}
+              onNotice={onNotice}
+              onError={onError}
+              onViewChange={onViewChange}
             />
           ) : null}
 
@@ -11335,6 +11630,1987 @@ type CalendarViewProps = {
   onError: (message: string) => void;
 };
 
+type InspectionsViewProps = {
+  client: CrmClient;
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  onReload: () => Promise<void>;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+  onViewChange: (view: WorkspaceView) => void;
+};
+
+type InspectionDateFilter = "all" | "unscheduled" | "today" | "next_7" | "past_due";
+type InspectionSort = "scheduled_asc" | "updated_desc" | "priority" | "status";
+type InspectionWorkspaceTab = "overview" | "field" | "report" | "activity";
+
+const inspectionDateFilters: { value: InspectionDateFilter; label: string }[] = [
+  { value: "all", label: "All dates" },
+  { value: "unscheduled", label: "Unscheduled" },
+  { value: "today", label: "Today" },
+  { value: "next_7", label: "Next 7 days" },
+  { value: "past_due", label: "Past due" },
+];
+
+const inspectionSortOptions: { value: InspectionSort; label: string }[] = [
+  { value: "scheduled_asc", label: "Scheduled soonest" },
+  { value: "updated_desc", label: "Recently updated" },
+  { value: "priority", label: "Priority" },
+  { value: "status", label: "Status" },
+];
+
+const inspectionWorkspaceTabs: { value: InspectionWorkspaceTab; label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "field", label: "Field mode" },
+  { value: "report", label: "Estimate / report" },
+  { value: "activity", label: "Activity" },
+];
+
+function createInspectionActivity(
+  label: string,
+  detail: string,
+  visibility: InspectionActivityItem["visibility"] = "system",
+): InspectionActivityItem {
+  return {
+    id: crypto.randomUUID(),
+    label,
+    detail,
+    visibility,
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+function getInspectionServiceType(inspection: InspectionRecord): ServiceType {
+  return inspection.service_category.includes("painting") ||
+    inspection.service_category === "cabinet_refinishing"
+    ? "painting"
+    : "roofing";
+}
+
+function isRoofingInspection(inspection: InspectionRecord | null) {
+  return !inspection || getInspectionServiceType(inspection) === "roofing";
+}
+
+function getInspectionPropertyAddress(
+  snapshot: CrmSnapshot,
+  inspection: InspectionRecord,
+) {
+  const job = inspection.job_id
+    ? snapshot.jobs.find((item) => item.id === inspection.job_id)
+    : null;
+  const customer = inspection.customer_id
+    ? snapshot.customers.find((item) => item.id === inspection.customer_id)
+    : null;
+  const lead = inspection.lead_id
+    ? snapshot.leads.find((item) => item.id === inspection.lead_id)
+    : null;
+
+  return (
+    inspection.property_address?.trim() ||
+    (job ? getJobDisplayAddress(job) : null) ||
+    customer?.property_address ||
+    lead?.property_address ||
+    "Property to confirm"
+  );
+}
+
+function getInspectionTargetName(
+  snapshot: CrmSnapshot,
+  inspection: InspectionRecord,
+) {
+  const customer = inspection.customer_id
+    ? snapshot.customers.find((item) => item.id === inspection.customer_id)
+    : null;
+  const lead = inspection.lead_id
+    ? snapshot.leads.find((item) => item.id === inspection.lead_id)
+    : null;
+  const job = inspection.job_id
+    ? snapshot.jobs.find((item) => item.id === inspection.job_id)
+    : null;
+
+  return customer?.display_name ?? lead?.contact_name ?? job?.title ?? "Unlinked site";
+}
+
+function getInspectionFindingCategories(inspection: InspectionRecord | null) {
+  if (isRoofingInspection(inspection)) {
+    return roofingFindingCategories;
+  }
+
+  return paintingFindingCategories;
+}
+
+function getInspectionQuickFindings(
+  inspection: InspectionRecord | null,
+): InspectionQuickFindingTemplate[] {
+  return isRoofingInspection(inspection) ? roofingQuickFindings : paintingQuickFindings;
+}
+
+function buildInspectionScopePreview(inspection: InspectionRecord) {
+  const estimateFindings = inspection.findings.filter(
+    (finding) => finding.include_in_estimate,
+  );
+  const estimateMeasurements = inspection.measurements.filter(
+    (measurement) => measurement.include_in_estimate,
+  );
+  const lines = [
+    `${inspection.title}`,
+    inspection.purpose ? `Purpose: ${inspection.purpose}` : null,
+    estimateFindings.length ? "Selected findings:" : null,
+    ...estimateFindings.map(
+      (finding) =>
+        `- ${finding.area}: ${finding.observation}${
+          finding.recommendation ? ` Recommendation: ${finding.recommendation}` : ""
+        }`,
+    ),
+    estimateMeasurements.length ? "Selected measurements:" : null,
+    ...estimateMeasurements.map(
+      (measurement) =>
+        `- ${measurement.label}: ${measurement.value} ${measurement.unit}${
+          measurement.notes ? ` (${measurement.notes})` : ""
+        }`,
+    ),
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}
+
+function buildInspectionReportBody({
+  snapshot,
+  inspection,
+  company,
+  reportType,
+  reportSummary,
+  photos,
+}: {
+  snapshot: CrmSnapshot;
+  inspection: InspectionRecord;
+  company: CompanyRecord | null;
+  reportType: InspectionOutcome;
+  reportSummary: string;
+  photos: JobPhotoRecord[];
+}) {
+  const reportFindings = inspection.findings.filter(
+    (finding) => finding.customer_visible && finding.include_in_report,
+  );
+  const visiblePhotos = photos.filter((photo) => photo.is_customer_visible);
+  const customer = inspection.customer_id
+    ? snapshot.customers.find((item) => item.id === inspection.customer_id)
+    : null;
+  const lead = inspection.lead_id
+    ? snapshot.leads.find((item) => item.id === inspection.lead_id)
+    : null;
+  const inspector =
+    inspection.assigned_inspector ||
+    (inspection.employee_id
+      ? snapshot.employees.find((employee) => employee.id === inspection.employee_id)
+          ?.full_name
+      : null) ||
+    "WeatherTech OS team";
+
+  return [
+    `${company?.name ?? "WeatherTech OS"} - ${inspectionOutcomeLabel(reportType)}`,
+    "",
+    "Customer and Property",
+    `Prepared for: ${customer?.display_name ?? lead?.contact_name ?? "Customer to confirm"}`,
+    `Property: ${getInspectionPropertyAddress(snapshot, inspection)}`,
+    `Inspection date: ${
+      inspection.scheduled_start
+        ? formatDate(inspection.scheduled_start)
+        : formatDate(inspection.created_at)
+    }`,
+    `Inspector: ${inspector}`,
+    "",
+    "Inspection Purpose",
+    inspection.purpose || "Document selected inspection observations for customer review.",
+    "",
+    "Summary",
+    reportSummary ||
+      "Summary pending final review by WeatherTech before customer delivery.",
+    "",
+    "Customer-Visible Findings",
+    reportFindings.length
+      ? reportFindings
+          .map(
+            (finding) =>
+              `- ${finding.area} / ${finding.category}: ${finding.observation}${
+                finding.recommendation ? ` Recommendation: ${finding.recommendation}` : ""
+              }`,
+          )
+          .join("\n")
+      : "No customer-visible findings have been selected for this draft.",
+    "",
+    "Photographic Documentation",
+    visiblePhotos.length
+      ? visiblePhotos
+          .map((photo, index) => `${index + 1}. ${photo.caption || photo.label || photo.file_path}`)
+          .join("\n")
+      : "No customer-visible photographs have been selected for this draft.",
+    "",
+    "Recommended Next Step",
+    "Review the related estimate or proposal for approved repair, maintenance, or replacement scope.",
+    "",
+    "Notes and Limitations",
+    "This document reflects visible conditions documented during the site visit. It is not an engineering report, structural certification, code-compliance certification, insurance coverage determination, or warranty certification unless separately stated in approved customer-facing language.",
+    "",
+    "Prepared for review before customer delivery.",
+  ].join("\n");
+}
+
+function InspectionsView({
+  client,
+  snapshot,
+  companyMap,
+  onReload,
+  onNotice,
+  onError,
+  onViewChange,
+}: InspectionsViewProps) {
+  const [selectedInspectionId, setSelectedInspectionId] = useState(
+    snapshot.inspections[0]?.id ?? "new",
+  );
+  const [inspectionSearch, setInspectionSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<InspectionStatus | "all">("all");
+  const [typeFilter, setTypeFilter] = useState<InspectionType | "all">("all");
+  const [serviceFilter, setServiceFilter] = useState<
+    InspectionServiceCategory | "all"
+  >("all");
+  const [dateFilter, setDateFilter] = useState<InspectionDateFilter>("all");
+  const [reportFilter, setReportFilter] = useState<
+    "all" | "requested" | "created" | "not_required"
+  >("all");
+  const [sortBy, setSortBy] = useState<InspectionSort>("scheduled_asc");
+  const [workspaceTab, setWorkspaceTab] = useState<InspectionWorkspaceTab>("overview");
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+  const selectedInspection =
+    snapshot.inspections.find((inspection) => inspection.id === selectedInspectionId) ??
+    null;
+  const selectedCompany = selectedInspection
+    ? companyMap.get(selectedInspection.company_id) ?? null
+    : null;
+  const selectedInspectionPhotos = selectedInspection
+    ? snapshot.jobPhotos.filter(
+        (photo) =>
+          photo.inspection_id === selectedInspection.id ||
+          selectedInspection.photo_ids.includes(photo.id) ||
+          (selectedInspection.job_id !== null && photo.job_id === selectedInspection.job_id) ||
+          (selectedInspection.customer_id !== null &&
+            photo.customer_id === selectedInspection.customer_id) ||
+          (selectedInspection.estimate_id !== null &&
+            photo.estimate_id === selectedInspection.estimate_id),
+      )
+    : [];
+  const selectedScheduleEvent = selectedInspection?.schedule_event_id
+    ? snapshot.scheduleEvents.find(
+        (event) => event.id === selectedInspection.schedule_event_id,
+      ) ?? null
+    : null;
+  const selectedEstimate = selectedInspection?.estimate_id
+    ? snapshot.estimates.find((estimate) => estimate.id === selectedInspection.estimate_id) ??
+      null
+    : null;
+  const selectedReport = selectedInspection?.report_document_id
+    ? snapshot.documents.find(
+        (document) => document.id === selectedInspection.report_document_id,
+      ) ?? null
+    : null;
+  const selectedInspectionIsRoofing = isRoofingInspection(selectedInspection);
+  const selectedQuickFindings = getInspectionQuickFindings(selectedInspection);
+  const activeInspectorNames = Array.from(
+    new Set(
+      [
+        ...snapshot.employees.map((employee) => employee.full_name),
+        ...snapshot.inspections.map((inspection) => inspection.assigned_inspector),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+  const inspectionStats = {
+    total: snapshot.inspections.length,
+    scheduled: snapshot.inspections.filter((inspection) => inspection.status === "scheduled").length,
+    inProgress: snapshot.inspections.filter((inspection) => inspection.status === "in_progress").length,
+    completed: snapshot.inspections.filter((inspection) => inspection.status === "completed").length,
+    reports: snapshot.inspections.filter((inspection) => inspection.report_document_id).length,
+  };
+  const filteredInspections = snapshot.inspections
+    .filter((inspection) => {
+      const query = inspectionSearch.toLowerCase();
+      const company = companyMap.get(inspection.company_id);
+      const customer = inspection.customer_id
+        ? snapshot.customers.find((item) => item.id === inspection.customer_id)
+        : null;
+      const lead = inspection.lead_id
+        ? snapshot.leads.find((item) => item.id === inspection.lead_id)
+        : null;
+      const job = inspection.job_id
+        ? snapshot.jobs.find((item) => item.id === inspection.job_id)
+        : null;
+      const searchableText = [
+        inspection.title,
+        inspection.purpose,
+        inspection.internal_notes,
+        inspection.notes,
+        inspection.assigned_inspector,
+        customer?.display_name,
+        lead?.contact_name,
+        job?.title,
+        getInspectionPropertyAddress(snapshot, inspection),
+        company?.name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const start = inspection.scheduled_start
+        ? new Date(inspection.scheduled_start)
+        : null;
+      const today = todayIsoDate();
+      const nextWeek = addDaysIsoDate(7);
+      const matchesDate =
+        dateFilter === "all" ||
+        (dateFilter === "unscheduled" && !inspection.scheduled_start) ||
+        (dateFilter === "today" && inspection.scheduled_start?.slice(0, 10) === today) ||
+        (dateFilter === "next_7" &&
+          Boolean(
+            inspection.scheduled_start &&
+              inspection.scheduled_start.slice(0, 10) >= today &&
+              inspection.scheduled_start.slice(0, 10) <= nextWeek,
+          )) ||
+        (dateFilter === "past_due" &&
+          Boolean(
+            start &&
+              start.getTime() < Date.now() &&
+              !["completed", "no_work_needed", "canceled", "passed"].includes(
+                inspection.status,
+              ),
+          ));
+      const matchesReport =
+        reportFilter === "all" ||
+        (reportFilter === "requested" && inspection.report_requested) ||
+        (reportFilter === "created" && Boolean(inspection.report_document_id)) ||
+        (reportFilter === "not_required" &&
+          !inspection.report_requested &&
+          !inspection.report_document_id);
+
+      return (
+        (!query || searchableText.includes(query)) &&
+        (companyFilter === "all" || inspection.company_id === companyFilter) &&
+        (statusFilter === "all" || inspection.status === statusFilter) &&
+        (typeFilter === "all" || inspection.inspection_type === typeFilter) &&
+        (serviceFilter === "all" || inspection.service_category === serviceFilter) &&
+        matchesDate &&
+        matchesReport
+      );
+    })
+    .sort((a, b) => {
+      if (sortBy === "updated_desc") {
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      }
+
+      if (sortBy === "priority") {
+        const priorityOrder: Record<LeadPriority, number> = {
+          urgent: 0,
+          high: 1,
+          normal: 2,
+          low: 3,
+        };
+        return priorityOrder[a.priority] - priorityOrder[b.priority];
+      }
+
+      if (sortBy === "status") {
+        return inspectionStatusLabel(a.status).localeCompare(inspectionStatusLabel(b.status));
+      }
+
+      return (
+        new Date(a.scheduled_start ?? a.updated_at).getTime() -
+        new Date(b.scheduled_start ?? b.updated_at).getTime()
+      );
+    });
+  const {
+    page: inspectionPage,
+    pageCount: inspectionPageCount,
+    setPage: setInspectionPage,
+    pagedItems: pagedInspections,
+  } = usePagination(filteredInspections, 8);
+
+  useEffect(() => {
+    if (selectedInspectionId === "new") {
+      return;
+    }
+
+    if (!snapshot.inspections.some((inspection) => inspection.id === selectedInspectionId)) {
+      setSelectedInspectionId(snapshot.inspections[0]?.id ?? "new");
+    }
+  }, [selectedInspectionId, snapshot.inspections]);
+
+  const selectInspection = (inspectionId: string) => {
+    updateUiPreservingScrollPosition(() => {
+      setSelectedInspectionId(inspectionId);
+      setWorkspaceTab("overview");
+    });
+  };
+
+  const appendActivity = (
+    inspection: InspectionRecord,
+    label: string,
+    detail: string,
+    visibility: InspectionActivityItem["visibility"] = "system",
+  ) => [
+    createInspectionActivity(label, detail, visibility),
+    ...(inspection.activity ?? []),
+  ];
+
+  const handleCreateInspection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (savingAction) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const companyId = getFormString(formData, "company_id", snapshot.companies[0]?.id);
+    const selectedCustomerId = getOptionalRelation(formData, "customer_id");
+    const selectedLeadId = getOptionalRelation(formData, "lead_id");
+    const selectedJobId = getOptionalRelation(formData, "job_id");
+    const existingScheduleEventId = getOptionalRelation(formData, "schedule_event_id");
+    const existingScheduleEvent = existingScheduleEventId
+      ? snapshot.scheduleEvents.find((item) => item.id === existingScheduleEventId) ?? null
+      : null;
+    const customerId = selectedCustomerId ?? existingScheduleEvent?.customer_id ?? null;
+    const leadId = selectedLeadId ?? existingScheduleEvent?.lead_id ?? null;
+    const jobId = selectedJobId ?? existingScheduleEvent?.job_id ?? null;
+    const scheduledStartInput = getFormString(formData, "scheduled_start");
+    const scheduledEndInput = getFormString(formData, "scheduled_end");
+
+    if (!customerId && !leadId && !jobId && !existingScheduleEventId) {
+      onError("Choose a lead, customer, job, or calendar event before creating an inspection.");
+      return;
+    }
+
+    if ((scheduledStartInput && !scheduledEndInput) || (!scheduledStartInput && scheduledEndInput)) {
+      onError("Enter both scheduled start and scheduled end, or leave both blank.");
+      return;
+    }
+
+    const scheduledStart = scheduledStartInput
+      ? fromDateTimeInputValue(scheduledStartInput)
+      : existingScheduleEvent?.start_at ?? null;
+    const scheduledEnd = scheduledEndInput
+      ? fromDateTimeInputValue(scheduledEndInput)
+      : existingScheduleEvent?.end_at ?? null;
+
+    if (
+      scheduledStart &&
+      scheduledEnd &&
+      new Date(scheduledEnd).getTime() <= new Date(scheduledStart).getTime()
+    ) {
+      onError("Scheduled end must be after scheduled start.");
+      return;
+    }
+
+    const job = jobId ? snapshot.jobs.find((item) => item.id === jobId) : null;
+    const customer = customerId
+      ? snapshot.customers.find((item) => item.id === customerId)
+      : null;
+    const lead = leadId ? snapshot.leads.find((item) => item.id === leadId) : null;
+    const propertyAddress =
+      getOptionalFormString(formData, "property_address") ||
+      (job ? getJobDisplayAddress(job) : null) ||
+      existingScheduleEvent?.location ||
+      customer?.property_address ||
+      lead?.property_address ||
+      null;
+    const title = getFormString(formData, "title", "Site inspection");
+
+    try {
+      setSavingAction("create-inspection");
+      const savedInspection = await createInspection(client, {
+        company_id: companyId,
+        customer_id: customerId,
+        lead_id: leadId,
+        job_id: jobId,
+        schedule_event_id: existingScheduleEventId,
+        title,
+        status: scheduledStart ? "scheduled" : "draft",
+        inspection_type: getFormString(
+          formData,
+          "inspection_type",
+          "site_inspection",
+        ) as InspectionType,
+        service_category: getFormString(
+          formData,
+          "service_category",
+          "roofing",
+        ) as InspectionServiceCategory,
+        checklist: "Site inspection workflow",
+        scheduled_start: scheduledStart,
+        scheduled_end: scheduledEnd,
+        assigned_inspector: getOptionalFormString(formData, "assigned_inspector"),
+        property_address: propertyAddress,
+        priority: getFormString(formData, "priority", "normal") as LeadPriority,
+        purpose: getOptionalFormString(formData, "purpose"),
+        notes: getOptionalFormString(formData, "notes"),
+        internal_notes: getOptionalFormString(formData, "notes"),
+        report_requested: false,
+        findings: [],
+        measurements: [],
+        photo_ids: [],
+        activity: [
+          createInspectionActivity(
+            "Inspection created",
+            scheduledStart ? "Created with scheduled site visit." : "Created as draft.",
+          ),
+        ],
+      });
+
+      let scheduleEventId = existingScheduleEventId;
+
+      if (scheduledStart && scheduledEnd && !existingScheduleEventId) {
+        const savedEvent = await createScheduleEvent(client, {
+          company_id: companyId,
+          customer_id: customerId,
+          lead_id: leadId,
+          job_id: jobId,
+          title: `Inspection - ${title}`,
+          event_type: "inspection",
+          status: "scheduled",
+          start_at: scheduledStart,
+          end_at: scheduledEnd,
+          location: propertyAddress,
+          notes: getOptionalFormString(formData, "purpose"),
+        });
+        scheduleEventId = savedEvent.id;
+        await updateInspection(client, savedInspection.id, {
+          schedule_event_id: savedEvent.id,
+          activity: appendActivity(
+            savedInspection,
+            "Schedule created",
+            formatDateTime(savedEvent.start_at),
+          ),
+        });
+      }
+
+      form.reset();
+      setSelectedInspectionId(savedInspection.id);
+      await onReload();
+      onNotice(scheduleEventId ? "Inspection scheduled." : "Inspection draft saved.");
+    } catch (currentError) {
+      logCaughtError("[CRM] Unable to create inspection", currentError);
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to save inspection. Confirm migration 0019 has been applied.",
+        ),
+      );
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleUpdateInspection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const status = getFormString(
+      formData,
+      "status",
+      selectedInspection.status,
+    ) as InspectionStatus;
+    const outcome = getOptionalRelation(formData, "outcome") as InspectionOutcome | null;
+
+    try {
+      setSavingAction("update-inspection");
+      await updateInspection(client, selectedInspection.id, {
+        status,
+        outcome,
+        report_requested: selectedInspectionIsRoofing
+          ? formData.get("report_requested") === "on"
+          : selectedInspection.report_requested,
+        purpose: getOptionalFormString(formData, "purpose"),
+        internal_notes: getOptionalFormString(formData, "internal_notes"),
+        completed_at:
+          status === "completed" || status === "no_work_needed" || status === "passed"
+            ? selectedInspection.completed_at ?? new Date().toISOString()
+            : selectedInspection.completed_at,
+        activity: appendActivity(
+          selectedInspection,
+          "Inspection updated",
+          `${inspectionStatusLabel(status)} - ${inspectionOutcomeLabel(outcome)}`,
+        ),
+      });
+      await onReload();
+      onNotice("Inspection updated.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to update inspection."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const updateInspectionStatus = async (
+    inspection: InspectionRecord,
+    status: InspectionStatus,
+    outcome: InspectionOutcome | null = inspection.outcome,
+  ) => {
+    if (savingAction) {
+      return;
+    }
+
+    try {
+      setSavingAction(`status-${status}`);
+      await updateInspection(client, inspection.id, {
+        status,
+        outcome,
+        completed_at:
+          status === "completed" || status === "no_work_needed" || status === "passed"
+            ? inspection.completed_at ?? new Date().toISOString()
+            : inspection.completed_at,
+        activity: appendActivity(
+          inspection,
+          "Status changed",
+          inspectionStatusLabel(status),
+        ),
+      });
+      await onReload();
+      onNotice(`Inspection marked ${inspectionStatusLabel(status)}.`);
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to update inspection status."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleAddFinding = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const observation = getFormString(formData, "observation");
+
+    if (!observation) {
+      onError("Add an observation before saving the finding.");
+      return;
+    }
+
+    const finding: InspectionFinding = {
+      id: crypto.randomUUID(),
+      area: getFormString(formData, "area", "General"),
+      category: getFormString(formData, "category", "Observation"),
+      observation,
+      severity: getFormString(formData, "severity", "moderate") as InspectionSeverity,
+      priority: getFormString(formData, "priority", "normal") as LeadPriority,
+      recommendation: getFormString(formData, "recommendation"),
+      related_photo_id: getOptionalRelation(formData, "related_photo_id"),
+      customer_visible: formData.get("customer_visible") === "on",
+      action_required: formData.get("action_required") === "on",
+      include_in_estimate: formData.get("include_in_estimate") === "on",
+      include_in_report: formData.get("include_in_report") === "on",
+      estimated_remaining_life: isRoofingInspection(selectedInspection)
+        ? getOptionalFormString(formData, "estimated_remaining_life")
+        : null,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      setSavingAction("add-finding");
+      await updateInspection(client, selectedInspection.id, {
+        findings: [finding, ...selectedInspection.findings],
+        activity: appendActivity(
+          selectedInspection,
+          "Finding added",
+          `${finding.area}: ${finding.observation}`,
+          finding.customer_visible ? "customer_visible" : "internal",
+        ),
+      });
+      form.reset();
+      await onReload();
+      onNotice("Finding added.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to add finding."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleQuickFinding = async (template: InspectionQuickFindingTemplate) => {
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const finding: InspectionFinding = {
+      id: crypto.randomUUID(),
+      area: template.area,
+      category: template.category,
+      observation: template.observation,
+      severity: template.severity,
+      priority: template.priority,
+      recommendation: template.recommendation,
+      related_photo_id: null,
+      customer_visible: Boolean(template.customerVisible),
+      action_required: template.actionRequired ?? true,
+      include_in_estimate: template.includeInEstimate ?? true,
+      include_in_report: Boolean(template.includeInReport),
+      estimated_remaining_life: null,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      setSavingAction(`quick-finding-${template.label}`);
+      await updateInspection(client, selectedInspection.id, {
+        findings: [finding, ...selectedInspection.findings],
+        activity: appendActivity(
+          selectedInspection,
+          "Quick finding added",
+          `${finding.area}: ${finding.observation}`,
+          finding.customer_visible ? "customer_visible" : "internal",
+        ),
+      });
+      await onReload();
+      onNotice("Finding added.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to add finding."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleAddMeasurement = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const label = getFormString(formData, "label");
+    const value = getFormString(formData, "value");
+
+    if (!label || !value) {
+      onError("Add both a measurement label and value.");
+      return;
+    }
+
+    const measurement: InspectionMeasurement = {
+      id: crypto.randomUUID(),
+      label,
+      value,
+      unit: getFormString(formData, "unit", "each"),
+      notes: getOptionalFormString(formData, "notes"),
+      include_in_estimate: formData.get("include_in_estimate") === "on",
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      setSavingAction("add-measurement");
+      await updateInspection(client, selectedInspection.id, {
+        measurements: [measurement, ...selectedInspection.measurements],
+        activity: appendActivity(
+          selectedInspection,
+          "Measurement added",
+          `${measurement.label}: ${measurement.value} ${measurement.unit}`,
+          "internal",
+        ),
+      });
+      form.reset();
+      await onReload();
+      onNotice("Measurement added.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to add measurement."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleUploadInspectionPhoto = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const file = formData.get("photo");
+
+    if (!(file instanceof File) || file.size === 0) {
+      onError("Choose a photo before uploading.");
+      return;
+    }
+
+    try {
+      setSavingAction("upload-photo");
+      const photoLabel = getOptionalFormString(formData, "label");
+      const photoCaption = getOptionalFormString(formData, "caption");
+      const isCustomerVisible = formData.get("is_customer_visible") === "on";
+      const savedPhoto = await createJobPhoto(
+        client,
+        {
+          company_id: selectedInspection.company_id,
+          customer_id: selectedInspection.customer_id,
+          job_id: selectedInspection.job_id,
+          estimate_id: selectedInspection.estimate_id,
+          inspection_id: selectedInspection.id,
+          label: photoLabel,
+          caption: photoCaption,
+          is_customer_visible: isCustomerVisible,
+          taken_at: new Date().toISOString(),
+        },
+        file,
+      );
+      const createFindingFromPhoto = formData.get("create_finding_from_photo") === "on";
+      const photoFinding: InspectionFinding | null = createFindingFromPhoto
+        ? {
+            id: crypto.randomUUID(),
+            area: photoLabel ?? "Photo",
+            category: getFormString(
+              formData,
+              "photo_finding_category",
+              getInspectionFindingCategories(selectedInspection)[0] ?? "Photo observation",
+            ),
+            observation:
+              photoCaption ?? photoLabel ?? "Photo documented during inspection.",
+            severity: "moderate",
+            priority: "normal",
+            recommendation: "",
+            related_photo_id: savedPhoto.id,
+            customer_visible: isCustomerVisible,
+            action_required: true,
+            include_in_estimate: true,
+            include_in_report: false,
+            estimated_remaining_life: null,
+            created_at: new Date().toISOString(),
+          }
+        : null;
+      const nextPhotoIds = Array.from(
+        new Set([savedPhoto.id, ...selectedInspection.photo_ids]),
+      );
+      const nextFindings = photoFinding
+        ? [photoFinding, ...selectedInspection.findings]
+        : selectedInspection.findings;
+      const nextActivity = photoFinding
+        ? [
+            createInspectionActivity(
+              "Finding added from photo",
+              `${photoFinding.area}: ${photoFinding.observation}`,
+              photoFinding.customer_visible ? "customer_visible" : "internal",
+            ),
+            ...appendActivity(
+              selectedInspection,
+              "Photo uploaded",
+              savedPhoto.caption ?? savedPhoto.label ?? "Inspection photo",
+              savedPhoto.is_customer_visible ? "customer_visible" : "internal",
+            ),
+          ]
+        : appendActivity(
+            selectedInspection,
+            "Photo uploaded",
+            savedPhoto.caption ?? savedPhoto.label ?? "Inspection photo",
+            savedPhoto.is_customer_visible ? "customer_visible" : "internal",
+          );
+      await updateInspection(client, selectedInspection.id, {
+        photo_ids: nextPhotoIds,
+        findings: nextFindings,
+        activity: nextActivity,
+      });
+      form.reset();
+      await onReload();
+      onNotice(
+        photoFinding ? "Inspection photo uploaded and finding added." : "Inspection photo uploaded.",
+      );
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to upload inspection photo. Confirm migration 0019 has been applied.",
+        ),
+      );
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleCreateEstimateFromInspection = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const title = getFormString(
+      formData,
+      "estimate_title",
+      `Estimate - ${selectedInspection.title}`,
+    );
+    const scopeOfWork =
+      getFormString(formData, "scope_of_work") ||
+      buildInspectionScopePreview(selectedInspection);
+
+    try {
+      setSavingAction("create-estimate");
+      const savedEstimate = await createEstimate(
+        client,
+        {
+          company_id: selectedInspection.company_id,
+          customer_id: selectedInspection.customer_id,
+          lead_id: selectedInspection.lead_id,
+          business: selectedCompany?.name ?? null,
+          location: getInspectionPropertyAddress(snapshot, selectedInspection),
+          title,
+          status: "draft",
+          service_type: getInspectionServiceType(selectedInspection),
+          issue_date: todayIsoDate(),
+          notes: "Draft estimate created from inspection. Review pricing before sending.",
+          scope_of_work: scopeOfWork,
+        },
+        [],
+      );
+      await updateInspection(client, selectedInspection.id, {
+        estimate_id: savedEstimate.id,
+        outcome: "estimate_only",
+        status:
+          selectedInspection.status === "draft"
+            ? "completed"
+            : selectedInspection.status,
+        completed_at: selectedInspection.completed_at ?? new Date().toISOString(),
+        activity: appendActivity(
+          selectedInspection,
+          "Estimate draft created",
+          savedEstimate.title,
+        ),
+      });
+      await onReload();
+      onNotice("Estimate draft created from inspection.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create estimate draft."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleCreateInspectionReport = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    if (!isRoofingInspection(selectedInspection)) {
+      onError("Reports are only enabled for roofing inspections. Use Estimate Only for painting.");
+      return;
+    }
+
+    const reportType = getFormString(
+      formData,
+      "report_type",
+      "roof_report",
+    ) as InspectionOutcome;
+    const title = getFormString(
+      formData,
+      "report_title",
+      `${inspectionOutcomeLabel(reportType)} - ${selectedInspection.title}`,
+    );
+    const summary = getFormString(formData, "report_summary");
+    const body = buildInspectionReportBody({
+      snapshot,
+      inspection: selectedInspection,
+      company: selectedCompany,
+      reportType,
+      reportSummary: summary,
+      photos: selectedInspectionPhotos,
+    });
+
+    try {
+      setSavingAction("create-report");
+      const savedDocument = await createDocument(client, {
+        company_id: selectedInspection.company_id,
+        customer_id: selectedInspection.customer_id,
+        job_id: selectedInspection.job_id,
+        estimate_id: selectedInspection.estimate_id,
+        title,
+        category: "other",
+        status: "draft",
+        template_key: `inspection_${reportType}`,
+        file_url: null,
+        body,
+      });
+      await updateInspection(client, selectedInspection.id, {
+        report_document_id: savedDocument.id,
+        report_created_at: new Date().toISOString(),
+        outcome: reportType,
+        report_requested: true,
+        activity: appendActivity(
+          selectedInspection,
+          "Report draft created",
+          savedDocument.title,
+        ),
+      });
+      await onReload();
+      onNotice("Inspection report draft saved to documents.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create report draft."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  return (
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
+      <section className="space-y-5">
+        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 p-5">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Inspections</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Schedule site visits, capture estimate-ready findings, and create
+                  an optional roof report only when the job needs one.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => selectInspection("new")}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+              >
+                <Plus className="h-4 w-4" />
+                New inspection
+              </button>
+            </div>
+          </div>
+
+          <div className="border-b border-slate-200 p-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <ProfileStat label="Inspections" value={inspectionStats.total} />
+              <ProfileStat label="Scheduled" value={inspectionStats.scheduled} />
+              <ProfileStat label="In progress" value={inspectionStats.inProgress} />
+              <ProfileStat label="Completed" value={inspectionStats.completed} />
+              <ProfileStat label="Reports" value={inspectionStats.reports} />
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_180px]">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  value={inspectionSearch}
+                  onChange={(event) => {
+                    setInspectionSearch(event.target.value);
+                    setInspectionPage(1);
+                  }}
+                  className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  data-testid="inspections-search"
+                  placeholder="Search inspections"
+                />
+              </div>
+              <select
+                value={companyFilter}
+                onChange={(event) => {
+                  setCompanyFilter(event.target.value);
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="inspections-company-filter"
+              >
+                <option value="all">All companies</option>
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value as InspectionStatus | "all");
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="inspections-status-filter"
+              >
+                <option value="all">All statuses</option>
+                {inspectionStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sortBy}
+                onChange={(event) => setSortBy(event.target.value as InspectionSort)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="inspections-sort"
+              >
+                {inspectionSortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <select
+                value={typeFilter}
+                onChange={(event) => {
+                  setTypeFilter(event.target.value as InspectionType | "all");
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="inspections-type-filter"
+              >
+                <option value="all">All inspection types</option>
+                {inspectionTypes.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={serviceFilter}
+                onChange={(event) => {
+                  setServiceFilter(event.target.value as InspectionServiceCategory | "all");
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All service categories</option>
+                {inspectionServiceCategories.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={dateFilter}
+                onChange={(event) => {
+                  setDateFilter(event.target.value as InspectionDateFilter);
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {inspectionDateFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={reportFilter}
+                onChange={(event) => {
+                  setReportFilter(event.target.value as typeof reportFilter);
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All report states</option>
+                <option value="requested">Report requested</option>
+                <option value="created">Report created</option>
+                <option value="not_required">Report not required</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {pagedInspections.map((inspection) => {
+              const company = companyMap.get(inspection.company_id);
+              const isSelected = selectedInspectionId === inspection.id;
+
+              return (
+                <button
+                  key={inspection.id}
+                  type="button"
+                  onClick={() => selectInspection(inspection.id)}
+                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_150px_160px] xl:items-center ${
+                    isSelected ? "bg-sky-50" : "bg-white"
+                  }`}
+                >
+                  <div>
+                    <p className="font-semibold text-slate-950">{inspection.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {getInspectionTargetName(snapshot, inspection)} -{" "}
+                      {getInspectionPropertyAddress(snapshot, inspection)}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
+                      {inspectionTypeLabel(inspection.inspection_type)} /{" "}
+                      {inspectionServiceCategoryLabel(inspection.service_category)}
+                    </p>
+                  </div>
+                  <Badge
+                    label={inspectionStatusLabel(inspection.status)}
+                    tone={inspectionStatusTone(inspection.status)}
+                  />
+                  <Badge
+                    label={
+                      inspection.report_document_id
+                        ? "Report created"
+                        : inspection.report_requested
+                          ? "Report requested"
+                          : "Estimate path"
+                    }
+                    tone={inspection.report_document_id ? "green" : "blue"}
+                  />
+                  <span className="text-sm text-slate-600">
+                    {company?.name ?? "Company"} -{" "}
+                    {inspection.scheduled_start
+                      ? formatDateTime(inspection.scheduled_start)
+                      : "No schedule"}
+                  </span>
+                </button>
+              );
+            })}
+            {!filteredInspections.length ? (
+              <EmptyState
+                label={
+                  snapshot.inspections.length
+                    ? "No inspections match this view."
+                    : "No inspections yet. Create one from a lead, customer, or job."
+                }
+              />
+            ) : null}
+          </div>
+          <PaginationControls
+            page={inspectionPage}
+            pageCount={inspectionPageCount}
+            total={filteredInspections.length}
+            onPageChange={setInspectionPage}
+          />
+        </div>
+      </section>
+
+      <aside className="space-y-5">
+        {selectedInspectionId === "new" || !selectedInspection ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Create site inspection</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Schedule an operational visit. Reports stay optional.
+            </p>
+            <form onSubmit={handleCreateInspection} className="mt-5 grid gap-3">
+              <select
+                required
+                name="company_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                required
+                name="title"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Inspection title"
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select name="inspection_type" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                  {inspectionTypes.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+                <select name="service_category" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                  {inspectionServiceCategories.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <select name="lead_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="none">No lead</option>
+                {snapshot.leads.map((lead) => (
+                  <option key={lead.id} value={lead.id}>
+                    {lead.contact_name} - {lead.property_address}
+                  </option>
+                ))}
+              </select>
+              <select name="customer_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="none">No customer</option>
+                {snapshot.customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.display_name} - {customer.property_address}
+                  </option>
+                ))}
+              </select>
+              <select name="job_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="none">No job</option>
+                {snapshot.jobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.title} - {getJobDisplayAddress(job)}
+                  </option>
+                ))}
+              </select>
+              <select name="schedule_event_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="none">Create new calendar event if scheduled</option>
+                {snapshot.scheduleEvents
+                  .filter((event) => event.event_type === "inspection")
+                  .map((event) => (
+                    <option key={event.id} value={event.id}>
+                      {event.title} - {formatDateTime(event.start_at)}
+                    </option>
+                  ))}
+              </select>
+              <input
+                name="property_address"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Property or jobsite override"
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input
+                  name="scheduled_start"
+                  type="datetime-local"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  name="scheduled_end"
+                  type="datetime-local"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input
+                  name="assigned_inspector"
+                  list="inspection-inspectors"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Assigned inspector"
+                />
+                <select name="priority" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                  {leadPriorities.map((priority) => (
+                    <option key={priority.value} value={priority.value}>
+                      {priority.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <datalist id="inspection-inspectors">
+                {activeInspectorNames.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              <textarea
+                name="purpose"
+                className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Internal purpose"
+              />
+              <textarea
+                name="notes"
+                className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Internal notes"
+              />
+              <button
+                type="submit"
+                disabled={savingAction !== null}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <Save className="h-4 w-4" />
+                {savingAction === "create-inspection" ? "Saving" : "Create inspection"}
+              </button>
+            </form>
+          </section>
+        ) : (
+          <>
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-950">
+                    {selectedInspection.title}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {getInspectionTargetName(snapshot, selectedInspection)}
+                  </p>
+                </div>
+                <Badge
+                  label={inspectionStatusLabel(selectedInspection.status)}
+                  tone={inspectionStatusTone(selectedInspection.status)}
+                />
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <ProfileStat
+                  label="Outcome"
+                  value={inspectionOutcomeLabel(selectedInspection.outcome)}
+                />
+                <ProfileStat
+                  label="Report"
+                  value={selectedReport ? "Draft created" : "Optional"}
+                />
+                <ProfileStat
+                  label="Findings"
+                  value={selectedInspection.findings.length}
+                />
+                <ProfileStat
+                  label="Photos"
+                  value={selectedInspectionPhotos.length}
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void updateInspectionStatus(selectedInspection, "in_progress")}
+                  disabled={savingAction !== null}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:bg-slate-300"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Start inspection
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void updateInspectionStatus(
+                      selectedInspection,
+                      "completed",
+                      selectedInspection.outcome ?? "estimate_only",
+                    )
+                  }
+                  disabled={savingAction !== null}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Complete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onViewChange("calendar")}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <CalendarClock className="h-4 w-4" />
+                  Calendar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onViewChange("estimates")}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <FileText className="h-4 w-4" />
+                  Estimates
+                </button>
+              </div>
+              <div className="mt-4 grid gap-1 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                <ContactLine icon={MapPin} value={getInspectionPropertyAddress(snapshot, selectedInspection)} />
+                <ContactLine
+                  icon={CalendarClock}
+                  value={
+                    selectedInspection.scheduled_start
+                      ? formatDateTime(selectedInspection.scheduled_start)
+                      : selectedScheduleEvent
+                        ? formatDateTime(selectedScheduleEvent.start_at)
+                        : null
+                  }
+                />
+                <ContactLine icon={UserRound} value={selectedInspection.assigned_inspector} />
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="flex gap-1 overflow-x-auto border-b border-slate-200 p-2">
+                {inspectionWorkspaceTabs.map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    onClick={() => setWorkspaceTab(tab.value)}
+                    className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${
+                      workspaceTab === tab.value
+                        ? "bg-slate-950 text-white"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {workspaceTab === "overview" ? (
+                <div className="grid gap-5 p-5">
+                  <form onSubmit={handleUpdateInspection} className="grid gap-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <select
+                        name="status"
+                        defaultValue={selectedInspection.status}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      >
+                        {inspectionStatuses.map((status) => (
+                          <option key={status.value} value={status.value}>
+                            {status.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        name="outcome"
+                        defaultValue={selectedInspection.outcome ?? "none"}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      >
+                        <option value="none">No outcome selected</option>
+                        {inspectionOutcomes.map((outcome) => (
+                          <option key={outcome.value} value={outcome.value}>
+                            {outcome.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <textarea
+                      name="purpose"
+                      defaultValue={selectedInspection.purpose ?? ""}
+                      className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Purpose"
+                    />
+                    <textarea
+                      name="internal_notes"
+                      defaultValue={selectedInspection.internal_notes ?? ""}
+                      className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Internal notes"
+                    />
+                    {selectedInspectionIsRoofing ? (
+                      <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                        <input
+                          name="report_requested"
+                          type="checkbox"
+                          defaultChecked={selectedInspection.report_requested}
+                          className="mt-1"
+                        />
+                        Optional roof report requested
+                      </label>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save inspection
+                    </button>
+                  </form>
+                  <div className="grid gap-3">
+                    <p className="text-sm font-bold uppercase text-slate-500">
+                      Relationships
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <ProfileStat
+                        label="Lead"
+                        value={
+                          selectedInspection.lead_id
+                            ? snapshot.leads.find((lead) => lead.id === selectedInspection.lead_id)
+                                ?.contact_name ?? "Linked"
+                            : "None"
+                        }
+                      />
+                      <ProfileStat
+                        label="Customer"
+                        value={
+                          selectedInspection.customer_id
+                            ? snapshot.customers.find(
+                                (customer) => customer.id === selectedInspection.customer_id,
+                              )?.display_name ?? "Linked"
+                            : "None"
+                        }
+                      />
+                      <ProfileStat
+                        label="Job"
+                        value={
+                          selectedInspection.job_id
+                            ? snapshot.jobs.find((job) => job.id === selectedInspection.job_id)
+                                ?.title ?? "Linked"
+                            : "None"
+                        }
+                      />
+                      <ProfileStat
+                        label="Estimate"
+                        value={selectedEstimate?.title ?? "Not created"}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {workspaceTab === "field" ? (
+                <div className="grid gap-5 p-5">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => void updateInspectionStatus(selectedInspection, "in_progress")}
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-14 items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-700 disabled:bg-slate-300"
+                    >
+                      <ClipboardList className="h-5 w-5" />
+                      Start Inspection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateInspectionStatus(
+                          selectedInspection,
+                          "completed",
+                          selectedInspection.outcome ?? "estimate_only",
+                        )
+                      }
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-14 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                    >
+                      <CheckCircle2 className="h-5 w-5" />
+                      Complete Inspection
+                    </button>
+                  </div>
+
+                  <div className="grid gap-3 rounded-lg border border-sky-100 bg-sky-50 p-4">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-950">Quick capture</h4>
+                        <p className="text-sm text-slate-600">
+                          Add common {selectedInspectionIsRoofing ? "roofing" : "painting"} findings
+                          without typing a full note on site.
+                        </p>
+                      </div>
+                      <span className="text-xs font-semibold uppercase text-sky-700">
+                        Estimate-ready by default
+                      </span>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {selectedQuickFindings.map((template) => (
+                        <button
+                          key={template.label}
+                          type="button"
+                          onClick={() => void handleQuickFinding(template)}
+                          disabled={savingAction !== null}
+                          className="min-h-16 rounded-md border border-sky-200 bg-white px-3 py-2 text-left text-sm shadow-sm transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <span className="block font-bold text-slate-950">
+                            {template.label}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-600">
+                            {template.category}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleAddFinding} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                    <div>
+                      <h4 className="font-bold text-slate-950">Add finding</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Use this for anything the quick buttons do not cover. Only selected
+                        findings carry into estimates; report flags are explicit.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input name="area" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Area, elevation, room, or roof section" />
+                      <select name="category" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        {getInspectionFindingCategories(selectedInspection).map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <textarea
+                      required
+                      name="observation"
+                      className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Observation entered by inspector"
+                    />
+                    <textarea
+                      name="recommendation"
+                      className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Recommendation, if approved"
+                    />
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <select name="severity" defaultValue="moderate" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        {inspectionSeverities.map((severity) => (
+                          <option key={severity.value} value={severity.value}>
+                            {severity.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select name="priority" defaultValue="normal" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        {leadPriorities.map((priority) => (
+                          <option key={priority.value} value={priority.value}>
+                            {priority.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select name="related_photo_id" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        <option value="none">No related photo</option>
+                        {selectedInspectionPhotos.map((photo) => (
+                          <option key={photo.id} value={photo.id}>
+                            {photo.caption ?? photo.label ?? photo.file_path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedInspectionIsRoofing ? (
+                      <input
+                        name="estimated_remaining_life"
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Optional remaining service life text, only if approved"
+                      />
+                    ) : null}
+                    <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                      {([
+                        ["action_required", "Needs action", true],
+                        ["include_in_estimate", "Add to estimate scope", true],
+                        ["customer_visible", "Customer-visible note", false],
+                        ["include_in_report", "Use in optional report", false],
+                      ] as const).map(([name, label, defaultChecked]) => (
+                        <label key={name} className="flex items-center gap-2">
+                          <input
+                            name={name}
+                            type="checkbox"
+                            defaultChecked={Boolean(defaultChecked)}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add finding
+                    </button>
+                  </form>
+
+                  <form onSubmit={handleAddMeasurement} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                    <h4 className="font-bold text-slate-950">Add measurement</h4>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <input required name="label" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Label" />
+                      <input required name="value" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Value" />
+                      <input name="unit" defaultValue="sq ft" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Unit" />
+                    </div>
+                    <input name="notes" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Measurement notes" />
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input name="include_in_estimate" type="checkbox" defaultChecked />
+                      Carry into estimate review
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add measurement
+                    </button>
+                  </form>
+
+                  <form onSubmit={handleUploadInspectionPhoto} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                    <div>
+                      <h4 className="font-bold text-slate-950">Upload inspection photo</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Photos can become findings immediately, so roof work does not
+                        require a second data-entry pass.
+                      </p>
+                    </div>
+                    <input required name="photo" type="file" accept="image/*" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input name="label" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Label, such as roof section" />
+                      <input name="caption" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Caption" />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <select name="photo_finding_category" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        {getInspectionFindingCategories(selectedInspection).map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="flex min-h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        <input name="create_finding_from_photo" type="checkbox" defaultChecked />
+                        Also save as finding
+                      </label>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input name="is_customer_visible" type="checkbox" />
+                      Customer-visible if included in an optional report
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload photo
+                    </button>
+                  </form>
+
+                  <div className="grid gap-3">
+                    {selectedInspection.findings.map((finding) => (
+                      <div key={finding.id} className="rounded-lg border border-slate-200 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-slate-950">
+                              {finding.area} - {finding.category}
+                            </p>
+                            <p className="mt-2 text-sm text-slate-600">{finding.observation}</p>
+                            {finding.recommendation ? (
+                              <p className="mt-2 text-sm text-slate-500">
+                                Recommendation: {finding.recommendation}
+                              </p>
+                            ) : null}
+                          </div>
+                          <Badge label={finding.severity} tone={finding.severity === "urgent" ? "amber" : "blue"} />
+                        </div>
+                      </div>
+                    ))}
+                    {!selectedInspection.findings.length ? (
+                      <EmptyState label="No findings recorded yet." />
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {workspaceTab === "report" ? (
+                <div className="grid gap-5 p-5">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="font-bold text-emerald-900">Fastest path: Estimate Only</p>
+                    <p className="mt-1 text-sm text-emerald-800">
+                      This creates a draft estimate from selected findings and measurements.
+                      It does not generate a report.
+                    </p>
+                  </div>
+                  <form onSubmit={handleCreateEstimateFromInspection} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                    <h4 className="font-bold text-slate-950">Estimate review</h4>
+                    <input
+                      name="estimate_title"
+                      defaultValue={`Estimate - ${selectedInspection.title}`}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <textarea
+                      name="scope_of_work"
+                      defaultValue={buildInspectionScopePreview(selectedInspection)}
+                      className="min-h-40 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                    >
+                      <FileText className="h-4 w-4" />
+                      Create estimate draft
+                    </button>
+                  </form>
+
+                  {selectedInspectionIsRoofing ? (
+                    <form onSubmit={handleCreateInspectionReport} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                      <h4 className="font-bold text-slate-950">Optional roof report draft</h4>
+                      <p className="text-sm text-slate-500">
+                        Use this only for homeowner, HOA, property-manager, insurance,
+                        or commercial documentation. Only customer-visible findings
+                        marked for report and customer-visible photos are included.
+                      </p>
+                      <select name="report_type" defaultValue="roof_report" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                        {inspectionOutcomes
+                          .filter((outcome) =>
+                            [
+                              "roof_report",
+                              "maintenance_report",
+                              "insurance_hoa_documentation",
+                            ].includes(outcome.value),
+                          )
+                          .map((outcome) => (
+                            <option key={outcome.value} value={outcome.value}>
+                              {outcome.label}
+                            </option>
+                          ))}
+                      </select>
+                      <input
+                        name="report_title"
+                        defaultValue={`Inspection Report - ${selectedInspection.title}`}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                      <textarea
+                        name="report_summary"
+                        className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Customer-visible executive summary"
+                      />
+                      <div className="grid gap-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                        <p className="font-semibold text-slate-950">Report-ready content</p>
+                        <p>
+                          Findings selected:{" "}
+                          {
+                            selectedInspection.findings.filter(
+                              (finding) =>
+                                finding.customer_visible && finding.include_in_report,
+                            ).length
+                          }
+                        </p>
+                        <p>
+                          Customer-visible photos:{" "}
+                          {
+                            selectedInspectionPhotos.filter(
+                              (photo) => photo.is_customer_visible,
+                            ).length
+                          }
+                        </p>
+                        <p>Internal notes are not included automatically.</p>
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={savingAction !== null}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <FileText className="h-4 w-4" />
+                        Create report draft
+                      </button>
+                    </form>
+                  ) : (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                      <p className="font-bold text-orange-950">Painting inspection path</p>
+                      <p className="mt-1 text-sm text-orange-800">
+                        IHC painting inspections stay lightweight: capture conditions,
+                        measurements, colors, and prep notes, then create the estimate.
+                        Formal roof reports are not part of the standard painting workflow.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ProfileStat label="Estimate" value={selectedEstimate?.title ?? "Not created"} />
+                    <ProfileStat label="Report document" value={selectedReport?.title ?? "Not created"} />
+                  </div>
+                </div>
+              ) : null}
+
+              {workspaceTab === "activity" ? (
+                <div className="grid gap-3 p-5">
+                  {selectedInspection.activity.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-slate-200 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-950">{item.label}</p>
+                          <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
+                        </div>
+                        <span className="text-xs font-semibold uppercase text-slate-400">
+                          {item.visibility.replace("_", " ")}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500">
+                        {formatDateTime(item.occurred_at)}
+                      </p>
+                    </div>
+                  ))}
+                  {!selectedInspection.activity.length ? (
+                    <EmptyState label="No inspection activity yet." />
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
 function CalendarView({
   client,
   snapshot,
@@ -11899,18 +14175,23 @@ function PhotosView({
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
   const [relationFilter, setRelationFilter] = useState<
-    "all" | "job" | "customer" | "estimate" | "unassigned"
+    "all" | "job" | "customer" | "estimate" | "inspection" | "unassigned"
   >("all");
   const filteredPhotos = snapshot.jobPhotos.filter((photo) => {
     const job = snapshot.jobs.find((item) => item.id === photo.job_id);
     const customer = snapshot.customers.find((item) => item.id === photo.customer_id);
     const estimate = snapshot.estimates.find((item) => item.id === photo.estimate_id);
+    const inspection = snapshot.inspections.find(
+      (item) => item.id === photo.inspection_id,
+    );
     const query = search.toLowerCase();
     const targetLabel = [
       photo.caption,
+      photo.label,
       job?.title,
       customer?.display_name,
       estimate?.title,
+      inspection?.title,
       photo.file_path,
     ]
       .filter(Boolean)
@@ -11924,10 +14205,12 @@ function PhotosView({
       (relationFilter === "job" && Boolean(photo.job_id)) ||
       (relationFilter === "customer" && Boolean(photo.customer_id)) ||
       (relationFilter === "estimate" && Boolean(photo.estimate_id)) ||
+      (relationFilter === "inspection" && Boolean(photo.inspection_id)) ||
       (relationFilter === "unassigned" &&
         !photo.job_id &&
         !photo.customer_id &&
-        !photo.estimate_id);
+        !photo.estimate_id &&
+        !photo.inspection_id);
 
     return matchesSearch && matchesCompany && matchesRelation;
   });
@@ -11942,6 +14225,7 @@ function PhotosView({
     jobLinked: snapshot.jobPhotos.filter((photo) => photo.job_id).length,
     customerLinked: snapshot.jobPhotos.filter((photo) => photo.customer_id).length,
     estimateLinked: snapshot.jobPhotos.filter((photo) => photo.estimate_id).length,
+    inspectionLinked: snapshot.jobPhotos.filter((photo) => photo.inspection_id).length,
   };
 
   useEffect(() => {
@@ -11966,8 +14250,12 @@ function PhotosView({
     const estimate = photo.estimate_id
       ? snapshot.estimates.find((item) => item.id === photo.estimate_id)
       : null;
+    const inspection = photo.inspection_id
+      ? snapshot.inspections.find((item) => item.id === photo.inspection_id)
+      : null;
 
     return (
+      inspection?.title ??
       job?.title ??
       customer?.display_name ??
       estimate?.title ??
@@ -12002,6 +14290,8 @@ function PhotosView({
           customer_id: getOptionalRelation(formData, "customer_id"),
           job_id: getOptionalRelation(formData, "job_id"),
           estimate_id: getOptionalRelation(formData, "estimate_id"),
+          inspection_id: getOptionalRelation(formData, "inspection_id"),
+          label: getOptionalFormString(formData, "label"),
           caption: getOptionalFormString(formData, "caption"),
           taken_at: getOptionalFormString(formData, "taken_at"),
         },
@@ -12029,11 +14319,12 @@ function PhotosView({
                 Upload, search, and organize job, estimate, and customer photos.
               </p>
             </div>
-            <div className="grid gap-2 sm:grid-cols-4 lg:min-w-[520px]">
+            <div className="grid gap-2 sm:grid-cols-5 lg:min-w-[620px]">
               <ProfileStat label="Total" value={photoStats.total} />
               <ProfileStat label="Jobs" value={photoStats.jobLinked} />
               <ProfileStat label="Customers" value={photoStats.customerLinked} />
               <ProfileStat label="Estimates" value={photoStats.estimateLinked} />
+              <ProfileStat label="Inspections" value={photoStats.inspectionLinked} />
             </div>
           </div>
           <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_190px_190px]">
@@ -12067,6 +14358,7 @@ function PhotosView({
                     | "job"
                     | "customer"
                     | "estimate"
+                    | "inspection"
                     | "unassigned",
                 )
               }
@@ -12076,6 +14368,7 @@ function PhotosView({
               <option value="job">Linked to jobs</option>
               <option value="customer">Linked to customers</option>
               <option value="estimate">Linked to estimates</option>
+              <option value="inspection">Linked to inspections</option>
               <option value="unassigned">Unassigned</option>
             </select>
           </div>
@@ -12232,6 +14525,22 @@ function PhotosView({
               </option>
             ))}
           </select>
+          <select
+            name="inspection_id"
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="none">No inspection</option>
+            {snapshot.inspections.map((inspection) => (
+              <option key={inspection.id} value={inspection.id}>
+                {inspection.title}
+              </option>
+            ))}
+          </select>
+          <input
+            name="label"
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Label"
+          />
           <input
             name="caption"
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -14331,7 +16640,7 @@ function EmployeePortalView({
               </select>
               <input required name="title" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Inspection title" />
               <select name="status" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
-                {inspectionStatuses.map((status) => (
+                {legacyJobInspectionStatuses.map((status) => (
                   <option key={status.value} value={status.value}>{status.label}</option>
                 ))}
               </select>

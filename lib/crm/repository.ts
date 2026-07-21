@@ -143,6 +143,15 @@ type LegacyLeadRecord = Partial<LeadRecord> & {
   service_needed?: string | null;
 };
 
+type LegacyInspectionRecord = Partial<InspectionRecord> & {
+  job_id?: string | null;
+  checklist?: string | null;
+  findings?: unknown;
+  measurements?: unknown;
+  photo_ids?: unknown;
+  activity?: unknown;
+};
+
 function getLegacyLeadString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -301,6 +310,69 @@ function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
       created_by: lead.created_by ?? null,
       created_at: createdAt,
       updated_at: getLegacyLeadString(lead.updated_at) ?? createdAt,
+    };
+  });
+}
+
+function normalizeJsonArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value as T[] : [];
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function normalizeInspectionRows(inspections: InspectionRecord[]): InspectionRecord[] {
+  return inspections.map((row) => {
+    const inspection = row as LegacyInspectionRecord;
+    const createdAt = getLegacyLeadString(inspection.created_at) ?? new Date().toISOString();
+    const checklist = getLegacyLeadString(inspection.checklist) ?? "Site inspection";
+
+    return {
+      ...row,
+      company_id: getLegacyLeadString(inspection.company_id) ?? "",
+      employee_id: inspection.employee_id ?? null,
+      customer_id: inspection.customer_id ?? null,
+      lead_id: inspection.lead_id ?? null,
+      job_id: inspection.job_id ?? null,
+      schedule_event_id: inspection.schedule_event_id ?? null,
+      estimate_id: inspection.estimate_id ?? null,
+      report_document_id: inspection.report_document_id ?? null,
+      title: getLegacyLeadString(inspection.title) ?? "Site inspection",
+      status: inspection.status ?? "draft",
+      inspection_type: inspection.inspection_type ?? "site_inspection",
+      service_category: inspection.service_category ?? "roofing",
+      checklist,
+      scheduled_start: getLegacyLeadString(inspection.scheduled_start),
+      scheduled_end: getLegacyLeadString(inspection.scheduled_end),
+      assigned_inspector: getLegacyLeadString(inspection.assigned_inspector),
+      property_address: getLegacyLeadString(inspection.property_address),
+      priority: inspection.priority ?? "normal",
+      purpose: getLegacyLeadString(inspection.purpose),
+      completed_at: getLegacyLeadString(inspection.completed_at),
+      notes: getLegacyLeadString(inspection.notes),
+      internal_notes:
+        getLegacyLeadString(inspection.internal_notes) ??
+        getLegacyLeadString(inspection.notes),
+      outcome: inspection.outcome ?? null,
+      report_requested: Boolean(inspection.report_requested),
+      report_created_at: getLegacyLeadString(inspection.report_created_at),
+      findings: normalizeJsonArray<InspectionRecord["findings"][number]>(
+        inspection.findings,
+      ),
+      measurements: normalizeJsonArray<InspectionRecord["measurements"][number]>(
+        inspection.measurements,
+      ),
+      photo_ids: normalizeStringArray(inspection.photo_ids),
+      activity: normalizeJsonArray<InspectionRecord["activity"][number]>(
+        inspection.activity,
+      ),
+      created_at: createdAt,
+      updated_at: getLegacyLeadString(inspection.updated_at) ?? createdAt,
     };
   });
 }
@@ -553,7 +625,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     employees: requireRows("employees", employees),
     jobAssignments: requireRows("job_assignments", jobAssignments),
     timeEntries: requireRows("time_entries", timeEntries),
-    inspections: requireRows("inspections", inspections),
+    inspections: normalizeInspectionRows(requireRows("inspections", inspections)),
     dailyLogs: requireRows("daily_logs", dailyLogs),
     changeOrders: requireRows("change_orders", changeOrders),
     signatures: requireRows("signatures", signatures),
@@ -1201,7 +1273,12 @@ export async function createJobPhoto(
     throw new Error("Choose a photo to upload.");
   }
 
-  const relationId = input.job_id ?? input.customer_id ?? input.estimate_id ?? "general";
+  const relationId =
+    input.inspection_id ??
+    input.job_id ??
+    input.customer_id ??
+    input.estimate_id ??
+    "general";
   const filePath = `${relationId}/${crypto.randomUUID()}-${safeStorageName(file.name)}`;
   const { error: uploadError } = await client.storage
     .from("job-photos")
@@ -1215,18 +1292,39 @@ export async function createJobPhoto(
   }
 
   const { data: publicUrl } = client.storage.from("job-photos").getPublicUrl(filePath);
+  const photoPayload: JobPhotoInput & {
+    file_path: string;
+    file_url: string;
+  } = {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    job_id: input.job_id ?? null,
+    estimate_id: input.estimate_id ?? null,
+    caption: input.caption ?? null,
+    taken_at: input.taken_at ?? null,
+    file_path: filePath,
+    file_url: publicUrl.publicUrl,
+  };
+
+  if (input.inspection_id) {
+    photoPayload.inspection_id = input.inspection_id;
+
+    if (input.label) {
+      photoPayload.label = input.label;
+    }
+
+    if (typeof input.is_customer_visible === "boolean") {
+      photoPayload.is_customer_visible = input.is_customer_visible;
+    }
+
+    if (typeof input.sort_order === "number") {
+      photoPayload.sort_order = input.sort_order;
+    }
+  }
+
   const { data, error } = await client
     .from("job_photos")
-    .insert({
-      ...input,
-      customer_id: input.customer_id ?? null,
-      job_id: input.job_id ?? null,
-      estimate_id: input.estimate_id ?? null,
-      caption: input.caption ?? null,
-      taken_at: input.taken_at ?? null,
-      file_path: filePath,
-      file_url: publicUrl.publicUrl,
-    })
+    .insert(photoPayload)
     .select("*")
     .single();
 
@@ -1560,11 +1658,9 @@ export async function updateTimeEntry(
 }
 
 export async function createInspection(client: CrmClient, input: InspectionInput) {
-  
-
   const { data, error } = await client
     .from("inspections")
-    .insert(input)
+    .insert(buildInspectionPayload(input))
     .select("*")
     .single();
 
@@ -1572,7 +1668,85 @@ export async function createInspection(client: CrmClient, input: InspectionInput
     throw error;
   }
 
-  return data;
+  return normalizeInspectionRows([data])[0];
+}
+
+function buildInspectionPayload(input: InspectionInput) {
+  const payload: InspectionInput = {
+    company_id: input.company_id,
+    employee_id: input.employee_id ?? null,
+    job_id: input.job_id ?? null,
+    title: input.title,
+    status: input.status,
+    checklist: input.checklist,
+    completed_at: input.completed_at ?? null,
+    notes: input.notes ?? null,
+  };
+
+  if ("customer_id" in input) payload.customer_id = input.customer_id ?? null;
+  if ("lead_id" in input) payload.lead_id = input.lead_id ?? null;
+  if ("schedule_event_id" in input) {
+    payload.schedule_event_id = input.schedule_event_id ?? null;
+  }
+  if ("estimate_id" in input) payload.estimate_id = input.estimate_id ?? null;
+  if ("report_document_id" in input) {
+    payload.report_document_id = input.report_document_id ?? null;
+  }
+  if ("inspection_type" in input) {
+    payload.inspection_type = input.inspection_type ?? "site_inspection";
+  }
+  if ("service_category" in input) {
+    payload.service_category = input.service_category ?? "roofing";
+  }
+  if ("scheduled_start" in input) {
+    payload.scheduled_start = input.scheduled_start ?? null;
+  }
+  if ("scheduled_end" in input) {
+    payload.scheduled_end = input.scheduled_end ?? null;
+  }
+  if ("assigned_inspector" in input) {
+    payload.assigned_inspector = input.assigned_inspector ?? null;
+  }
+  if ("property_address" in input) {
+    payload.property_address = input.property_address ?? null;
+  }
+  if ("priority" in input) payload.priority = input.priority ?? "normal";
+  if ("purpose" in input) payload.purpose = input.purpose ?? null;
+  if ("internal_notes" in input) {
+    payload.internal_notes = input.internal_notes ?? input.notes ?? null;
+  }
+  if ("outcome" in input) payload.outcome = input.outcome ?? null;
+  if ("report_requested" in input) {
+    payload.report_requested = input.report_requested ?? false;
+  }
+  if ("report_created_at" in input) {
+    payload.report_created_at = input.report_created_at ?? null;
+  }
+  if ("findings" in input) payload.findings = input.findings ?? [];
+  if ("measurements" in input) payload.measurements = input.measurements ?? [];
+  if ("photo_ids" in input) payload.photo_ids = input.photo_ids ?? [];
+  if ("activity" in input) payload.activity = input.activity ?? [];
+
+  return payload;
+}
+
+export async function updateInspection(
+  client: CrmClient,
+  id: string,
+  input: Partial<InspectionInput>,
+) {
+  const { data, error } = await client
+    .from("inspections")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return normalizeInspectionRows([data])[0];
 }
 
 export async function createDailyLog(client: CrmClient, input: DailyLogInput) {

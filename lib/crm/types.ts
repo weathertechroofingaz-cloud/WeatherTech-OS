@@ -100,7 +100,46 @@ export type EmployeeRole =
   | "technician";
 export type AssignmentStatus = "assigned" | "accepted" | "completed" | "missed";
 export type TimeEntryStatus = "clocked_in" | "submitted" | "approved";
-export type InspectionStatus = "pending" | "passed" | "failed" | "needs_review";
+export type InspectionStatus =
+  | "draft"
+  | "scheduled"
+  | "in_progress"
+  | "completed"
+  | "follow_up_required"
+  | "no_work_needed"
+  | "canceled"
+  | "pending"
+  | "passed"
+  | "failed"
+  | "needs_review";
+export type InspectionType =
+  | "site_inspection"
+  | "roof_inspection"
+  | "roof_repair"
+  | "maintenance"
+  | "insurance_hoa"
+  | "painting_exterior"
+  | "painting_interior"
+  | "cabinet_refinishing"
+  | "follow_up";
+export type InspectionServiceCategory =
+  | "roofing"
+  | "roof_repair"
+  | "tile_underlayment"
+  | "exterior_painting"
+  | "interior_painting"
+  | "cabinet_refinishing"
+  | "general_exterior";
+export type InspectionOutcome =
+  | "estimate_only"
+  | "roof_report"
+  | "maintenance_report"
+  | "insurance_hoa_documentation"
+  | "schedule_follow_up"
+  | "no_work_needed"
+  | "internal_only"
+  | "save_and_close";
+export type InspectionSeverity = "low" | "moderate" | "high" | "urgent";
 export type ChangeOrderStatus = "draft" | "sent" | "approved" | "rejected";
 export type SignatureStatus = "pending" | "signed" | "declined";
 export type DocumentCategory =
@@ -401,10 +440,14 @@ export type JobPhotoRecord = {
   customer_id: string | null;
   job_id: string | null;
   estimate_id: string | null;
+  inspection_id: string | null;
   caption: string | null;
+  label: string | null;
   file_path: string;
   file_url: string;
   taken_at: string | null;
+  is_customer_visible: boolean;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 };
@@ -517,14 +560,70 @@ export type InspectionRecord = {
   id: string;
   company_id: string;
   employee_id: string | null;
-  job_id: string;
+  customer_id: string | null;
+  lead_id: string | null;
+  job_id: string | null;
+  schedule_event_id: string | null;
+  estimate_id: string | null;
+  report_document_id: string | null;
   title: string;
   status: InspectionStatus;
+  inspection_type: InspectionType;
+  service_category: InspectionServiceCategory;
   checklist: string;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  assigned_inspector: string | null;
+  property_address: string | null;
+  priority: LeadPriority;
+  purpose: string | null;
   completed_at: string | null;
   notes: string | null;
+  internal_notes: string | null;
+  outcome: InspectionOutcome | null;
+  report_requested: boolean;
+  report_created_at: string | null;
+  findings: InspectionFinding[];
+  measurements: InspectionMeasurement[];
+  photo_ids: string[];
+  activity: InspectionActivityItem[];
   created_at: string;
   updated_at: string;
+};
+
+export type InspectionFinding = {
+  id: string;
+  area: string;
+  category: string;
+  observation: string;
+  severity: InspectionSeverity;
+  priority: LeadPriority;
+  recommendation: string;
+  related_photo_id?: string | null;
+  customer_visible: boolean;
+  action_required: boolean;
+  include_in_estimate: boolean;
+  include_in_report: boolean;
+  estimated_remaining_life?: string | null;
+  created_at: string;
+};
+
+export type InspectionMeasurement = {
+  id: string;
+  label: string;
+  value: string;
+  unit: string;
+  notes?: string | null;
+  include_in_estimate: boolean;
+  created_at: string;
+};
+
+export type InspectionActivityItem = {
+  id: string;
+  label: string;
+  detail: string;
+  occurred_at: string;
+  visibility: "internal" | "customer_visible" | "system";
 };
 
 export type DailyLogRecord = {
@@ -964,8 +1063,12 @@ export type JobPhotoInput = {
   customer_id?: string | null;
   job_id?: string | null;
   estimate_id?: string | null;
+  inspection_id?: string | null;
   caption?: string | null;
+  label?: string | null;
   taken_at?: string | null;
+  is_customer_visible?: boolean;
+  sort_order?: number;
 };
 
 export type InvoiceLineItemInput = {
@@ -1047,12 +1150,33 @@ export type TimeEntryInput = {
 export type InspectionInput = {
   company_id: string;
   employee_id?: string | null;
-  job_id: string;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  schedule_event_id?: string | null;
+  estimate_id?: string | null;
+  report_document_id?: string | null;
   title: string;
   status?: InspectionStatus;
+  inspection_type?: InspectionType;
+  service_category?: InspectionServiceCategory;
   checklist: string;
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  assigned_inspector?: string | null;
+  property_address?: string | null;
+  priority?: LeadPriority;
+  purpose?: string | null;
   completed_at?: string | null;
   notes?: string | null;
+  internal_notes?: string | null;
+  outcome?: InspectionOutcome | null;
+  report_requested?: boolean;
+  report_created_at?: string | null;
+  findings?: InspectionFinding[];
+  measurements?: InspectionMeasurement[];
+  photo_ids?: string[];
+  activity?: InspectionActivityItem[];
 };
 
 export type DailyLogInput = {

@@ -16,6 +16,7 @@ const DEFAULT_GROUPS = [
   "lead-intake",
   "themes",
   "layout",
+  "inspections",
   "jobs-workspace",
   "job-builder",
   "job-production",
@@ -204,6 +205,34 @@ async function findCompanies(env) {
   return { weatherTech, ihc };
 }
 
+async function detectInspectionFoundationSupport(env) {
+  try {
+    await restRequest(
+      env,
+      [
+        "inspections?select=",
+        encodeURIComponent(
+          "id,customer_id,lead_id,schedule_event_id,estimate_id,report_document_id,inspection_type,service_category,scheduled_start,scheduled_end,findings,measurements,photo_ids,activity",
+        ),
+        "&limit=1",
+      ].join(""),
+    );
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (
+      message.includes("does not exist") ||
+      message.includes("schema cache") ||
+      message.includes("Could not find")
+    ) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const resolvedLeadNameColumn = leadNameColumn ?? await detectLeadNameColumn(env);
   const prefixFilter = encodeURIComponent(`${TEST_PREFIX}%`);
@@ -214,6 +243,10 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const estimates = await restRequest(
     env,
     `estimates?select=id,title&title=like.${prefixFilter}`,
+  );
+  const inspections = await restRequest(
+    env,
+    `inspections?select=id,title&title=like.${prefixFilter}`,
   );
   const leads = await restRequest(
     env,
@@ -229,6 +262,9 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const scopedEstimates = runId
     ? estimates.filter((estimate) => estimate.title.includes(runId))
     : estimates;
+  const scopedInspections = runId
+    ? inspections.filter((inspection) => inspection.title.includes(runId))
+    : inspections;
   const scopedLeads = runId
     ? leads.filter((lead) => String(lead[resolvedLeadNameColumn] ?? "").includes(runId))
     : leads;
@@ -237,15 +273,23 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     : customers;
   const jobIds = scopedJobs.map((job) => job.id);
   const estimateIds = scopedEstimates.map((estimate) => estimate.id);
+  const inspectionIds = scopedInspections.map((inspection) => inspection.id);
   const leadIds = scopedLeads.map((lead) => lead.id);
   const customerIds = scopedCustomers.map((customer) => customer.id);
 
   await deleteByLike(env, "integration_sync_logs", "external_id");
 
-  if (!jobIds.length && !estimateIds.length && !leadIds.length && !customerIds.length) {
+  if (
+    !jobIds.length &&
+    !estimateIds.length &&
+    !inspectionIds.length &&
+    !leadIds.length &&
+    !customerIds.length
+  ) {
     return {
       jobsDeleted: 0,
       estimatesDeleted: 0,
+      inspectionsDeleted: 0,
       leadsDeleted: 0,
       customersDeleted: 0,
       integrationLogsDeleted: "requested",
@@ -255,6 +299,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   await deleteByLike(env, "schedule_events", "title");
   await deleteByLike(env, "documents", "title");
   await deleteByLike(env, "scopes", "title");
+  await deleteByIds(env, "inspections", "id", inspectionIds);
   await deleteByIds(env, "schedule_events", "job_id", jobIds);
   await deleteByIds(env, "schedule_events", "lead_id", leadIds);
   await deleteByIds(env, "job_tasks", "job_id", jobIds);
@@ -269,6 +314,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   return {
     jobsDeleted: jobIds.length,
     estimatesDeleted: estimateIds.length,
+    inspectionsDeleted: inspectionIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
     integrationLogsDeleted: "requested",
@@ -626,7 +672,7 @@ function toDateTimeLocalValue(date) {
 
 async function clickCompanyScope(tab, companyName) {
   const button = tab.playwright.locator(
-    `xpath=//button[@aria-pressed and contains(normalize-space(.), ${xpathString(companyName)})]`,
+    `xpath=//button[@aria-pressed and .//p[normalize-space(.)=${xpathString(companyName)}]]`,
   );
   await clickUnique(button, `company scope ${companyName}`);
   await tab.playwright.waitForTimeout(600);
@@ -1748,6 +1794,256 @@ async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
   };
 }
 
+async function findInspectionByTitle(env, title) {
+  const [inspection] = await restRequest(
+    env,
+    `inspections?select=*&title=eq.${encodeURIComponent(title)}&limit=1`,
+  );
+
+  return inspection ?? null;
+}
+
+async function testInspectionsWorkflow(tab, env, company, testJob, runId, progress) {
+  const migrationReady = await detectInspectionFoundationSupport(env);
+  const inspectionTitle = `${TEST_PREFIX} ${runId} INSPECTION`;
+  const estimateTitle = `${TEST_PREFIX} ${runId} INSPECTION ESTIMATE`;
+  const reportTitle = `${TEST_PREFIX} ${runId} INSPECTION REPORT`;
+  const internalOnlyNote = `${TEST_PREFIX} ${runId} INTERNAL ONLY NOTE`;
+  const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  start.setMinutes(0, 0, 0);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+  progress("inspections:open:start");
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await clickNav(tab, "Inspections");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Schedule site visits") &&
+      document.body.innerText.includes("Estimate Only"),
+    "inspections screen",
+  );
+  progress("inspections:open:done");
+
+  await clickUnique(tab.playwright.getByRole("button", { name: "New inspection" }), "New inspection");
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//input[@name="title"]'),
+    inspectionTitle,
+    "inspection title",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//aside//form//button[@type="submit"]'),
+    "Create inspection validation",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Choose a lead, customer, job, or calendar event"),
+    "inspection relation validation",
+  );
+
+  if (!migrationReady) {
+    return {
+      migrationReady,
+      verified: "UI and validation verified; live persistence waits for migration 0019.",
+    };
+  }
+
+  progress("inspections:create:start");
+  await selectUnique(
+    tab.playwright.locator('xpath=//aside//form//select[@name="company_id"]'),
+    company.id,
+    "inspection company",
+  );
+  await selectUnique(
+    tab.playwright.locator('xpath=//aside//form//select[@name="job_id"]'),
+    testJob.id,
+    "inspection job",
+  );
+  await selectUnique(
+    tab.playwright.locator('xpath=//aside//form//select[@name="inspection_type"]'),
+    "roof_inspection",
+    "inspection type",
+  );
+  await selectUnique(
+    tab.playwright.locator('xpath=//aside//form//select[@name="service_category"]'),
+    "roofing",
+    "inspection service category",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//input[@name="scheduled_start"]'),
+    toDateTimeLocalValue(start),
+    "inspection scheduled start",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//input[@name="scheduled_end"]'),
+    toDateTimeLocalValue(end),
+    "inspection scheduled end",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//input[@name="assigned_inspector"]'),
+    `${TEST_PREFIX} ${runId} Inspector`,
+    "inspection inspector",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//textarea[@name="purpose"]'),
+    "TEST roof condition documentation for estimate review.",
+    "inspection purpose",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//aside//form//textarea[@name="notes"]'),
+    internalOnlyNote,
+    "inspection internal note",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//aside//form//button[@type="submit"]'),
+    "Create inspection",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title),
+    `inspection ${inspectionTitle}`,
+    15000,
+    inspectionTitle,
+  );
+  const savedInspection = await waitForAsync(
+    () => findInspectionByTitle(env, inspectionTitle),
+    `Supabase inspection ${inspectionTitle}`,
+    15000,
+  );
+
+  if (savedInspection.status !== "scheduled") {
+    throw new Error(`Created inspection status was ${savedInspection.status}.`);
+  }
+
+  if (!savedInspection.schedule_event_id) {
+    throw new Error("Created inspection did not link to a schedule event.");
+  }
+  progress("inspections:create:done");
+
+  progress("inspections:filters:start");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inspections-search"]'),
+    inspectionTitle,
+    "inspections search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="inspections-status-filter"]'),
+    "scheduled",
+    "inspections status filter",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title),
+    `filtered inspection ${inspectionTitle}`,
+    10000,
+    inspectionTitle,
+  );
+  progress("inspections:filters:done");
+
+  progress("inspections:finding:start");
+  await clickUnique(tab.playwright.getByRole("button", { name: "Field mode" }), "Field mode");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Quick capture") &&
+      document.body.innerText.includes("Estimate-ready by default"),
+    "inspection quick capture panel",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="area"]'),
+    "South roof slope",
+    "finding area",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//textarea[@name="observation"]'),
+    "TEST cracked tile observed by inspector.",
+    "finding observation",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//textarea[@name="recommendation"]'),
+    "Replace cracked tile and review surrounding underlayment before estimate is sent.",
+    "finding recommendation",
+  );
+  for (const name of ["action_required", "include_in_estimate", "customer_visible", "include_in_report"]) {
+    await tab.playwright.locator(`xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="${name}"]`).check();
+  }
+  await clickUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//button[@type="submit"]'),
+    "Add finding",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("TEST cracked tile observed by inspector."),
+    "inspection finding rendered",
+    15000,
+  );
+  const inspectionWithFinding = await findInspectionByTitle(env, inspectionTitle);
+
+  if (!Array.isArray(inspectionWithFinding.findings) || inspectionWithFinding.findings.length < 1) {
+    throw new Error("Inspection finding did not persist.");
+  }
+  progress("inspections:finding:done");
+
+  progress("inspections:estimate:start");
+  await clickUnique(tab.playwright.getByRole("button", { name: "Estimate / report" }), "Estimate / report");
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//input[@name="estimate_title"]'),
+    estimateTitle,
+    "inspection estimate title",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//button[@type="submit"]'),
+    "Create estimate draft",
+  );
+  await waitForAsync(
+    () =>
+      restRequest(env, `estimates?select=id,title&title=eq.${encodeURIComponent(estimateTitle)}&limit=1`)
+        .then((rows) => rows[0]),
+    `inspection estimate ${estimateTitle}`,
+    15000,
+  );
+  progress("inspections:estimate:done");
+
+  progress("inspections:report:start");
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Optional roof report draft"]]//input[@name="report_title"]'),
+    reportTitle,
+    "inspection report title",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Optional roof report draft"]]//textarea[@name="report_summary"]'),
+    "Customer-visible TEST report summary.",
+    "inspection report summary",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Optional roof report draft"]]//button[@type="submit"]'),
+    "Create report draft",
+  );
+  const report = await waitForAsync(
+    () =>
+      restRequest(env, `documents?select=id,title,body&title=eq.${encodeURIComponent(reportTitle)}&limit=1`)
+        .then((rows) => rows[0]),
+    `inspection report ${reportTitle}`,
+    15000,
+  );
+
+  if (!report?.body?.includes("TEST cracked tile observed by inspector.")) {
+    throw new Error("Inspection report did not include selected customer-visible finding.");
+  }
+
+  if (report.body.includes(internalOnlyNote)) {
+    throw new Error("Inspection report included internal-only notes.");
+  }
+  progress("inspections:report:done");
+
+  return {
+    migrationReady,
+    inspectionId: savedInspection.id,
+    estimateTitle,
+    reportTitle,
+  };
+}
+
 async function runUiMutationTests(tab, testJob, runId, progress) {
   const addedTaskTitle = `${TEST_PREFIX} ${runId} ADDED TASK`;
   const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;
@@ -2234,6 +2530,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("layout")) {
       await record("Dashboard quick actions do not overlap at laptop width", () =>
         testQuickActionsDoNotOverlap(browser, tab),
+      );
+    }
+
+    if (enabledGroups.has("inspections")) {
+      await record("Inspections module opens, validates, and runs live workflow when migration is available", () =>
+        testInspectionsWorkflow(tab, env, weatherTech, seededJob, runId, progress),
       );
     }
 
