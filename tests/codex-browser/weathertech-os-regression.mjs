@@ -634,6 +634,17 @@ async function selectUnique(locator, value, label) {
   await locator.selectOption(value, { timeoutMs: 8000 });
 }
 
+async function waitForNoSavingState(tab, label) {
+  await waitFor(
+    tab,
+    () => ![...document.querySelectorAll("button")].some(
+      (button) => button.innerText.trim() === "Saving",
+    ),
+    label,
+    15000,
+  );
+}
+
 async function clickNav(tab, label) {
   await clickUnique(
     tab.playwright.locator("nav").getByRole("button", { name: label }),
@@ -1809,6 +1820,8 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   const estimateTitle = `${TEST_PREFIX} ${runId} INSPECTION ESTIMATE`;
   const reportTitle = `${TEST_PREFIX} ${runId} INSPECTION REPORT`;
   const internalOnlyNote = `${TEST_PREFIX} ${runId} INTERNAL ONLY NOTE`;
+  const fieldInternalNote = `${TEST_PREFIX} ${runId} FIELD INTERNAL NOTE`;
+  const measurementLabel = `${TEST_PREFIX} ${runId} ROOF SQUARES`;
   const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
   start.setMinutes(0, 0, 0);
   const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -1820,7 +1833,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     tab,
     () =>
       document.body.innerText.includes("Schedule site visits") &&
-      document.body.innerText.includes("Estimate Only"),
+      document.body.innerText.includes("Create site inspection"),
     "inspections screen",
   );
   progress("inspections:open:done");
@@ -1944,9 +1957,11 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   await clickUnique(tab.playwright.getByRole("button", { name: "Field mode" }), "Field mode");
   await waitFor(
     tab,
-    () =>
-      document.body.innerText.includes("Quick capture") &&
-      document.body.innerText.includes("Estimate-ready by default"),
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return text.includes("quick capture") && text.includes("estimate-ready by default");
+    },
     "inspection quick capture panel",
   );
   await fillUnique(
@@ -1984,8 +1999,71 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   }
   progress("inspections:finding:done");
 
+  progress("inspections:measurement:start");
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add measurement"]]//input[@name="label"]'),
+    measurementLabel,
+    "inspection measurement label",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add measurement"]]//input[@name="value"]'),
+    "23",
+    "inspection measurement value",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add measurement"]]//button[@type="submit"]'),
+    "Add measurement",
+  );
+  const inspectionWithMeasurement = await waitForAsync(
+    async () => {
+      const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+      return inspection?.measurements?.some((measurement) => measurement.label === measurementLabel)
+        ? inspection
+        : null;
+    },
+    "inspection measurement persistence",
+    15000,
+  );
+  progress("inspections:measurement:done");
+
+  progress("inspections:note:start");
+  await fillUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add internal note"]]//textarea[@name="note"]'),
+    fieldInternalNote,
+    "inspection internal field note",
+  );
+  await clickUnique(
+    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add internal note"]]//button[@type="submit"]'),
+    "Add internal note",
+  );
+  const inspectionWithNote = await waitForAsync(
+    async () => {
+      const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+      return inspection?.internal_notes?.includes(fieldInternalNote) ? inspection : null;
+    },
+    "inspection internal note persistence",
+    15000,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Internal note added."),
+    "inspection internal note UI acknowledgement",
+    15000,
+  );
+  await waitForNoSavingState(tab, "inspection internal note save complete");
+  progress("inspections:note:done");
+
   progress("inspections:estimate:start");
   await clickUnique(tab.playwright.getByRole("button", { name: "Estimate / report" }), "Estimate / report");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Estimate review") &&
+      document.body.innerText.includes("Optional roof report draft"),
+    "inspection estimate/report panel",
+  );
   await fillUnique(
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//input[@name="estimate_title"]'),
     estimateTitle,
@@ -2002,6 +2080,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     `inspection estimate ${estimateTitle}`,
     15000,
   );
+  await waitForNoSavingState(tab, "inspection estimate save complete");
   progress("inspections:estimate:done");
 
   progress("inspections:report:start");
@@ -2034,13 +2113,115 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   if (report.body.includes(internalOnlyNote)) {
     throw new Error("Inspection report included internal-only notes.");
   }
+
+  if (report.body.includes(fieldInternalNote)) {
+    throw new Error("Inspection report included internal field notes.");
+  }
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Inspection report draft saved to documents."),
+    "inspection report UI acknowledgement",
+    15000,
+  );
+  await waitForNoSavingState(tab, "inspection report save complete");
   progress("inspections:report:done");
+
+  progress("inspections:record-management:start");
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-cancel-button"]'),
+    "Cancel inspection",
+  );
+  const cancelConfirmation = tab.playwright.locator(
+    '[role="alertdialog"][aria-label="Cancel inspection confirmation"]',
+  );
+  await waitForUniqueLocator(cancelConfirmation, "cancel inspection confirmation");
+  const cancelConfirmationText = await cancelConfirmation.innerText({ timeoutMs: 8000 });
+
+  if (
+    !cancelConfirmationText.includes("Cancel") ||
+    !cancelConfirmationText.includes("related records stay connected")
+  ) {
+    throw new Error("Cancel inspection confirmation did not explain the action.");
+  }
+
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-confirm-cancel-button"]'),
+    "Confirm cancel inspection",
+  );
+  await waitForAsync(
+    async () => {
+      const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+      return inspection?.status === "canceled" ? inspection : null;
+    },
+    "inspection canceled persistence",
+    15000,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Inspection canceled."),
+    "inspection canceled UI acknowledgement",
+    15000,
+  );
+  await waitForNoSavingState(tab, "inspection cancel save complete");
+  await selectUnique(
+    tab.playwright.locator('[data-testid="inspections-lifecycle-filter"]'),
+    "canceled",
+    "canceled inspections filter",
+  );
+  await waitFor(
+    tab,
+    (title) => {
+      const text = document.body.innerText;
+
+      return (
+        text.includes(title) &&
+        text.toLowerCase().includes("canceled - hidden from active work")
+      );
+    },
+    "canceled inspection visible when requested",
+    10000,
+    inspectionTitle,
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-restore-button"]'),
+    "Restore inspection",
+  );
+  const restoreConfirmation = tab.playwright.locator(
+    '[role="alertdialog"][aria-label="Restore inspection confirmation"]',
+  );
+  await waitForUniqueLocator(restoreConfirmation, "restore inspection confirmation");
+  const restoreConfirmationText = await restoreConfirmation.innerText({ timeoutMs: 8000 });
+
+  if (
+    !restoreConfirmationText.includes("Restore") ||
+    !restoreConfirmationText.includes("return to active work")
+  ) {
+    throw new Error("Restore inspection confirmation did not explain the action.");
+  }
+
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
+    "Confirm restore inspection",
+  );
+  await waitForAsync(
+    async () => {
+      const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+      return inspection && inspection.status !== "canceled" ? inspection : null;
+    },
+    "inspection restored persistence",
+    15000,
+  );
+  progress("inspections:record-management:done");
 
   return {
     migrationReady,
     inspectionId: savedInspection.id,
     estimateTitle,
     reportTitle,
+    measurements: inspectionWithMeasurement.measurements.length,
+    internalNoteSaved: inspectionWithNote.internal_notes.includes(fieldInternalNote),
   };
 }
 
@@ -2456,6 +2637,7 @@ export async function runWeatherTechOsRegression({
     await ensureAppShell(tab, baseUrl, progress);
 
     if (
+      enabledGroups.has("inspections") ||
       enabledGroups.has("jobs-workspace") ||
       enabledGroups.has("job-builder") ||
       enabledGroups.has("job-production")

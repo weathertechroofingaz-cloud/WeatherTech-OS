@@ -11641,8 +11641,10 @@ type InspectionsViewProps = {
 };
 
 type InspectionDateFilter = "all" | "unscheduled" | "today" | "next_7" | "past_due";
+type InspectionLifecycleFilter = "active" | "include_canceled" | "canceled";
 type InspectionSort = "scheduled_asc" | "updated_desc" | "priority" | "status";
 type InspectionWorkspaceTab = "overview" | "field" | "report" | "activity";
+type InspectionRecordManagementAction = "cancel" | "restore";
 
 const inspectionDateFilters: { value: InspectionDateFilter; label: string }[] = [
   { value: "all", label: "All dates" },
@@ -11650,6 +11652,12 @@ const inspectionDateFilters: { value: InspectionDateFilter; label: string }[] = 
   { value: "today", label: "Today" },
   { value: "next_7", label: "Next 7 days" },
   { value: "past_due", label: "Past due" },
+];
+
+const inspectionLifecycleFilters: { value: InspectionLifecycleFilter; label: string }[] = [
+  { value: "active", label: "Active work" },
+  { value: "include_canceled", label: "Include canceled" },
+  { value: "canceled", label: "Canceled only" },
 ];
 
 const inspectionSortOptions: { value: InspectionSort; label: string }[] = [
@@ -11876,15 +11884,20 @@ function InspectionsView({
     InspectionServiceCategory | "all"
   >("all");
   const [dateFilter, setDateFilter] = useState<InspectionDateFilter>("all");
+  const [lifecycleFilter, setLifecycleFilter] =
+    useState<InspectionLifecycleFilter>("active");
   const [reportFilter, setReportFilter] = useState<
     "all" | "requested" | "created" | "not_required"
   >("all");
   const [sortBy, setSortBy] = useState<InspectionSort>("scheduled_asc");
   const [workspaceTab, setWorkspaceTab] = useState<InspectionWorkspaceTab>("overview");
   const [savingAction, setSavingAction] = useState<string | null>(null);
+  const [recordManagementAction, setRecordManagementAction] =
+    useState<InspectionRecordManagementAction | null>(null);
   const selectedInspection =
     snapshot.inspections.find((inspection) => inspection.id === selectedInspectionId) ??
     null;
+  const selectedInspectionIsCanceled = selectedInspection?.status === "canceled";
   const selectedCompany = selectedInspection
     ? companyMap.get(selectedInspection.company_id) ?? null
     : null;
@@ -11926,10 +11939,11 @@ function InspectionsView({
   ).sort((a, b) => a.localeCompare(b));
   const inspectionStats = {
     total: snapshot.inspections.length,
+    active: snapshot.inspections.filter((inspection) => inspection.status !== "canceled").length,
     scheduled: snapshot.inspections.filter((inspection) => inspection.status === "scheduled").length,
     inProgress: snapshot.inspections.filter((inspection) => inspection.status === "in_progress").length,
     completed: snapshot.inspections.filter((inspection) => inspection.status === "completed").length,
-    reports: snapshot.inspections.filter((inspection) => inspection.report_document_id).length,
+    canceled: snapshot.inspections.filter((inspection) => inspection.status === "canceled").length,
   };
   const filteredInspections = snapshot.inspections
     .filter((inspection) => {
@@ -11989,6 +12003,11 @@ function InspectionsView({
         (reportFilter === "not_required" &&
           !inspection.report_requested &&
           !inspection.report_document_id);
+      const matchesLifecycle =
+        lifecycleFilter === "include_canceled" ||
+        (lifecycleFilter === "canceled"
+          ? inspection.status === "canceled"
+          : inspection.status !== "canceled");
 
       return (
         (!query || searchableText.includes(query)) &&
@@ -11997,6 +12016,7 @@ function InspectionsView({
         (typeFilter === "all" || inspection.inspection_type === typeFilter) &&
         (serviceFilter === "all" || inspection.service_category === serviceFilter) &&
         matchesDate &&
+        matchesLifecycle &&
         matchesReport
       );
     })
@@ -12045,6 +12065,7 @@ function InspectionsView({
     updateUiPreservingScrollPosition(() => {
       setSelectedInspectionId(inspectionId);
       setWorkspaceTab("overview");
+      setRecordManagementAction(null);
     });
   };
 
@@ -12189,8 +12210,8 @@ function InspectionsView({
       }
 
       form.reset();
-      setSelectedInspectionId(savedInspection.id);
       await onReload();
+      setSelectedInspectionId(savedInspection.id);
       onNotice(scheduleEventId ? "Inspection scheduled." : "Inspection draft saved.");
     } catch (currentError) {
       logCaughtError("[CRM] Unable to create inspection", currentError);
@@ -12219,15 +12240,42 @@ function InspectionsView({
       selectedInspection.status,
     ) as InspectionStatus;
     const outcome = getOptionalRelation(formData, "outcome") as InspectionOutcome | null;
+    const scheduledStartInput = getFormString(formData, "scheduled_start");
+    const scheduledEndInput = getFormString(formData, "scheduled_end");
+
+    if ((scheduledStartInput && !scheduledEndInput) || (!scheduledStartInput && scheduledEndInput)) {
+      onError("Enter both scheduled start and scheduled end, or leave both blank.");
+      return;
+    }
+
+    const scheduledStart = scheduledStartInput
+      ? fromDateTimeInputValue(scheduledStartInput)
+      : null;
+    const scheduledEnd = scheduledEndInput ? fromDateTimeInputValue(scheduledEndInput) : null;
+
+    if (
+      scheduledStart &&
+      scheduledEnd &&
+      new Date(scheduledEnd).getTime() <= new Date(scheduledStart).getTime()
+    ) {
+      onError("Scheduled end must be after scheduled start.");
+      return;
+    }
 
     try {
       setSavingAction("update-inspection");
       await updateInspection(client, selectedInspection.id, {
+        title: getFormString(formData, "title", selectedInspection.title),
         status,
         outcome,
         report_requested: selectedInspectionIsRoofing
           ? formData.get("report_requested") === "on"
           : selectedInspection.report_requested,
+        scheduled_start: scheduledStart,
+        scheduled_end: scheduledEnd,
+        assigned_inspector: getOptionalFormString(formData, "assigned_inspector"),
+        property_address: getOptionalFormString(formData, "property_address"),
+        priority: getFormString(formData, "priority", selectedInspection.priority) as LeadPriority,
         purpose: getOptionalFormString(formData, "purpose"),
         internal_notes: getOptionalFormString(formData, "internal_notes"),
         completed_at:
@@ -12243,6 +12291,7 @@ function InspectionsView({
       await onReload();
       onNotice("Inspection updated.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to update inspection", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to update inspection."));
     } finally {
       setSavingAction(null);
@@ -12276,7 +12325,66 @@ function InspectionsView({
       await onReload();
       onNotice(`Inspection marked ${inspectionStatusLabel(status)}.`);
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to update inspection status", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to update inspection status."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleCancelInspection = async () => {
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    try {
+      setSavingAction("cancel-inspection");
+      await updateInspection(client, selectedInspection.id, {
+        status: "canceled",
+        activity: appendActivity(
+          selectedInspection,
+          "Inspection canceled",
+          "Moved out of active inspection work while preserving linked records.",
+        ),
+      });
+      setRecordManagementAction(null);
+      await onReload();
+      onNotice("Inspection canceled.");
+    } catch (currentError) {
+      logCaughtError("[CRM] Unable to cancel inspection", currentError);
+      onError(getCaughtErrorMessage(currentError, "Unable to cancel inspection."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleRestoreInspection = async () => {
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    const restoredStatus: InspectionStatus = selectedInspection.scheduled_start
+      ? "scheduled"
+      : "draft";
+
+    try {
+      setSavingAction("restore-inspection");
+      await updateInspection(client, selectedInspection.id, {
+        status: restoredStatus,
+        completed_at: null,
+        activity: appendActivity(
+          selectedInspection,
+          "Inspection restored",
+          `Returned to ${inspectionStatusLabel(restoredStatus).toLowerCase()} work.`,
+        ),
+      });
+      setRecordManagementAction(null);
+      setLifecycleFilter("include_canceled");
+      await onReload();
+      onNotice("Inspection restored.");
+    } catch (currentError) {
+      logCaughtError("[CRM] Unable to restore inspection", currentError);
+      onError(getCaughtErrorMessage(currentError, "Unable to restore inspection."));
     } finally {
       setSavingAction(null);
     }
@@ -12286,6 +12394,11 @@ function InspectionsView({
     event.preventDefault();
 
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before adding field work.");
       return;
     }
 
@@ -12332,6 +12445,7 @@ function InspectionsView({
       await onReload();
       onNotice("Finding added.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to add inspection finding", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to add finding."));
     } finally {
       setSavingAction(null);
@@ -12340,6 +12454,11 @@ function InspectionsView({
 
   const handleQuickFinding = async (template: InspectionQuickFindingTemplate) => {
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before adding field work.");
       return;
     }
 
@@ -12374,6 +12493,7 @@ function InspectionsView({
       await onReload();
       onNotice("Finding added.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to add quick inspection finding", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to add finding."));
     } finally {
       setSavingAction(null);
@@ -12384,6 +12504,11 @@ function InspectionsView({
     event.preventDefault();
 
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before adding field work.");
       return;
     }
 
@@ -12422,7 +12547,56 @@ function InspectionsView({
       await onReload();
       onNotice("Measurement added.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to add inspection measurement", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to add measurement."));
+    } finally {
+      setSavingAction(null);
+    }
+  };
+
+  const handleAddInspectionNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before adding field notes.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const note = getFormString(formData, "note");
+
+    if (!note) {
+      onError("Add an internal note before saving.");
+      return;
+    }
+
+    const datedNote = `${formatDateTime(new Date().toISOString())}: ${note}`;
+    const nextInternalNotes = [selectedInspection.internal_notes, datedNote]
+      .filter(Boolean)
+      .join("\n\n");
+
+    try {
+      setSavingAction("add-inspection-note");
+      await updateInspection(client, selectedInspection.id, {
+        internal_notes: nextInternalNotes,
+        activity: appendActivity(
+          selectedInspection,
+          "Internal note added",
+          note,
+          "internal",
+        ),
+      });
+      form.reset();
+      await onReload();
+      onNotice("Internal note added.");
+    } catch (currentError) {
+      logCaughtError("[CRM] Unable to add inspection note", currentError);
+      onError(getCaughtErrorMessage(currentError, "Unable to add internal note."));
     } finally {
       setSavingAction(null);
     }
@@ -12432,6 +12606,11 @@ function InspectionsView({
     event.preventDefault();
 
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before uploading photos.");
       return;
     }
 
@@ -12525,6 +12704,7 @@ function InspectionsView({
         photoFinding ? "Inspection photo uploaded and finding added." : "Inspection photo uploaded.",
       );
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to upload inspection photo", currentError);
       onError(
         getCaughtErrorMessage(
           currentError,
@@ -12542,6 +12722,11 @@ function InspectionsView({
     event.preventDefault();
 
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before creating an estimate.");
       return;
     }
 
@@ -12591,6 +12776,7 @@ function InspectionsView({
       await onReload();
       onNotice("Estimate draft created from inspection.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to create estimate from inspection", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to create estimate draft."));
     } finally {
       setSavingAction(null);
@@ -12603,6 +12789,11 @@ function InspectionsView({
     event.preventDefault();
 
     if (!selectedInspection || savingAction) {
+      return;
+    }
+
+    if (selectedInspection.status === "canceled") {
+      onError("Restore this inspection before creating a report.");
       return;
     }
 
@@ -12660,6 +12851,7 @@ function InspectionsView({
       await onReload();
       onNotice("Inspection report draft saved to documents.");
     } catch (currentError) {
+      logCaughtError("[CRM] Unable to create inspection report", currentError);
       onError(getCaughtErrorMessage(currentError, "Unable to create report draft."));
     } finally {
       setSavingAction(null);
@@ -12691,14 +12883,15 @@ function InspectionsView({
           </div>
 
           <div className="border-b border-slate-200 p-5">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <ProfileStat label="Inspections" value={inspectionStats.total} />
+              <ProfileStat label="Active" value={inspectionStats.active} />
               <ProfileStat label="Scheduled" value={inspectionStats.scheduled} />
               <ProfileStat label="In progress" value={inspectionStats.inProgress} />
               <ProfileStat label="Completed" value={inspectionStats.completed} />
-              <ProfileStat label="Reports" value={inspectionStats.reports} />
+              <ProfileStat label="Canceled" value={inspectionStats.canceled} />
             </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_180px]">
+            <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_170px_170px_170px_170px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
@@ -12731,7 +12924,11 @@ function InspectionsView({
               <select
                 value={statusFilter}
                 onChange={(event) => {
-                  setStatusFilter(event.target.value as InspectionStatus | "all");
+                  const nextStatus = event.target.value as InspectionStatus | "all";
+                  setStatusFilter(nextStatus);
+                  if (nextStatus === "canceled") {
+                    setLifecycleFilter("include_canceled");
+                  }
                   setInspectionPage(1);
                 }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -12741,6 +12938,27 @@ function InspectionsView({
                 {inspectionStatuses.map((status) => (
                   <option key={status.value} value={status.value}>
                     {status.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={lifecycleFilter}
+                onChange={(event) => {
+                  const nextLifecycle = event.target.value as InspectionLifecycleFilter;
+                  setLifecycleFilter(nextLifecycle);
+                  if (nextLifecycle === "canceled") {
+                    setStatusFilter("canceled");
+                  } else if (nextLifecycle === "active" && statusFilter === "canceled") {
+                    setStatusFilter("all");
+                  }
+                  setInspectionPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="inspections-lifecycle-filter"
+              >
+                {inspectionLifecycleFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
                   </option>
                 ))}
               </select>
@@ -12823,6 +13041,7 @@ function InspectionsView({
             {pagedInspections.map((inspection) => {
               const company = companyMap.get(inspection.company_id);
               const isSelected = selectedInspectionId === inspection.id;
+              const isCanceled = inspection.status === "canceled";
 
               return (
                 <button
@@ -12830,7 +13049,7 @@ function InspectionsView({
                   type="button"
                   onClick={() => selectInspection(inspection.id)}
                   className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_150px_160px] xl:items-center ${
-                    isSelected ? "bg-sky-50" : "bg-white"
+                    isSelected ? "bg-sky-50" : isCanceled ? "bg-amber-50/50" : "bg-white"
                   }`}
                 >
                   <div>
@@ -12843,6 +13062,11 @@ function InspectionsView({
                       {inspectionTypeLabel(inspection.inspection_type)} /{" "}
                       {inspectionServiceCategoryLabel(inspection.service_category)}
                     </p>
+                    {isCanceled ? (
+                      <p className="mt-1 text-xs font-semibold uppercase text-amber-700">
+                        Canceled - hidden from active work
+                      </p>
+                    ) : null}
                   </div>
                   <Badge
                     label={inspectionStatusLabel(inspection.status)}
@@ -12871,7 +13095,9 @@ function InspectionsView({
               <EmptyState
                 label={
                   snapshot.inspections.length
-                    ? "No inspections match this view."
+                    ? lifecycleFilter === "active" && inspectionStats.canceled
+                      ? "No active inspections match this view. Include canceled to review canceled records."
+                      : "No inspections match this view."
                     : "No inspections yet. Create one from a lead, customer, or job."
                 }
               />
@@ -13057,7 +13283,7 @@ function InspectionsView({
                 <button
                   type="button"
                   onClick={() => void updateInspectionStatus(selectedInspection, "in_progress")}
-                  disabled={savingAction !== null}
+                  disabled={savingAction !== null || selectedInspectionIsCanceled}
                   className="inline-flex min-h-10 items-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:bg-slate-300"
                 >
                   <ClipboardList className="h-4 w-4" />
@@ -13072,7 +13298,7 @@ function InspectionsView({
                       selectedInspection.outcome ?? "estimate_only",
                     )
                   }
-                  disabled={savingAction !== null}
+                  disabled={savingAction !== null || selectedInspectionIsCanceled}
                   className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   <CheckCircle2 className="h-4 w-4" />
@@ -13109,6 +13335,104 @@ function InspectionsView({
                 />
                 <ContactLine icon={UserRound} value={selectedInspection.assigned_inspector} />
               </div>
+              <div
+                className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+                data-testid="inspection-record-management"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold uppercase text-slate-500">
+                      Record management
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Canceling removes this inspection from active work while keeping
+                      linked customers, leads, jobs, estimates, reports, and photos intact.
+                    </p>
+                  </div>
+                  {selectedInspection.status === "canceled" ? (
+                    <button
+                      type="button"
+                      onClick={() => setRecordManagementAction("restore")}
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      data-testid="inspection-restore-button"
+                    >
+                      <RefreshCcw className="h-4 w-4" />
+                      Restore inspection
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setRecordManagementAction("cancel")}
+                      disabled={savingAction !== null}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+                      data-testid="inspection-cancel-button"
+                    >
+                      <X className="h-4 w-4" />
+                      Cancel inspection
+                    </button>
+                  )}
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  Permanent deletion is restricted. Use cancel for test, duplicate,
+                  or incorrect inspections unless an administrator later approves
+                  a dedicated deletion workflow.
+                </p>
+                {recordManagementAction ? (
+                  <div
+                    role="alertdialog"
+                    aria-label={
+                      recordManagementAction === "cancel"
+                        ? "Cancel inspection confirmation"
+                        : "Restore inspection confirmation"
+                    }
+                    className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4"
+                  >
+                    <p className="font-bold text-amber-950">
+                      {recordManagementAction === "cancel"
+                        ? `Cancel ${selectedInspection.title}?`
+                        : `Restore ${selectedInspection.title}?`}
+                    </p>
+                    <p className="mt-1 text-sm text-amber-900">
+                      {recordManagementAction === "cancel"
+                        ? "The inspection will leave active work, but related records stay connected."
+                        : "The inspection will return to active work and can be edited again."}
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => setRecordManagementAction(null)}
+                        disabled={savingAction !== null}
+                        className="inline-flex min-h-10 items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                      >
+                        Keep inspection
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          recordManagementAction === "cancel"
+                            ? void handleCancelInspection()
+                            : void handleRestoreInspection()
+                        }
+                        disabled={savingAction !== null}
+                        className="inline-flex min-h-10 items-center justify-center rounded-md bg-amber-700 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-800 disabled:bg-amber-300"
+                        data-testid={
+                          recordManagementAction === "cancel"
+                            ? "inspection-confirm-cancel-button"
+                            : "inspection-confirm-restore-button"
+                        }
+                      >
+                        {savingAction === "cancel-inspection" ||
+                        savingAction === "restore-inspection"
+                          ? "Saving"
+                          : recordManagementAction === "cancel"
+                            ? "Confirm cancel"
+                            : "Confirm restore"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -13132,6 +13456,13 @@ function InspectionsView({
               {workspaceTab === "overview" ? (
                 <div className="grid gap-5 p-5">
                   <form onSubmit={handleUpdateInspection} className="grid gap-3">
+                    <input
+                      required
+                      name="title"
+                      defaultValue={selectedInspection.title}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Inspection title"
+                    />
                     <div className="grid gap-3 sm:grid-cols-2">
                       <select
                         name="status"
@@ -13153,6 +13484,54 @@ function InspectionsView({
                         {inspectionOutcomes.map((outcome) => (
                           <option key={outcome.value} value={outcome.value}>
                             {outcome.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      name="property_address"
+                      defaultValue={selectedInspection.property_address ?? ""}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Property or jobsite"
+                    />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        name="scheduled_start"
+                        type="datetime-local"
+                        defaultValue={
+                          selectedInspection.scheduled_start
+                            ? toDateTimeInputValue(selectedInspection.scheduled_start)
+                            : ""
+                        }
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                      <input
+                        name="scheduled_end"
+                        type="datetime-local"
+                        defaultValue={
+                          selectedInspection.scheduled_end
+                            ? toDateTimeInputValue(selectedInspection.scheduled_end)
+                            : ""
+                        }
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        name="assigned_inspector"
+                        list="inspection-inspectors"
+                        defaultValue={selectedInspection.assigned_inspector ?? ""}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Assigned inspector"
+                      />
+                      <select
+                        name="priority"
+                        defaultValue={selectedInspection.priority}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      >
+                        {leadPriorities.map((priority) => (
+                          <option key={priority.value} value={priority.value}>
+                            {priority.label}
                           </option>
                         ))}
                       </select>
@@ -13237,7 +13616,7 @@ function InspectionsView({
                     <button
                       type="button"
                       onClick={() => void updateInspectionStatus(selectedInspection, "in_progress")}
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-14 items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-700 disabled:bg-slate-300"
                     >
                       <ClipboardList className="h-5 w-5" />
@@ -13252,7 +13631,7 @@ function InspectionsView({
                           selectedInspection.outcome ?? "estimate_only",
                         )
                       }
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-14 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
                     >
                       <CheckCircle2 className="h-5 w-5" />
@@ -13279,7 +13658,7 @@ function InspectionsView({
                           key={template.label}
                           type="button"
                           onClick={() => void handleQuickFinding(template)}
-                          disabled={savingAction !== null}
+                          disabled={savingAction !== null || selectedInspectionIsCanceled}
                           className="min-h-16 rounded-md border border-sky-200 bg-white px-3 py-2 text-left text-sm shadow-sm transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <span className="block font-bold text-slate-950">
@@ -13372,7 +13751,7 @@ function InspectionsView({
                     </div>
                     <button
                       type="submit"
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
                     >
                       <Plus className="h-4 w-4" />
@@ -13394,11 +13773,34 @@ function InspectionsView({
                     </label>
                     <button
                       type="submit"
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                     >
                       <Plus className="h-4 w-4" />
                       Add measurement
+                    </button>
+                  </form>
+
+                  <form onSubmit={handleAddInspectionNote} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                    <div>
+                      <h4 className="font-bold text-slate-950">Add internal note</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Field notes stay internal unless manually rewritten into customer-facing content.
+                      </p>
+                    </div>
+                    <textarea
+                      required
+                      name="note"
+                      className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      placeholder="Internal field note"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add internal note
                     </button>
                   </form>
 
@@ -13434,7 +13836,7 @@ function InspectionsView({
                     </label>
                     <button
                       type="submit"
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                     >
                       <Upload className="h-4 w-4" />
@@ -13491,7 +13893,7 @@ function InspectionsView({
                     />
                     <button
                       type="submit"
-                      disabled={savingAction !== null}
+                      disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
                     >
                       <FileText className="h-4 w-4" />
@@ -13555,7 +13957,7 @@ function InspectionsView({
                       </div>
                       <button
                         type="submit"
-                        disabled={savingAction !== null}
+                        disabled={savingAction !== null || selectedInspectionIsCanceled}
                         className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                       >
                         <FileText className="h-4 w-4" />
