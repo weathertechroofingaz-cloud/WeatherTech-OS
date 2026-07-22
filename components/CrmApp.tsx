@@ -1,6 +1,7 @@
 "use client";
 
 import type { SupabaseClient, User } from "@supabase/supabase-js";
+import Image from "next/image";
 import {
   ArrowDown,
   ArrowUp,
@@ -6404,6 +6405,18 @@ type CustomerPropertySummary = {
   sources: string[];
   activeWorkCount: number;
   lastActivity: string;
+  roofSystem: string;
+  roofAge: string;
+  exteriorPaintColors: string;
+  hoa: string;
+  gateCodes: string;
+  accessInstructions: string;
+  pets: string;
+  solar: string;
+  hvacNotes: string;
+  warrantyDocuments: DocumentRecord[];
+  photos: JobPhotoRecord[];
+  inspections: InspectionRecord[];
 };
 
 type CustomerTimelineKind =
@@ -6567,6 +6580,207 @@ function isOutstandingInvoice(invoice: InvoiceRecord) {
   return invoice.status !== "paid" && invoice.status !== "void" && invoice.balance_due > 0;
 }
 
+function getCustomerInitials(customer: CustomerRecord) {
+  return (customer.contact_name || customer.display_name)
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function recordBelongsToProperty(
+  property: Pick<CustomerPropertySummary, "address">,
+  address: string | null | undefined,
+) {
+  return crmAddressesLikelyMatch(property.address, address);
+}
+
+function getPropertySourceText(
+  customer: CustomerRecord,
+  property: Pick<CustomerPropertySummary, "address">,
+  related: CustomerRelatedRecords,
+) {
+  const matchingLeads = related.leads.filter((lead) =>
+    recordBelongsToProperty(property, lead.property_address),
+  );
+  const matchingEstimates = related.estimates.filter((estimate) =>
+    recordBelongsToProperty(property, estimate.location),
+  );
+  const matchingInspections = related.inspections.filter((inspection) =>
+    recordBelongsToProperty(property, inspection.property_address),
+  );
+  const matchingJobs = related.jobs.filter((job) =>
+    recordBelongsToProperty(property, job.property_address || job.address),
+  );
+
+  return [
+    customer.notes,
+    ...matchingLeads.flatMap((lead) => [lead.notes, lead.source, lead.service_type]),
+    ...matchingEstimates.flatMap((estimate) => [
+      estimate.notes,
+      estimate.scope_of_work,
+      estimate.paint_color_body,
+      estimate.paint_color_trim,
+      estimate.paint_color_accent,
+      estimate.paint_finish ? paintFinishLabel(estimate.paint_finish) : null,
+    ]),
+    ...matchingInspections.flatMap((inspection) => [
+      inspection.notes,
+      inspection.internal_notes,
+      inspection.purpose,
+      ...inspection.findings.flatMap((finding) => [
+        finding.area,
+        finding.category,
+        finding.observation,
+        finding.recommendation,
+        finding.estimated_remaining_life ?? null,
+      ]),
+      ...inspection.measurements.flatMap((measurement) => [
+        measurement.label,
+        measurement.value,
+        measurement.unit,
+        measurement.notes ?? null,
+      ]),
+    ]),
+    ...matchingJobs.flatMap((job) => [
+      job.notes,
+      job.scope_of_work,
+      job.service_type,
+      job.crew_name,
+      job.project_manager,
+    ]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractPropertyDetail(sourceText: string, patterns: RegExp[]) {
+  for (const pattern of patterns) {
+    const match = sourceText.match(pattern);
+    const value = match?.[1]?.trim().replace(/[.;]+$/, "");
+
+    if (value) {
+      return truncateTimelineText(value, 90);
+    }
+  }
+
+  return null;
+}
+
+function detectPropertyMention(sourceText: string, keywords: RegExp[], fallback: string) {
+  return keywords.some((pattern) => pattern.test(sourceText)) ? fallback : "Not documented";
+}
+
+function buildCustomerPropertyIntelligence(
+  customer: CustomerRecord,
+  property: Pick<CustomerPropertySummary, "address">,
+  related: CustomerRelatedRecords,
+) {
+  const sourceText = getPropertySourceText(customer, property, related);
+  const normalizedText = sourceText.toLowerCase();
+  const matchingEstimates = related.estimates.filter((estimate) =>
+    recordBelongsToProperty(property, estimate.location),
+  );
+  const matchingInspections = related.inspections.filter((inspection) =>
+    recordBelongsToProperty(property, inspection.property_address),
+  );
+  const matchingJobs = related.jobs.filter((job) =>
+    recordBelongsToProperty(property, job.property_address || job.address),
+  );
+  const matchingPhotos = related.photos.filter((photo) => {
+    const inspection = photo.inspection_id
+      ? related.inspections.find((item) => item.id === photo.inspection_id)
+      : null;
+    const job = photo.job_id
+      ? related.jobs.find((item) => item.id === photo.job_id)
+      : null;
+
+    return (
+      recordBelongsToProperty(property, inspection?.property_address) ||
+      recordBelongsToProperty(property, job?.property_address || job?.address)
+    );
+  });
+  const warrantyDocuments = related.documents.filter(
+    (document) => document.category === "warranty",
+  );
+  const paintingEstimate = matchingEstimates.find(
+    (estimate) =>
+      estimate.paint_color_body ||
+      estimate.paint_color_trim ||
+      estimate.paint_color_accent ||
+      estimate.paint_finish,
+  );
+  const colors = [
+    paintingEstimate?.paint_color_body ? `Body ${paintingEstimate.paint_color_body}` : null,
+    paintingEstimate?.paint_color_trim ? `Trim ${paintingEstimate.paint_color_trim}` : null,
+    paintingEstimate?.paint_color_accent ? `Accent ${paintingEstimate.paint_color_accent}` : null,
+    paintingEstimate?.paint_finish
+      ? `Finish ${paintFinishLabel(paintingEstimate.paint_finish)}`
+      : null,
+  ].filter(Boolean);
+
+  return {
+    roofSystem:
+      extractPropertyDetail(sourceText, [
+        /roof(?:ing)? system[:\-]\s*([^\n]+)/i,
+        /roof type[:\-]\s*([^\n]+)/i,
+        /system[:\-]\s*([^\n]+)/i,
+      ]) ??
+      (matchingJobs.some((job) => job.service_type === "roofing") ||
+      matchingInspections.some((inspection) => inspection.service_category === "roofing")
+        ? "Roofing history linked"
+        : "Not documented"),
+    roofAge:
+      extractPropertyDetail(sourceText, [
+        /roof age[:\-]\s*([^\n]+)/i,
+        /roof(?: is)?\s+([0-9]{1,2}\s*(?:years?|yrs?)\s*old)/i,
+        /installed[:\-]\s*([^\n]+)/i,
+      ]) ?? "Not documented",
+    exteriorPaintColors:
+      colors.length
+        ? colors.join(" · ")
+        : extractPropertyDetail(sourceText, [
+            /paint colors?[:\-]\s*([^\n]+)/i,
+            /exterior colors?[:\-]\s*([^\n]+)/i,
+            /body color[:\-]\s*([^\n]+)/i,
+          ]) ?? "Not documented",
+    hoa:
+      customer.customer_type === "hoa"
+        ? "HOA account"
+        : extractPropertyDetail(sourceText, [/hoa[:\-]\s*([^\n]+)/i]) ??
+          detectPropertyMention(normalizedText, [/\bhoa\b/, /homeowners association/], "HOA mentioned"),
+    gateCodes:
+      extractPropertyDetail(sourceText, [
+        /gate code[:\-]\s*([^\n]+)/i,
+        /access code[:\-]\s*([^\n]+)/i,
+      ]) ?? "Not documented",
+    accessInstructions:
+      extractPropertyDetail(sourceText, [
+        /access instructions?[:\-]\s*([^\n]+)/i,
+        /access[:\-]\s*([^\n]+)/i,
+        /entry[:\-]\s*([^\n]+)/i,
+      ]) ?? "Not documented",
+    pets:
+      extractPropertyDetail(sourceText, [/pets?[:\-]\s*([^\n]+)/i]) ??
+      detectPropertyMention(normalizedText, [/\bdog\b/, /\bcat\b/, /\bpets?\b/], "Pets mentioned"),
+    solar:
+      extractPropertyDetail(sourceText, [/solar[:\-]\s*([^\n]+)/i]) ??
+      detectPropertyMention(normalizedText, [/\bsolar\b/, /pv panels?/], "Solar mentioned"),
+    hvacNotes:
+      extractPropertyDetail(sourceText, [
+        /hvac[:\-]\s*([^\n]+)/i,
+        /a\/c[:\-]\s*([^\n]+)/i,
+        /air conditioning[:\-]\s*([^\n]+)/i,
+      ]) ??
+      detectPropertyMention(normalizedText, [/\bhvac\b/, /\ba\/c\b/, /air conditioning/], "HVAC mentioned"),
+    warrantyDocuments,
+    photos: matchingPhotos.length ? matchingPhotos : related.photos.slice(0, 3),
+    inspections: matchingInspections,
+  };
+}
+
 function buildCustomerPropertySummaries(
   customer: CustomerRecord,
   related: CustomerRelatedRecords,
@@ -6629,6 +6843,18 @@ function buildCustomerPropertySummaries(
       sources: [source],
       activeWorkCount: activeWork ? 1 : 0,
       lastActivity,
+      roofSystem: "Not documented",
+      roofAge: "Not documented",
+      exteriorPaintColors: "Not documented",
+      hoa: "Not documented",
+      gateCodes: "Not documented",
+      accessInstructions: "Not documented",
+      pets: "Not documented",
+      solar: "Not documented",
+      hvacNotes: "Not documented",
+      warrantyDocuments: [],
+      photos: [],
+      inspections: [],
     });
   };
 
@@ -6690,7 +6916,12 @@ function buildCustomerPropertySummaries(
     }),
   );
 
-  return [...propertyMap.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+  return [...propertyMap.values()]
+    .map((property) => ({
+      ...property,
+      ...buildCustomerPropertyIntelligence(customer, property, related),
+    }))
+    .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 }
 
 function recordMatchesCustomerIdentity(
@@ -7136,8 +7367,10 @@ function buildCustomerTimelineItems(
   related.leads.forEach((lead) => {
     items.push({
       id: `lead-${lead.id}`,
-      label: "Lead created",
-      description: `${lead.contact_name} - ${pipelineStageLabel(lead.pipeline_stage)}`,
+      label: getLeadTimelineLabel(lead),
+      description: `${lead.contact_name} - ${lead.source} - ${pipelineStageLabel(
+        lead.pipeline_stage,
+      )}`,
       occurredAt: lead.created_at,
       user: "CRM",
       icon: UserRound,
@@ -7350,6 +7583,85 @@ function buildCustomerTimelineItems(
   });
 
   return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+}
+
+function getCustomerLifetimeRevenue(related: CustomerRelatedRecords) {
+  const invoiceRevenue = related.invoices.reduce((total, invoice) => total + invoice.total, 0);
+
+  if (invoiceRevenue > 0) {
+    return invoiceRevenue;
+  }
+
+  return related.jobs
+    .filter((job) => job.status === "completed" || job.status === "closed")
+    .reduce((total, job) => total + job.total, 0);
+}
+
+function getCustomerWarrantyStatus(related: CustomerRelatedRecords) {
+  const warrantyDocuments = related.documents.filter(
+    (document) => document.category === "warranty",
+  );
+  const completedJobs = related.jobs.filter(
+    (job) => job.status === "completed" || job.status === "closed",
+  );
+
+  if (warrantyDocuments.length) {
+    return {
+      label: "Warranty documented",
+      detail: `${warrantyDocuments.length} warranty ${
+        warrantyDocuments.length === 1 ? "document" : "documents"
+      } linked`,
+      tone: "green" as const,
+    };
+  }
+
+  if (completedJobs.length) {
+    return {
+      label: "Needs warranty packet",
+      detail: "Completed work exists without a linked warranty document",
+      tone: "amber" as const,
+    };
+  }
+
+  return {
+    label: "Not started",
+    detail: "Warranty will become active after completed work is documented",
+    tone: "blue" as const,
+  };
+}
+
+function getCustomerPrimaryPhoto(related: CustomerRelatedRecords) {
+  return (
+    related.photos.find((photo) => photo.is_customer_visible) ??
+    related.photos[0] ??
+    null
+  );
+}
+
+function getCustomerLastCommunication(items: UnifiedInboxItem[]) {
+  return items
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+}
+
+function getCustomerNextAppointment(related: CustomerRelatedRecords) {
+  return related.scheduleEvents
+    .filter((event) => event.status === "scheduled" && isFutureDateTime(event.start_at))
+    .sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
+}
+
+function getLeadTimelineLabel(lead: LeadRecord) {
+  const source = lead.source.toLowerCase();
+
+  if (source.includes("website")) {
+    return "Website inquiry";
+  }
+
+  if (source.includes("yelp")) {
+    return "Yelp inquiry";
+  }
+
+  return "Lead created";
 }
 
 function CustomersView({
@@ -7705,11 +8017,25 @@ function CustomersView({
               <ContactLine icon={Building2} value={selectedCustomer.property_address} />
             </div>
 
+            <CustomerProfilePanel
+              snapshot={snapshot}
+              companyMap={companyMap}
+              customer={selectedCustomer}
+              onViewChange={onViewChange}
+              onAddNote={handleFocusCustomerNotes}
+            />
+
             <form
               key={selectedCustomer.id}
               onSubmit={handleUpdateCustomer}
-              className="mt-5 grid gap-3"
+              className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
             >
+              <div>
+                <p className="text-sm font-bold text-slate-950">Edit customer profile</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Keep contact, property, notes, and account status current.
+                </p>
+              </div>
               <label className="grid gap-1 text-sm font-medium text-slate-700">
                 Company
                 <select
@@ -7845,13 +8171,6 @@ function CustomersView({
                 {isUpdatingCustomer ? "Saving customer" : "Save customer"}
               </button>
             </form>
-            <CustomerProfilePanel
-              snapshot={snapshot}
-              companyMap={companyMap}
-              customer={selectedCustomer}
-              onViewChange={onViewChange}
-              onAddNote={handleFocusCustomerNotes}
-            />
           </section>
         ) : null}
       </aside>
@@ -7916,15 +8235,9 @@ function CustomerProfilePanel({
     [customer, snapshot.customers],
   );
   const company = companyMap.get(customer.company_id);
-  const openLeads = related.leads.filter(
-    (lead) => lead.status !== "won" && lead.status !== "lost",
-  );
   const openEstimates = related.estimates.filter(isOpenEstimate);
   const activeJobs = related.jobs.filter(isActiveJob);
   const outstandingInvoices = related.invoices.filter(isOutstandingInvoice);
-  const upcomingAppointments = related.scheduleEvents
-    .filter((event) => event.status === "scheduled" && isFutureDateTime(event.start_at))
-    .sort((a, b) => a.start_at.localeCompare(b.start_at));
   const realTimelineItems = timelineItems.filter((item) => item.kind !== "future");
   const lastActivity = realTimelineItems[0];
   const leadSources = uniqueById(
@@ -7932,6 +8245,15 @@ function CustomerProfilePanel({
   )
     .map((lead) => lead.label)
     .filter(Boolean);
+  const outstandingInvoiceTotal = outstandingInvoices.reduce(
+    (total, invoice) => total + invoice.balance_due,
+    0,
+  );
+  const lifetimeRevenue = getCustomerLifetimeRevenue(related);
+  const warrantyStatus = getCustomerWarrantyStatus(related);
+  const nextAppointment = getCustomerNextAppointment(related);
+  const lastCommunication = getCustomerLastCommunication(communicationItems);
+  const primaryPhoto = getCustomerPrimaryPhoto(related);
   const sectionCounts: Record<CustomerWorkspaceSection, number | null> = {
     overview: null,
     properties: properties.length,
@@ -7956,28 +8278,29 @@ function CustomerProfilePanel({
       data-testid="customer-workspace"
     >
       <div
-        className="rounded-xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4"
+        className="rounded-xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm"
         data-testid="customer-360-header"
       >
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-3">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px] xl:items-stretch">
+          <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
             <div
-              className="grid h-12 w-12 shrink-0 place-items-center rounded-lg text-sm font-black text-white shadow-sm"
+              className="grid h-20 w-20 shrink-0 place-items-center rounded-xl text-xl font-black text-white shadow-sm"
               style={{ backgroundColor: getCompanyBrandColor(company) }}
+              aria-label={`${customer.display_name} customer logo`}
             >
-              {companyInitials(company)}
+              {getCustomerInitials(customer) || companyInitials(company)}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-xs font-bold uppercase text-slate-500">
                 Customer 360 workspace
               </p>
-              <h4 className="mt-1 truncate text-xl font-black text-slate-950">
+              <h4 className="mt-1 text-2xl font-black tracking-tight text-slate-950">
                 {customer.display_name}
               </h4>
               <p className="mt-1 text-sm text-slate-600">
                 {company?.name ?? "Company"} - {customer.contact_name}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-2" aria-label="Customer status badges">
                 <Badge
                   label={customerStatusLabel(customer.status)}
                   tone={customer.status === "inactive" ? "amber" : "green"}
@@ -7987,40 +8310,72 @@ function CustomerProfilePanel({
                   label={leadSources.length ? leadSources[0] : "No linked source"}
                   tone="amber"
                 />
+                <Badge label={warrantyStatus.label} tone={warrantyStatus.tone} />
+              </div>
+              <div className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                <ContactLine icon={Phone} value={customer.phone} />
+                <ContactLine icon={Mail} value={customer.email} />
+                <ContactLine
+                  icon={MapPin}
+                  value={
+                    properties[0]
+                      ? formatCustomerPropertyAddress(properties[0])
+                      : customer.property_address
+                  }
+                />
+                <ContactLine
+                  icon={CalendarClock}
+                  value={
+                    nextAppointment
+                      ? formatDateTime(nextAppointment.start_at)
+                      : "No upcoming appointment"
+                  }
+                />
               </div>
             </div>
           </div>
-          <div className="grid gap-2 text-sm text-slate-600 lg:min-w-72">
-            <ContactLine icon={Phone} value={customer.phone} />
-            <ContactLine icon={Mail} value={customer.email} />
-            <ContactLine
-              icon={MapPin}
-              value={
-                properties[0]
-                  ? formatCustomerPropertyAddress(properties[0])
-                  : customer.property_address
-              }
-            />
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+            {primaryPhoto ? (
+              <Image
+                src={primaryPhoto.file_url}
+                alt={primaryPhoto.caption ?? primaryPhoto.label ?? "Customer property photo"}
+                width={640}
+                height={176}
+                unoptimized
+                className="h-44 w-full object-cover"
+              />
+            ) : (
+              <div className="grid h-44 place-items-center bg-slate-100 text-slate-500">
+                <div className="text-center">
+                  <Camera className="mx-auto h-8 w-8" />
+                  <p className="mt-2 text-sm font-semibold">Property photo</p>
+                  <p className="text-xs">No linked photo yet</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
           <ProfileStat label="Properties" value={properties.length} />
-          <ProfileStat label="Open leads" value={openLeads.length} />
-          <ProfileStat label="Open estimates" value={openEstimates.length} />
           <ProfileStat label="Active jobs" value={activeJobs.length} />
+          <ProfileStat label="Open estimates" value={openEstimates.length} />
           <ProfileStat
-            label="Outstanding"
-            value={formatMoney(
-              outstandingInvoices.reduce((total, invoice) => total + invoice.balance_due, 0),
-            )}
+            label="Outstanding invoices"
+            value={formatMoney(outstandingInvoiceTotal)}
+          />
+          <ProfileStat label="Lifetime revenue" value={formatMoney(lifetimeRevenue)} />
+          <ProfileStat label="Customer since" value={formatDate(customer.created_at)} />
+          <ProfileStat
+            label="Warranty"
+            value={warrantyStatus.label}
           />
           <ProfileStat
-            label="Next appointment"
+            label="Last communication"
             value={
-              upcomingAppointments[0]
-                ? formatDateTime(upcomingAppointments[0].start_at)
-                : "None"
+              lastCommunication
+                ? formatDateTime(lastCommunication.createdAt)
+                : "No contact"
             }
           />
         </div>
@@ -8032,56 +8387,60 @@ function CustomerProfilePanel({
               ? `${lastActivity.label} - ${formatDateTime(lastActivity.occurredAt)}`
               : "No activity yet"}
           </span>
+          <span className="mx-2 text-slate-300">|</span>
+          <span className="font-semibold text-slate-900">{warrantyStatus.detail}</span>
         </div>
       </div>
 
       <div
-        className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5"
+        className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
         data-testid="customer-quick-actions"
       >
         <CustomerQuickAction
-          label="New Lead"
-          icon={UserRound}
-          onClick={() => onViewChange("leads")}
-        />
-        <CustomerQuickAction
-          label="New Estimate"
+          label="Create Estimate"
+          detail="Build pricing from this customer context."
           icon={Calculator}
           onClick={() => onViewChange("estimates")}
         />
         <CustomerQuickAction
-          label="New Inspection"
+          label="Schedule Inspection"
+          detail="Open the inspection workflow for this property."
           icon={ClipboardList}
           onClick={() => onViewChange("inspections")}
         />
         <CustomerQuickAction
-          label="Schedule Visit"
-          icon={CalendarClock}
-          onClick={() => onViewChange("calendar")}
-        />
-        <CustomerQuickAction
-          label="New Job"
+          label="Schedule Job"
+          detail="Move approved work into production."
           icon={Building2}
           onClick={() => onViewChange("jobs")}
         />
         <CustomerQuickAction
+          label="Open Communications"
+          detail="Review website, Yelp, SMS, and email activity."
+          icon={MessageSquare}
+          onClick={() => setActiveSection("communications")}
+        />
+        <CustomerQuickAction
+          label="Add Internal Note"
+          detail="Jump to the customer note field."
+          icon={Pencil}
+          onClick={onAddNote}
+        />
+        <CustomerQuickAction
           label="Upload Photos"
+          detail="Attach jobsite or property photos."
           icon={Camera}
           onClick={() => onViewChange("photos")}
         />
         <CustomerQuickAction
-          label="Upload Documents"
-          icon={FileText}
-          onClick={() => onViewChange("documents")}
-        />
-        <CustomerQuickAction label="Add Note" icon={MessageSquare} onClick={onAddNote} />
-        <CustomerQuickAction
-          label="Generate Scope"
-          icon={WandSparkles}
-          onClick={() => onViewChange("scopes")}
+          label="Create Invoice"
+          detail="Prepare billing for linked work."
+          icon={ReceiptText}
+          onClick={() => onViewChange("invoices")}
         />
         <CustomerQuickAction
           label="Open Calendar"
+          detail="View scheduled visits and production dates."
           icon={CalendarClock}
           onClick={() => onViewChange("calendar")}
         />
@@ -8135,6 +8494,7 @@ function CustomerProfilePanel({
             related={related}
             properties={properties}
             leadSources={leadSources}
+            communicationsCount={communicationItems.length}
           />
         ) : null}
 
@@ -8309,10 +8669,12 @@ function CustomerProfilePanel({
 
 function CustomerQuickAction({
   label,
+  detail,
   icon: Icon,
   onClick,
 }: {
   label: string;
+  detail: string;
   icon: typeof Home;
   onClick: () => void;
 }) {
@@ -8320,10 +8682,15 @@ function CustomerQuickAction({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+      className="group flex min-h-24 w-full items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
     >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span className="truncate">{label}</span>
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-sky-50 text-sky-700 transition group-hover:bg-white">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-bold text-slate-950">{label}</span>
+        <span className="mt-1 block text-xs leading-5 text-slate-500">{detail}</span>
+      </span>
     </button>
   );
 }
@@ -8334,18 +8701,60 @@ function CustomerOverviewSection({
   related,
   properties,
   leadSources,
+  communicationsCount,
 }: {
   customer: CustomerRecord;
   company?: CompanyRecord;
   related: CustomerRelatedRecords;
   properties: CustomerPropertySummary[];
   leadSources: string[];
+  communicationsCount: number;
 }) {
+  const openEstimateTotal = related.estimates
+    .filter(isOpenEstimate)
+    .reduce((total, estimate) => total + estimate.total, 0);
+  const outstandingInvoiceTotal = related.invoices
+    .filter(isOutstandingInvoice)
+    .reduce((total, invoice) => total + invoice.balance_due, 0);
+  const completedInspectionCount = related.inspections.filter(
+    (inspection) => inspection.status === "completed" || inspection.completed_at,
+  ).length;
+
   return (
     <div className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <CustomerSummaryCard
+          title="Estimates"
+          value={related.estimates.length}
+          detail={`${formatMoney(openEstimateTotal)} open`}
+          icon={Calculator}
+          tone="blue"
+        />
+        <CustomerSummaryCard
+          title="Jobs"
+          value={related.jobs.length}
+          detail={`${related.jobs.filter(isActiveJob).length} active`}
+          icon={Building2}
+          tone="purple"
+        />
+        <CustomerSummaryCard
+          title="Inspections"
+          value={related.inspections.length}
+          detail={`${completedInspectionCount} completed`}
+          icon={ClipboardList}
+          tone="green"
+        />
+        <CustomerSummaryCard
+          title="Financial"
+          value={formatMoney(getCustomerLifetimeRevenue(related))}
+          detail={`${formatMoney(outstandingInvoiceTotal)} outstanding`}
+          icon={DollarSign}
+          tone="amber"
+        />
+      </div>
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
         <p className="text-sm font-bold text-slate-950">Overview</p>
-        <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
           <CustomerDetail label="Customer" value={customer.display_name} />
           <CustomerDetail label="Primary contact" value={customer.contact_name} />
           <CustomerDetail label="Company" value={company?.name ?? "Company"} />
@@ -8381,13 +8790,73 @@ function CustomerOverviewSection({
                 : "No property recorded"
             }
           />
-        </dl>
+        </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <ProfileStat label="Scopes" value={related.scopes.length} />
-        <ProfileStat label="Documents" value={related.documents.length} />
-        <ProfileStat label="Photos" value={related.photos.length} />
+        <CustomerSummaryCard
+          title="Documents"
+          value={related.documents.length}
+          detail={`${related.documents.filter((document) => document.status === "draft").length} drafts`}
+          icon={FileText}
+          tone="slate"
+        />
+        <CustomerSummaryCard
+          title="Communications"
+          value={communicationsCount}
+          detail="Linked inbox activity"
+          icon={MessageSquare}
+          tone="blue"
+        />
+        <CustomerSummaryCard
+          title="Photos"
+          value={related.photos.length}
+          detail={`${related.photos.filter((photo) => photo.is_customer_visible).length} customer-visible`}
+          icon={Camera}
+          tone="green"
+        />
       </div>
+    </div>
+  );
+}
+
+function CustomerSummaryCard({
+  title,
+  value,
+  detail,
+  icon: Icon,
+  tone,
+}: {
+  title: string;
+  value: string | number;
+  detail: string;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber" | "purple" | "slate";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-emerald-50 text-emerald-700"
+      : tone === "amber"
+        ? "bg-amber-50 text-amber-700"
+        : tone === "purple"
+          ? "bg-purple-50 text-purple-700"
+          : tone === "blue"
+            ? "bg-sky-50 text-sky-700"
+            : "bg-slate-100 text-slate-600";
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
+          <p className="mt-1 text-xl font-black tracking-tight text-slate-950">
+            {value}
+          </p>
+        </div>
+        <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ${toneClass}`}>
+          <Icon className="h-5 w-5" />
+        </span>
+      </div>
+      <p className="mt-3 text-sm text-slate-500">{detail}</p>
     </div>
   );
 }
@@ -8406,39 +8875,81 @@ function CustomerPropertiesSection({
       {properties.map((property, index) => (
         <div
           key={property.id}
-          className="rounded-lg border border-slate-200 bg-white p-3"
+          className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
         >
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-sm font-bold text-slate-950">
-                {index === 0 ? "Primary service property" : "Linked property"}
-              </p>
-              <p className="mt-1 text-sm text-slate-600">
-                {formatCustomerPropertyAddress(property)}
+          <div className="grid gap-0 lg:grid-cols-[180px_minmax(0,1fr)]">
+            <div className="bg-slate-100">
+              {property.photos[0] ? (
+                <Image
+                  src={property.photos[0].file_url}
+                  alt={property.photos[0].caption ?? property.photos[0].label ?? "Property photo"}
+                  width={360}
+                  height={176}
+                  unoptimized
+                  className="h-44 w-full object-cover lg:h-full"
+                />
+              ) : (
+                <div className="grid h-44 place-items-center text-slate-500 lg:h-full">
+                  <div className="text-center">
+                    <Home className="mx-auto h-7 w-7" />
+                    <p className="mt-2 text-xs font-semibold uppercase">Property</p>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold text-slate-950">
+                    {index === 0 ? "Primary service property" : "Linked property"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {formatCustomerPropertyAddress(property)}
+                  </p>
+                </div>
+                <Badge
+                  label={
+                    property.activeWorkCount
+                      ? `${property.activeWorkCount} active`
+                      : "No active work"
+                  }
+                  tone={property.activeWorkCount ? "blue" : "green"}
+                />
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <CustomerDetail label="Roof system" value={property.roofSystem} />
+                <CustomerDetail label="Roof age" value={property.roofAge} />
+                <CustomerDetail label="Exterior paint colors" value={property.exteriorPaintColors} />
+                <CustomerDetail label="HOA" value={property.hoa} />
+                <CustomerDetail label="Gate codes" value={property.gateCodes} />
+                <CustomerDetail label="Access instructions" value={property.accessInstructions} />
+                <CustomerDetail label="Pets" value={property.pets} />
+                <CustomerDetail label="Solar" value={property.solar} />
+                <CustomerDetail label="HVAC notes" value={property.hvacNotes} />
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <ProfileStat label="Warranty docs" value={property.warrantyDocuments.length} />
+                <ProfileStat label="Photos" value={property.photos.length} />
+                <ProfileStat label="Inspection history" value={property.inspections.length} />
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {property.sources.map((source) => (
+                  <span
+                    key={source}
+                    className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600"
+                  >
+                    {source}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
+                Last linked activity {formatDateTime(property.lastActivity)}
               </p>
             </div>
-            <Badge
-              label={
-                property.activeWorkCount
-                  ? `${property.activeWorkCount} active`
-                  : "No active work"
-              }
-              tone={property.activeWorkCount ? "blue" : "green"}
-            />
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {property.sources.map((source) => (
-              <span
-                key={source}
-                className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600"
-              >
-                {source}
-              </span>
-            ))}
-          </div>
-          <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
-            Last linked activity {formatDateTime(property.lastActivity)}
-          </p>
         </div>
       ))}
     </div>
@@ -8540,8 +9051,8 @@ function CustomerCommunicationsSection({
 function CustomerDetail({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
-      <dd className="mt-0.5 font-medium text-slate-800">{value}</dd>
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-0.5 font-medium text-slate-800">{value}</p>
     </div>
   );
 }

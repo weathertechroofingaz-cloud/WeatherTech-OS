@@ -2100,12 +2100,19 @@ async function testCustomersWorkflow(tab, env, company, runId) {
 
       return (
         headerText.includes("Customer 360 workspace") &&
+        headerText.includes("Lifetime revenue") &&
+        headerText.includes("Customer since") &&
+        headerText.includes("Last communication") &&
         workspaceText.includes("Properties") &&
         workspaceText.includes("Warranty") &&
         workspaceText.includes("Maintenance") &&
-        quickActionText.includes("New Estimate") &&
-        quickActionText.includes("Schedule Visit") &&
-        quickActionText.includes("Upload Documents") &&
+        workspaceText.includes("Financial") &&
+        quickActionText.includes("Create Estimate") &&
+        quickActionText.includes("Schedule Inspection") &&
+        quickActionText.includes("Schedule Job") &&
+        quickActionText.includes("Open Communications") &&
+        quickActionText.includes("Add Internal Note") &&
+        quickActionText.includes("Create Invoice") &&
         quickActionText.includes("Open Calendar") &&
         workspaceText.includes("Communications")
       );
@@ -2121,7 +2128,11 @@ async function testCustomersWorkflow(tab, env, company, runId) {
 
       return Boolean(
         propertySection?.textContent?.includes("Primary service property") &&
-          propertySection.textContent.includes(address),
+          propertySection.textContent.includes(address) &&
+          propertySection.textContent.includes("Roof system") &&
+          propertySection.textContent.includes("Exterior paint colors") &&
+          propertySection.textContent.includes("Gate codes") &&
+          propertySection.textContent.includes("Inspection history"),
       );
     },
     "customer properties workspace section",
@@ -2196,7 +2207,7 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     updatedNotes,
   );
   await clickUnique(
-    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Add Note")]'),
+    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Add Internal Note")]'),
     "customer add note quick action",
   );
   await waitFor(
