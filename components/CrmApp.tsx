@@ -118,6 +118,31 @@ import {
 } from "../lib/crm/companyScope";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
+  buildCommunicationProviderReadiness,
+  buildUnifiedInboxItems,
+  communicationAttentionFilters,
+  communicationChannelLabels,
+  communicationDateFilters,
+  communicationItemIsFollowUpDue,
+  communicationItemMatchesAttentionFilter,
+  communicationItemMatchesDateFilter,
+  getCommunicationChannelTone,
+  getCommunicationDirectionLabel,
+  getCommunicationStatusTone,
+  getCompanyLocationLabel,
+  getInboxProviderTone,
+  getLeadInboxProvider,
+  getLeadMessageSummary,
+  inboxFilters,
+  inboxKindFilters,
+  inboxProviderLabels,
+  type CommunicationAttentionFilter,
+  type CommunicationDateFilter,
+  type InboxFilter,
+  type InboxKindFilter,
+  type UnifiedInboxItem,
+} from "../lib/crm/communications";
+import {
   getEstimateTemplatesForTrade,
   type EstimateTemplate,
 } from "../lib/crm/estimateTemplates";
@@ -852,91 +877,6 @@ const smsCategories: { value: SmsMessageCategory; label: string }[] = [
   { value: "job_update", label: "Job update" },
   { value: "weather_delay", label: "Weather delay" },
   { value: "general", label: "General" },
-];
-
-type InboxProvider =
-  | "website"
-  | "yelp"
-  | "twilio"
-  | "gmail"
-  | "gohighlevel"
-  | "manual_unknown";
-
-type CommunicationChannel =
-  | "phone_call"
-  | "sms"
-  | "email"
-  | "website_form"
-  | "yelp"
-  | "google_business"
-  | "facebook_social"
-  | "provider_event"
-  | "manual_entry";
-
-type InboxFilter = "all" | CommunicationChannel;
-type CommunicationDirection = "inbound" | "outbound" | "internal";
-type CommunicationAttentionFilter =
-  | "all"
-  | "unread"
-  | "missed"
-  | "failed"
-  | "unassigned"
-  | "follow_up"
-  | "archived";
-type CommunicationDateFilter = "all" | "today" | "7d" | "30d";
-
-const inboxFilters: { value: InboxFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "phone_call", label: "Calls" },
-  { value: "sms", label: "SMS" },
-  { value: "email", label: "Email" },
-  { value: "website_form", label: "Website" },
-  { value: "yelp", label: "Yelp" },
-  { value: "google_business", label: "Google Business" },
-  { value: "facebook_social", label: "Facebook" },
-  { value: "provider_event", label: "Provider events" },
-  { value: "manual_entry", label: "Manual" },
-];
-
-const inboxProviderLabels: Record<InboxProvider, string> = {
-  website: "Website",
-  yelp: "Yelp",
-  twilio: "Twilio",
-  gmail: "Gmail",
-  gohighlevel: "GoHighLevel",
-  manual_unknown: "Manual/unknown",
-};
-
-const communicationChannelLabels: Record<CommunicationChannel, string> = {
-  phone_call: "Call",
-  sms: "SMS",
-  email: "Email",
-  website_form: "Website",
-  yelp: "Yelp",
-  google_business: "Google Business",
-  facebook_social: "Facebook",
-  provider_event: "Provider event",
-  manual_entry: "Manual",
-};
-
-const communicationAttentionFilters: {
-  value: CommunicationAttentionFilter;
-  label: string;
-}[] = [
-  { value: "all", label: "All states" },
-  { value: "unread", label: "Unread/new" },
-  { value: "missed", label: "Missed calls" },
-  { value: "failed", label: "Failed" },
-  { value: "unassigned", label: "Unassigned" },
-  { value: "follow_up", label: "Follow-up due" },
-  { value: "archived", label: "Archived" },
-];
-
-const communicationDateFilters: { value: CommunicationDateFilter; label: string }[] = [
-  { value: "all", label: "Any time" },
-  { value: "today", label: "Today" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
 ];
 
 const scopeCategories = (Object.keys(scopeCategoryLabels) as ScopeCategory[]).map(
@@ -2403,7 +2343,7 @@ export function CrmApp() {
 function LoadingScreen({ label }: { label: string }) {
   return (
     <main className="min-h-screen bg-slate-50 p-4 text-slate-950 sm:p-6">
-      <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-lg border border-slate-200 bg-slate-950 p-4 shadow-sm xl:min-h-[calc(100vh-48px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
             <div className="grid h-11 w-11 place-items-center rounded-md bg-sky-500 font-bold text-white">
@@ -2799,7 +2739,7 @@ function CrmWorkspace({
       }`}
     >
       <ToastViewport notice={notice} error={error} />
-      <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:min-h-[calc(100vh-48px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
             <div
@@ -2853,7 +2793,7 @@ function CrmWorkspace({
           </div>
         </aside>
 
-        <section className="min-w-0 space-y-5">
+        <section className="min-w-0 max-w-full space-y-5 overflow-hidden">
           <header className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div>
@@ -4588,593 +4528,11 @@ function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
   };
 }
 
-type UnifiedInboxItem = {
-  id: string;
-  provider: InboxProvider;
-  channel: CommunicationChannel;
-  direction: CommunicationDirection;
-  kind: "Lead" | "SMS" | "Email" | "Integration";
-  companyId: string;
-  leadId: string | null;
-  customerId: string | null;
-  relatedTable: string | null;
-  relatedRecordId: string | null;
-  customerName: string;
-  contact: string;
-  phone: string | null;
-  email: string | null;
-  businessLocation: string;
-  sourceAccount: string | null;
-  sourceLabel: string;
-  serviceType: string;
-  summary: string;
-  createdAt: string;
-  status: string;
-  isUnread: boolean;
-  isArchived: boolean;
-  isFailed: boolean;
-  isMissedCall: boolean;
-  isUnassigned: boolean;
-  followUpAt: string | null;
-  assignedTo: string | null;
-  failureDetail: string | null;
-};
-
-type InboxKindFilter = "all" | UnifiedInboxItem["kind"];
-
 type UnifiedInboxViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onViewChange: (view: WorkspaceView) => void;
 };
-
-const inboxKindFilters: { value: InboxKindFilter; label: string }[] = [
-  { value: "all", label: "All activity" },
-  { value: "Lead", label: "Leads" },
-  { value: "SMS", label: "SMS" },
-  { value: "Email", label: "Email" },
-  { value: "Integration", label: "Integrations" },
-];
-
-function getInboxProviderTone(provider: InboxProvider) {
-  return provider === "website"
-    ? "green"
-    : provider === "manual_unknown"
-      ? "amber"
-      : "blue";
-}
-
-function getCommunicationChannelTone(channel: CommunicationChannel) {
-  return channel === "website_form" || channel === "yelp"
-    ? "green"
-    : channel === "manual_entry" || channel === "provider_event"
-      ? "amber"
-      : "blue";
-}
-
-function getCommunicationDirectionLabel(direction: CommunicationDirection) {
-  const labels: Record<CommunicationDirection, string> = {
-    inbound: "Inbound",
-    outbound: "Outbound",
-    internal: "Internal",
-  };
-
-  return labels[direction];
-}
-
-function getInboxProviderFromText(value: string | null | undefined): InboxProvider {
-  const normalized = value?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "";
-
-  if (normalized.includes("gmail") || normalized.includes("email")) {
-    return "gmail";
-  }
-
-  if (normalized.includes("gohighlevel") || normalized.includes("ghl")) {
-    return "gohighlevel";
-  }
-
-  if (normalized.includes("twilio") || normalized.includes("sms")) {
-    return "twilio";
-  }
-
-  if (normalized.includes("yelp")) {
-    return "yelp";
-  }
-
-  if (normalized.includes("website") || normalized.includes("webform")) {
-    return "website";
-  }
-
-  return "manual_unknown";
-}
-
-function getInboxProviderFromLeadNotes(notes: string | null | undefined): InboxProvider {
-  const firstLine = notes?.split("\n")[0] ?? "";
-  const firstLineProvider = getInboxProviderFromText(firstLine);
-
-  if (firstLineProvider !== "manual_unknown") {
-    return firstLineProvider;
-  }
-
-  return "manual_unknown";
-}
-
-function getCompanyLocationLabel(
-  company: CompanyRecord | undefined,
-  location: string | null | undefined,
-) {
-  const companyName = company?.short_name ?? company?.name ?? "Business";
-  const locationText = location?.trim();
-
-  if (!locationText) {
-    return companyName;
-  }
-
-  if (locationText.toLowerCase() === companyName.toLowerCase()) {
-    return companyName;
-  }
-
-  return `${companyName} · ${locationText}`;
-}
-
-function getInboxContact(phone: string | null | undefined, email: string | null | undefined) {
-  return [phone, email].filter(Boolean).join(" · ") || "No contact provided";
-}
-
-function getLeadMessageSummary(lead: LeadRecord) {
-  const messageLine = lead.notes
-    ?.split("\n")
-    .find((line) => line.toLowerCase().startsWith("message:"));
-  const message = messageLine?.replace(/^message:\s*/i, "").trim();
-
-  if (message && message.toLowerCase() !== "not provided") {
-    return message;
-  }
-
-  return lead.notes?.trim() || lead.property_address || "New lead created.";
-}
-
-function getLeadInboxProvider(lead: LeadRecord) {
-  const sourceProvider = getInboxProviderFromText(lead.source);
-
-  if (sourceProvider !== "manual_unknown") {
-    return sourceProvider;
-  }
-
-  return getInboxProviderFromLeadNotes(lead.notes);
-}
-
-function getLeadCommunicationChannel(provider: InboxProvider): CommunicationChannel {
-  if (provider === "website") {
-    return "website_form";
-  }
-
-  if (provider === "yelp") {
-    return "yelp";
-  }
-
-  if (provider === "twilio") {
-    return "sms";
-  }
-
-  if (provider === "gmail") {
-    return "email";
-  }
-
-  if (provider === "gohighlevel") {
-    return "provider_event";
-  }
-
-  return "manual_entry";
-}
-
-function getIntegrationCommunicationChannel(
-  provider: IntegrationProvider,
-): CommunicationChannel {
-  if (provider === "website") {
-    return "website_form";
-  }
-
-  if (provider === "yelp") {
-    return "yelp";
-  }
-
-  if (provider === "twilio" || provider === "twilio_sms") {
-    return "sms";
-  }
-
-  if (provider === "gmail") {
-    return "email";
-  }
-
-  return "provider_event";
-}
-
-function getIntegrationInboxProvider(provider: IntegrationProvider): InboxProvider {
-  if (provider === "website") {
-    return "website";
-  }
-
-  if (provider === "yelp") {
-    return "yelp";
-  }
-
-  if (provider === "twilio" || provider === "twilio_sms") {
-    return "twilio";
-  }
-
-  if (provider === "gmail") {
-    return "gmail";
-  }
-
-  if (provider === "gohighlevel") {
-    return "gohighlevel";
-  }
-
-  return "manual_unknown";
-}
-
-function getIntegrationProviderLabel(provider: IntegrationProvider) {
-  const inboxProvider = getIntegrationInboxProvider(provider);
-
-  return inboxProviderLabels[inboxProvider];
-}
-
-function getSmsTarget(snapshot: CrmSnapshot, message: SmsMessageRecord) {
-  const lead = message.lead_id
-    ? snapshot.leads.find((item) => item.id === message.lead_id)
-    : null;
-  const customer = message.customer_id
-    ? snapshot.customers.find((item) => item.id === message.customer_id)
-    : null;
-
-  const isLikelyInbound = getSmsDirection(message) === "inbound";
-
-  return {
-    lead,
-    customer,
-    name:
-      lead?.contact_name ??
-      customer?.display_name ??
-      customer?.contact_name ??
-      (isLikelyInbound ? message.from_phone : message.to_phone) ??
-      "Unknown SMS contact",
-    serviceType: lead ? serviceLabel(lead.service_type) : "General",
-    location: lead?.city ?? customer?.city ?? lead?.property_address ?? null,
-  };
-}
-
-function getSmsDirection(message: SmsMessageRecord): CommunicationDirection {
-  if (message.status === "draft" || message.status === "queued") {
-    return "outbound";
-  }
-
-  if (message.twilio_message_sid && message.from_phone && !message.customer_id && !message.lead_id) {
-    return "inbound";
-  }
-
-  return "outbound";
-}
-
-function getEmailTarget(snapshot: CrmSnapshot, message: EmailMessageRecord) {
-  const customer = message.customer_id
-    ? snapshot.customers.find((item) => item.id === message.customer_id)
-    : null;
-
-  return {
-    name: customer?.display_name ?? customer?.contact_name ?? message.to_email,
-    location: customer?.city ?? customer?.property_address ?? null,
-  };
-}
-
-function getIntegrationLogLead(snapshot: CrmSnapshot, log: IntegrationSyncLogRecord) {
-  return log.related_table === "leads" && log.related_record_id
-    ? snapshot.leads.find((lead) => lead.id === log.related_record_id)
-    : null;
-}
-
-function communicationItemIsFollowUpDue(item: UnifiedInboxItem) {
-  return Boolean(item.followUpAt && Date.parse(item.followUpAt) <= Date.now());
-}
-
-function communicationItemMatchesDateFilter(
-  item: UnifiedInboxItem,
-  dateFilter: CommunicationDateFilter,
-) {
-  if (dateFilter === "all") {
-    return true;
-  }
-
-  const itemTime = Date.parse(item.createdAt);
-
-  if (!Number.isFinite(itemTime)) {
-    return false;
-  }
-
-  const now = new Date();
-
-  if (dateFilter === "today") {
-    return new Date(itemTime).toDateString() === now.toDateString();
-  }
-
-  const days = dateFilter === "7d" ? 7 : 30;
-  const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
-
-  return itemTime >= cutoff;
-}
-
-function communicationItemMatchesAttentionFilter(
-  item: UnifiedInboxItem,
-  attentionFilter: CommunicationAttentionFilter,
-) {
-  if (attentionFilter === "all") {
-    return true;
-  }
-
-  if (attentionFilter === "unread") {
-    return item.isUnread;
-  }
-
-  if (attentionFilter === "missed") {
-    return item.isMissedCall;
-  }
-
-  if (attentionFilter === "failed") {
-    return item.isFailed;
-  }
-
-  if (attentionFilter === "unassigned") {
-    return item.isUnassigned;
-  }
-
-  if (attentionFilter === "follow_up") {
-    return communicationItemIsFollowUpDue(item);
-  }
-
-  return item.isArchived;
-}
-
-function getCommunicationStatusTone(item: UnifiedInboxItem) {
-  if (item.isFailed || item.isUnassigned || item.isMissedCall) {
-    return "amber";
-  }
-
-  if (item.status.toLowerCase().includes("sent") || item.status.toLowerCase().includes("succeeded")) {
-    return "green";
-  }
-
-  return "blue";
-}
-
-function buildUnifiedInboxItems(
-  snapshot: CrmSnapshot,
-  companyMap: Map<string, CompanyRecord>,
-) {
-  const leadItems: UnifiedInboxItem[] = snapshot.leads.map((lead) => {
-    const company = companyMap.get(lead.company_id);
-    const provider = getLeadInboxProvider(lead);
-    const channel = getLeadCommunicationChannel(provider);
-    const followUpAt = lead.next_follow_up;
-
-    return {
-      id: `lead-${lead.id}`,
-      provider,
-      channel,
-      direction: "inbound",
-      kind: "Lead",
-      companyId: lead.company_id,
-      leadId: lead.id,
-      customerId: lead.customer_id,
-      relatedTable: "leads",
-      relatedRecordId: lead.id,
-      customerName: lead.contact_name,
-      contact: getInboxContact(lead.phone, lead.email),
-      phone: lead.phone,
-      email: lead.email,
-      businessLocation: getCompanyLocationLabel(
-        company,
-        lead.city || lead.property_address,
-      ),
-      sourceAccount: lead.city || lead.source,
-      sourceLabel: inboxProviderLabels[provider],
-      serviceType: serviceLabel(lead.service_type),
-      summary: getLeadMessageSummary(lead),
-      createdAt: lead.created_at,
-      status: statusLabel(lead.status),
-      isUnread: lead.status === "new" || lead.pipeline_stage === "new_lead",
-      isArchived: false,
-      isFailed: false,
-      isMissedCall: false,
-      isUnassigned: !lead.created_by,
-      followUpAt,
-      assignedTo: lead.created_by,
-      failureDetail: null,
-    };
-  });
-
-  const smsItems: UnifiedInboxItem[] = snapshot.smsMessages.map((message) => {
-    const target = getSmsTarget(snapshot, message);
-    const direction = getSmsDirection(message);
-    const contactPhone = direction === "inbound" ? message.from_phone : message.to_phone;
-
-    return {
-      id: `sms-${message.id}`,
-      provider: "twilio",
-      channel: "sms",
-      direction,
-      kind: "SMS",
-      companyId: message.company_id,
-      leadId: message.lead_id,
-      customerId: message.customer_id,
-      relatedTable: "sms_messages",
-      relatedRecordId: message.id,
-      customerName: target.name,
-      contact: contactPhone ?? message.to_phone,
-      phone: contactPhone ?? message.to_phone,
-      email: null,
-      businessLocation: getCompanyLocationLabel(
-        companyMap.get(message.company_id),
-        target.location,
-      ),
-      sourceAccount: message.from_phone,
-      sourceLabel: "Twilio",
-      serviceType: target.serviceType,
-      summary: message.body,
-      createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
-      status: smsMessageStatusLabel(message.status),
-      isUnread: direction === "inbound",
-      isArchived: false,
-      isFailed: message.status === "failed",
-      isMissedCall: false,
-      isUnassigned: !message.customer_id && !message.lead_id,
-      followUpAt: null,
-      assignedTo: null,
-      failureDetail: sanitizeIntegrationSyncLogText(message.last_error),
-    };
-  });
-
-  const emailItems: UnifiedInboxItem[] = snapshot.emailMessages.map((message) => {
-    const target = getEmailTarget(snapshot, message);
-
-    return {
-      id: `email-${message.id}`,
-      provider: "gmail",
-      channel: "email",
-      direction: "outbound",
-      kind: "Email",
-      companyId: message.company_id,
-      leadId: null,
-      customerId: message.customer_id,
-      relatedTable: "email_messages",
-      relatedRecordId: message.id,
-      customerName: target.name,
-      contact: message.to_email,
-      phone: null,
-      email: message.to_email,
-      businessLocation: getCompanyLocationLabel(
-        companyMap.get(message.company_id),
-        target.location,
-      ),
-      sourceAccount: message.cc_email,
-      sourceLabel: "Gmail",
-      serviceType: emailCategoryLabel(message.category),
-      summary: message.subject || message.body,
-      createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
-      status: emailMessageStatusLabel(message.status),
-      isUnread: false,
-      isArchived: false,
-      isFailed: message.status === "failed",
-      isMissedCall: false,
-      isUnassigned: !message.customer_id,
-      followUpAt: null,
-      assignedTo: null,
-      failureDetail: sanitizeIntegrationSyncLogText(message.last_error),
-    };
-  });
-
-  const integrationItems: UnifiedInboxItem[] = snapshot.integrationSyncLogs
-    .filter(
-      (log) =>
-        log.provider === "gohighlevel" ||
-        log.status === "failed" ||
-        log.status === "retrying",
-    )
-    .map((log) => {
-      const lead = getIntegrationLogLead(snapshot, log);
-      const provider = getIntegrationInboxProvider(log.provider);
-
-      return {
-        id: `integration-${log.id}`,
-        provider,
-        channel: getIntegrationCommunicationChannel(log.provider),
-        direction:
-          log.direction === "provider_to_weathertech"
-            ? "inbound"
-            : log.direction === "weathertech_to_provider"
-              ? "outbound"
-              : "internal",
-        kind: "Integration",
-        companyId: log.company_id,
-        leadId: lead?.id ?? null,
-        customerId: lead?.customer_id ?? null,
-        relatedTable: log.related_table,
-        relatedRecordId: log.related_record_id,
-        customerName: lead?.contact_name ?? log.event_type,
-        contact: getInboxContact(lead?.phone, lead?.email),
-        phone: lead?.phone ?? null,
-        email: lead?.email ?? null,
-        businessLocation: getCompanyLocationLabel(
-          companyMap.get(log.company_id),
-          lead?.city ?? lead?.property_address,
-        ),
-        sourceAccount: log.external_id,
-        sourceLabel: getIntegrationProviderLabel(log.provider),
-        serviceType: lead ? serviceLabel(lead.service_type) : "Lead sync",
-        summary:
-          sanitizeIntegrationSyncLogText(log.error_message) ??
-          integrationSyncLogStatusLabel(log.status),
-        createdAt: log.completed_at ?? log.last_attempted_at ?? log.created_at,
-        status: integrationSyncLogStatusLabel(log.status),
-        isUnread: log.status === "failed" || log.status === "retrying",
-        isArchived: false,
-        isFailed: log.status === "failed",
-        isMissedCall: false,
-        isUnassigned: !lead?.customer_id,
-        followUpAt: log.next_retry_at,
-        assignedTo: null,
-        failureDetail: sanitizeIntegrationSyncLogText(log.error_message),
-      };
-    });
-
-  return [...leadItems, ...smsItems, ...emailItems, ...integrationItems].sort(
-    (left, right) =>
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
-  );
-}
-
-function getCommunicationProviderStates(snapshot: CrmSnapshot) {
-  const hasConnection = (provider: IntegrationProvider) =>
-    snapshot.integrationConnections.some(
-      (connection) => connection.provider === provider && connection.status === "connected",
-    );
-
-  return [
-    {
-      label: "Website intake",
-      status: "Ready",
-      detail: "Server endpoint normalizes website form leads into CRM leads.",
-      tone: "green" as const,
-    },
-    {
-      label: "Yelp intake",
-      status: "Ready",
-      detail: "Provider-agnostic endpoint is ready for approved Yelp forwarding.",
-      tone: "green" as const,
-    },
-    {
-      label: "Twilio SMS",
-      status: hasConnection("twilio_sms") ? "Configured" : "Disconnected",
-      detail: hasConnection("twilio_sms")
-        ? "SMS records and webhook storage can appear in the hub."
-        : "Outbound send controls stay disabled until Twilio credentials and numbers are configured.",
-      tone: hasConnection("twilio_sms") ? ("green" as const) : ("amber" as const),
-    },
-    {
-      label: "Gmail",
-      status: hasConnection("gmail") ? "Configured" : "Disconnected",
-      detail: hasConnection("gmail")
-        ? "Email drafts and queued sends can appear in the hub."
-        : "Gmail OAuth/send worker is not verified, so email is shown as draft/outbox history only.",
-      tone: hasConnection("gmail") ? ("green" as const) : ("amber" as const),
-    },
-    {
-      label: "Calls",
-      status: "Not connected",
-      detail: "No persisted call table or voice provider workflow exists yet.",
-      tone: "amber" as const,
-    },
-  ];
-}
 
 function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxViewProps) {
   const [providerFilter, setProviderFilter] = useState<InboxFilter>("all");
@@ -5197,7 +4555,10 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         .sort(),
     [inboxItems],
   );
-  const providerStates = useMemo(() => getCommunicationProviderStates(snapshot), [snapshot]);
+  const providerStates = useMemo(
+    () => buildCommunicationProviderReadiness(snapshot, inboxItems),
+    [inboxItems, snapshot],
+  );
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
 
@@ -5210,6 +4571,9 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         item.sourceAccount,
         item.serviceType,
         item.summary,
+        item.notes,
+        item.participants.join(" "),
+        item.attachments.join(" "),
         item.status,
         item.kind,
         item.channel,
@@ -5297,12 +4661,12 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
               Communications Hub
             </p>
             <h2 className="mt-1 text-xl font-bold text-slate-950">
-              Lead and communication activity
+              Unified Communications Center
             </h2>
             <p className="mt-1 max-w-2xl text-sm text-slate-500">
-              Website, Yelp, SMS, email, and provider sync activity in one queue.
-              Calls and outbound provider sends stay clearly disconnected until real
-              credentials and workflows are verified.
+              Lead and communication activity from phone, SMS, email, website,
+              Yelp, GoHighLevel, internal notes, and calendar records in one queue.
+              Outbound provider sends stay disabled here until real workflows are approved.
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px] xl:grid-cols-4">
@@ -5322,7 +4686,7 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {providerStates.map((state) => (
             <div
               key={state.label}
@@ -5330,9 +4694,33 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
             >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-bold text-slate-950">{state.label}</p>
-                <Badge label={state.status} tone={state.tone} />
+                <Badge label={state.connectionStatus} tone={state.tone} />
               </div>
-              <p className="mt-2 text-xs leading-5 text-slate-500">{state.detail}</p>
+              <div className="mt-3 grid gap-2 text-xs text-slate-600">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-500">Sync health</span>
+                  <span className="font-bold text-slate-900">{state.syncHealth}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-500">Last sync</span>
+                  <span className="text-right">
+                    {state.lastSyncAt ? formatDateTime(state.lastSyncAt) : "Not synced"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-500">Last activity</span>
+                  <span className="text-right">
+                    {state.lastActivityAt
+                      ? formatDateTime(state.lastActivityAt)
+                      : "No activity"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-500">Error state</span>
+                  <span className="text-right">{state.errorState}</span>
+                </div>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-slate-500">{state.detail}</p>
             </div>
           ))}
         </div>
@@ -5522,8 +4910,8 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
                 <div className="text-sm text-slate-600 lg:text-right">
                   <p className="font-semibold text-slate-950">Received</p>
                   <p className="mt-1">{formatDateTime(item.createdAt)}</p>
-                  <p className="mt-3 font-semibold text-slate-950">Assignment</p>
-                  <p className="mt-1">{item.assignedTo ?? "Unassigned"}</p>
+                  <p className="mt-3 font-semibold text-slate-950">Provider</p>
+                  <p className="mt-1">{item.sourceLabel}</p>
                 </div>
               </button>
             ))}
@@ -5587,6 +4975,13 @@ function CommunicationDetailPanel({
       );
     })
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const relatedRecords = [
+    item.leadId ? "Lead linked" : null,
+    item.customerId ? "Customer linked" : null,
+    item.jobId ? "Job linked" : null,
+    item.estimateId ? "Estimate linked" : null,
+    item.scheduleEventId ? "Calendar linked" : null,
+  ].filter(Boolean);
 
   return (
     <aside
@@ -5608,8 +5003,15 @@ function CommunicationDetailPanel({
       </div>
 
       <dl className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
+        <CustomerDetail label="Source" value={item.sourceLabel} />
+        <CustomerDetail label="Channel" value={communicationChannelLabels[item.channel]} />
         <CustomerDetail label="Direction" value={getCommunicationDirectionLabel(item.direction)} />
         <CustomerDetail label="Status" value={item.status} />
+        <CustomerDetail label="Created" value={formatDateTime(item.createdAt)} />
+        <CustomerDetail
+          label="Updated"
+          value={item.updatedAt ? formatDateTime(item.updatedAt) : "Not updated"}
+        />
         <CustomerDetail label="Company/location" value={item.businessLocation} />
         <CustomerDetail label="Account/source" value={item.sourceAccount ?? item.sourceLabel} />
         <CustomerDetail label="Assigned" value={item.assignedTo ?? "Unassigned"} />
@@ -5617,7 +5019,48 @@ function CommunicationDetailPanel({
           label="Follow-up"
           value={item.followUpAt ? formatDateTime(item.followUpAt) : "None scheduled"}
         />
+        <CustomerDetail
+          label="Related records"
+          value={relatedRecords.length ? relatedRecords.join(", ") : "No CRM link"}
+        />
       </dl>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white p-3">
+          <p className="text-sm font-bold text-slate-950">Participants</p>
+          {item.participants.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {item.participants.map((participant) => (
+                <span
+                  key={participant}
+                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600"
+                >
+                  {participant}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-slate-500">No participants recorded.</p>
+          )}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-3">
+          <p className="text-sm font-bold text-slate-950">Attachments</p>
+          {item.attachments.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {item.attachments.map((attachment) => (
+                <span
+                  key={attachment}
+                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600"
+                >
+                  {attachment}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-slate-500">No attachments linked.</p>
+          )}
+        </div>
+      </div>
 
       {item.failureDetail ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -5625,6 +5068,13 @@ function CommunicationDetailPanel({
           <p className="mt-1">{item.failureDetail}</p>
         </div>
       ) : null}
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+        <p className="text-sm font-bold text-slate-950">Notes</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+          {item.notes ?? item.summary}
+        </p>
+      </div>
 
       <div className="mt-5 grid gap-2 sm:grid-cols-2">
         {item.leadId ? (
@@ -5670,10 +5120,9 @@ function CommunicationDetailPanel({
       <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <p className="text-sm font-bold text-slate-950">Supported actions</p>
         <div className="mt-3 grid gap-2 text-sm text-slate-600">
-          <p>Read-only conversation history is available from CRM, lead intake, SMS, email, and sync-log records.</p>
-          <p>SMS sending remains disabled here until the Twilio worker is connected and verified.</p>
-          <p>Email sending remains draft/queue-only until Gmail OAuth/send behavior is verified.</p>
-          <p>Call logging needs a persisted call-record model before it can be saved safely.</p>
+          <p>Read-only conversation history is available from CRM, lead intake, SMS, email, calendar, internal-note, and sync-log records.</p>
+          <p>No outbound call, SMS, email, Yelp, Google Business Profile, or GoHighLevel action is enabled from this panel.</p>
+          <p>Live provider writes still require approved credentials, explicit workflow controls, and provider-specific workers.</p>
         </div>
       </div>
 
@@ -8975,8 +8424,8 @@ function CustomerCommunicationsSection({
           <div>
             <p className="text-sm font-bold text-slate-950">Communications</p>
             <p className="mt-1 text-sm text-slate-500">
-              Customer-linked leads, SMS, email drafts, and integration events.
-              Internal notes stay in the Notes and Activity sections.
+              Customer-linked leads, SMS, email drafts, calendar events, internal
+              notes, and integration activity. Internal records stay staff-facing.
             </p>
           </div>
           <button
@@ -9016,6 +8465,10 @@ function CustomerCommunicationsSection({
                   <Badge
                     label={communicationChannelLabels[item.channel]}
                     tone={getCommunicationChannelTone(item.channel)}
+                  />
+                  <Badge
+                    label={item.sourceLabel}
+                    tone={getInboxProviderTone(item.provider)}
                   />
                   <Badge
                     label={getCommunicationDirectionLabel(item.direction)}

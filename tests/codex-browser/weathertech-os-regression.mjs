@@ -2192,7 +2192,7 @@ async function testCustomersWorkflow(tab, env, company, runId) {
       return (
         text.includes("Communications") &&
         text.includes("Open Hub") &&
-        text.includes("Internal notes stay in the Notes and Activity sections")
+        text.includes("Internal records stay staff-facing")
       );
     },
     "customer communications workspace section",
@@ -2277,7 +2277,17 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
 
       return (
         text.includes("communications hub") &&
-        text.includes("lead and communication activity")
+        text.includes("lead and communication activity") &&
+        text.includes("twilio") &&
+        text.includes("gmail") &&
+        text.includes("google calendar") &&
+        text.includes("google business profile") &&
+        text.includes("yelp") &&
+        text.includes("gohighlevel") &&
+        text.includes("sync health") &&
+        text.includes("last sync") &&
+        text.includes("last activity") &&
+        text.includes("error state")
       );
     },
     "unified inbox",
@@ -2302,8 +2312,8 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
   );
   await selectUnique(
     tab.playwright.locator('[data-testid="inbox-attention-filter"]'),
-    "unread",
-    "inbox unread state filter",
+    "unassigned",
+    "inbox unassigned state filter",
   );
   await waitFor(
     tab,
@@ -2315,7 +2325,7 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
         text.includes(normalizedLeadName) &&
         text.includes("website") &&
         text.includes("lead") &&
-        text.includes("unread/new")
+        text.includes("unassigned")
       );
     },
     "filtered inbox lead",
@@ -2330,7 +2340,12 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
 
       return (
         text.includes("conversation detail") &&
+        text.includes("source") &&
+        text.includes("participants") &&
+        text.includes("attachments") &&
+        text.includes("related records") &&
         text.includes("supported actions") &&
+        text.includes("no outbound call") &&
         text.includes(leadName.toLowerCase())
       );
     },
