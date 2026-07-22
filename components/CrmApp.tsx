@@ -3,6 +3,7 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Image from "next/image";
 import {
+  Activity,
   ArrowDown,
   ArrowUp,
   Building2,
@@ -17,6 +18,7 @@ import {
   Copy,
   DollarSign,
   FileText,
+  Globe2,
   Home,
   LogOut,
   Mail,
@@ -28,6 +30,7 @@ import {
   Paintbrush,
   Pencil,
   Phone,
+  PlugZap,
   Plus,
   Printer,
   ReceiptText,
@@ -35,6 +38,7 @@ import {
   Save,
   Search,
   ShieldCheck,
+  Star,
   Sun,
   Trash2,
   Upload,
@@ -142,6 +146,17 @@ import {
   type InboxKindFilter,
   type UnifiedInboxItem,
 } from "../lib/crm/communications";
+import {
+  buildIntegrationCenterProviders,
+  integrationCapabilityLabels,
+  integrationConnectionStateLabel,
+  integrationHealthStateLabel,
+  integrationReadinessStateLabel,
+  type IntegrationHealthState,
+  type IntegrationProviderMetadata,
+  type IntegrationProviderReadiness,
+  type IntegrationReadinessState,
+} from "../lib/crm/integrationCenter";
 import {
   getEstimateTemplatesForTrade,
   type EstimateTemplate,
@@ -3079,7 +3094,7 @@ function CrmWorkspace({
           ) : null}
 
           {view === "settings" ? (
-            <SettingsView snapshot={snapshot} />
+            <SettingsView snapshot={snapshot} onViewChange={onViewChange} />
           ) : null}
         </section>
       </div>
@@ -23944,13 +23959,249 @@ function IntegrationsView({
   );
 }
 
-function SettingsView({ snapshot }: { snapshot: CrmSnapshot }) {
+const integrationProviderIconMap: Record<
+  IntegrationProviderMetadata["iconKey"],
+  typeof Home
+> = {
+  automation: Bot,
+  calendar: CalendarClock,
+  future: PlugZap,
+  mail: Mail,
+  phone: Phone,
+  reviews: Star,
+  website: Globe2,
+};
+
+function getReadinessTone(state: IntegrationReadinessState): "blue" | "green" | "amber" {
+  return state === "ready" ? "green" : state === "disabled" ? "blue" : "amber";
+}
+
+function getHealthTone(state: IntegrationHealthState): "blue" | "green" | "amber" {
+  return state === "healthy" ? "green" : state === "disabled" ? "blue" : "amber";
+}
+
+function ProviderStatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "blue" | "green" | "amber";
+}) {
+  return <Badge label={label} tone={tone} />;
+}
+
+function ProviderHealthIndicator({ provider }: { provider: IntegrationProviderReadiness }) {
+  const tone = getHealthTone(provider.healthState);
+  const dotClass = {
+    amber: "bg-amber-500",
+    blue: "bg-sky-500",
+    green: "bg-emerald-500",
+  }[tone];
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-2">
+        <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
+        <p className="text-sm font-bold text-slate-950">
+          {integrationHealthStateLabel(provider.healthState)}
+        </p>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-slate-500">
+        {provider.healthSummary}
+      </p>
+    </div>
+  );
+}
+
+function ProviderSyncIndicator({ provider }: { provider: IntegrationProviderReadiness }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-slate-500">Last Sync</span>
+        <span className="text-right font-semibold text-slate-900">
+          {formatOptionalDateTime(provider.syncState.lastSyncAt)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-slate-500">Last Activity</span>
+        <span className="text-right font-semibold text-slate-900">
+          {formatOptionalDateTime(provider.syncState.lastActivityAt)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-slate-500">Sync Records</span>
+        <span className="font-semibold text-slate-900">
+          {provider.syncState.total}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ProviderCapabilityPills({ provider }: { provider: IntegrationProviderReadiness }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {provider.metadata.capabilities.map((capability) => (
+        <span
+          key={capability}
+          className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600"
+        >
+          {integrationCapabilityLabels[capability]}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function IntegrationProviderCard({ provider }: { provider: IntegrationProviderReadiness }) {
+  const Icon = integrationProviderIconMap[provider.metadata.iconKey];
+  const connectionTone = provider.connectionState === "connected" ? "green" : "blue";
+  const readinessTone = getReadinessTone(provider.readinessState);
+
+  return (
+    <article
+      className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+      data-provider-id={provider.metadata.id}
+      data-testid="integration-provider-card"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-white text-sky-700 ring-1 ring-slate-200">
+            <Icon className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-bold text-slate-950">{provider.metadata.label}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              {provider.metadata.description}
+            </p>
+          </div>
+        </div>
+        <ProviderStatusBadge
+          label={integrationConnectionStateLabel(provider.connectionState)}
+          tone={connectionTone}
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <ProviderStatusBadge
+          label={integrationReadinessStateLabel(provider.readinessState)}
+          tone={readinessTone}
+        />
+        <ProviderStatusBadge
+          label={provider.metadata.supportsOAuth ? "OAuth ready" : "API/Webhook"}
+          tone="blue"
+        />
+        {provider.metadata.supportsWebhooks ? (
+          <ProviderStatusBadge label="Webhooks" tone="blue" />
+        ) : null}
+      </div>
+
+      <ProviderCapabilityPills provider={provider} />
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <ProviderHealthIndicator provider={provider} />
+        <ProviderSyncIndicator provider={provider} />
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">
+          Connection Summary
+        </p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {provider.connectionSummary}
+        </p>
+      </div>
+    </article>
+  );
+}
+
+function IntegrationCenterSection({
+  providers,
+  onOpenIntegrations,
+}: {
+  providers: IntegrationProviderReadiness[];
+  onOpenIntegrations: () => void;
+}) {
+  const connectedCount = providers.filter(
+    (provider) => provider.connectionState === "connected",
+  ).length;
+  const readyCount = providers.filter(
+    (provider) => provider.readinessState === "ready",
+  ).length;
+  const needsConfigurationCount = providers.filter(
+    (provider) => provider.readinessState === "requires_configuration",
+  ).length;
+  const needsAttentionCount = providers.filter(
+    (provider) => provider.healthState === "needs_attention",
+  ).length;
+
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+      data-testid="integration-center"
+    >
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Integration Center
+          </p>
+          <h2 className="mt-1 text-xl font-bold text-slate-950">
+            Provider readiness foundation
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            A provider-agnostic registry for communications, lead intake,
+            calendar, automation, webhooks, photos, documents, AI, and future
+            integrations. No provider is connected or messaged from this center.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenIntegrations}
+          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <Activity className="h-4 w-4" />
+          Open integration tools
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Providers" value={providers.length} />
+        <ProfileStat label="Connected" value={connectedCount} />
+        <ProfileStat label="Ready" value={readyCount} />
+        <ProfileStat
+          label="Needs config"
+          value={needsConfigurationCount + needsAttentionCount}
+        />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        {providers.map((provider) => (
+          <IntegrationProviderCard key={provider.metadata.id} provider={provider} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SettingsView({
+  snapshot,
+  onViewChange,
+}: {
+  snapshot: CrmSnapshot;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
   const workflowSettingsByCompany = new Map(
     snapshot.companyWorkflowSettings.map((settings) => [settings.company_id, settings]),
   );
+  const integrationProviders = buildIntegrationCenterProviders(snapshot);
 
   return (
     <div className="space-y-5">
+      <IntegrationCenterSection
+        providers={integrationProviders}
+        onOpenIntegrations={() => onViewChange("integrations")}
+      />
+
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-950">Multi-company settings</h2>
         <p className="mt-1 text-sm text-slate-500">

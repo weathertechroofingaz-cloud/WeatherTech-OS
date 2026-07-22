@@ -16,6 +16,8 @@ const DEFAULT_GROUPS = [
   "lead-intake",
   "themes",
   "layout",
+  "settings",
+  "calendar",
   "inspections",
   "jobs-workspace",
   "job-builder",
@@ -2922,6 +2924,97 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   return overlaps;
 }
 
+async function testSettingsIntegrationCenter(tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Settings");
+  await waitFor(
+    tab,
+    () => {
+      const section = document.querySelector('[data-testid="integration-center"]');
+      const text = section?.textContent?.toLowerCase() ?? "";
+      const cards = [
+        ...(section?.querySelectorAll('[data-testid="integration-provider-card"]') ?? []),
+      ];
+
+      return (
+        text.includes("integration center") &&
+        text.includes("provider readiness foundation") &&
+        text.includes("connected") &&
+        text.includes("not connected") &&
+        text.includes("ready") &&
+        text.includes("requires configuration") &&
+        text.includes("disabled") &&
+        text.includes("last sync") &&
+        text.includes("last activity") &&
+        text.includes("health") &&
+        text.includes("connection summary") &&
+        [
+          "twilio",
+          "gmail",
+          "google calendar",
+          "google business profile",
+          "yelp",
+          "website forms",
+          "gohighlevel",
+        ].every((provider) => text.includes(provider)) &&
+        [
+          "sms",
+          "calling",
+          "email",
+          "calendar",
+          "reviews",
+          "website leads",
+          "crm sync",
+          "photos",
+          "documents",
+          "ai",
+          "webhooks",
+        ].every((capability) => text.includes(capability)) &&
+        cards.length >= 8
+      );
+    },
+    "settings integration center",
+    15000,
+  );
+
+  return await tab.playwright.evaluate(() => {
+    const section = document.querySelector('[data-testid="integration-center"]');
+    const cards = [
+      ...(section?.querySelectorAll('[data-testid="integration-provider-card"]') ?? []),
+    ];
+
+    return {
+      hasSettingsAccess: Boolean(section),
+      providerCards: cards.length,
+    };
+  });
+}
+
+async function testCalendarScreen(tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Calendar");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes("calendar") &&
+        text.includes("schedule inspections, estimates, jobs, follow-ups, and deliveries.") &&
+        text.includes("this week") &&
+        text.includes("scheduled") &&
+        text.includes("conflicts") &&
+        text.includes("unscheduled jobs") &&
+        text.includes("new")
+      );
+    },
+    "calendar screen",
+    15000,
+  );
+
+  return { opened: true };
+}
+
 async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
   await selectTestJob(tab, testJob.title);
 
@@ -4007,6 +4100,18 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("dashboard")) {
       await record("Dashboard loads in live Supabase mode", () =>
         testDashboardLiveMode(tab),
+      );
+    }
+
+    if (enabledGroups.has("settings")) {
+      await record("Settings Integration Center displays provider readiness", () =>
+        testSettingsIntegrationCenter(tab),
+      );
+    }
+
+    if (enabledGroups.has("calendar")) {
+      await record("Calendar screen opens with schedule metrics", () =>
+        testCalendarScreen(tab),
       );
     }
 
