@@ -362,6 +362,15 @@ async function seedTestJob(env, companyId, runId) {
   return job;
 }
 
+async function findJobTaskByTitle(env, jobId, title) {
+  const rows = await restRequest(
+    env,
+    `job_tasks?select=id,title,status,description&job_id=eq.${jobId}&title=eq.${encodeURIComponent(title)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
+}
+
 async function seedTestLead(env, companyId, runId, leadNameColumn) {
   const leadName = `${TEST_PREFIX} ${runId} LEAD`;
   const basePayload = {
@@ -879,6 +888,27 @@ async function selectUnique(locator, value, label) {
   await locator.selectOption(value, { timeoutMs: 8000 });
 }
 
+async function checkUnique(locator, label) {
+  await waitForUniqueLocator(locator, label);
+  let lastError = null;
+
+  for (const action of [
+    () => locator.check({ timeoutMs: 8000 }),
+    () => locator.click({ force: true, timeoutMs: 8000 }),
+    () => locator.check({ timeoutMs: 8000 }),
+  ]) {
+    try {
+      await action();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  throw lastError ?? new Error(`${label} could not be checked.`);
+}
+
 async function waitForNoSavingState(tab, label) {
   await waitFor(
     tab,
@@ -936,56 +966,72 @@ async function clickListRowByParagraph(
   );
 
   await waitForUniqueLocator(row, label, timeoutMs);
-
-  const box = await waitFor(
-    tab,
-    (input) => {
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const section = [...document.querySelectorAll("section")].find((candidate) =>
-        [...candidate.querySelectorAll("h2")].some(
-          (heading) => normalize(heading.textContent) === input.sectionHeading,
-        ),
-      );
-      const row = [...section?.querySelectorAll("button") ?? []].find((candidate) =>
-        [...candidate.querySelectorAll("p")].some(
-          (paragraph) => normalize(paragraph.textContent) === input.paragraphText,
-        ),
-      );
-
-      if (!row) {
-        return null;
-      }
-
-      row.scrollIntoView({ block: "center", behavior: "auto" });
-
-      const rect = row.getBoundingClientRect();
-
-      if (
-        rect.width <= 0 ||
-        rect.height <= 0 ||
-        rect.bottom <= 0 ||
-        rect.top >= window.innerHeight
-      ) {
-        return null;
-      }
-
-      return {
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2),
-      };
-    },
-    label,
-    timeoutMs,
-    input,
-  );
+  let selected = false;
 
   try {
-    await tab.cua.click({ x: box.x, y: box.y });
+    await clickUnique(row, label, { retryTransientClick: true });
+    selected = await waitFor(
+      tab,
+      (input) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const targetText = normalize(input.paragraphText);
+        return [...document.querySelectorAll("aside, aside section")].some((section) =>
+          normalize(section.textContent).includes(targetText),
+        );
+      },
+      `${label} selected through locator`,
+      1200,
+      input,
+    ).catch(() => false);
   } catch {
-    // Fall through to the exact locator click below.
+    selected = false;
   }
 
-  await clickUnique(row, label, { retryTransientClick: true });
+  if (!selected) {
+    const box = await waitFor(
+      tab,
+      (input) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const section = [...document.querySelectorAll("section")].find((candidate) =>
+          [...candidate.querySelectorAll("h2")].some(
+            (heading) => normalize(heading.textContent) === input.sectionHeading,
+          ),
+        );
+        const row = [...section?.querySelectorAll("button") ?? []].find((candidate) =>
+          [...candidate.querySelectorAll("p")].some(
+            (paragraph) => normalize(paragraph.textContent) === input.paragraphText,
+          ),
+        );
+
+        if (!row) {
+          return null;
+        }
+
+        row.scrollIntoView({ block: "center", behavior: "auto" });
+
+        const rect = row.getBoundingClientRect();
+
+        if (
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          rect.bottom <= 0 ||
+          rect.top >= window.innerHeight
+        ) {
+          return null;
+        }
+
+        return {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      },
+      `${label} fallback click target`,
+      timeoutMs,
+      input,
+    );
+
+    await tab.cua.click({ x: box.x, y: box.y });
+  }
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -1059,15 +1105,59 @@ async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) 
     const nodeId = visibleDomButtonNodeId(lastDom, text);
 
     if (nodeId) {
-      await tab.dom_cua.click({ node_id: nodeId });
-      await tab.playwright.waitForTimeout(500);
-      return;
+      try {
+        await tab.dom_cua.click({ node_id: nodeId });
+        await tab.playwright.waitForTimeout(500);
+        return;
+      } catch (error) {
+        lastDom = `${lastDom}\nLast click error: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
     }
 
     await tab.playwright.waitForTimeout(250);
   }
 
   throw new Error(`${label} visible submit button was not found. Visible DOM: ${lastDom.slice(0, 500)}`);
+}
+
+async function clickVisibleDomButtonByText(tab, text, label, timeoutMs = 30000) {
+  const startedAt = Date.now();
+  const input = { text };
+  let lastDom = "";
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await tab.playwright.evaluate((input) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const button = [...document.querySelectorAll("button")].find(
+        (candidate) => normalize(candidate.textContent) === input.text,
+      );
+
+      button?.scrollIntoView({ block: "center", behavior: "auto" });
+    }, input);
+    await tab.playwright.waitForTimeout(200);
+
+    const visibleDom = await tab.dom_cua.get_visible_dom();
+    lastDom = typeof visibleDom === "string" ? visibleDom : JSON.stringify(visibleDom);
+    const nodeId = visibleDomButtonNodeId(lastDom, text, null);
+
+    if (nodeId) {
+      try {
+        await tab.dom_cua.click({ node_id: nodeId });
+        await tab.playwright.waitForTimeout(500);
+        return;
+      } catch (error) {
+        lastDom = `${lastDom}\nLast click error: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+    }
+
+    await tab.playwright.waitForTimeout(250);
+  }
+
+  throw new Error(`${label} visible button was not found. Visible DOM: ${lastDom.slice(0, 500)}`);
 }
 
 async function clickSubmitUntilText(tab, submitText, expectedText, label, attempts = 3) {
@@ -1156,13 +1246,12 @@ function toDateTimeLocalValue(date) {
 
 async function clickCompanyScope(tab, companyName) {
   await tab.playwright.evaluate(() => window.scrollTo(0, 0));
-  await clickVisibleButtonByText(
-    tab,
-    "button[aria-pressed]",
-    companyName,
-    `company scope ${companyName}`,
-    "paragraph",
+  await tab.playwright.waitForTimeout(300);
+  const scopeButton = tab.playwright.locator(
+    `xpath=//button[@aria-pressed and (.//p[normalize-space(.)=${xpathString(companyName)}] or contains(normalize-space(.), ${xpathString(companyName)}))]`,
   );
+  await waitForUniqueLocator(scopeButton, `company scope ${companyName}`);
+  await scopeButton.click({ timeoutMs: 10000 });
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -1206,6 +1295,27 @@ async function preserveScrollAround(tab, action, label, tolerance = 240) {
   return { before, after, delta };
 }
 
+async function preserveScrollAfterControlActivation(tab, activate, settle, label, tolerance = 240) {
+  const before = await getScrollY(tab);
+  await activate();
+  await tab.playwright.waitForTimeout(300);
+  const activated = await getScrollY(tab);
+  await settle();
+  await tab.playwright.waitForTimeout(900);
+  const after = await getScrollY(tab);
+  const delta = Math.abs(after - activated);
+
+  if (delta > tolerance) {
+    throw new Error(`${label} changed scroll by ${delta}px after activation, expected <= ${tolerance}px.`);
+  }
+
+  if (activated > 300 && after < 180) {
+    throw new Error(`${label} jumped near the top of the page after activation.`);
+  }
+
+  return { before, activated, after, delta };
+}
+
 async function preventTopJumpAround(tab, action, label) {
   const before = await getScrollY(tab);
   await action();
@@ -1228,6 +1338,69 @@ async function scrollTextIntoView(tab, text) {
     node?.scrollIntoView({ block: "center", behavior: "auto" });
   }, text);
   await tab.playwright.waitForTimeout(250);
+}
+
+async function scrollChecklistTaskIntoView(tab, taskTitle) {
+  await waitFor(
+    tab,
+    (taskTitle) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const checklist = document.querySelector("#job-section-checklist");
+      const taskCard = [...checklist?.querySelectorAll(".rounded-lg.border") ?? []].find(
+        (candidate) => [...candidate.querySelectorAll("p")].some(
+          (paragraph) => normalize(paragraph.textContent) === taskTitle,
+        ),
+      );
+
+      if (!taskCard) {
+        return false;
+      }
+
+      taskCard.scrollIntoView({ block: "center", behavior: "auto" });
+      return true;
+    },
+    `checklist task ${taskTitle} scroll target`,
+    10000,
+    taskTitle,
+  );
+  await tab.playwright.waitForTimeout(250);
+}
+
+async function clickInspectionTabAndWait(tab, label, expectedTexts) {
+  const expected = Array.isArray(expectedTexts) ? expectedTexts : [expectedTexts];
+  let opened = false;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await scrollTextIntoView(tab, label);
+    await clickUnique(
+      tab.playwright.getByRole("button", { name: label }),
+      `${label} inspection tab attempt ${attempt}`,
+    );
+
+    try {
+      await waitFor(
+        tab,
+        (expected) => {
+          const text = document.body.innerText.toLowerCase();
+
+          return expected.every((item) => text.includes(item.toLowerCase()));
+        },
+        `${label} inspection tab panel`,
+        attempt === 2 ? 10000 : 2500,
+        expected,
+      );
+      opened = true;
+      break;
+    } catch (error) {
+      if (attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  if (!opened) {
+    throw new Error(`${label} inspection tab did not open.`);
+  }
 }
 
 async function testTheme(tab, companyName, expectedPrimary, expectedAccent = null) {
@@ -1934,7 +2107,7 @@ async function testCustomersWorkflow(tab, env, company, runId) {
         quickActionText.includes("Schedule Visit") &&
         quickActionText.includes("Upload Documents") &&
         quickActionText.includes("Open Calendar") &&
-        workspaceText.includes("Future Communications")
+        workspaceText.includes("Communications")
       );
     },
     "customer 360 workspace sections and quick actions",
@@ -1996,6 +2169,22 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     tab,
     () => document.body.innerText.includes("Maintenance plans are prepared"),
     "customer maintenance placeholder",
+    10000,
+  );
+  await clickCustomerWorkspaceTab(tab, "Communications");
+  await waitFor(
+    tab,
+    () => {
+      const section = document.querySelector('[data-testid="customer-communications-section"]');
+      const text = section?.textContent ?? "";
+
+      return (
+        text.includes("Communications") &&
+        text.includes("Open Hub") &&
+        text.includes("Internal notes stay in the Notes and Activity sections")
+      );
+    },
+    "customer communications workspace section",
     10000,
   );
   await clickCustomerWorkspaceTab(tab, "Notes");
@@ -2072,7 +2261,14 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
   await clickNav(tab, "Inbox");
   await waitFor(
     tab,
-    () => document.body.innerText.includes("Lead and communication activity"),
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes("communications hub") &&
+        text.includes("lead and communication activity")
+      );
+    },
     "unified inbox",
     15000,
   );
@@ -2088,21 +2284,46 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
     "inbox activity type filter",
   );
   await clickUnique(
-    tab.playwright.locator('xpath=//button[contains(normalize-space(.), "Website")]'),
+    tab.playwright.locator(
+      'xpath=//div[@aria-label="Communication channels"]//button[contains(normalize-space(.), "Website")]',
+    ),
     "Website inbox source filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="inbox-attention-filter"]'),
+    "unread",
+    "inbox unread state filter",
   );
   await waitFor(
     tab,
     (leadName) => {
-      const text = document.body.innerText;
+      const text = document.body.innerText.toLowerCase();
+      const normalizedLeadName = leadName.toLowerCase();
 
       return (
-        text.includes(leadName) &&
-        text.includes("Website") &&
-        text.includes("Lead")
+        text.includes(normalizedLeadName) &&
+        text.includes("website") &&
+        text.includes("lead") &&
+        text.includes("unread/new")
       );
     },
     "filtered inbox lead",
+    10000,
+    leadWorkflow.leadName,
+  );
+  await waitFor(
+    tab,
+    (leadName) => {
+      const detail = document.querySelector('[data-testid="communication-detail"]');
+      const text = detail?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("conversation detail") &&
+        text.includes("supported actions") &&
+        text.includes(leadName.toLowerCase())
+      );
+    },
+    "communication detail panel",
     10000,
     leadWorkflow.leadName,
   );
@@ -2112,13 +2333,16 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
     () => {
       const search = document.querySelector('[data-testid="inbox-search"]');
       const kind = document.querySelector('[data-testid="inbox-kind-filter"]');
+      const attention = document.querySelector('[data-testid="inbox-attention-filter"]');
 
       return (
         document.body.innerText.includes("Recent activity") &&
         search?.tagName === "INPUT" &&
         search.value === "" &&
         kind?.tagName === "SELECT" &&
-        kind.value === "all"
+        kind.value === "all" &&
+        attention?.tagName === "SELECT" &&
+        attention.value === "all"
       );
     },
     "cleared inbox filters",
@@ -2129,6 +2353,7 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
     search: "passed",
     kindFilter: "Lead",
     providerFilter: "Website",
+    detailPanel: "passed",
   };
 }
 
@@ -2710,7 +2935,12 @@ async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
   await selectUnique(
     tab.playwright.locator('[data-testid="jobs-schedule-filter"]'),
     "scheduled",
-    "jobs scheduled no-results filter",
+    "jobs scheduled filter",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="jobs-search"]'),
+    `${testJob.title} NO RESULTS`,
+    "jobs workspace no-results search",
   );
   await waitFor(
     tab,
@@ -2905,16 +3135,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   progress("inspections:filters:done");
 
   progress("inspections:finding:start");
-  await clickUnique(tab.playwright.getByRole("button", { name: "Field mode" }), "Field mode");
-  await waitFor(
-    tab,
-    () => {
-      const text = document.body.innerText.toLowerCase();
-
-      return text.includes("quick capture") && text.includes("estimate-ready by default");
-    },
-    "inspection quick capture panel",
-  );
+  await clickInspectionTabAndWait(tab, "Field mode", [
+    "quick capture",
+    "estimate-ready by default",
+  ]);
   await fillUnique(
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="area"]'),
     "South roof slope",
@@ -2931,7 +3155,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "finding recommendation",
   );
   for (const name of ["action_required", "include_in_estimate", "customer_visible", "include_in_report"]) {
-    await tab.playwright.locator(`xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="${name}"]`).check();
+    await checkUnique(
+      tab.playwright.locator(`xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="${name}"]`),
+      `inspection finding ${name} checkbox`,
+    );
   }
   await clickUnique(
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//button[@type="submit"]'),
@@ -2947,6 +3174,18 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
 
   if (!Array.isArray(inspectionWithFinding.findings) || inspectionWithFinding.findings.length < 1) {
     throw new Error("Inspection finding did not persist.");
+  }
+  const savedFinding = inspectionWithFinding.findings.find((finding) =>
+    finding.observation === "TEST cracked tile observed by inspector.",
+  );
+
+  if (
+    !savedFinding?.action_required ||
+    !savedFinding.include_in_estimate ||
+    !savedFinding.customer_visible ||
+    !savedFinding.include_in_report
+  ) {
+    throw new Error("Inspection finding did not persist selected customer-facing flags.");
   }
   progress("inspections:finding:done");
 
@@ -2984,19 +3223,33 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     fieldInternalNote,
     "inspection internal field note",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add internal note"]]//button[@type="submit"]'),
-    "Add internal note",
-  );
-  const inspectionWithNote = await waitForAsync(
-    async () => {
-      const inspection = await findInspectionByTitle(env, inspectionTitle);
+  let inspectionWithNote = null;
+  let internalNoteError = null;
 
-      return inspection?.internal_notes?.includes(fieldInternalNote) ? inspection : null;
-    },
-    "inspection internal note persistence",
-    15000,
-  );
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await scrollTextIntoView(tab, "Add internal note");
+    await clickVisibleDomSubmitByText(tab, "Add internal note", `Add internal note attempt ${attempt}`);
+
+    try {
+      inspectionWithNote = await waitForAsync(
+        async () => {
+          const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+          return inspection?.internal_notes?.includes(fieldInternalNote) ? inspection : null;
+        },
+        "inspection internal note persistence",
+        attempt === 3 ? 15000 : 5000,
+      );
+      break;
+    } catch (error) {
+      internalNoteError = error;
+    }
+  }
+
+  if (!inspectionWithNote) {
+    throw internalNoteError ?? new Error("Inspection internal note did not persist.");
+  }
+
   await waitFor(
     tab,
     () => document.body.innerText.includes("Internal note added."),
@@ -3007,19 +3260,16 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   progress("inspections:note:done");
 
   progress("inspections:estimate:start");
-  await clickUnique(tab.playwright.getByRole("button", { name: "Estimate / report" }), "Estimate / report");
-  await waitFor(
-    tab,
-    () =>
-      document.body.innerText.includes("Estimate review") &&
-      document.body.innerText.includes("Optional roof report draft"),
-    "inspection estimate/report panel",
-  );
+  await clickInspectionTabAndWait(tab, "Estimate / report", [
+    "Estimate review",
+    "Optional roof report draft",
+  ]);
   await fillUnique(
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//input[@name="estimate_title"]'),
     estimateTitle,
     "inspection estimate title",
   );
+  await scrollTextIntoView(tab, "Create estimate draft");
   await clickUnique(
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//button[@type="submit"]'),
     "Create estimate draft",
@@ -3045,17 +3295,30 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "Customer-visible TEST report summary.",
     "inspection report summary",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Optional roof report draft"]]//button[@type="submit"]'),
-    "Create report draft",
-  );
-  const report = await waitForAsync(
-    () =>
-      restRequest(env, `documents?select=id,title,body&title=eq.${encodeURIComponent(reportTitle)}&limit=1`)
-        .then((rows) => rows[0]),
-    `inspection report ${reportTitle}`,
-    15000,
-  );
+  let report = null;
+  let reportError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await scrollTextIntoView(tab, "Create report draft");
+    await clickVisibleDomSubmitByText(tab, "Create report draft", `Create report draft attempt ${attempt}`);
+
+    try {
+      report = await waitForAsync(
+        () =>
+          restRequest(env, `documents?select=id,title,body&title=eq.${encodeURIComponent(reportTitle)}&limit=1`)
+            .then((rows) => rows[0]),
+        `inspection report ${reportTitle}`,
+        attempt === 3 ? 15000 : 5000,
+      );
+      break;
+    } catch (error) {
+      reportError = error;
+    }
+  }
+
+  if (!report) {
+    throw reportError ?? new Error("Inspection report did not persist.");
+  }
 
   if (!report?.body?.includes("TEST cracked tile observed by inspector.")) {
     throw new Error("Inspection report did not include selected customer-visible finding.");
@@ -3078,14 +3341,37 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   progress("inspections:report:done");
 
   progress("inspections:record-management:start");
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-cancel-button"]'),
-    "Cancel inspection",
-  );
   const cancelConfirmation = tab.playwright.locator(
     '[role="alertdialog"][aria-label="Cancel inspection confirmation"]',
   );
-  await waitForUniqueLocator(cancelConfirmation, "cancel inspection confirmation");
+  let cancelConfirmationOpened = false;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await scrollTextIntoView(tab, "Cancel inspection");
+    await clickUnique(
+      tab.playwright.locator('[data-testid="inspection-cancel-button"]'),
+      `Cancel inspection attempt ${attempt}`,
+    );
+
+    try {
+      await waitForUniqueLocator(
+        cancelConfirmation,
+        "cancel inspection confirmation",
+        attempt === 2 ? 10000 : 2500,
+      );
+      cancelConfirmationOpened = true;
+      break;
+    } catch (error) {
+      if (attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  if (!cancelConfirmationOpened) {
+    throw new Error("Cancel inspection confirmation did not open.");
+  }
+
   const cancelConfirmationText = await cancelConfirmation.innerText({ timeoutMs: 8000 });
 
   if (
@@ -3095,10 +3381,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Cancel inspection confirmation did not explain the action.");
   }
 
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-confirm-cancel-button"]'),
-    "Confirm cancel inspection",
-  );
+  await clickVisibleDomButtonByText(tab, "Confirm cancel", "Confirm cancel inspection");
   await waitForAsync(
     async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);
@@ -3134,14 +3417,37 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     10000,
     inspectionTitle,
   );
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-restore-button"]'),
-    "Restore inspection",
-  );
   const restoreConfirmation = tab.playwright.locator(
     '[role="alertdialog"][aria-label="Restore inspection confirmation"]',
   );
-  await waitForUniqueLocator(restoreConfirmation, "restore inspection confirmation");
+  let restoreConfirmationOpened = false;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await scrollTextIntoView(tab, "Restore inspection");
+    await clickUnique(
+      tab.playwright.locator('[data-testid="inspection-restore-button"]'),
+      `Restore inspection attempt ${attempt}`,
+    );
+
+    try {
+      await waitForUniqueLocator(
+        restoreConfirmation,
+        "restore inspection confirmation",
+        attempt === 2 ? 10000 : 2500,
+      );
+      restoreConfirmationOpened = true;
+      break;
+    } catch (error) {
+      if (attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  if (!restoreConfirmationOpened) {
+    throw new Error("Restore inspection confirmation did not open.");
+  }
+
   const restoreConfirmationText = await restoreConfirmation.innerText({ timeoutMs: 8000 });
 
   if (
@@ -3151,10 +3457,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Restore inspection confirmation did not explain the action.");
   }
 
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
-    "Confirm restore inspection",
-  );
+  await clickVisibleDomButtonByText(tab, "Confirm restore", "Confirm restore inspection");
   await waitForAsync(
     async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);
@@ -3176,7 +3479,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   };
 }
 
-async function runUiMutationTests(tab, testJob, runId, progress) {
+async function runUiMutationTests(tab, env, testJob, runId, progress) {
   const addedTaskTitle = `${TEST_PREFIX} ${runId} ADDED TASK`;
   const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;
   const noteText = `${TEST_PREFIX} ${runId} NOTE`;
@@ -3258,29 +3561,75 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
   );
   progress("job:add-task:done");
 
-  await scrollTextIntoView(tab, addedTaskTitle);
+  await scrollChecklistTaskIntoView(tab, addedTaskTitle);
   progress("job:status:start");
-  results.changeTaskStatus = await preserveScrollAround(
+  results.changeTaskStatus = await preserveScrollAfterControlActivation(
     tab,
     async () => {
-      const doneButton = tab.playwright.locator(`xpath=//*[normalize-space(.)="${addedTaskTitle}"]/ancestor::*[contains(@class,"rounded-lg")][1]//button[normalize-space(.)="Done"]`);
+      const doneButton = tab.playwright.locator(
+        [
+          `xpath=//*[@id="job-section-checklist"]//p[normalize-space(.)=${xpathString(addedTaskTitle)}]`,
+          '/ancestor::*[contains(@class,"rounded-lg")][1]',
+          '//button[normalize-space(.)="Done"]',
+        ].join(""),
+      );
       await clickUnique(doneButton, "added task Done button");
+    },
+    async () => {
+      await waitForAsync(
+        async () => {
+          const task = await findJobTaskByTitle(env, testJob.id, addedTaskTitle);
+
+          return task?.status === "done" ? task : null;
+        },
+        `added task done persistence ${addedTaskTitle}`,
+        15000,
+      );
       await waitFor(tab, () => document.body.innerText.includes("Checklist task marked Done."), "task status notice");
     },
     "changing task status",
   );
   progress("job:status:done");
 
-  await scrollTextIntoView(tab, addedTaskTitle);
+  await scrollChecklistTaskIntoView(tab, addedTaskTitle);
   progress("job:edit-task:start");
-  results.editTask = await preserveScrollAround(
+  results.editTask = await preserveScrollAfterControlActivation(
     tab,
     async () => {
-      const editButton = tab.playwright.locator(`xpath=//*[normalize-space(.)="${addedTaskTitle}"]/ancestor::*[contains(@class,"rounded-lg")][1]//button[@title="Edit task"]`);
+      const editButton = tab.playwright.locator(
+        [
+          `xpath=//*[@id="job-section-checklist"]//p[normalize-space(.)=${xpathString(addedTaskTitle)}]`,
+          '/ancestor::*[contains(@class,"rounded-lg")][1]',
+          '//button[@title="Edit task"]',
+        ].join(""),
+      );
       await clickUnique(editButton, "added task edit button");
+    },
+    async () => {
       const editTitleInput = tab.playwright.locator(`xpath=//form[.//*[normalize-space(.)="Save task"]]//input[@name="title"]`);
+      await waitFor(
+        tab,
+        (title) => {
+          const form = [...document.querySelectorAll("form")].find((candidate) =>
+            [...candidate.querySelectorAll("button")].some(
+              (button) => button.textContent?.trim() === "Save task",
+            ),
+          );
+          const input = form?.querySelector('input[name="title"]');
+
+          return input?.value === title;
+        },
+        "added task edit form",
+        10000,
+        addedTaskTitle,
+      );
       await fillUnique(editTitleInput, editedTaskTitle, "edit task title");
-      await clickUnique(tab.playwright.getByRole("button", { name: "Save task" }), "Save task");
+      await clickVisibleDomSubmitByText(tab, "Save task", "Save task");
+      await waitForAsync(
+        () => findJobTaskByTitle(env, testJob.id, editedTaskTitle),
+        `edited task persistence ${editedTaskTitle}`,
+        15000,
+      );
       await waitFor(
         tab,
         (title) => document.body.innerText.includes(title),
@@ -3316,6 +3665,7 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//input[@name="quantity"]'), "3", "material quantity");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//input[@name="unit"]'), "bundle", "material unit");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//textarea[@name="notes"]'), "Regression material notes.", "material notes");
+  await scrollTextIntoView(tab, "Add material");
   results.addMaterial = await preventTopJumpAround(
     tab,
     async () => {
@@ -3728,15 +4078,20 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("job-production")) {
       await record("Job workflow scroll and refresh regression flows", () =>
-        runUiMutationTests(
-          tab,
-          {
-            ...seededJob,
-            title: jobBuilderWorkflow?.updatedJobTitle ?? seededJob.title,
-          },
-          runId,
-          progress,
-        ),
+        (async () => {
+          const viewport = await browser.capabilities.get("viewport");
+          await viewport.set(LAPTOP_VIEWPORT);
+          return runUiMutationTests(
+            tab,
+            env,
+            {
+              ...seededJob,
+              title: jobBuilderWorkflow?.updatedJobTitle ?? seededJob.title,
+            },
+            runId,
+            progress,
+          );
+        })(),
       );
     }
   } finally {
