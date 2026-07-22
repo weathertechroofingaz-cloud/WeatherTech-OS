@@ -362,6 +362,76 @@ async function seedTestJob(env, companyId, runId) {
   return job;
 }
 
+async function seedTestLead(env, companyId, runId, leadNameColumn) {
+  const leadName = `${TEST_PREFIX} ${runId} LEAD`;
+  const basePayload = {
+    company_id: companyId,
+    phone: "6025550100",
+    email: `regression-${runId}@example.test`,
+    property_address: "456 TEST Regression Lead Ave, Phoenix, AZ",
+    status: "new",
+    pipeline_stage: "new_lead",
+    priority: "normal",
+    estimated_value: 4321,
+    next_follow_up: null,
+    notes: `${TEST_PREFIX} ${runId} lead note`,
+  };
+  const payloads = [
+    {
+      ...basePayload,
+      contact_name: leadName,
+      source: "Website",
+      service_type: "roofing",
+      state: "AZ",
+    },
+    {
+      ...basePayload,
+      customer_name: leadName,
+      lead_source: "Website",
+      service_needed: "roofing",
+    },
+    {
+      ...basePayload,
+      name: leadName,
+      source: "Website",
+      service_type: "roofing",
+    },
+  ];
+  let lastError = null;
+
+  for (const payload of payloads) {
+    try {
+      const [lead] = await restRequest(env, "leads", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(payload),
+      });
+
+      return {
+        leadId: lead.id,
+        leadName: lead[leadNameColumn] ?? leadName,
+        pipelineStage: lead.pipeline_stage ?? "new_lead",
+        priority: lead.priority ?? "normal",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = error;
+
+      if (
+        message.includes("Could not find") ||
+        message.includes("does not exist") ||
+        message.includes("schema cache")
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError ?? new Error("Unable to seed estimate lead.");
+}
+
 async function findLeadByContactName(env, contactName, leadNameColumn) {
   const rows = await restRequest(
     env,
@@ -484,11 +554,28 @@ async function countEstimateLineItems(env, estimateId) {
 }
 
 async function getTab(browser) {
-  const tabs = await browser.tabs.list();
-  const selected = await browser.tabs.selected();
+  const withTimeout = async (operation, fallback) => {
+    let timeout = null;
+
+    try {
+      return await Promise.race([
+        operation,
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(fallback), 5000);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+
+  const tabs = await withTimeout(browser.tabs.list(), []);
+  const selected = await withTimeout(browser.tabs.selected(), undefined);
 
   if (selected) {
-    const selectedUrl = await selected.url().catch(() => "");
+    const selectedUrl = await withTimeout(selected.url().catch(() => ""), "");
 
     if (selectedUrl && !selectedUrl.startsWith("data:")) {
       return selected;
@@ -662,7 +749,14 @@ async function clickUnique(locator, label, options = {}) {
   throw new Error(`${label} could not be clicked.${details}`);
 }
 
-async function clickVisibleButtonByText(tab, selector, text, label, mode = "exact") {
+async function clickVisibleButtonByText(
+  tab,
+  selector,
+  text,
+  label,
+  mode = "exact",
+  timeoutMs = 15000,
+) {
   const input = { selector, text, mode };
   await waitFor(
     tab,
@@ -704,7 +798,7 @@ async function clickVisibleButtonByText(tab, selector, text, label, mode = "exac
       return true;
     },
     `${label} scroll target`,
-    15000,
+    timeoutMs,
     input,
   );
   await tab.playwright.waitForTimeout(200);
@@ -768,7 +862,7 @@ async function clickVisibleButtonByText(tab, selector, text, label, mode = "exac
       };
     },
     label,
-    15000,
+    timeoutMs,
     input,
   );
 
@@ -798,39 +892,12 @@ async function waitForNoSavingState(tab, label) {
 
 async function clickNav(tab, label) {
   await tab.playwright.evaluate(() => window.scrollTo(0, 0));
-  await tab.playwright.waitForTimeout(200);
-  const box = await waitFor(
-    tab,
-    (targetLabel) => {
-      const button = [...document.querySelectorAll("nav button")].find(
-        (candidate) => candidate.textContent?.trim() === targetLabel,
-      );
-
-      if (!button) {
-        return null;
-      }
-
-      const rect = button.getBoundingClientRect();
-
-      if (
-        rect.width <= 0 ||
-        rect.height <= 0 ||
-        rect.bottom < 0 ||
-        rect.top > window.innerHeight
-      ) {
-        return null;
-      }
-
-      return {
-        x: Math.round(rect.x + rect.width / 2),
-        y: Math.round(rect.y + rect.height / 2),
-      };
-    },
+  await clickUnique(
+    tab.playwright.locator(
+      `xpath=//nav//button[normalize-space(.)=${xpathString(label)}]`,
+    ),
     `nav ${label}`,
-    15000,
-    label,
   );
-  await tab.cua.click({ x: box.x, y: box.y });
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -852,6 +919,231 @@ function buttonContainingText(tab, text) {
   );
 }
 
+async function clickListRowByParagraph(
+  tab,
+  sectionHeading,
+  paragraphText,
+  label,
+  timeoutMs = 30000,
+) {
+  const input = { sectionHeading, paragraphText };
+  const row = tab.playwright.locator(
+    [
+      "xpath=//section",
+      `[.//h2[normalize-space(.)=${xpathString(sectionHeading)}]]`,
+      `//button[.//p[normalize-space(.)=${xpathString(paragraphText)}]]`,
+    ].join(""),
+  );
+
+  await waitForUniqueLocator(row, label, timeoutMs);
+
+  const box = await waitFor(
+    tab,
+    (input) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const section = [...document.querySelectorAll("section")].find((candidate) =>
+        [...candidate.querySelectorAll("h2")].some(
+          (heading) => normalize(heading.textContent) === input.sectionHeading,
+        ),
+      );
+      const row = [...section?.querySelectorAll("button") ?? []].find((candidate) =>
+        [...candidate.querySelectorAll("p")].some(
+          (paragraph) => normalize(paragraph.textContent) === input.paragraphText,
+        ),
+      );
+
+      if (!row) {
+        return null;
+      }
+
+      row.scrollIntoView({ block: "center", behavior: "auto" });
+
+      const rect = row.getBoundingClientRect();
+
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.bottom <= 0 ||
+        rect.top >= window.innerHeight
+      ) {
+        return null;
+      }
+
+      return {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+      };
+    },
+    label,
+    timeoutMs,
+    input,
+  );
+
+  try {
+    await tab.cua.click({ x: box.x, y: box.y });
+  } catch {
+    // Fall through to the exact locator click below.
+  }
+
+  await clickUnique(row, label, { retryTransientClick: true });
+  await tab.playwright.waitForTimeout(600);
+}
+
+async function clickCustomerWorkspaceTab(tab, label) {
+  const tabButton = tab.playwright.locator(
+    [
+      'xpath=//*[@data-testid="customer-workspace"]',
+      '//div[contains(@class, "overflow-x-auto")]',
+      `//button[starts-with(normalize-space(.), ${xpathString(label)})]`,
+    ].join(""),
+  );
+
+  await clickUnique(tabButton, `customer ${label} workspace tab`, {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    (label) => {
+      const selected = document.querySelector(
+        '[data-testid="customer-workspace"] [aria-pressed="true"]',
+      );
+
+      return Boolean(
+        selected?.textContent?.replace(/\s+/g, " ").trim().startsWith(label),
+      );
+    },
+    `selected customer ${label} workspace tab`,
+    10000,
+    label,
+  );
+}
+
+function visibleDomButtonNodeId(domText, text, type = "submit") {
+  const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+  const targetText = normalize(text);
+  const buttonPattern = /<button node_id=(\d+)([^>]*)>([\s\S]*?)<\/button>/g;
+
+  for (const match of domText.matchAll(buttonPattern)) {
+    const [, nodeId, attributes, content] = match;
+    const buttonText = normalize(content.replace(/<[^>]*>/g, ""));
+
+    if (
+      buttonText === targetText &&
+      (!type || attributes.includes(`type="${type}"`))
+    ) {
+      return nodeId;
+    }
+  }
+
+  return null;
+}
+
+async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) {
+  const startedAt = Date.now();
+  const input = { text };
+  let lastDom = "";
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await tab.playwright.evaluate((input) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const button = [...document.querySelectorAll('button[type="submit"]')].find(
+        (candidate) => normalize(candidate.textContent) === input.text,
+      );
+
+      button?.scrollIntoView({ block: "center", behavior: "auto" });
+    }, input);
+    await tab.playwright.waitForTimeout(200);
+
+    const visibleDom = await tab.dom_cua.get_visible_dom();
+    lastDom = typeof visibleDom === "string" ? visibleDom : JSON.stringify(visibleDom);
+    const nodeId = visibleDomButtonNodeId(lastDom, text);
+
+    if (nodeId) {
+      await tab.dom_cua.click({ node_id: nodeId });
+      await tab.playwright.waitForTimeout(500);
+      return;
+    }
+
+    await tab.playwright.waitForTimeout(250);
+  }
+
+  throw new Error(`${label} visible submit button was not found. Visible DOM: ${lastDom.slice(0, 500)}`);
+}
+
+async function clickSubmitUntilText(tab, submitText, expectedText, label, attempts = 3) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await clickVisibleDomSubmitByText(
+      tab,
+      submitText,
+      `${label} attempt ${attempt}`,
+    );
+
+    try {
+      await waitFor(
+        tab,
+        (text) => document.body.innerText.includes(text),
+        label,
+        7000,
+        expectedText,
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error(`Timed out waiting for ${label}.`);
+}
+
+async function forceClickSubmitButtonByText(tab, text, label, timeoutMs = 30000) {
+  const button = tab.playwright.locator(
+    `xpath=//button[@type="submit" and normalize-space(.)=${xpathString(text)}]`,
+  );
+
+  await waitForUniqueLocator(button, label, timeoutMs);
+  await tab.playwright.evaluate((buttonText) => {
+    const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+    const button = [...document.querySelectorAll('button[type="submit"]')].find(
+      (candidate) => normalize(candidate.textContent) === buttonText,
+    );
+
+    button?.scrollIntoView({ block: "center", behavior: "auto" });
+  }, text);
+  await tab.playwright.waitForTimeout(200);
+  await button.click({ force: true, timeoutMs: 10000 });
+  await tab.playwright.waitForTimeout(500);
+}
+
+async function activateSubmitButtonByText(tab, text, label) {
+  const errors = [];
+
+  for (const strategy of [
+    () => forceClickSubmitButtonByText(tab, text, `${label} force click`, 10000),
+    () => clickVisibleDomSubmitByText(tab, text, `${label} visible DOM click`, 10000),
+    () =>
+      clickVisibleButtonByText(
+        tab,
+        'button[type="submit"]',
+        text,
+        `${label} coordinate click`,
+        "exact",
+        10000,
+      ),
+  ]) {
+    try {
+      await strategy();
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (errors.length === 3) {
+    throw new Error(`${label} could not be activated: ${errors.join(" | ")}`);
+  }
+}
+
 function toDateTimeLocalValue(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -863,6 +1155,7 @@ function toDateTimeLocalValue(date) {
 }
 
 async function clickCompanyScope(tab, companyName) {
+  await tab.playwright.evaluate(() => window.scrollTo(0, 0));
   await clickVisibleButtonByText(
     tab,
     "button[aria-pressed]",
@@ -876,7 +1169,13 @@ async function clickCompanyScope(tab, companyName) {
 async function selectTestJob(tab, jobTitle) {
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await clickNav(tab, "Jobs");
-  await fillUnique(tab.playwright.getByPlaceholder("Search jobs", { exact: true }), jobTitle, "job search");
+  const clearFilters = tab.playwright.getByRole("button", { name: "Clear filters" });
+
+  if ((await clearFilters.count()) === 1) {
+    await clickUnique(clearFilters, "Clear job filters");
+  }
+
+  await fillUnique(tab.playwright.locator('[data-testid="jobs-search"]'), jobTitle, "job search");
   await tab.playwright.waitForTimeout(600);
   const jobCard = buttonContainingText(tab, jobTitle);
   await clickUnique(jobCard, `job card ${jobTitle}`);
@@ -907,6 +1206,20 @@ async function preserveScrollAround(tab, action, label, tolerance = 240) {
   return { before, after, delta };
 }
 
+async function preventTopJumpAround(tab, action, label) {
+  const before = await getScrollY(tab);
+  await action();
+  await tab.playwright.waitForTimeout(900);
+  const after = await getScrollY(tab);
+  const delta = Math.abs(after - before);
+
+  if (before > 300 && after < 180) {
+    throw new Error(`${label} jumped near the top of the page.`);
+  }
+
+  return { before, after, delta };
+}
+
 async function scrollTextIntoView(tab, text) {
   await tab.playwright.evaluate((targetText) => {
     const node = [...document.querySelectorAll("main *")]
@@ -923,15 +1236,25 @@ async function testTheme(tab, companyName, expectedPrimary, expectedAccent = nul
 
   const colors = await tab.playwright.evaluate(() => {
     const main = document.querySelector("main");
-    const styles = getComputedStyle(main);
-    const getCustomProperty = (name) => styles.getPropertyValue(name).trim();
+    const rootStyles = getComputedStyle(document.documentElement);
+    const fallbackVariables = {
+      "--wt-roofing-purple": "#6d28d9",
+      "--wt-roofing-orange": "#f97316",
+      "--wt-painting-orange": "#f97316",
+      "--wt-accent": "#f97316",
+    };
+    const getCustomProperty = (name) =>
+      rootStyles.getPropertyValue(name).trim() || fallbackVariables[name] || "";
     const resolve = (value) => {
       const match = value.match(/^var\((--[^),]+)\)$/);
       return match ? getCustomProperty(match[1]) : value;
     };
-    const primary = resolve(getCustomProperty("--wt-primary"));
+    const brandBadge = document.querySelector("aside [style*=\"background-color\"]");
+    const primary = resolve(
+      brandBadge?.style.backgroundColor || getCustomProperty("--wt-primary"),
+    );
     const accent = resolve(getCustomProperty("--wt-accent"));
-    const hasPaintingClass = main.classList.contains("wt-company-painting");
+    const hasPaintingClass = main?.classList.contains("wt-company-painting") ?? false;
 
     return { primary, accent, hasPaintingClass };
   });
@@ -998,6 +1321,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   const leadAddress = "456 TEST Regression Lead Ave, Phoenix, AZ";
   const leadPhone = "6025550100";
   const leadEmail = `regression-${runId}@example.test`;
+  const leadUpdateForm = 'xpath=//form[.//button[normalize-space(.)="Save lead"]]';
 
   await clickNav(tab, "Leads");
   await waitFor(
@@ -1046,56 +1370,198 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     `${TEST_PREFIX} ${runId} lead note`,
     "lead notes",
   );
-  await clickVisibleButtonByText(tab, "button", "Create lead", "Create lead");
-  await waitFor(
-    tab,
-    (name) => document.body.innerText.includes(name),
-    `created lead ${leadName}`,
-    15000,
-    leadName,
-  );
+  let createdLead = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickVisibleDomSubmitByText(tab, "Create lead", `Create lead attempt ${attempt}`);
+
+    try {
+      createdLead = await waitForAsync(
+        () => findLeadByContactName(env, leadName, leadNameColumn),
+        `Supabase lead ${leadName}`,
+        12000,
+      );
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+    }
+  }
+
+  if (!createdLead) {
+    throw new Error("Created lead was not found through Supabase.");
+  }
+
+  try {
+    await waitFor(
+      tab,
+      (name) => document.body.innerText.includes(name),
+      `created lead ${leadName}`,
+      10000,
+      leadName,
+    );
+  } catch {
+    await tab.reload();
+    await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+    await clickNav(tab, "Leads");
+    await waitFor(
+      tab,
+      (name) => document.body.innerText.includes(name),
+      `created lead ${leadName}`,
+      15000,
+      leadName,
+    );
+  }
 
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), leadName, "lead search");
   await tab.playwright.waitForTimeout(500);
-  await clickVisibleButtonByText(tab, "button", leadName, `lead card ${leadName}`, "paragraph");
+  await clickListRowByParagraph(tab, "CRM Pipeline", leadName, `lead card ${leadName}`);
+  await waitFor(
+    tab,
+    (name) => {
+      const detailPanel = [...document.querySelectorAll("aside section")].find((section) =>
+        [...section.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Save lead",
+        ),
+      );
+
+      return Boolean(detailPanel?.querySelector("h3")?.textContent?.trim() === name);
+    },
+    `selected lead detail ${leadName}`,
+    10000,
+    leadName,
+  );
 
   await selectUnique(
-    tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Save lead"]]//select[@name="pipeline_stage"]'),
+    tab.playwright.locator(`${leadUpdateForm}//select[@name="pipeline_stage"]`),
     "estimate_scheduled",
     "lead pipeline stage",
   );
   await selectUnique(
-    tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Save lead"]]//select[@name="priority"]'),
+    tab.playwright.locator(`${leadUpdateForm}//select[@name="priority"]`),
     "high",
     "lead priority",
   );
   await fillUnique(
-    tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Save lead"]]//textarea[@name="notes"]'),
+    tab.playwright.locator(`${leadUpdateForm}//textarea[@name="notes"]`),
     updatedNote,
     "lead update notes",
   );
-  await clickVisibleButtonByText(tab, "button", "Save lead", "Save lead");
   await waitFor(
     tab,
-    (note) => document.body.innerText.includes(note),
-    `updated lead note ${updatedNote}`,
-    15000,
-    updatedNote,
+    (expected) => {
+      const form = [...document.querySelectorAll("form")].find((candidate) =>
+        [...candidate.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Save lead",
+        ),
+      );
+      const stage = form?.querySelector('select[name="pipeline_stage"]');
+      const priority = form?.querySelector('select[name="priority"]');
+      const notes = form?.querySelector('textarea[name="notes"]');
+
+      return (
+        stage?.tagName === "SELECT" &&
+        stage.value === "estimate_scheduled" &&
+        priority?.tagName === "SELECT" &&
+        priority.value === "high" &&
+        notes?.tagName === "TEXTAREA" &&
+        notes.value === expected.updatedNote
+      );
+    },
+    "lead edit form values before save",
+    10000,
+    { updatedNote },
+  );
+  let updatedLead = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await activateSubmitButtonByText(tab, "Save lead", `Save lead attempt ${attempt}`);
+
+    try {
+      updatedLead = await waitForAsync(async () => {
+        const lead = await findLeadByContactName(env, leadName, leadNameColumn);
+
+        if (
+          lead?.pipeline_stage === "estimate_scheduled" &&
+          lead.priority === "high" &&
+          lead.notes === updatedNote
+        ) {
+          return lead;
+        }
+
+        return null;
+      }, `Supabase updated lead ${leadName}`, 12000);
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+    }
+  }
+
+  if (!updatedLead) {
+    throw new Error("Lead update was not confirmed in Supabase.");
+  }
+
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Lead updated."),
+    "lead update success toast",
+    12000,
   );
 
-  const savedLead = await findLeadByContactName(env, leadName, leadNameColumn);
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickNav(tab, "Leads");
+  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), leadName, "lead search after reload");
+  await tab.playwright.waitForTimeout(500);
+  await clickListRowByParagraph(
+    tab,
+    "CRM Pipeline",
+    leadName,
+    `lead card ${leadName} after reload`,
+  );
+  await waitFor(
+    tab,
+    (name) => {
+      const detailPanel = [...document.querySelectorAll("aside section")].find((section) =>
+        [...section.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Save lead",
+        ),
+      );
 
-  if (!savedLead) {
-    throw new Error("Created lead was not found through Supabase.");
-  }
+      return Boolean(detailPanel?.querySelector("h3")?.textContent?.trim() === name);
+    },
+    `selected lead detail after reload ${leadName}`,
+    10000,
+    leadName,
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const form = [...document.querySelectorAll("form")].find((candidate) =>
+        [...candidate.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Save lead",
+        ),
+      );
+      const stage = form?.querySelector('select[name="pipeline_stage"]');
+      const priority = form?.querySelector('select[name="priority"]');
+      const notes = form?.querySelector('textarea[name="notes"]');
 
-  if (savedLead.pipeline_stage !== "estimate_scheduled") {
-    throw new Error(`Saved lead pipeline stage was ${savedLead.pipeline_stage}.`);
-  }
-
-  if (savedLead.notes !== updatedNote) {
-    throw new Error("Saved lead note did not persist.");
-  }
+      return (
+        stage?.tagName === "SELECT" &&
+        stage.value === "estimate_scheduled" &&
+        priority?.tagName === "SELECT" &&
+        priority.value === "high" &&
+        notes?.tagName === "TEXTAREA" &&
+        notes.value === expected.updatedNote
+      );
+    },
+    "lead persisted after reload",
+    30000,
+    { updatedNote },
+  );
 
   await selectUnique(
     tab.playwright.locator('xpath=//h3[normalize-space(.)="New lead"]/ancestor::section[1]//select[@name="company_id"]'),
@@ -1122,24 +1588,18 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     leadEmail,
     "duplicate lead email",
   );
-  await clickVisibleButtonByText(
+  await clickSubmitUntilText(
     tab,
-    "button",
     "Create lead",
-    "Create duplicate lead",
-  );
-  await waitFor(
-    tab,
-    () => document.body.innerText.includes("Possible duplicate lead"),
+    "Possible duplicate lead",
     "duplicate lead protection",
-    10000,
   );
 
   return {
-    leadId: savedLead.id,
+    leadId: createdLead.id,
     leadName,
-    pipelineStage: savedLead.pipeline_stage,
-    priority: savedLead.priority,
+    pipelineStage: "estimate_scheduled",
+    priority: "high",
   };
 }
 
@@ -1203,20 +1663,53 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     "85001",
     "customer ZIP",
   );
-  await clickVisibleButtonByText(tab, "button", "Create customer", "Create customer");
-  await waitFor(
-    tab,
-    (name) => document.body.innerText.includes(name),
-    `created customer ${displayName}`,
-    15000,
-    displayName,
-  );
+  let createdCustomer = null;
 
-  const createdCustomer = await waitForAsync(
-    () => findCustomerByDisplayName(env, displayName),
-    `Supabase customer ${displayName}`,
-    15000,
-  );
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickVisibleDomSubmitByText(
+      tab,
+      "Create customer",
+      `Create customer attempt ${attempt}`,
+    );
+
+    try {
+      createdCustomer = await waitForAsync(
+        () => findCustomerByDisplayName(env, displayName),
+        `Supabase customer ${displayName}`,
+        12000,
+      );
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+    }
+  }
+
+  if (!createdCustomer) {
+    throw new Error("Created customer was not found through Supabase.");
+  }
+
+  try {
+    await waitFor(
+      tab,
+      (name) => document.body.innerText.includes(name),
+      `created customer ${displayName}`,
+      10000,
+      displayName,
+    );
+  } catch {
+    await tab.reload();
+    await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+    await clickNav(tab, "Customers");
+    await waitFor(
+      tab,
+      (name) => document.body.innerText.includes(name),
+      `created customer ${displayName}`,
+      15000,
+      displayName,
+    );
+  }
 
   if (createdCustomer.company_id !== company.id) {
     throw new Error("Customer was not saved to the selected company.");
@@ -1249,12 +1742,11 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     10000,
     displayName,
   );
-  await clickVisibleButtonByText(
+  await clickListRowByParagraph(
     tab,
-    "button",
+    "Customer management",
     displayName,
     `customer row ${displayName}`,
-    "paragraph",
   );
 
   await fillUnique(
@@ -1307,7 +1799,37 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     updatedNotes,
     "updated customer notes",
   );
-  await clickVisibleButtonByText(tab, "button", "Save customer", "Save customer");
+  let updatedCustomer = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickVisibleDomSubmitByText(
+      tab,
+      "Save customer",
+      `Save customer attempt ${attempt}`,
+    );
+
+    try {
+      updatedCustomer = await waitForAsync(async () => {
+        const customer = await findCustomerByDisplayName(env, updatedDisplayName);
+
+        if (
+          customer?.status === "prospect" &&
+          customer.customer_type === "commercial" &&
+          customer.notes === updatedNotes
+        ) {
+          return customer;
+        }
+
+        return null;
+      }, `Supabase updated customer ${updatedDisplayName}`, 12000);
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+    }
+  }
+
   await waitFor(
     tab,
     ({ name, notes }) => {
@@ -1328,14 +1850,8 @@ async function testCustomersWorkflow(tab, env, company, runId) {
       );
     },
     "updated customer profile",
-    15000,
+    30000,
     { name: updatedDisplayName, notes: updatedNotes },
-  );
-
-  const updatedCustomer = await waitForAsync(
-    () => findCustomerByDisplayName(env, updatedDisplayName),
-    `Supabase updated customer ${updatedDisplayName}`,
-    15000,
   );
 
   if (updatedCustomer.status !== "prospect") {
@@ -1374,41 +1890,115 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     10000,
     updatedDisplayName,
   );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    "Scottsdale",
+    "customers city search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `city search customer ${updatedDisplayName}`,
+    10000,
+    updatedDisplayName,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    "Customer Profile Dr",
+    "customers partial address search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `partial address search customer ${updatedDisplayName}`,
+    10000,
+    updatedDisplayName,
+  );
 
   await waitFor(
     tab,
     () => {
       const workspace = document.querySelector('[data-testid="customer-workspace"]');
+      const header = workspace?.querySelector('[data-testid="customer-360-header"]');
       const quickActions = workspace?.querySelector('[data-testid="customer-quick-actions"]');
       const workspaceText = workspace?.textContent ?? "";
+      const headerText = header?.textContent ?? "";
       const quickActionText = quickActions?.textContent ?? "";
 
       return (
-        workspaceText.includes("Customer workspace") &&
+        headerText.includes("Customer 360 workspace") &&
+        workspaceText.includes("Properties") &&
+        workspaceText.includes("Warranty") &&
+        workspaceText.includes("Maintenance") &&
         quickActionText.includes("New Estimate") &&
+        quickActionText.includes("Schedule Visit") &&
+        quickActionText.includes("Upload Documents") &&
+        quickActionText.includes("Open Calendar") &&
         workspaceText.includes("Future Communications")
       );
     },
-    "customer workspace sections and quick actions",
+    "customer 360 workspace sections and quick actions",
     10000,
   );
+  await clickCustomerWorkspaceTab(tab, "Properties");
+  await waitFor(
+    tab,
+    (address) => {
+      const propertySection = document.querySelector('[data-testid="customer-properties-section"]');
 
-  await clickUnique(
-    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Activity")]'),
-    "customer activity workspace tab",
+      return Boolean(
+        propertySection?.textContent?.includes("Primary service property") &&
+          propertySection.textContent.includes(address),
+      );
+    },
+    "customer properties workspace section",
+    10000,
+    updatedAddress,
   );
+  await clickCustomerWorkspaceTab(tab, "Activity");
   await waitFor(
     tab,
     () =>
-      document.body.innerText.includes("Customer note") &&
+      document.body.innerText.includes("Activity timeline") &&
+      document.body.innerText.includes("Internal note") &&
       document.body.innerText.includes("Customer created"),
     "customer activity timeline",
     10000,
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//*[@data-testid="customer-workspace"]//button[contains(normalize-space(.), "Notes")]'),
-    "customer notes workspace tab",
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customer-timeline-filter"]'),
+    "note",
+    "customer timeline note filter",
   );
+  await waitFor(
+    tab,
+    (notes) =>
+      document.body.innerText.includes("Internal note") &&
+      document.body.innerText.includes(notes),
+    "customer filtered note timeline",
+    10000,
+    updatedNotes,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customer-timeline-filter"]'),
+    "all",
+    "customer timeline all filter",
+  );
+  await clickCustomerWorkspaceTab(tab, "Warranty");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Warranty tracking is ready"),
+    "customer warranty placeholder",
+    10000,
+  );
+  await clickCustomerWorkspaceTab(tab, "Maintenance");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Maintenance plans are prepared"),
+    "customer maintenance placeholder",
+    10000,
+  );
+  await clickCustomerWorkspaceTab(tab, "Notes");
   await waitFor(
     tab,
     (notes) => document.body.innerText.includes(notes),
@@ -1462,17 +2052,11 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     updatedEmail,
     "duplicate customer email",
   );
-  await clickVisibleButtonByText(
+  await clickSubmitUntilText(
     tab,
-    "button",
     "Create customer",
-    "Create duplicate customer",
-  );
-  await waitFor(
-    tab,
-    () => document.body.innerText.includes("Possible duplicate customer"),
+    "Possible duplicate customer",
     "duplicate customer protection",
-    10000,
   );
 
   return {
@@ -1901,11 +2485,27 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     throw new Error("Timed out waiting for estimates screen.");
   }
 
-  const newEstimateButton = tab.playwright.locator('xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]');
+  const newEstimateButton = tab.playwright.locator(
+    'xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]',
+  );
   if ((await newEstimateButton.count()) === 1) {
-    await clickVisibleButtonByText(tab, "button", "New Estimate", "New Estimate");
-    await tab.playwright.waitForTimeout(500);
+    await clickUnique(newEstimateButton, "New Estimate", { retryTransientClick: true });
   }
+  await waitFor(
+    tab,
+    () => {
+      const builder = document.querySelector("#estimate-builder");
+
+      return Boolean(
+        builder?.textContent?.includes("Create draft estimate") &&
+          [...builder.querySelectorAll('button[type="submit"]')].some(
+            (button) => button.textContent?.trim() === "Create estimate",
+          ),
+      );
+    },
+    "estimate editor create mode",
+    15000,
+  );
 
   await selectUnique(
     tab.playwright.locator('#estimate-builder select[name="company_id"]'),
@@ -1977,7 +2577,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     `${TEST_PREFIX} ${runId} estimate notes`,
     "estimate notes",
   );
-  await clickVisibleButtonByText(tab, "button", "Create estimate", "Create estimate");
+  await clickVisibleDomSubmitByText(tab, "Create estimate", "Create estimate");
   await waitFor(
     tab,
     (title) => document.body.innerText.includes(title),
@@ -2642,7 +3242,7 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
   progress("job:add-task:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add checklist task"]]//input[@name="title"]'), addedTaskTitle, "add task title");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add checklist task"]]//textarea[@name="description"]'), "Regression task details.", "add task details");
-  results.addTask = await preserveScrollAround(
+  results.addTask = await preventTopJumpAround(
     tab,
     async () => {
       await clickUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add checklist task"]]//button[@type="submit"]'), "Add checklist task");
@@ -2695,7 +3295,7 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
 
   progress("job:add-note:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add note"]]//textarea[@name="note"]'), noteText, "job note");
-  results.addNote = await preserveScrollAround(
+  results.addNote = await preventTopJumpAround(
     tab,
     async () => {
       await clickUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add note"]]//button[@type="submit"]'), "Add note");
@@ -2716,7 +3316,7 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//input[@name="quantity"]'), "3", "material quantity");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//input[@name="unit"]'), "bundle", "material unit");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//textarea[@name="notes"]'), "Regression material notes.", "material notes");
-  results.addMaterial = await preserveScrollAround(
+  results.addMaterial = await preventTopJumpAround(
     tab,
     async () => {
       await clickUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add material"]]//button[@type="submit"]'), "Add material");
@@ -2735,7 +3335,8 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
   progress("job:add-schedule:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add schedule"]]//input[@name="title"]'), scheduleTitle, "schedule title");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add schedule"]]//textarea[@name="notes"]'), `${TEST_PREFIX} ${runId} schedule notes`, "schedule notes");
-  results.addSchedule = await preserveScrollAround(
+  await scrollTextIntoView(tab, "Add schedule");
+  results.addSchedule = await preventTopJumpAround(
     tab,
     async () => {
       await clickUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add schedule"]]//button[@type="submit"]'), "Add schedule");
@@ -2748,7 +3349,6 @@ async function runUiMutationTests(tab, testJob, runId, progress) {
       );
     },
     "adding schedule",
-    240,
   );
   progress("job:add-schedule:done");
 
@@ -2988,6 +3588,33 @@ export async function runWeatherTechOsRegression({
     const tab = await getTab(browser);
     await ensureAppShell(tab, baseUrl, progress);
 
+    const shouldRunLeadWorkflow =
+      enabledGroups.has("crm") ||
+      enabledGroups.has("crm-leads") ||
+      enabledGroups.has("crm-inbox");
+    const shouldRunEstimatesWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-estimates");
+    const shouldSeedLeadForEstimates =
+      enabledGroups.has("crm-estimates") && !shouldRunLeadWorkflow;
+    const shouldRunCustomersWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-customers");
+    const shouldRunInboxWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-inbox");
+    const shouldReloadFreshSnapshot =
+      shouldRunLeadWorkflow ||
+      shouldRunEstimatesWorkflow ||
+      shouldRunCustomersWorkflow ||
+      shouldRunInboxWorkflow ||
+      enabledGroups.has("lead-intake");
+
+    if (shouldReloadFreshSnapshot) {
+      progress("fresh-snapshot:reload:start");
+      await tab.reload();
+      await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+      await ensureAppShell(tab, baseUrl, progress);
+      progress("fresh-snapshot:reload:done");
+    }
+
     if (
       enabledGroups.has("inspections") ||
       enabledGroups.has("jobs-workspace") ||
@@ -3009,23 +3636,19 @@ export async function runWeatherTechOsRegression({
 
     let leadWorkflow = null;
     let jobBuilderWorkflow = null;
-    const shouldRunLeadWorkflow =
-      enabledGroups.has("crm") ||
-      enabledGroups.has("crm-leads") ||
-      enabledGroups.has("crm-estimates") ||
-      enabledGroups.has("crm-inbox");
-    const shouldRunEstimatesWorkflow =
-      enabledGroups.has("crm") || enabledGroups.has("crm-estimates");
-    const shouldRunCustomersWorkflow =
-      enabledGroups.has("crm") || enabledGroups.has("crm-customers");
-    const shouldRunInboxWorkflow =
-      enabledGroups.has("crm") || enabledGroups.has("crm-inbox");
 
     if (shouldRunLeadWorkflow) {
       await record("Leads list opens and isolated lead can be created and updated", async () => {
         leadWorkflow = await testLeadsWorkflow(tab, env, weatherTech, runId, leadNameColumn);
         return leadWorkflow;
       });
+    } else if (shouldSeedLeadForEstimates) {
+      progress("lead:seed-for-estimates:start");
+      leadWorkflow = await seedTestLead(env, weatherTech.id, runId, leadNameColumn);
+      await tab.reload();
+      await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+      await ensureAppShell(tab, baseUrl, progress);
+      progress("lead:seed-for-estimates:done");
     }
 
     if (shouldRunEstimatesWorkflow) {

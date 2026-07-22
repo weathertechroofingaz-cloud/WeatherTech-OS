@@ -4504,6 +4504,24 @@ type LeadsViewProps = {
   onError: (message: string) => void;
 };
 
+type LeadEditDraft = {
+  pipeline_stage: PipelineStage;
+  priority: LeadPriority;
+  estimated_value: string;
+  next_follow_up: string;
+  notes: string;
+};
+
+function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
+  return {
+    pipeline_stage: lead?.pipeline_stage ?? "new_lead",
+    priority: lead?.priority ?? "normal",
+    estimated_value: lead ? String(lead.estimated_value) : "",
+    next_follow_up: lead?.next_follow_up ?? "",
+    notes: lead?.notes ?? "",
+  };
+}
+
 type UnifiedInboxItem = {
   id: string;
   provider: InboxProvider;
@@ -4983,6 +5001,9 @@ function LeadsView({
 
   const selectedLead =
     snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? null;
+  const [leadEditDraft, setLeadEditDraft] = useState(() =>
+    getLeadEditDraft(selectedLead),
+  );
 
   useEffect(() => {
     if (!snapshot.leads.length) {
@@ -5000,6 +5021,10 @@ function LeadsView({
       setSelectedLeadId(snapshot.leads[0].id);
     }
   }, [selectedLeadId, snapshot.leads]);
+
+  useEffect(() => {
+    setLeadEditDraft(getLeadEditDraft(selectedLead));
+  }, [selectedLead]);
 
   const filteredLeads = snapshot.leads.filter((lead) => {
     const query = search.toLowerCase();
@@ -5123,24 +5148,18 @@ function LeadsView({
     }
 
     try {
-      const formData = new FormData(event.currentTarget);
-      const pipelineStage = getFormString(
-        formData,
-        "pipeline_stage",
-        selectedLead.pipeline_stage,
-      ) as PipelineStage;
+      const pipelineStage = leadEditDraft.pipeline_stage;
+      const estimatedValue = Number(
+        leadEditDraft.estimated_value.replace(/[^0-9.]/g, ""),
+      );
 
       await updateLead(client, selectedLead.id, {
         status: leadStatusForPipelineStage(pipelineStage),
         pipeline_stage: pipelineStage,
-        priority: getFormString(
-          formData,
-          "priority",
-          selectedLead.priority,
-        ) as LeadPriority,
-        estimated_value: getFormNumber(formData, "estimated_value"),
-        next_follow_up: getOptionalFormString(formData, "next_follow_up"),
-        notes: getOptionalFormString(formData, "notes"),
+        priority: leadEditDraft.priority,
+        estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : 0,
+        next_follow_up: leadEditDraft.next_follow_up || null,
+        notes: leadEditDraft.notes || null,
       });
       await onReload();
       onNotice("Lead updated.");
@@ -5370,7 +5389,13 @@ function LeadsView({
                   Pipeline stage
                   <select
                     name="pipeline_stage"
-                    defaultValue={selectedLead.pipeline_stage}
+                    value={leadEditDraft.pipeline_stage}
+                    onChange={(event) =>
+                      setLeadEditDraft((current) => ({
+                        ...current,
+                        pipeline_stage: event.target.value as PipelineStage,
+                      }))
+                    }
                     className="rounded-md border border-slate-300 px-3 py-2"
                   >
                     {pipelineStages.map((stage) => (
@@ -5384,7 +5409,13 @@ function LeadsView({
                   Priority
                   <select
                     name="priority"
-                    defaultValue={selectedLead.priority}
+                    value={leadEditDraft.priority}
+                    onChange={(event) =>
+                      setLeadEditDraft((current) => ({
+                        ...current,
+                        priority: event.target.value as LeadPriority,
+                      }))
+                    }
                     className="rounded-md border border-slate-300 px-3 py-2"
                   >
                     {leadPriorities.map((priority) => (
@@ -5400,7 +5431,13 @@ function LeadsView({
                   Value
                   <input
                     name="estimated_value"
-                    defaultValue={selectedLead.estimated_value}
+                    value={leadEditDraft.estimated_value}
+                    onChange={(event) =>
+                      setLeadEditDraft((current) => ({
+                        ...current,
+                        estimated_value: event.target.value,
+                      }))
+                    }
                     className="rounded-md border border-slate-300 px-3 py-2"
                   />
                 </label>
@@ -5409,7 +5446,13 @@ function LeadsView({
                   <input
                     name="next_follow_up"
                     type="date"
-                    defaultValue={selectedLead.next_follow_up ?? ""}
+                    value={leadEditDraft.next_follow_up}
+                    onChange={(event) =>
+                      setLeadEditDraft((current) => ({
+                        ...current,
+                        next_follow_up: event.target.value,
+                      }))
+                    }
                     className="rounded-md border border-slate-300 px-3 py-2"
                   />
                 </label>
@@ -5418,7 +5461,13 @@ function LeadsView({
                 Notes
                 <textarea
                   name="notes"
-                  defaultValue={selectedLead.notes ?? ""}
+                  value={leadEditDraft.notes}
+                  onChange={(event) =>
+                    setLeadEditDraft((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
                   className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
                 />
               </label>
@@ -5596,6 +5645,7 @@ type CustomersViewProps = {
 
 type CustomerWorkspaceSection =
   | "overview"
+  | "properties"
   | "activity"
   | "leads"
   | "estimates"
@@ -5606,6 +5656,8 @@ type CustomerWorkspaceSection =
   | "documents"
   | "notes"
   | "calendar"
+  | "warranty"
+  | "maintenance"
   | "communications";
 
 type CustomerRelatedRecords = {
@@ -5620,6 +5672,30 @@ type CustomerRelatedRecords = {
   scheduleEvents: ScheduleEventRecord[];
 };
 
+type CustomerPropertySummary = {
+  id: string;
+  address: string;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  sources: string[];
+  activeWorkCount: number;
+  lastActivity: string;
+};
+
+type CustomerTimelineKind =
+  | "profile"
+  | "lead"
+  | "estimate"
+  | "inspection"
+  | "job"
+  | "invoice"
+  | "document"
+  | "photo"
+  | "calendar"
+  | "note"
+  | "future";
+
 type CustomerTimelineItem = {
   id: string;
   label: string;
@@ -5628,6 +5704,7 @@ type CustomerTimelineItem = {
   user: string;
   icon: typeof Home;
   tone: "blue" | "green" | "amber" | "purple" | "slate";
+  kind: CustomerTimelineKind;
 };
 
 const customerWorkspaceSections: {
@@ -5635,6 +5712,7 @@ const customerWorkspaceSections: {
   label: string;
 }[] = [
   { value: "overview", label: "Overview" },
+  { value: "properties", label: "Properties" },
   { value: "activity", label: "Activity" },
   { value: "leads", label: "Leads" },
   { value: "estimates", label: "Estimates" },
@@ -5645,7 +5723,25 @@ const customerWorkspaceSections: {
   { value: "documents", label: "Documents" },
   { value: "notes", label: "Notes" },
   { value: "calendar", label: "Calendar" },
+  { value: "warranty", label: "Warranty" },
+  { value: "maintenance", label: "Maintenance" },
   { value: "communications", label: "Future Communications" },
+];
+
+const customerTimelineFilters: {
+  value: CustomerTimelineKind | "all";
+  label: string;
+}[] = [
+  { value: "all", label: "All activity" },
+  { value: "lead", label: "Leads" },
+  { value: "estimate", label: "Estimates" },
+  { value: "inspection", label: "Inspections" },
+  { value: "job", label: "Jobs" },
+  { value: "invoice", label: "Invoices" },
+  { value: "calendar", label: "Calendar" },
+  { value: "document", label: "Documents" },
+  { value: "photo", label: "Photos" },
+  { value: "note", label: "Notes" },
 ];
 
 function normalizeCrmLookup(value: string | null | undefined) {
@@ -5658,6 +5754,35 @@ function normalizeCrmLookup(value: string | null | undefined) {
 
 function normalizePhoneDigits(value: string | null | undefined) {
   return (value ?? "").replace(/\D/g, "");
+}
+
+function crmAddressesLikelyMatch(
+  firstAddress: string | null | undefined,
+  secondAddress: string | null | undefined,
+) {
+  const first = normalizeCrmLookup(firstAddress);
+  const second = normalizeCrmLookup(secondAddress);
+
+  if (!first || !second) {
+    return false;
+  }
+
+  if (first === second) {
+    return true;
+  }
+
+  const firstTokens = [...new Set(first.split(" ").filter(Boolean))];
+  const secondTokens = [...new Set(second.split(" ").filter(Boolean))];
+  const [shorterTokens, longerTokens] =
+    firstTokens.length <= secondTokens.length
+      ? [firstTokens, secondTokens]
+      : [secondTokens, firstTokens];
+  const longerTokenSet = new Set(longerTokens);
+
+  return (
+    shorterTokens.length >= 4 &&
+    shorterTokens.every((token) => longerTokenSet.has(token))
+  );
 }
 
 function truncateTimelineText(value: string, maxLength = 120) {
@@ -5674,6 +5799,173 @@ function uniqueById<T extends { id: string }>(records: T[]) {
     seen.add(record.id);
     return true;
   });
+}
+
+function getRecordAddressKey({
+  address,
+  city,
+  state,
+  postalCode,
+}: {
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+}) {
+  return normalizeCrmLookup([address, city, state, postalCode].filter(Boolean).join(" "));
+}
+
+function formatCustomerPropertyAddress(property: {
+  address: string;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+}) {
+  return [property.address, property.city, property.state, property.postalCode]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function isFutureDateTime(value: string | null) {
+  return Boolean(value && new Date(value).getTime() >= Date.now());
+}
+
+function isOpenEstimate(estimate: EstimateRecord) {
+  return estimate.status === "draft" || estimate.status === "sent";
+}
+
+function isActiveJob(job: JobRecord) {
+  return !["completed", "closed", "cancelled", "canceled"].includes(job.status);
+}
+
+function isOutstandingInvoice(invoice: InvoiceRecord) {
+  return invoice.status !== "paid" && invoice.status !== "void" && invoice.balance_due > 0;
+}
+
+function buildCustomerPropertySummaries(
+  customer: CustomerRecord,
+  related: CustomerRelatedRecords,
+): CustomerPropertySummary[] {
+  const propertyMap = new Map<string, CustomerPropertySummary>();
+
+  const upsertProperty = ({
+    address,
+    city = null,
+    state = null,
+    postalCode = null,
+    source,
+    activeWork = false,
+    lastActivity,
+  }: {
+    address?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postalCode?: string | null;
+    source: string;
+    activeWork?: boolean;
+    lastActivity: string;
+  }) => {
+    if (!address?.trim()) {
+      return;
+    }
+
+    const key = getRecordAddressKey({ address, city, state, postalCode });
+
+    if (!key) {
+      return;
+    }
+
+    const existing = propertyMap.get(key);
+
+    if (existing) {
+      propertyMap.set(key, {
+        ...existing,
+        city: existing.city ?? city,
+        state: existing.state ?? state,
+        postalCode: existing.postalCode ?? postalCode,
+        sources: existing.sources.includes(source)
+          ? existing.sources
+          : [...existing.sources, source],
+        activeWorkCount: existing.activeWorkCount + (activeWork ? 1 : 0),
+        lastActivity:
+          lastActivity.localeCompare(existing.lastActivity) > 0
+            ? lastActivity
+            : existing.lastActivity,
+      });
+      return;
+    }
+
+    propertyMap.set(key, {
+      id: key,
+      address,
+      city,
+      state,
+      postalCode,
+      sources: [source],
+      activeWorkCount: activeWork ? 1 : 0,
+      lastActivity,
+    });
+  };
+
+  upsertProperty({
+    address: customer.property_address,
+    city: customer.city,
+    state: customer.state,
+    postalCode: customer.postal_code,
+    source: "Customer profile",
+    activeWork: false,
+    lastActivity: customer.updated_at,
+  });
+
+  related.leads.forEach((lead) =>
+    upsertProperty({
+      address: lead.property_address,
+      city: lead.city,
+      state: lead.state,
+      postalCode: lead.postal_code,
+      source: "Lead",
+      activeWork: lead.status !== "won" && lead.status !== "lost",
+      lastActivity: lead.updated_at,
+    }),
+  );
+
+  related.estimates.forEach((estimate) =>
+    upsertProperty({
+      address: estimate.location,
+      source: "Estimate",
+      activeWork: isOpenEstimate(estimate),
+      lastActivity: estimate.updated_at,
+    }),
+  );
+
+  related.inspections.forEach((inspection) =>
+    upsertProperty({
+      address: inspection.property_address,
+      source: "Inspection",
+      activeWork: inspection.status !== "completed" && inspection.status !== "canceled",
+      lastActivity: inspection.updated_at,
+    }),
+  );
+
+  related.jobs.forEach((job) =>
+    upsertProperty({
+      address: job.property_address || job.address,
+      source: "Job",
+      activeWork: isActiveJob(job),
+      lastActivity: job.updated_at,
+    }),
+  );
+
+  related.scheduleEvents.forEach((event) =>
+    upsertProperty({
+      address: event.location,
+      source: "Calendar",
+      activeWork: event.status === "scheduled",
+      lastActivity: event.updated_at,
+    }),
+  );
+
+  return [...propertyMap.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 }
 
 function recordMatchesCustomerIdentity(
@@ -5814,6 +6106,7 @@ function buildCustomerSearchText(
 ) {
   const related = getCustomerRelatedRecords(snapshot, customer);
   const company = companyMap.get(customer.company_id);
+  const properties = buildCustomerPropertySummaries(customer, related);
 
   return [
     customer.id,
@@ -5831,6 +6124,14 @@ function buildCustomerSearchText(
     company?.short_name,
     customerStatusLabel(customer.status),
     customerTypeLabel(customer.customer_type),
+    ...properties.flatMap((property) => [
+      property.address,
+      property.city,
+      property.state,
+      property.postalCode,
+      formatCustomerPropertyAddress(property),
+      ...property.sources,
+    ]),
     ...related.leads.flatMap((lead) => [
       lead.id,
       lead.contact_name,
@@ -5838,7 +6139,12 @@ function buildCustomerSearchText(
       normalizePhoneDigits(lead.phone),
       lead.email,
       lead.property_address,
+      lead.city,
+      lead.state,
+      lead.postal_code,
       lead.source,
+      lead.status,
+      statusLabel(lead.status),
       pipelineStageLabel(lead.pipeline_stage),
     ]),
     ...related.estimates.flatMap((estimate) => [
@@ -5846,12 +6152,22 @@ function buildCustomerSearchText(
       estimate.title,
       estimate.business,
       estimate.location,
+      estimate.service_type,
       estimateStatusLabel(estimate.status),
+    ]),
+    ...related.scopes.flatMap((scope) => [
+      scope.id,
+      scope.title,
+      scopeCategoryLabels[scope.category],
+      scopeStatusLabel(scope.status),
     ]),
     ...related.inspections.flatMap((inspection) => [
       inspection.id,
       inspection.title,
       inspection.property_address,
+      inspection.assigned_inspector,
+      inspection.inspection_type,
+      inspection.service_category,
       inspectionStatusLabel(inspection.status),
     ]),
     ...related.jobs.flatMap((job) => [
@@ -5860,6 +6176,9 @@ function buildCustomerSearchText(
       job.crew_name,
       job.project_manager,
       job.property_address,
+      job.address,
+      job.business,
+      job.location,
       jobStatusLabel(job.status),
     ]),
     ...related.invoices.flatMap((invoice) => [
@@ -5868,11 +6187,25 @@ function buildCustomerSearchText(
       invoice.title,
       invoiceStatusLabel(invoice.status),
     ]),
+    ...related.scheduleEvents.flatMap((event) => [
+      event.id,
+      event.title,
+      event.location,
+      scheduleEventTypeLabel(event.event_type),
+      scheduleEventStatusLabel(event.status),
+    ]),
     ...related.documents.flatMap((document) => [
       document.id,
       document.title,
       documentCategoryLabel(document.category),
       documentStatusLabel(document.status),
+    ]),
+    ...related.photos.flatMap((photo) => [
+      photo.id,
+      photo.caption,
+      photo.label,
+      photo.file_path,
+      photo.is_customer_visible ? "customer visible photo" : "internal photo",
     ]),
   ]
     .filter(Boolean)
@@ -5904,7 +6237,7 @@ function findPotentialCustomerDuplicates(
         customer.contact_name || customer.display_name,
       );
 
-      if (inputAddress && customerAddress && inputAddress === customerAddress) {
+      if (crmAddressesLikelyMatch(inputAddress, customerAddress)) {
         reasons.push("same service address");
       }
 
@@ -5952,7 +6285,7 @@ function findPotentialLeadDuplicate(
     }
 
     const leadAddress = normalizeCrmLookup(lead.property_address);
-    const sameAddress = Boolean(inputAddress && leadAddress && inputAddress === leadAddress);
+    const sameAddress = crmAddressesLikelyMatch(inputAddress, leadAddress);
     const samePhone = Boolean(inputPhone && normalizePhoneDigits(lead.phone) === inputPhone);
     const sameEmail = Boolean(inputEmail && normalizeCrmLookup(lead.email) === inputEmail);
     const sameName = Boolean(inputName && normalizeCrmLookup(lead.contact_name) === inputName);
@@ -5990,18 +6323,35 @@ function buildCustomerTimelineItems(
       user: "WeatherTech OS",
       icon: Users,
       tone: "slate",
+      kind: "profile",
     },
   ];
+
+  if (customer.updated_at !== customer.created_at) {
+    items.push({
+      id: `customer-updated-${customer.id}`,
+      label: "Customer status updated",
+      description: `${customerStatusLabel(customer.status)} - ${customerTypeLabel(
+        customer.customer_type,
+      )}`,
+      occurredAt: customer.updated_at,
+      user: "CRM",
+      icon: Pencil,
+      tone: customer.status === "inactive" ? "amber" : "blue",
+      kind: "profile",
+    });
+  }
 
   if (customer.notes) {
     items.push({
       id: `customer-note-${customer.id}`,
-      label: "Customer note",
+      label: "Internal note",
       description: truncateTimelineText(customer.notes),
       occurredAt: customer.updated_at,
       user: "Team",
       icon: MessageSquare,
       tone: "amber",
+      kind: "note",
     });
   }
 
@@ -6014,18 +6364,63 @@ function buildCustomerTimelineItems(
       user: "CRM",
       icon: UserRound,
       tone: "blue",
+      kind: "lead",
     });
+
+    if (lead.updated_at !== lead.created_at) {
+      items.push({
+        id: `lead-status-${lead.id}`,
+        label: "Lead status changed",
+        description: `${statusLabel(lead.status)} - ${pipelineStageLabel(
+          lead.pipeline_stage,
+        )}`,
+        occurredAt: lead.updated_at,
+        user: lead.created_by ?? "CRM",
+        icon: ArrowUp,
+        tone: lead.status === "won" ? "green" : lead.status === "lost" ? "amber" : "blue",
+        kind: "lead",
+      });
+    }
   });
 
   related.estimates.forEach((estimate) => {
     items.push({
-      id: `estimate-${estimate.id}`,
-      label: "Estimate",
+      id: `estimate-created-${estimate.id}`,
+      label: "Estimate created",
       description: `${estimate.title} - ${formatMoney(estimate.total)}`,
-      occurredAt: estimate.updated_at,
+      occurredAt: estimate.created_at,
       user: "Estimating",
       icon: Calculator,
       tone: estimate.status === "approved" ? "green" : "blue",
+      kind: "estimate",
+    });
+
+    if (estimate.updated_at !== estimate.created_at) {
+      items.push({
+        id: `estimate-revised-${estimate.id}`,
+        label: "Estimate revised",
+        description: `${estimateStatusLabel(estimate.status)} - ${formatMoney(
+          estimate.total,
+        )}`,
+        occurredAt: estimate.updated_at,
+        user: "Estimating",
+        icon: Pencil,
+        tone: estimate.status === "approved" ? "green" : "blue",
+        kind: "estimate",
+      });
+    }
+  });
+
+  related.scopes.forEach((scope) => {
+    items.push({
+      id: `scope-${scope.id}`,
+      label: "Scope prepared",
+      description: `${scope.title} - ${scopeStatusLabel(scope.status)}`,
+      occurredAt: scope.updated_at,
+      user: "Scopes",
+      icon: WandSparkles,
+      tone: scope.status === "approved" ? "green" : "purple",
+      kind: "estimate",
     });
   });
 
@@ -6038,30 +6433,87 @@ function buildCustomerTimelineItems(
       user: inspection.assigned_inspector ?? "Production",
       icon: ClipboardList,
       tone: inspection.status === "completed" ? "green" : "purple",
+      kind: "inspection",
     });
+
+    if (inspection.completed_at) {
+      items.push({
+        id: `inspection-completed-${inspection.id}`,
+        label: "Inspection completed",
+        description: inspection.outcome
+          ? inspectionOutcomeLabel(inspection.outcome)
+          : "Inspection marked complete",
+        occurredAt: inspection.completed_at,
+        user: inspection.assigned_inspector ?? "Production",
+        icon: CheckCircle2,
+        tone: "green",
+        kind: "inspection",
+      });
+    }
+
+    if (inspection.internal_notes) {
+      items.push({
+        id: `inspection-internal-note-${inspection.id}`,
+        label: "Inspection internal note",
+        description: truncateTimelineText(inspection.internal_notes),
+        occurredAt: inspection.updated_at,
+        user: inspection.assigned_inspector ?? "Production",
+        icon: MessageSquare,
+        tone: "amber",
+        kind: "note",
+      });
+    }
   });
 
   related.jobs.forEach((job) => {
     items.push({
-      id: `job-${job.id}`,
-      label: "Job",
+      id: `job-created-${job.id}`,
+      label: "Job created",
       description: `${job.title} - ${jobStatusLabel(job.status)}`,
-      occurredAt: job.updated_at,
+      occurredAt: job.created_at,
       user: job.project_manager ?? job.crew_name ?? "Production",
       icon: Building2,
-      tone: job.status === "completed" || job.status === "closed" ? "green" : "blue",
+      tone: isActiveJob(job) ? "blue" : "green",
+      kind: "job",
     });
+
+    if (job.status === "completed" || job.status === "closed") {
+      items.push({
+        id: `job-completed-${job.id}`,
+        label: "Job completed",
+        description: job.title,
+        occurredAt: job.end_date ?? job.updated_at,
+        user: job.project_manager ?? job.crew_name ?? "Production",
+        icon: CheckCircle2,
+        tone: "green",
+        kind: "job",
+      });
+    } else if (job.updated_at !== job.created_at) {
+      items.push({
+        id: `job-status-${job.id}`,
+        label: "Job status changed",
+        description: `${job.title} - ${jobStatusLabel(job.status)}`,
+        occurredAt: job.updated_at,
+        user: job.project_manager ?? job.crew_name ?? "Production",
+        icon: ArrowUp,
+        tone: job.status === "blocked" ? "amber" : "blue",
+        kind: "job",
+      });
+    }
   });
 
   related.scheduleEvents.forEach((event) => {
+    const upcoming = isFutureDateTime(event.start_at) && event.status === "scheduled";
+
     items.push({
       id: `schedule-${event.id}`,
-      label: scheduleEventTypeLabel(event.event_type),
+      label: upcoming ? "Upcoming appointment" : scheduleEventTypeLabel(event.event_type),
       description: `${event.title} - ${formatDateTime(event.start_at)}`,
       occurredAt: event.start_at,
       user: "Scheduler",
       icon: CalendarClock,
-      tone: "purple",
+      tone: upcoming ? "purple" : event.status === "completed" ? "green" : "slate",
+      kind: "calendar",
     });
   });
 
@@ -6074,6 +6526,7 @@ function buildCustomerTimelineItems(
       user: "Financial",
       icon: ReceiptText,
       tone: invoice.status === "paid" ? "green" : "amber",
+      kind: "invoice",
     });
   });
 
@@ -6086,6 +6539,7 @@ function buildCustomerTimelineItems(
       user: "Documents",
       icon: FileText,
       tone: "slate",
+      kind: "document",
     });
   });
 
@@ -6095,10 +6549,22 @@ function buildCustomerTimelineItems(
       label: "Photo",
       description: photo.caption ?? photo.label ?? "Jobsite photo",
       occurredAt: photo.taken_at ?? photo.created_at,
-      user: "Field",
+      user: photo.is_customer_visible ? "Field - customer visible" : "Field - internal",
       icon: Camera,
       tone: photo.is_customer_visible ? "green" : "slate",
+      kind: "photo",
     });
+  });
+
+  items.push({
+    id: `future-communications-${customer.id}`,
+    label: "Future calls, texts, and emails",
+    description: "Communication threads will appear here after those integrations are enabled.",
+    occurredAt: customer.updated_at,
+    user: "Roadmap",
+    icon: MessageSquare,
+    tone: "slate",
+    kind: "future",
   });
 
   return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
@@ -6626,9 +7092,16 @@ function CustomerProfilePanel({
 }) {
   const [activeSection, setActiveSection] =
     useState<CustomerWorkspaceSection>("overview");
+  const [timelineFilter, setTimelineFilter] = useState<CustomerTimelineKind | "all">(
+    "all",
+  );
   const related = useMemo(
     () => getCustomerRelatedRecords(snapshot, customer),
     [customer, snapshot],
+  );
+  const properties = useMemo(
+    () => buildCustomerPropertySummaries(customer, related),
+    [customer, related],
   );
   const timelineItems = useMemo(
     () => buildCustomerTimelineItems(customer, related),
@@ -6657,13 +7130,26 @@ function CustomerProfilePanel({
     [customer, snapshot.customers],
   );
   const company = companyMap.get(customer.company_id);
-  const invoiceBalance = related.invoices.reduce(
-    (total, invoice) => total + invoice.balance_due,
-    0,
+  const openLeads = related.leads.filter(
+    (lead) => lead.status !== "won" && lead.status !== "lost",
   );
+  const openEstimates = related.estimates.filter(isOpenEstimate);
+  const activeJobs = related.jobs.filter(isActiveJob);
+  const outstandingInvoices = related.invoices.filter(isOutstandingInvoice);
+  const upcomingAppointments = related.scheduleEvents
+    .filter((event) => event.status === "scheduled" && isFutureDateTime(event.start_at))
+    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+  const realTimelineItems = timelineItems.filter((item) => item.kind !== "future");
+  const lastActivity = realTimelineItems[0];
+  const leadSources = uniqueById(
+    related.leads.map((lead) => ({ id: lead.source, label: lead.source })),
+  )
+    .map((lead) => lead.label)
+    .filter(Boolean);
   const sectionCounts: Record<CustomerWorkspaceSection, number | null> = {
     overview: null,
-    activity: timelineItems.length,
+    properties: properties.length,
+    activity: realTimelineItems.length,
     leads: related.leads.length,
     estimates: related.estimates.length,
     inspections: related.inspections.length,
@@ -6673,6 +7159,8 @@ function CustomerProfilePanel({
     documents: related.documents.length,
     notes: customer.notes ? 1 : 0,
     calendar: related.scheduleEvents.length,
+    warranty: 0,
+    maintenance: 0,
     communications: 0,
   };
 
@@ -6681,23 +7169,88 @@ function CustomerProfilePanel({
       className="mt-5 border-t border-slate-200 pt-5"
       data-testid="customer-workspace"
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h4 className="text-sm font-bold uppercase text-slate-500">
-            Customer workspace
-          </h4>
-          <p className="mt-1 text-sm text-slate-600">
-            {company?.name ?? "Company"} - {customerStatusLabel(customer.status)}
-          </p>
+      <div
+        className="rounded-xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4"
+        data-testid="customer-360-header"
+      >
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 gap-3">
+            <div
+              className="grid h-12 w-12 shrink-0 place-items-center rounded-lg text-sm font-black text-white shadow-sm"
+              style={{ backgroundColor: getCompanyBrandColor(company) }}
+            >
+              {companyInitials(company)}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase text-slate-500">
+                Customer 360 workspace
+              </p>
+              <h4 className="mt-1 truncate text-xl font-black text-slate-950">
+                {customer.display_name}
+              </h4>
+              <p className="mt-1 text-sm text-slate-600">
+                {company?.name ?? "Company"} - {customer.contact_name}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge
+                  label={customerStatusLabel(customer.status)}
+                  tone={customer.status === "inactive" ? "amber" : "green"}
+                />
+                <Badge label={customerTypeLabel(customer.customer_type)} tone="blue" />
+                <Badge
+                  label={leadSources.length ? leadSources[0] : "No linked source"}
+                  tone="amber"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-2 text-sm text-slate-600 lg:min-w-72">
+            <ContactLine icon={Phone} value={customer.phone} />
+            <ContactLine icon={Mail} value={customer.email} />
+            <ContactLine
+              icon={MapPin}
+              value={
+                properties[0]
+                  ? formatCustomerPropertyAddress(properties[0])
+                  : customer.property_address
+              }
+            />
+          </div>
         </div>
-        <Badge
-          label={customerTypeLabel(customer.customer_type)}
-          tone={customer.status === "inactive" ? "amber" : "blue"}
-        />
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <ProfileStat label="Properties" value={properties.length} />
+          <ProfileStat label="Open leads" value={openLeads.length} />
+          <ProfileStat label="Open estimates" value={openEstimates.length} />
+          <ProfileStat label="Active jobs" value={activeJobs.length} />
+          <ProfileStat
+            label="Outstanding"
+            value={formatMoney(
+              outstandingInvoices.reduce((total, invoice) => total + invoice.balance_due, 0),
+            )}
+          />
+          <ProfileStat
+            label="Next appointment"
+            value={
+              upcomingAppointments[0]
+                ? formatDateTime(upcomingAppointments[0].start_at)
+                : "None"
+            }
+          />
+        </div>
+
+        <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+          Last activity:{" "}
+          <span className="font-semibold text-slate-900">
+            {lastActivity
+              ? `${lastActivity.label} - ${formatDateTime(lastActivity.occurredAt)}`
+              : "No activity yet"}
+          </span>
+        </div>
       </div>
 
       <div
-        className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+        className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5"
         data-testid="customer-quick-actions"
       >
         <CustomerQuickAction
@@ -6716,7 +7269,7 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("inspections")}
         />
         <CustomerQuickAction
-          label="Schedule"
+          label="Schedule Visit"
           icon={CalendarClock}
           onClick={() => onViewChange("calendar")}
         />
@@ -6726,12 +7279,12 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("jobs")}
         />
         <CustomerQuickAction
-          label="Upload Photo"
+          label="Upload Photos"
           icon={Camera}
           onClick={() => onViewChange("photos")}
         />
         <CustomerQuickAction
-          label="Add Document"
+          label="Upload Documents"
           icon={FileText}
           onClick={() => onViewChange("documents")}
         />
@@ -6741,23 +7294,20 @@ function CustomerProfilePanel({
           icon={WandSparkles}
           onClick={() => onViewChange("scopes")}
         />
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <ProfileStat label="Open leads" value={related.leads.length} />
-        <ProfileStat
-          label="Estimates"
-          value={formatMoney(
-            related.estimates.reduce((total, estimate) => total + estimate.total, 0),
-          )}
+        <CustomerQuickAction
+          label="Open Calendar"
+          icon={CalendarClock}
+          onClick={() => onViewChange("calendar")}
         />
-        <ProfileStat label="Active jobs" value={related.jobs.length} />
-        <ProfileStat label="Balance" value={formatMoney(invoiceBalance)} />
       </div>
 
       {duplicateMatches.length ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
           <p className="text-sm font-bold text-amber-900">Potential duplicate review</p>
+          <p className="mt-1 text-sm text-amber-800">
+            Merge is not automated. Review these matches before creating or editing
+            records so customer and property history stays clean.
+          </p>
           <div className="mt-2 grid gap-2">
             {duplicateMatches.slice(0, 3).map((match) => (
               <p key={match.customer.id} className="text-sm text-amber-800">
@@ -6793,11 +7343,25 @@ function CustomerProfilePanel({
 
       <div className="mt-4" data-testid="customer-workspace-section">
         {activeSection === "overview" ? (
-          <CustomerOverviewSection customer={customer} company={company} related={related} />
+          <CustomerOverviewSection
+            customer={customer}
+            company={company}
+            related={related}
+            properties={properties}
+            leadSources={leadSources}
+          />
+        ) : null}
+
+        {activeSection === "properties" ? (
+          <CustomerPropertiesSection properties={properties} />
         ) : null}
 
         {activeSection === "activity" ? (
-          <CustomerTimeline items={timelineItems} />
+          <CustomerTimeline
+            items={timelineItems}
+            filter={timelineFilter}
+            onFilterChange={setTimelineFilter}
+          />
         ) : null}
 
         {activeSection === "leads" ? (
@@ -6930,11 +7494,27 @@ function CustomerProfilePanel({
           />
         ) : null}
 
+        {activeSection === "warranty" ? (
+          <CustomerFutureSection
+            title="Warranty"
+            label="Warranty tracking is ready for a future schema-backed record."
+            detail="Completed jobs, documents, and customer-visible photos are already linked here so warranty records can be added without changing this workspace."
+          />
+        ) : null}
+
+        {activeSection === "maintenance" ? (
+          <CustomerFutureSection
+            title="Maintenance"
+            label="Maintenance plans are prepared as a Customer 360 section."
+            detail="Recurring roof reviews, paint touch-ups, and seasonal reminders need a dedicated maintenance table before they can be persisted."
+          />
+        ) : null}
+
         {activeSection === "communications" ? (
-          <RelatedList
+          <CustomerFutureSection
             title="Communications"
-            emptyLabel="No calls, texts, or email threads are linked yet."
-            items={[]}
+            label="Calls, texts, and email threads are not linked yet."
+            detail="This placeholder keeps the Customer 360 navigation stable until Gmail, Twilio, or GoHighLevel communication records are promoted into this workspace."
           />
         ) : null}
       </div>
@@ -6967,17 +7547,15 @@ function CustomerOverviewSection({
   customer,
   company,
   related,
+  properties,
+  leadSources,
 }: {
   customer: CustomerRecord;
   company?: CompanyRecord;
   related: CustomerRelatedRecords;
+  properties: CustomerPropertySummary[];
+  leadSources: string[];
 }) {
-  const leadSources = uniqueById(
-    related.leads.map((lead) => ({ id: lead.source, label: lead.source })),
-  )
-    .map((lead) => lead.label)
-    .filter(Boolean);
-
   return (
     <div className="grid gap-3">
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -7004,6 +7582,20 @@ function CustomerOverviewSection({
             label="Lead source"
             value={leadSources.length ? leadSources.join(", ") : "No linked source"}
           />
+          <CustomerDetail
+            label="Property count"
+            value={`${properties.length} ${
+              properties.length === 1 ? "property" : "properties"
+            }`}
+          />
+          <CustomerDetail
+            label="Primary property"
+            value={
+              properties[0]
+                ? formatCustomerPropertyAddress(properties[0])
+                : "No property recorded"
+            }
+          />
         </dl>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -7011,6 +7603,59 @@ function CustomerOverviewSection({
         <ProfileStat label="Documents" value={related.documents.length} />
         <ProfileStat label="Photos" value={related.photos.length} />
       </div>
+    </div>
+  );
+}
+
+function CustomerPropertiesSection({
+  properties,
+}: {
+  properties: CustomerPropertySummary[];
+}) {
+  if (!properties.length) {
+    return <EmptyState label="No properties are linked to this customer yet." />;
+  }
+
+  return (
+    <div className="grid gap-3" data-testid="customer-properties-section">
+      {properties.map((property, index) => (
+        <div
+          key={property.id}
+          className="rounded-lg border border-slate-200 bg-white p-3"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-slate-950">
+                {index === 0 ? "Primary service property" : "Linked property"}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {formatCustomerPropertyAddress(property)}
+              </p>
+            </div>
+            <Badge
+              label={
+                property.activeWorkCount
+                  ? `${property.activeWorkCount} active`
+                  : "No active work"
+              }
+              tone={property.activeWorkCount ? "blue" : "green"}
+            />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {property.sources.map((source) => (
+              <span
+                key={source}
+                className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600"
+              >
+                {source}
+              </span>
+            ))}
+          </div>
+          <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
+            Last linked activity {formatDateTime(property.lastActivity)}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -7024,53 +7669,117 @@ function CustomerDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CustomerTimeline({ items }: { items: CustomerTimelineItem[] }) {
+function CustomerTimeline({
+  items,
+  filter,
+  onFilterChange,
+}: {
+  items: CustomerTimelineItem[];
+  filter: CustomerTimelineKind | "all";
+  onFilterChange: (filter: CustomerTimelineKind | "all") => void;
+}) {
+  const filteredItems =
+    filter === "all" ? items : items.filter((item) => item.kind === filter);
+
   if (!items.length) {
     return <EmptyState label="No customer activity yet." />;
   }
 
   return (
-    <div
-      className="divide-y divide-slate-100 rounded-lg border border-slate-200"
-      data-testid="customer-timeline"
-    >
-      {items.slice(0, 12).map((item) => {
-        const Icon = item.icon;
-        const toneClass =
-          item.tone === "green"
-            ? "bg-emerald-50 text-emerald-700"
-            : item.tone === "amber"
-              ? "bg-amber-50 text-amber-700"
-              : item.tone === "purple"
-                ? "bg-purple-50 text-purple-700"
-                : item.tone === "blue"
-                  ? "bg-sky-50 text-sky-700"
-                  : "bg-slate-100 text-slate-600";
+    <div data-testid="customer-timeline">
+      <div className="mb-3 flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm font-bold text-slate-900">Activity timeline</p>
+        <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+          Filter
+          <select
+            value={filter}
+            onChange={(event) =>
+              onFilterChange(event.target.value as CustomerTimelineKind | "all")
+            }
+            data-testid="customer-timeline-filter"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"
+          >
+            {customerTimelineFilters.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
-        return (
-          <div key={item.id} className="flex gap-3 p-3">
-            <div
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${toneClass}`}
-            >
-              <Icon className="h-4 w-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-semibold text-slate-950">{item.label}</p>
-                <p className="text-xs font-medium text-slate-500">
-                  {formatDateTime(item.occurredAt)}
-                </p>
+      {filteredItems.length ? (
+        <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {filteredItems.slice(0, 16).map((item) => {
+            const Icon = item.icon;
+            const toneClass =
+              item.tone === "green"
+                ? "bg-emerald-50 text-emerald-700"
+                : item.tone === "amber"
+                  ? "bg-amber-50 text-amber-700"
+                  : item.tone === "purple"
+                    ? "bg-purple-50 text-purple-700"
+                    : item.tone === "blue"
+                      ? "bg-sky-50 text-sky-700"
+                      : "bg-slate-100 text-slate-600";
+
+            return (
+              <div key={item.id} className="flex gap-3 p-3">
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${toneClass}`}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="font-semibold text-slate-950">{item.label}</p>
+                    <p className="text-xs font-medium text-slate-500">
+                      {formatDateTime(item.occurredAt)}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">{item.description}</p>
+                  <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                    {item.user}
+                  </p>
+                </div>
               </div>
-              <p className="mt-1 text-sm text-slate-600">{item.description}</p>
-              <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                {item.user}
-              </p>
-            </div>
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState label="No activity matches this filter." />
+      )}
     </div>
   );
+}
+
+function CustomerFutureSection({
+  title,
+  label,
+  detail,
+}: {
+  title: string;
+  label: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+      <div className="flex gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-slate-500">
+          <ClockIcon />
+        </div>
+        <div>
+          <p className="text-sm font-bold text-slate-950">{title}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-700">{label}</p>
+          <p className="mt-1 text-sm text-slate-500">{detail}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClockIcon() {
+  return <CalendarClock className="h-5 w-5" />;
 }
 
 function ProfileStat({ label, value }: { label: string; value: string | number }) {
