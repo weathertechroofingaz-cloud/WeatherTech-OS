@@ -52,6 +52,7 @@ export const goHighLevelEnvVars = {
   ihcLocationId: "GHL_LOCATION_ID_IHC",
   apiBaseUrl: "https://services.leadconnectorhq.com",
   testEndpoint: "/api/integrations/gohighlevel/test",
+  readinessEndpoint: "/api/integrations/gohighlevel/readiness",
   leadDryRunEndpoint: "/api/integrations/gohighlevel/leads/dry-run",
   leadDryRunEventType: "lead_contact.dry_run",
 };

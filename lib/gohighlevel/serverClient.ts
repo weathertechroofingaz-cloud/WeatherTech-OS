@@ -1,8 +1,17 @@
 import type { CompanyRecord, CustomerRecord, LeadRecord } from "../crm/types";
+import {
+  goHighLevelPhaseOneGuardrails,
+  goHighLevelSyncFoundationMigration,
+  goHighLevelSyncResources,
+  type GoHighLevelLiveSyncStatus,
+} from "./foundation";
 
 const GHL_API_BASE_URL = "https://services.leadconnectorhq.com";
 const GHL_API_VERSION = "2021-07-28";
 const GHL_CONTACTS_ENDPOINT = "/contacts/";
+const GHL_LOCATION_ENDPOINT = "/locations/:locationId";
+const GHL_PIPELINES_ENDPOINT = "/opportunities/pipelines";
+const GHL_OPPORTUNITY_SEARCH_ENDPOINT = "/opportunities/search";
 export const GHL_LEAD_CONTACT_DRY_RUN_EVENT_TYPE = "lead_contact.dry_run";
 
 const GHL_REQUIRED_ENV_VARS = [
@@ -121,11 +130,58 @@ type TestConnectionOptions = {
   includeReadProbe?: boolean;
 };
 
+export type GoHighLevelPipelineProbeResult = GoHighLevelConfiguredLocation & {
+  readCheck: "skipped" | "ok" | "unauthorized" | "error";
+  statusCode: number | null;
+  message: string;
+  pipelineCount: number | null;
+  pipelineNames: string[];
+};
+
+export type GoHighLevelAccountReadinessResult = {
+  ok: boolean;
+  dryRun: true;
+  communicationsSent: false;
+  automationTriggered: false;
+  liveSyncEnabled: false;
+  status: GoHighLevelLiveSyncStatus;
+  statusLabel: string;
+  message: string;
+  tokenConfigured: boolean;
+  requiredEnvVars: string[];
+  configuredLocationIds: string[];
+  apiBaseUrl: string;
+  checkedAt: string;
+  accountMetadata: {
+    authMethod: "private_integration_token";
+    oauthSupported: false;
+    locationEndpoint: typeof GHL_LOCATION_ENDPOINT;
+    pipelineEndpoint: typeof GHL_PIPELINES_ENDPOINT;
+    opportunitySearchEndpoint: typeof GHL_OPPORTUNITY_SEARCH_ENDPOINT;
+    contactsEndpoint: typeof GHL_CONTACTS_ENDPOINT;
+  };
+  locations: GoHighLevelLocationProbeResult[];
+  pipelines: GoHighLevelPipelineProbeResult[];
+  syncResources: typeof goHighLevelSyncResources;
+  phaseOneGuardrails: typeof goHighLevelPhaseOneGuardrails;
+  migration: {
+    required: typeof goHighLevelSyncFoundationMigration;
+    applied: boolean | null;
+    checked: boolean;
+    message: string;
+  };
+  nextStep: string;
+};
+
 type GoHighLevelLocationResponse = {
   location?: {
     name?: unknown;
   };
   name?: unknown;
+};
+
+type GoHighLevelPipelineResponse = {
+  pipelines?: unknown;
 };
 
 function getServerEnv(name: string) {
@@ -170,7 +226,7 @@ function serviceTag(value: LeadRecord["service_type"]) {
   return `service:${value}`;
 }
 
-function createGoHighLevelPayloadFingerprint(payload: GoHighLevelLeadContactPayload) {
+function createGoHighLevelPayloadFingerprint(payload: unknown) {
   const serialized = JSON.stringify(payload);
   let hash = 0;
 
@@ -180,6 +236,15 @@ function createGoHighLevelPayloadFingerprint(payload: GoHighLevelLeadContactPayl
   }
 
   return `ghl-${Math.abs(hash).toString(16)}`;
+}
+
+function getGoHighLevelRequestHeaders(token: string, locationId?: string | null) {
+  return {
+    Accept: "application/json",
+    Authorization: `Bearer ${token}`,
+    Version: GHL_API_VERSION,
+    ...(locationId ? { locationId } : {}),
+  };
 }
 
 export function getGoHighLevelServerConfig() {
@@ -428,6 +493,43 @@ function createSkippedProbe(
   };
 }
 
+function createSkippedPipelineProbe(
+  location: GoHighLevelConfiguredLocation,
+  message: string,
+): GoHighLevelPipelineProbeResult {
+  return {
+    ...location,
+    readCheck: "skipped",
+    statusCode: null,
+    message,
+    pipelineCount: null,
+    pipelineNames: [],
+  };
+}
+
+function getPipelineNames(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const pipelines = (payload as GoHighLevelPipelineResponse).pipelines;
+
+  if (!Array.isArray(pipelines)) {
+    return [];
+  }
+
+  return pipelines
+    .map((pipeline) => {
+      if (!pipeline || typeof pipeline !== "object") {
+        return null;
+      }
+
+      const name = (pipeline as { name?: unknown }).name;
+      return typeof name === "string" && name.trim() ? name.trim() : null;
+    })
+    .filter((name): name is string => Boolean(name));
+}
+
 export function createGoHighLevelServerClient(token: string) {
   async function probeLocation(
     location: GoHighLevelConfiguredLocation,
@@ -441,11 +543,7 @@ export function createGoHighLevelServerClient(token: string) {
         `${GHL_API_BASE_URL}/locations/${encodeURIComponent(location.locationId)}`,
         {
           method: "GET",
-          headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${token}`,
-            Version: GHL_API_VERSION,
-          },
+          headers: getGoHighLevelRequestHeaders(token),
           cache: "no-store",
         },
       );
@@ -503,7 +601,70 @@ export function createGoHighLevelServerClient(token: string) {
     }
   }
 
-  return { probeLocation };
+  async function probePipelines(
+    location: GoHighLevelConfiguredLocation,
+  ): Promise<GoHighLevelPipelineProbeResult> {
+    if (!location.locationId) {
+      return createSkippedPipelineProbe(location, "Location ID is not configured.");
+    }
+
+    try {
+      const response = await fetch(`${GHL_API_BASE_URL}${GHL_PIPELINES_ENDPOINT}`, {
+        method: "GET",
+        headers: getGoHighLevelRequestHeaders(token, location.locationId),
+        cache: "no-store",
+      });
+
+      if (response.ok) {
+        const payload: unknown = await response.json().catch(() => null);
+        const pipelineNames = getPipelineNames(payload);
+
+        return {
+          ...location,
+          readCheck: "ok",
+          statusCode: response.status,
+          message: "Read-only pipeline discovery succeeded.",
+          pipelineCount: pipelineNames.length,
+          pipelineNames,
+        };
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        return {
+          ...location,
+          readCheck: "unauthorized",
+          statusCode: response.status,
+          message:
+            "GoHighLevel rejected the configured token for pipeline discovery.",
+          pipelineCount: null,
+          pipelineNames: [],
+        };
+      }
+
+      return {
+        ...location,
+        readCheck: "error",
+        statusCode: response.status,
+        message: `GoHighLevel pipeline discovery returned HTTP ${response.status}.`,
+        pipelineCount: null,
+        pipelineNames: [],
+      };
+    } catch (error) {
+      return {
+        ...location,
+        readCheck: "error",
+        statusCode: null,
+        message:
+          error instanceof Error
+            ? error.message
+            : "GoHighLevel pipeline discovery failed.",
+        pipelineCount: null,
+        pipelineNames: [],
+      };
+    }
+  }
+
+  return { probeLocation, probePipelines };
 }
 
 export async function testGoHighLevelConnection({
@@ -598,5 +759,142 @@ export async function testGoHighLevelConnection({
     apiBaseUrl: config.apiBaseUrl,
     checkedAt: new Date().toISOString(),
     nextStep: "Add approved lead sync and sync logging when ready.",
+  };
+}
+
+function getReadinessStatus({
+  connectionResult,
+  pipelines,
+  schemaApplied,
+}: {
+  connectionResult: GoHighLevelConnectionTestResult;
+  pipelines: GoHighLevelPipelineProbeResult[];
+  schemaApplied: boolean | null;
+}): GoHighLevelLiveSyncStatus {
+  if (!connectionResult.tokenConfigured && !connectionResult.configuredLocationIds.length) {
+    return "not_connected";
+  }
+
+  if (
+    connectionResult.status === "missing_token" ||
+    connectionResult.status === "missing_location"
+  ) {
+    return "credentials_required";
+  }
+
+  if (connectionResult.status === "auth_failed") {
+    return "validation_failed";
+  }
+
+  if (
+    connectionResult.status === "read_check_unavailable" ||
+    pipelines.some((pipeline) => pipeline.readCheck === "error")
+  ) {
+    return "sync_error";
+  }
+
+  if (pipelines.some((pipeline) => pipeline.readCheck === "unauthorized")) {
+    return "validation_failed";
+  }
+
+  if (schemaApplied === false) {
+    return "connected";
+  }
+
+  return connectionResult.ok ? "ready_to_sync" : "sync_disabled";
+}
+
+function getReadinessMessage(status: GoHighLevelLiveSyncStatus) {
+  const messages: Record<GoHighLevelLiveSyncStatus, string> = {
+    not_connected:
+      "GoHighLevel is not connected. Add server-only credentials and location IDs before validation.",
+    credentials_required:
+      "GoHighLevel server credentials or location IDs are missing.",
+    connected:
+      "GoHighLevel credentials can be validated, but the sync foundation migration is not applied yet.",
+    validation_failed:
+      "GoHighLevel rejected the configured credential or location mapping.",
+    ready_to_sync:
+      "GoHighLevel read-only validation is ready for owner-approved sync workers. No live sync ran.",
+    sync_disabled:
+      "GoHighLevel live synchronization is disabled until explicitly approved.",
+    sync_error:
+      "GoHighLevel validation or discovery returned an error. Review the server-side result before enabling sync.",
+  };
+
+  return messages[status];
+}
+
+export async function validateGoHighLevelAccountReadiness({
+  includeReadProbe = false,
+  includePipelineProbe = false,
+  schemaApplied = null,
+}: TestConnectionOptions & {
+  includePipelineProbe?: boolean;
+  schemaApplied?: boolean | null;
+} = {}): Promise<GoHighLevelAccountReadinessResult> {
+  const config = getGoHighLevelServerConfig();
+  const connectionResult = await testGoHighLevelConnection({ includeReadProbe });
+  const client = config.token ? createGoHighLevelServerClient(config.token) : null;
+  const pipelines =
+    client && includePipelineProbe
+      ? await Promise.all(
+          config.locations.map((location) => client.probePipelines(location)),
+        )
+      : config.locations.map((location) =>
+          createSkippedPipelineProbe(
+            location,
+            client
+              ? "Read-only pipeline discovery was not requested."
+              : "Token is not configured.",
+          ),
+        );
+  const status = getReadinessStatus({ connectionResult, pipelines, schemaApplied });
+
+  return {
+    ok: status === "ready_to_sync" || status === "connected",
+    dryRun: true,
+    communicationsSent: false,
+    automationTriggered: false,
+    liveSyncEnabled: false,
+    status,
+    statusLabel:
+      status
+        .split("_")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" "),
+    message: getReadinessMessage(status),
+    tokenConfigured: config.tokenConfigured,
+    requiredEnvVars: [...GHL_REQUIRED_ENV_VARS],
+    configuredLocationIds: config.configuredLocationIds,
+    apiBaseUrl: config.apiBaseUrl,
+    checkedAt: new Date().toISOString(),
+    accountMetadata: {
+      authMethod: "private_integration_token",
+      oauthSupported: false,
+      locationEndpoint: GHL_LOCATION_ENDPOINT,
+      pipelineEndpoint: GHL_PIPELINES_ENDPOINT,
+      opportunitySearchEndpoint: GHL_OPPORTUNITY_SEARCH_ENDPOINT,
+      contactsEndpoint: GHL_CONTACTS_ENDPOINT,
+    },
+    locations: connectionResult.locations,
+    pipelines,
+    syncResources: goHighLevelSyncResources,
+    phaseOneGuardrails: goHighLevelPhaseOneGuardrails,
+    migration: {
+      required: goHighLevelSyncFoundationMigration,
+      applied: schemaApplied,
+      checked: schemaApplied !== null,
+      message:
+        schemaApplied === true
+          ? "GoHighLevel sync mapping tables are available."
+          : schemaApplied === false
+            ? "Apply the GoHighLevel sync foundation migration before live sync workers are enabled."
+            : "Schema readiness was not checked.",
+    },
+    nextStep:
+      status === "ready_to_sync"
+        ? "Review mappings and approve a future worker before any live sync writes."
+        : "Complete credentials, location mapping, and the prepared sync foundation migration.",
   };
 }

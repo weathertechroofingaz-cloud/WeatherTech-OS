@@ -621,7 +621,8 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     label: "GoHighLevel",
     shortLabel: "GHL",
     family: "automation",
-    description: "Future marketing automation, CRM sync, activity mirroring, and campaign-safe workflow handoff.",
+    description:
+      "Secure live synchronization foundation for contacts, leads, opportunities, activity mirroring, and campaign-safe workflow handoff.",
     connectionProviders: ["gohighlevel"],
     capabilities: ["sms", "email", "calendar", "crm_sync", "ai", "webhooks"],
     iconKey: "automation",
@@ -647,8 +648,27 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       },
       {
         id: "location_id",
-        label: "Location ID",
-        description: "Maps the GoHighLevel location to WeatherTech Roofing LLC or IHC.",
+        label: "Location IDs",
+        description:
+          "Maps GoHighLevel sub-accounts to WeatherTech Roofing LLC and IHC without mixing records.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "sync_foundation_migration",
+        label: "Sync mapping tables",
+        description:
+          "Stores external IDs, duplicate detection metadata, conflict state, retries, and last-sync timestamps.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "pipeline_mapping",
+        label: "Pipeline and stage mapping",
+        description:
+          "Maps WeatherTech OS lead statuses to approved GoHighLevel pipelines and stages.",
         required: true,
         sensitive: false,
         kind: "text",
@@ -674,6 +694,24 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
         description: "Confirm the GoHighLevel location maps to the correct WeatherTech OS company.",
       },
       {
+        id: "account_metadata",
+        label: "Account metadata check",
+        description:
+          "Read location metadata without creating contacts, opportunities, campaigns, or workflows.",
+      },
+      {
+        id: "pipeline_discovery",
+        label: "Pipeline discovery check",
+        description:
+          "Read available opportunity pipelines before mapping WeatherTech OS lead statuses.",
+      },
+      {
+        id: "duplicate_conflict",
+        label: "Duplicate and conflict check",
+        description:
+          "Confirm external IDs, fingerprints, and conflict states prevent unsafe overwrites.",
+      },
+      {
         id: "workflow_safety",
         label: "Automation safety check",
         description: "Confirm live workflows cannot send customer messages without owner approval.",
@@ -688,15 +726,18 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     },
     connectionSteps: [
       "Collect server-only GoHighLevel credentials from the approved account.",
-      "Validate the API base, token, and location mapping in dry-run mode.",
-      "Confirm workflow safety before any outbound automation is enabled.",
-      "Enable sync workers only after account routing and owner approval are complete.",
+      "Apply the additive sync mapping migration before live workers are enabled.",
+      "Validate the API base, token, location metadata, and pipeline discovery in read-only mode.",
+      "Map contacts, leads, opportunities, notes, tags, and tasks by company.",
+      "Confirm workflow safety before any outbound automation or campaign handoff is enabled.",
+      "Enable sync workers only after account routing, duplicate handling, and owner approval are complete.",
     ],
     disconnectSummary:
       "A future disconnect will pause GoHighLevel sync and automation handoff without deleting CRM history.",
     reconnectSummary:
       "A future reconnect will rerun credential, location, and workflow-safety validation.",
-    summaryWhenDisconnected: "Server configuration is required before GoHighLevel sync workers can run.",
+    summaryWhenDisconnected:
+      "Credentials Required before GoHighLevel validation or live sync workers can run.",
   },
   {
     id: "future_provider",

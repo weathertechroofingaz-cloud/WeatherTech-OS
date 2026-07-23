@@ -187,6 +187,33 @@ export type IntegrationSyncLogStatus =
   | "failed"
   | "skipped"
   | "retrying";
+export type GoHighLevelSyncObjectType =
+  | "contact"
+  | "opportunity"
+  | "company"
+  | "note"
+  | "tag"
+  | "task"
+  | "pipeline"
+  | "stage";
+export type GoHighLevelSyncStatus =
+  | "pending"
+  | "synced"
+  | "conflict"
+  | "error"
+  | "ignored"
+  | "disabled";
+export type GoHighLevelConflictStatus =
+  | "none"
+  | "pending_review"
+  | "resolved_weathertech"
+  | "resolved_gohighlevel"
+  | "ignored";
+export type GoHighLevelDiscoveryStatus =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "partial";
 export type CalendarEventSyncStatus =
   | "queued"
   | "synced"
@@ -820,6 +847,50 @@ export type IntegrationSyncLogRecord = {
   updated_at: string;
 };
 
+export type GoHighLevelSyncMappingRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string | null;
+  provider: Extract<IntegrationProvider, "gohighlevel">;
+  local_table: string;
+  local_record_id: string;
+  external_object_type: GoHighLevelSyncObjectType;
+  external_id: string | null;
+  external_location_id: string | null;
+  external_account_id: string | null;
+  sync_status: GoHighLevelSyncStatus;
+  sync_direction: IntegrationSyncDirection;
+  conflict_status: GoHighLevelConflictStatus;
+  conflict_summary: string | null;
+  last_synced_at: string | null;
+  external_updated_at: string | null;
+  pending_sync: boolean;
+  last_error: string | null;
+  record_fingerprint: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelDiscoverySnapshotRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string | null;
+  provider: Extract<IntegrationProvider, "gohighlevel">;
+  location_key: string;
+  external_location_id: string | null;
+  account_name: string | null;
+  location_name: string | null;
+  pipeline_count: number;
+  pipelines: Record<string, unknown>[];
+  discovery_status: GoHighLevelDiscoveryStatus;
+  checked_at: string;
+  last_error: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LeadSourceMappingRecord = {
   id: string;
   provider: LeadSourceMappingProvider;
@@ -1446,6 +1517,44 @@ export type IntegrationSyncLogInput = {
   error_message?: string | null;
 };
 
+export type GoHighLevelSyncMappingInput = {
+  company_id: string;
+  integration_connection_id?: string | null;
+  provider?: Extract<IntegrationProvider, "gohighlevel">;
+  local_table: string;
+  local_record_id: string;
+  external_object_type: GoHighLevelSyncObjectType;
+  external_id?: string | null;
+  external_location_id?: string | null;
+  external_account_id?: string | null;
+  sync_status?: GoHighLevelSyncStatus;
+  sync_direction?: IntegrationSyncDirection;
+  conflict_status?: GoHighLevelConflictStatus;
+  conflict_summary?: string | null;
+  last_synced_at?: string | null;
+  external_updated_at?: string | null;
+  pending_sync?: boolean;
+  last_error?: string | null;
+  record_fingerprint?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type GoHighLevelDiscoverySnapshotInput = {
+  company_id: string;
+  integration_connection_id?: string | null;
+  provider?: Extract<IntegrationProvider, "gohighlevel">;
+  location_key: string;
+  external_location_id?: string | null;
+  account_name?: string | null;
+  location_name?: string | null;
+  pipeline_count?: number;
+  pipelines?: Record<string, unknown>[];
+  discovery_status?: GoHighLevelDiscoveryStatus;
+  checked_at?: string;
+  last_error?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type LeadSourceMappingInput = {
   provider: LeadSourceMappingProvider;
   external_source_id?: string | null;
@@ -1861,6 +1970,19 @@ export type IntegrationSyncLogInsert = IntegrationSyncLogInput & {
   updated_at?: string;
 };
 
+export type GoHighLevelSyncMappingInsert = GoHighLevelSyncMappingInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type GoHighLevelDiscoverySnapshotInsert =
+  GoHighLevelDiscoverySnapshotInput & {
+    id?: string;
+    created_at?: string;
+    updated_at?: string;
+  };
+
 export type LeadSourceMappingInsert = LeadSourceMappingInput & {
   id?: string;
   created_at?: string;
@@ -2179,6 +2301,22 @@ export type Database = {
         Insert: IntegrationSyncLogInsert;
         Update: Partial<
           Database["public"]["Tables"]["integration_sync_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gohighlevel_sync_mappings: {
+        Row: GoHighLevelSyncMappingRecord;
+        Insert: GoHighLevelSyncMappingInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gohighlevel_sync_mappings"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gohighlevel_discovery_snapshots: {
+        Row: GoHighLevelDiscoverySnapshotRecord;
+        Insert: GoHighLevelDiscoverySnapshotInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gohighlevel_discovery_snapshots"]["Insert"]
         >;
         Relationships: [];
       };

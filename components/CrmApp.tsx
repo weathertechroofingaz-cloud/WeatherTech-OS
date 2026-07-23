@@ -168,6 +168,15 @@ import {
   type IntegrationReadinessState,
 } from "../lib/crm/integrationCenter";
 import {
+  goHighLevelLiveSyncStatusLabels,
+  goHighLevelPhaseOneGuardrails,
+  goHighLevelReadinessEndpoint,
+  goHighLevelSyncFoundationMigration,
+  goHighLevelSyncResources,
+  type GoHighLevelLiveSyncStatus,
+  type GoHighLevelSyncResource,
+} from "../lib/gohighlevel/foundation";
+import {
   twilioBusinessNumberRouteTemplates,
   twilioLiveFoundationChecklist,
   twilioLiveReadinessLabels,
@@ -21655,6 +21664,64 @@ type GoHighLevelConnectionTestResult = {
   nextStep: string;
 };
 
+type GoHighLevelReadinessResult = {
+  ok: boolean;
+  dryRun: boolean;
+  communicationsSent: boolean;
+  automationTriggered: boolean;
+  liveSyncEnabled: boolean;
+  status: GoHighLevelLiveSyncStatus;
+  statusLabel: string;
+  message: string;
+  tokenConfigured: boolean;
+  requiredEnvVars: string[];
+  configuredLocationIds: string[];
+  apiBaseUrl: string;
+  checkedAt: string;
+  accountMetadata: {
+    authMethod: "private_integration_token";
+    oauthSupported: false;
+    locationEndpoint: string;
+    pipelineEndpoint: string;
+    opportunitySearchEndpoint: string;
+    contactsEndpoint: string;
+  };
+  locations: GoHighLevelConnectionTestResult["locations"];
+  pipelines: Array<{
+    key: "weathertech" | "ihc";
+    label: string;
+    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
+    locationId: string | null;
+    configured: boolean;
+    readCheck: "skipped" | "ok" | "unauthorized" | "error";
+    statusCode: number | null;
+    message: string;
+    pipelineCount: number | null;
+    pipelineNames: string[];
+  }>;
+  syncResources: GoHighLevelSyncResource[];
+  phaseOneGuardrails: string[];
+  migration: {
+    required: string;
+    applied: boolean | null;
+    checked: boolean;
+    message: string;
+  };
+  schema: {
+    checked: boolean;
+    applied: boolean | null;
+    migration: string;
+    tables: Array<{
+      table: string;
+      available: boolean;
+      message: string;
+    }>;
+    message: string;
+  };
+  syncResourceCount: number;
+  nextStep: string;
+};
+
 type GoHighLevelLeadDryRunResult = {
   ok: boolean;
   dryRun: boolean;
@@ -21872,6 +21939,31 @@ function getGoHighLevelDryRunStatusTone(
   return status === "validated" || status === "succeeded" ? "green" : "amber";
 }
 
+function getGoHighLevelReadinessStatusTone(
+  status: GoHighLevelLiveSyncStatus,
+): "blue" | "green" | "amber" {
+  if (status === "ready_to_sync" || status === "connected") {
+    return "green";
+  }
+
+  if (
+    status === "validation_failed" ||
+    status === "sync_error" ||
+    status === "credentials_required"
+  ) {
+    return "amber";
+  }
+
+  return "blue";
+}
+
+function countGoHighLevelResourceMode(
+  resources: GoHighLevelSyncResource[],
+  mode: GoHighLevelSyncResource["phaseOneMode"],
+) {
+  return resources.filter((resource) => resource.phaseOneMode === mode).length;
+}
+
 function getTwilioStatusTone(
   status: TwilioConnectionTestResult["status"] | "not_checked",
 ): "blue" | "green" | "amber" {
@@ -21966,6 +22058,10 @@ function IntegrationsView({
   const [goHighLevelTestResult, setGoHighLevelTestResult] =
     useState<GoHighLevelConnectionTestResult | null>(null);
   const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
+  const [goHighLevelReadinessResult, setGoHighLevelReadinessResult] =
+    useState<GoHighLevelReadinessResult | null>(null);
+  const [isCheckingGoHighLevelReadiness, setIsCheckingGoHighLevelReadiness] =
+    useState(false);
   const [goHighLevelLeadDryRunResult, setGoHighLevelLeadDryRunResult] =
     useState<GoHighLevelLeadDryRunResult | null>(null);
   const [isRunningGoHighLevelLeadDryRun, setIsRunningGoHighLevelLeadDryRun] =
@@ -21984,6 +22080,28 @@ function IntegrationsView({
   const goHighLevelLocationIds = getGoHighLevelLocationIds(
     primaryGoHighLevelConnection,
     goHighLevelTestResult,
+  );
+  const goHighLevelReadinessStatus =
+    goHighLevelReadinessResult?.status ??
+    (primaryGoHighLevelConnection
+      ? primaryGoHighLevelConnection.status === "paused"
+        ? "sync_disabled"
+        : primaryGoHighLevelConnection.status === "error"
+          ? "sync_error"
+          : "connected"
+      : "not_connected");
+  const goHighLevelReadinessStatusLabel =
+    goHighLevelReadinessResult?.statusLabel ??
+    goHighLevelLiveSyncStatusLabels[goHighLevelReadinessStatus];
+  const goHighLevelReadinessResources =
+    goHighLevelReadinessResult?.syncResources ?? goHighLevelSyncResources;
+  const goHighLevelDryRunResourceCount = countGoHighLevelResourceMode(
+    goHighLevelReadinessResources,
+    "dry_run_preview",
+  );
+  const goHighLevelMetadataResourceCount = countGoHighLevelResourceMode(
+    goHighLevelReadinessResources,
+    "metadata_only",
   );
   const goHighLevelLeadDryRunStatusLabel = goHighLevelLeadDryRunResult
     ? goHighLevelLeadDryRunResult.ok
@@ -22136,6 +22254,36 @@ function IntegrationsView({
       );
     } finally {
       setIsTestingGoHighLevel(false);
+    }
+  };
+
+  const handleCheckGoHighLevelReadiness = async () => {
+    setIsCheckingGoHighLevelReadiness(true);
+    setGoHighLevelReadinessResult(null);
+
+    try {
+      const response = await fetch(`${goHighLevelReadinessEndpoint}?probe=1&pipelines=1`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      const result = (await response.json()) as GoHighLevelReadinessResult;
+      setGoHighLevelReadinessResult(result);
+
+      if (result.ok) {
+        onNotice("GoHighLevel readiness checked. No live sync ran.");
+      } else {
+        onError(result.message);
+      }
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not check GoHighLevel readiness.",
+      );
+    } finally {
+      setIsCheckingGoHighLevelReadiness(false);
     }
   };
 
@@ -23526,6 +23674,226 @@ function IntegrationsView({
             />
           </div>
 
+          <div
+            className="mt-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4"
+            data-testid="gohighlevel-live-sync-foundation"
+          >
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-slate-950">
+                    GoHighLevel live synchronization foundation
+                  </p>
+                  <Badge
+                    label={goHighLevelReadinessStatusLabel}
+                    tone={getGoHighLevelReadinessStatusTone(goHighLevelReadinessStatus)}
+                  />
+                  <Badge label="No live sync" tone="blue" />
+                </div>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  Phase 1 validates credentials, location routing, pipeline discovery,
+                  external IDs, duplicate protection, conflict detection, sync
+                  timestamps, and retry readiness without creating provider records.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCheckGoHighLevelReadiness()}
+                disabled={isCheckingGoHighLevelReadiness}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-indigo-300 bg-white px-3 py-2 text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                {isCheckingGoHighLevelReadiness
+                  ? "Checking readiness"
+                  : "Check sync readiness"}
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <ProfileStat
+                label="Sync mode"
+                value={
+                  goHighLevelReadinessResult?.liveSyncEnabled
+                    ? "Live enabled"
+                    : "Disabled"
+                }
+              />
+              <ProfileStat
+                label="Migration"
+                value={
+                  goHighLevelReadinessResult
+                    ? goHighLevelReadinessResult.migration.applied
+                      ? "Applied"
+                      : "Required"
+                    : goHighLevelSyncFoundationMigration
+                }
+              />
+              <ProfileStat
+                label="Dry-run resources"
+                value={goHighLevelDryRunResourceCount}
+              />
+              <ProfileStat
+                label="Metadata resources"
+                value={goHighLevelMetadataResourceCount}
+              />
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(
+                [
+                  "not_connected",
+                  "credentials_required",
+                  "connected",
+                  "validation_failed",
+                  "ready_to_sync",
+                  "sync_disabled",
+                  "sync_error",
+                ] as GoHighLevelLiveSyncStatus[]
+              ).map((status) => (
+                <Badge
+                  key={status}
+                  label={goHighLevelLiveSyncStatusLabels[status]}
+                  tone={getGoHighLevelReadinessStatusTone(status)}
+                />
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.7fr)]">
+              <div className="rounded-lg border border-indigo-200 bg-white p-4">
+                <p className="text-sm font-bold text-slate-950">
+                  Sync resources prepared
+                </p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {goHighLevelReadinessResources.map((resource) => (
+                    <article
+                      key={resource.key}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-950">
+                          {resource.label}
+                        </p>
+                        <Badge
+                          label={
+                            resource.phaseOneMode === "dry_run_preview"
+                              ? "Dry-run"
+                              : "Metadata"
+                          }
+                          tone="blue"
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {resource.localRecord} to {resource.externalRecord}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-indigo-200 bg-white p-4">
+                <p className="text-sm font-bold text-slate-950">
+                  Safety and ownership guardrails
+                </p>
+                <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                  {(goHighLevelReadinessResult?.phaseOneGuardrails ??
+                    goHighLevelPhaseOneGuardrails).map((guardrail) => (
+                    <div key={guardrail} className="flex items-start gap-2">
+                      <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                      <p>{guardrail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {goHighLevelReadinessResult ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <div className="rounded-lg border border-indigo-200 bg-white p-4">
+                  <p className="text-sm font-bold text-slate-950">
+                    Location discovery
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {goHighLevelReadinessResult.locations.map((location) => (
+                      <div
+                        key={location.key}
+                        className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-950">
+                            {location.label}
+                          </p>
+                          <Badge
+                            label={location.readCheck.replace("_", " ")}
+                            tone={location.readCheck === "ok" ? "green" : "amber"}
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {location.locationName ?? location.envVar} · {location.message}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-indigo-200 bg-white p-4">
+                  <p className="text-sm font-bold text-slate-950">
+                    Pipeline discovery
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {goHighLevelReadinessResult.pipelines.map((pipeline) => (
+                      <div
+                        key={pipeline.key}
+                        className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-950">
+                            {pipeline.label}
+                          </p>
+                          <Badge
+                            label={
+                              pipeline.pipelineCount === null
+                                ? pipeline.readCheck.replace("_", " ")
+                                : `${pipeline.pipelineCount} pipelines`
+                            }
+                            tone={pipeline.readCheck === "ok" ? "green" : "amber"}
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {pipeline.message}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-indigo-200 bg-white p-4">
+                  <p className="text-sm font-bold text-slate-950">
+                    Schema readiness
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {goHighLevelReadinessResult.schema.message}
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {goHighLevelReadinessResult.schema.tables.map((table) => (
+                      <div
+                        key={table.table}
+                        className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                      >
+                        <code className="break-all text-xs font-semibold text-slate-700">
+                          {table.table}
+                        </code>
+                        <Badge
+                          label={table.available ? "Available" : "Required"}
+                          tone={table.available ? "green" : "amber"}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -23957,8 +24325,16 @@ function IntegrationsView({
                 { label: "API base", value: goHighLevelEnvVars.apiBaseUrl },
                 { label: "Test route", value: goHighLevelEnvVars.testEndpoint },
                 {
+                  label: "Readiness route",
+                  value: goHighLevelEnvVars.readinessEndpoint,
+                },
+                {
                   label: "Lead dry run",
                   value: goHighLevelEnvVars.leadDryRunEndpoint,
+                },
+                {
+                  label: "Sync migration",
+                  value: goHighLevelSyncFoundationMigration,
                 },
               ].map((item) => (
                 <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -24359,6 +24735,143 @@ function TwilioLiveFoundationPanel() {
               <span>{item}</span>
             </div>
           ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function GoHighLevelLiveSyncFoundationPanel() {
+  const statuses: GoHighLevelLiveSyncStatus[] = [
+    "not_connected",
+    "credentials_required",
+    "connected",
+    "validation_failed",
+    "ready_to_sync",
+    "sync_disabled",
+    "sync_error",
+  ];
+  const dryRunResources = countGoHighLevelResourceMode(
+    goHighLevelSyncResources,
+    "dry_run_preview",
+  );
+  const metadataResources = countGoHighLevelResourceMode(
+    goHighLevelSyncResources,
+    "metadata_only",
+  );
+
+  return (
+    <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-indigo-700">
+            GoHighLevel Live Synchronization Foundation
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            CRM sync, account metadata, and pipeline discovery setup
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Server-side architecture is prepared for contacts, leads, companies,
+            opportunities, notes, tags, tasks, external IDs, last sync timestamps,
+            pending sync flags, duplicate protection, conflict detection, and retry
+            readiness. No live sync or provider write is enabled here.
+          </p>
+        </div>
+        <ProviderStatusBadge label="No Live Sync" tone="blue" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {statuses.map((status) => (
+          <ProviderStatusBadge
+            key={status}
+            label={goHighLevelLiveSyncStatusLabels[status]}
+            tone={getGoHighLevelReadinessStatusTone(status)}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Sync resources" value={goHighLevelSyncResources.length} />
+        <ProfileStat label="Dry-run resources" value={dryRunResources} />
+        <ProfileStat label="Metadata resources" value={metadataResources} />
+        <ProfileStat label="Live sync" value="Disabled" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Phase 1 Sync Coverage
+          </p>
+          {goHighLevelSyncResources.map((resource) => (
+            <div
+              key={resource.key}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{resource.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    {resource.localRecord} to {resource.externalRecord}
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={
+                    resource.phaseOneMode === "dry_run_preview"
+                      ? "Dry-run preview"
+                      : "Metadata only"
+                  }
+                  tone="blue"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Read-only Readiness API
+          </p>
+          {[
+            {
+              label: "Readiness endpoint",
+              value: goHighLevelEnvVars.readinessEndpoint,
+            },
+            {
+              label: "Sync migration",
+              value: goHighLevelSyncFoundationMigration,
+            },
+            {
+              label: "Authentication",
+              value: "Server-side private integration token",
+            },
+            {
+              label: "Outbound automations",
+              value: "Disabled until owner approval",
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {item.label}
+              </p>
+              <code className="mt-1 block break-all text-sm font-semibold text-slate-950">
+                {item.value}
+              </code>
+            </div>
+          ))}
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-bold text-amber-950">
+              Safe setup sequence
+            </p>
+            <p className="mt-1 text-sm leading-6 text-amber-900">
+              Use the Integrations screen to check sync readiness, validate
+              credentials and location IDs, apply the additive sync mapping
+              migration, discover pipelines, map stages, then enable future sync
+              workers only after approval.
+            </p>
+          </div>
         </div>
       </div>
     </section>
@@ -24833,6 +25346,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <TwilioLiveFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <GoHighLevelLiveSyncFoundationPanel />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">

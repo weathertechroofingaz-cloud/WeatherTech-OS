@@ -2980,6 +2980,21 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("/api/integrations/twilio/status") &&
         text.includes("/api/integrations/twilio/voice") &&
         text.includes("/api/integrations/twilio/recording") &&
+        text.includes("gohighlevel live synchronization foundation") &&
+        text.includes("check sync readiness") &&
+        text.includes("no live sync") &&
+        text.includes("credentials required") &&
+        text.includes("validation failed") &&
+        text.includes("ready to sync") &&
+        text.includes("sync disabled") &&
+        text.includes("external ids") &&
+        text.includes("duplicate protection") &&
+        text.includes("conflict detection") &&
+        text.includes("sync timestamps") &&
+        text.includes("retry readiness") &&
+        text.includes("pipeline discovery") &&
+        text.includes("/api/integrations/gohighlevel/readiness") &&
+        text.includes("0021_gohighlevel_sync_foundation.sql") &&
         [
           "twilio",
           "gmail",

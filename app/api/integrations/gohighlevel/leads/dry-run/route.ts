@@ -53,6 +53,41 @@ function describeSafeError(error: unknown) {
   return "Request failed.";
 }
 
+function summarizeDryRunPayload(preview: GoHighLevelLeadContactDryRunPreview) {
+  const payload = preview.payload;
+
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    intendedRequest: payload.intendedRequest,
+    contact: {
+      hasEmail: Boolean(payload.contact.email),
+      hasPhone: Boolean(payload.contact.phone),
+      hasAddress: Boolean(payload.contact.address1),
+      state: payload.contact.state,
+      tagCount: payload.contact.tags.length,
+      tags: payload.contact.tags,
+    },
+    opportunityPreview: {
+      monetaryValue: payload.opportunityPreview.monetaryValue,
+      status: payload.opportunityPreview.status,
+      priority: payload.opportunityPreview.priority,
+      serviceType: payload.opportunityPreview.serviceType,
+    },
+    weathertechMetadata: {
+      leadId: payload.weathertechMetadata.leadId,
+      companyId: payload.weathertechMetadata.companyId,
+      customerLinked: Boolean(payload.weathertechMetadata.customerId),
+      source: payload.weathertechMetadata.source,
+      nextFollowUp: payload.weathertechMetadata.nextFollowUp,
+      notesIncluded: payload.weathertechMetadata.notesIncluded,
+    },
+    safety: payload.safety,
+  };
+}
+
 function createFailureResponse({
   status,
   message,
@@ -212,7 +247,7 @@ export async function POST(request: NextRequest) {
         automationTriggered: false,
         status: preview.status,
         missingFields: preview.missingFields,
-        payload: preview.payload,
+        payloadSummary: summarizeDryRunPayload(preview),
       }),
       error_code: preview.ok ? null : preview.status,
       error_message: preview.ok ? null : preview.message,
