@@ -3775,9 +3775,13 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
     "Surface preparation",
   ];
   const quickActionLabels = [
+    "Update Job Status",
     "Start Job",
+    "Open Customer 360",
     "Complete Inspection",
+    "View Inspection",
     "Upload Photos",
+    "Upload Documents",
     "Create Change Order",
     "Request Material",
     "Create Invoice",
@@ -3795,9 +3799,40 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
     "Invoice",
     "Paid",
   ];
+  const productionBoardLabels = [
+    "Production Board",
+    "Visual production queues",
+    "Unscheduled",
+    "Scheduled",
+    "In Production",
+    "Waiting on Customer",
+    "Waiting on Materials",
+    "Inspection Required",
+    "Final Walkthrough",
+    "Completed",
+    "Warranty",
+    "No fake dispatch",
+  ];
+  const crewSchedulerLabels = [
+    "Crew Scheduler",
+    "Crew and foreman schedule foundation",
+    "day",
+    "week",
+    "Open Calendar",
+    "Schedule conflicts and setup alerts",
+    "Equipment and vehicle readiness is not tracked",
+  ];
 
   const productionWorkspace = await tab.playwright.evaluate(
-    ({ commandCenterLabels, roofingLabels, paintingLabels, quickActionLabels, timelineLabels }) => {
+    ({
+      commandCenterLabels,
+      roofingLabels,
+      paintingLabels,
+      quickActionLabels,
+      timelineLabels,
+      productionBoardLabels,
+      crewSchedulerLabels,
+    }) => {
       const byTestId = (id) => document.querySelector(`[data-testid="${id}"]`);
       const textFor = (id) => byTestId(id)?.textContent ?? "";
       const panelIds = [
@@ -3808,6 +3843,10 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
         "job-production-summary",
         "job-production-quick-actions",
         "job-production-timeline",
+        "production-board",
+        "crew-scheduler",
+        "daily-production-log",
+        "photo-progress-panel",
       ];
 
       return {
@@ -3835,6 +3874,7 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
           "Change orders",
           "Invoices",
           "Communications",
+          "Weather delay",
         ].filter((label) => !textFor("job-production-summary").includes(label)),
         missingQuickActions: quickActionLabels.filter(
           (label) => !textFor("job-production-quick-actions").includes(label),
@@ -3842,9 +3882,35 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
         missingTimelineLabels: timelineLabels.filter(
           (label) => !textFor("job-production-timeline").includes(label),
         ),
+        missingProductionBoardLabels: productionBoardLabels.filter(
+          (label) => !textFor("production-board").includes(label),
+        ),
+        missingCrewSchedulerLabels: crewSchedulerLabels.filter(
+          (label) => !textFor("crew-scheduler").includes(label),
+        ),
+        missingProductionLogLabels: ["Daily production log", "Read-only activity"].filter(
+          (label) => !textFor("daily-production-log").includes(label),
+        ),
+        missingPhotoProgressLabels: [
+          "Photo progress",
+          "Before",
+          "During",
+          "After",
+          "Issue",
+          "Completion",
+          "Open Photos",
+        ].filter((label) => !textFor("photo-progress-panel").includes(label)),
       };
     },
-    { commandCenterLabels, roofingLabels, paintingLabels, quickActionLabels, timelineLabels },
+    {
+      commandCenterLabels,
+      roofingLabels,
+      paintingLabels,
+      quickActionLabels,
+      timelineLabels,
+      productionBoardLabels,
+      crewSchedulerLabels,
+    },
   );
 
   const missingProductionWorkspaceItems = Object.entries(productionWorkspace)
@@ -3856,6 +3922,109 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
       `Job production workspace is missing expected items: ${missingProductionWorkspaceItems.join("; ")}`,
     );
   }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="production-board-search"]'),
+    testJob.title,
+    "production board search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-company-filter"]'),
+    company.id,
+    "production board company filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-location-filter"]'),
+    "Phoenix",
+    "production board Phoenix filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-location-filter"]'),
+    "Tucson",
+    "production board Tucson filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-location-filter"]'),
+    "all",
+    "production board all branch filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-crew-filter"]'),
+    "unassigned",
+    "production board unassigned crew filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-crew-filter"]'),
+    "all",
+    "production board all crew filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-foreman-filter"]'),
+    "unassigned",
+    "production board unassigned foreman filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-foreman-filter"]'),
+    "all",
+    "production board all foreman filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-material-filter"]'),
+    "needs_attention",
+    "production board material readiness filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-material-filter"]'),
+    "not_recorded",
+    "production board material not recorded filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-material-filter"]'),
+    "all",
+    "production board all material filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-inspection-filter"]'),
+    "required",
+    "production board inspection required filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-inspection-filter"]'),
+    "not_recorded",
+    "production board inspection not recorded filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="production-board-inspection-filter"]'),
+    "all",
+    "production board all inspection filter",
+  );
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Clear board filters" }),
+    "Clear production board filters",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const board = document.querySelector('[data-testid="production-board"]');
+
+      return Boolean(board) && board.textContent?.includes("Unscheduled");
+    },
+    "production board after clearing filters",
+  );
+
+  await clickUnique(
+    tab.playwright.locator('[data-testid="photo-progress-panel"] button'),
+    "Open Photos from job production",
+  );
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Photos") &&
+      document.body.innerText.includes("Upload, search, and organize job"),
+    "Photos opened from production progress",
+    15000,
+  );
+  await selectTestJob(tab, testJob.title);
 
   const responsiveChecks = [];
 
@@ -3875,10 +4044,14 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
       ...(await tab.playwright.evaluate(() => {
         const commandCenter = document.querySelector('[data-testid="job-production-command-center"]');
         const quickActions = document.querySelector('[data-testid="job-production-quick-actions"]');
+        const productionBoard = document.querySelector('[data-testid="production-board"]');
+        const crewScheduler = document.querySelector('[data-testid="crew-scheduler"]');
 
         return {
           commandCenterVisible: Boolean(commandCenter),
           quickActionsVisible: Boolean(quickActions),
+          productionBoardVisible: Boolean(productionBoard),
+          crewSchedulerVisible: Boolean(crewScheduler),
           scrollWidth: document.documentElement.scrollWidth,
           viewportWidth: window.innerWidth,
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
@@ -3893,7 +4066,12 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
   }
 
   for (const check of responsiveChecks) {
-    if (!check.commandCenterVisible || !check.quickActionsVisible) {
+    if (
+      !check.commandCenterVisible ||
+      !check.quickActionsVisible ||
+      !check.productionBoardVisible ||
+      !check.crewSchedulerVisible
+    ) {
       throw new Error(`Job production workspace is missing on ${check.label} viewport.`);
     }
 

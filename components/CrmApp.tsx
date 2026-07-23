@@ -539,6 +539,18 @@ const jobTaskStatuses: { value: JobTaskStatus; label: string }[] = [
 
 type JobScheduleFilter = "all" | "unscheduled" | "scheduled" | "today" | "next_7";
 type JobCrewFilter = "all" | "assigned" | "unassigned";
+type ProductionLocationFilter = "all" | "Phoenix" | "Tucson" | "Other";
+type ProductionMaterialFilter =
+  | "all"
+  | "ready"
+  | "needs_attention"
+  | "not_recorded";
+type ProductionInspectionFilter =
+  | "all"
+  | "required"
+  | "complete"
+  | "not_recorded";
+type CrewSchedulerView = "day" | "week";
 type JobWorkspaceTab =
   | "overview"
   | "checklist"
@@ -1889,6 +1901,53 @@ type JobProductionTimelineItem = {
   icon: typeof Home;
 };
 
+type ProductionBoardColumn = {
+  id: string;
+  label: string;
+  detail: string;
+  jobs: JobRecord[];
+  tone: "blue" | "green" | "amber";
+  icon: typeof Home;
+};
+
+type ProductionReadiness = {
+  label: string;
+  detail: string;
+  tone: "blue" | "green" | "amber";
+};
+
+type ScheduleConflict = {
+  id: string;
+  label: string;
+  detail: string;
+  job: JobRecord | null;
+  tone: "blue" | "green" | "amber";
+};
+
+type CrewScheduleGroup = {
+  id: string;
+  crew: string;
+  foreman: string;
+  company: CompanyRecord | null;
+  jobs: JobRecord[];
+  conflicts: ScheduleConflict[];
+};
+
+type ProductionLogItem = {
+  id: string;
+  label: string;
+  detail: string;
+  occurredAt: string | null;
+  meta: string;
+  icon: typeof Home;
+};
+
+type PhotoProgressGroup = {
+  id: string;
+  label: string;
+  photos: JobPhotoRecord[];
+};
+
 function jobProductionText(job: JobRecord) {
   return [
     job.title,
@@ -1943,6 +2002,606 @@ function getJobForemanLabel(snapshot: CrmSnapshot, job: JobRecord) {
   );
 
   return getEmployeeName(snapshot, leadAssignment?.employee_id ?? null) ?? "Foreman unassigned";
+}
+
+function getJobProductionScheduleWindow(snapshot: CrmSnapshot, job: JobRecord) {
+  const scheduledStart = getJobScheduledStart(job);
+  const scheduledEnd = getJobScheduledEnd(job);
+  const event =
+    getJobScheduleEvents(snapshot, job.id).find((item) => item.status === "scheduled") ??
+    getJobScheduleEvents(snapshot, job.id)[0] ??
+    null;
+  const start = scheduledStart ?? event?.start_at ?? null;
+  const end = scheduledEnd ?? event?.end_at ?? null;
+
+  if (start && end) {
+    return { start, end };
+  }
+
+  return null;
+}
+
+function rangesOverlap(
+  left: { start: string; end: string },
+  right: { start: string; end: string },
+) {
+  const leftStart = Date.parse(left.start);
+  const leftEnd = Date.parse(left.end);
+  const rightStart = Date.parse(right.start);
+  const rightEnd = Date.parse(right.end);
+
+  if (
+    !Number.isFinite(leftStart) ||
+    !Number.isFinite(leftEnd) ||
+    !Number.isFinite(rightStart) ||
+    !Number.isFinite(rightEnd)
+  ) {
+    return false;
+  }
+
+  return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+function getJobMaterialReadiness(snapshot: CrmSnapshot, job: JobRecord): ProductionReadiness {
+  const orders = getJobMaterialOrders(snapshot, job.id);
+  const jobMaterials = getJobMaterials(snapshot, job.id);
+  const delayedOrder = orders.find((order) => {
+    if (!order.expected_delivery_date || order.status === "received" || order.status === "canceled") {
+      return false;
+    }
+
+    return order.expected_delivery_date < todayIsoDate();
+  });
+
+  if (delayedOrder) {
+    return {
+      label: "Delayed",
+      detail: `${delayedOrder.supplier_name} expected ${formatDate(
+        delayedOrder.expected_delivery_date ?? delayedOrder.requested_date,
+      )}`,
+      tone: "amber",
+    };
+  }
+
+  if (orders.some((order) => order.status === "received")) {
+    return {
+      label: "Ready",
+      detail: "Received material order recorded",
+      tone: "green",
+    };
+  }
+
+  if (orders.some((order) => order.status === "partial")) {
+    return {
+      label: "Partial",
+      detail: "Partially received material order",
+      tone: "amber",
+    };
+  }
+
+  if (orders.some((order) => order.status === "ordered")) {
+    return {
+      label: "Ordered",
+      detail: "Material order is placed",
+      tone: "blue",
+    };
+  }
+
+  if (orders.some((order) => order.status === "draft")) {
+    return {
+      label: "Requested",
+      detail: "Draft material order exists",
+      tone: "blue",
+    };
+  }
+
+  if (jobMaterials.length > 0) {
+    return {
+      label: "Not Recorded",
+      detail: "Job material list exists; order readiness is not tracked",
+      tone: "amber",
+    };
+  }
+
+  if (isProductionActiveJob(job)) {
+    return {
+      label: "Request Needed",
+      detail: "No material order or material list recorded",
+      tone: "amber",
+    };
+  }
+
+  return {
+    label: "Not Recorded",
+    detail: "Material readiness has not been tracked",
+    tone: "blue",
+  };
+}
+
+function getJobInspectionReadiness(snapshot: CrmSnapshot, job: JobRecord): ProductionReadiness {
+  const inspections = snapshot.inspections.filter(
+    (inspection) =>
+      inspection.job_id === job.id ||
+      (job.lead_id !== null && inspection.lead_id === job.lead_id) ||
+      (job.customer_id !== null && inspection.customer_id === job.customer_id),
+  );
+  const finalInspection = inspections.find(
+    (inspection) =>
+      inspection.title.toLowerCase().includes("final") ||
+      inspection.title.toLowerCase().includes("walkthrough"),
+  );
+  const openInspection = inspections.find(
+    (inspection) => inspection.status === "scheduled" || inspection.status === "draft",
+  );
+
+  if (finalInspection?.status === "completed") {
+    return {
+      label: "Final Complete",
+      detail: finalInspection.title,
+      tone: "green",
+    };
+  }
+
+  if (finalInspection) {
+    return {
+      label: "Final Walkthrough",
+      detail: `${finalInspection.title} · ${inspectionStatusLabel(finalInspection.status)}`,
+      tone: "amber",
+    };
+  }
+
+  if (openInspection) {
+    return {
+      label: "Inspection Required",
+      detail: `${openInspection.title} · ${inspectionStatusLabel(openInspection.status)}`,
+      tone: "amber",
+    };
+  }
+
+  if (inspections.some((inspection) => inspection.status === "completed")) {
+    return {
+      label: "Inspection Complete",
+      detail: "Completed inspection linked",
+      tone: "green",
+    };
+  }
+
+  return {
+    label: "Inspection Not Recorded",
+    detail: "No linked inspection record",
+    tone: "blue",
+  };
+}
+
+function getJobPriorityLabel(snapshot: CrmSnapshot, job: JobRecord) {
+  const inspection = snapshot.inspections.find((item) => item.job_id === job.id);
+  const lead = job.lead_id ? snapshot.leads.find((item) => item.id === job.lead_id) : null;
+
+  return inspection?.priority ?? lead?.priority ?? "normal";
+}
+
+function getJobOutstandingIssue(snapshot: CrmSnapshot, job: JobRecord) {
+  const materialReadiness = getJobMaterialReadiness(snapshot, job);
+  const inspectionReadiness = getJobInspectionReadiness(snapshot, job);
+
+  if (!hasSavedJobSchedule(job) && isProductionActiveJob(job)) {
+    return "Missing production schedule";
+  }
+
+  if (!jobHasCrew(snapshot, job) && isProductionActiveJob(job)) {
+    return "Crew unassigned";
+  }
+
+  if (materialReadiness.tone === "amber") {
+    return materialReadiness.label;
+  }
+
+  if (inspectionReadiness.tone === "amber") {
+    return inspectionReadiness.label;
+  }
+
+  if (job.status === "blocked") {
+    return "Blocked";
+  }
+
+  return "No outstanding issue recorded";
+}
+
+function getJobWeatherDelayReadiness(job: JobRecord): ProductionReadiness {
+  const text = jobProductionText(job);
+  const hasWeatherSignal = ["weather", "rain", "wind", "hail", "monsoon", "storm"].some(
+    (keyword) => text.includes(keyword),
+  );
+  const hasDelaySignal = ["delay", "delayed", "pause", "paused", "blocked"].some(
+    (keyword) => text.includes(keyword),
+  );
+
+  if (hasWeatherSignal && hasDelaySignal) {
+    return {
+      label: "Weather delay noted",
+      detail: "Existing job text includes weather and delay signals",
+      tone: "amber",
+    };
+  }
+
+  if (hasWeatherSignal) {
+    return {
+      label: "Weather note found",
+      detail: "Existing job text mentions weather; no delay is confirmed",
+      tone: "blue",
+    };
+  }
+
+  return {
+    label: "Not Tracked",
+    detail: "Weather-delay tracking needs a future workflow",
+    tone: "blue",
+  };
+}
+
+function jobNeedsFinalWalkthrough(snapshot: CrmSnapshot, job: JobRecord) {
+  const tasks = getJobTasks(snapshot, job.id);
+
+  return (
+    isProductionActiveJob(job) &&
+    tasks.length > 0 &&
+    tasks.every((task) => task.status === "done") &&
+    job.status !== "completed" &&
+    job.status !== "closed"
+  );
+}
+
+function jobHasWarrantySignal(snapshot: CrmSnapshot, job: JobRecord) {
+  return (
+    jobMatchesProductionKeywords(job, ["warranty"]) ||
+    getJobDocuments(snapshot, job).some((document) => document.category === "warranty")
+  );
+}
+
+function buildProductionBoardColumns(
+  snapshot: CrmSnapshot,
+  jobs: JobRecord[] = snapshot.jobs,
+): ProductionBoardColumn[] {
+  const unscheduled = jobs.filter(
+    (job) =>
+      isProductionActiveJob(job) &&
+      !hasSavedJobSchedule(job) &&
+      !hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+  );
+  const scheduled = jobs.filter(
+    (job) =>
+      job.status === "scheduled" ||
+      hasSavedJobSchedule(job) ||
+      hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+  );
+  const waitingOnCustomer = jobs.filter((job) => {
+    const text = jobProductionText(job);
+
+    return (
+      job.status === "blocked" &&
+      (text.includes("customer") ||
+        text.includes("approval") ||
+        text.includes("hoa") ||
+        getJobChangeOrders(snapshot, job.id).some((changeOrder) => changeOrder.status === "sent"))
+    );
+  });
+  const waitingOnMaterials = jobs.filter((job) => {
+    const readiness = getJobMaterialReadiness(snapshot, job);
+
+    return (
+      isProductionActiveJob(job) &&
+      ["Request Needed", "Requested", "Ordered", "Partial", "Delayed"].includes(
+        readiness.label,
+      )
+    );
+  });
+  const inspectionRequired = jobs.filter((job) => {
+    const readiness = getJobInspectionReadiness(snapshot, job);
+
+    return readiness.label === "Inspection Required";
+  });
+  const finalWalkthrough = jobs.filter((job) => jobNeedsFinalWalkthrough(snapshot, job));
+  const completed = jobs.filter(
+    (job) => job.status === "completed" || job.status === "closed",
+  );
+  const warranty = jobs.filter((job) => jobHasWarrantySignal(snapshot, job));
+
+  return [
+    {
+      id: "unscheduled",
+      label: "Unscheduled",
+      detail: "Active jobs missing production dates",
+      jobs: unscheduled,
+      tone: unscheduled.length ? "amber" : "green",
+      icon: CalendarClock,
+    },
+    {
+      id: "scheduled",
+      label: "Scheduled",
+      detail: "Saved dates or scheduled job events",
+      jobs: scheduled,
+      tone: "blue",
+      icon: CalendarClock,
+    },
+    {
+      id: "in-production",
+      label: "In Production",
+      detail: "Jobs marked in progress",
+      jobs: jobs.filter((job) => job.status === "in_progress"),
+      tone: "blue",
+      icon: Activity,
+    },
+    {
+      id: "customer",
+      label: "Waiting on Customer",
+      detail: "Blocked by customer, HOA, or approval signals",
+      jobs: waitingOnCustomer,
+      tone: waitingOnCustomer.length ? "amber" : "green",
+      icon: UserRound,
+    },
+    {
+      id: "materials",
+      label: "Waiting on Materials",
+      detail: "Material readiness is not ready",
+      jobs: waitingOnMaterials,
+      tone: waitingOnMaterials.length ? "amber" : "green",
+      icon: Package,
+    },
+    {
+      id: "inspection",
+      label: "Inspection Required",
+      detail: "Open linked inspection work",
+      jobs: inspectionRequired,
+      tone: inspectionRequired.length ? "amber" : "green",
+      icon: ClipboardList,
+    },
+    {
+      id: "walkthrough",
+      label: "Final Walkthrough",
+      detail: "Checklist complete, still open",
+      jobs: finalWalkthrough,
+      tone: finalWalkthrough.length ? "amber" : "green",
+      icon: CheckCircle2,
+    },
+    {
+      id: "completed",
+      label: "Completed",
+      detail: "Completed or closed jobs",
+      jobs: completed,
+      tone: completed.length ? "green" : "blue",
+      icon: CheckCircle2,
+    },
+    {
+      id: "warranty",
+      label: "Warranty",
+      detail: "Warranty jobs or warranty documents",
+      jobs: warranty,
+      tone: warranty.length ? "amber" : "green",
+      icon: ShieldCheck,
+    },
+  ];
+}
+
+function getJobBranchLocation(job: JobRecord) {
+  const location = getJobDisplayLocation(job).toLowerCase();
+  const address = getJobDisplayAddress(job).toLowerCase();
+
+  if (location.includes("tucson") || address.includes("tucson")) {
+    return "Tucson";
+  }
+
+  if (location.includes("phoenix") || address.includes("phoenix")) {
+    return "Phoenix";
+  }
+
+  return "Other";
+}
+
+function buildScheduleConflicts(snapshot: CrmSnapshot): ScheduleConflict[] {
+  const conflicts: ScheduleConflict[] = [];
+  const activeScheduledJobs = snapshot.jobs
+    .map((job) => ({
+      job,
+      window: getJobProductionScheduleWindow(snapshot, job),
+      crew: getJobCrewLabel(snapshot, job),
+      foreman: getJobForemanLabel(snapshot, job),
+    }))
+    .filter((item) => item.window !== null);
+
+  activeScheduledJobs.forEach((item, index) => {
+    activeScheduledJobs.slice(index + 1).forEach((otherItem) => {
+      if (!item.window || !otherItem.window || !rangesOverlap(item.window, otherItem.window)) {
+        return;
+      }
+
+      if (item.crew !== "Crew needed" && item.crew === otherItem.crew) {
+        conflicts.push({
+          id: `crew-${item.job.id}-${otherItem.job.id}`,
+          label: "Crew overlap",
+          detail: `${item.crew} is scheduled on ${item.job.title} and ${otherItem.job.title}`,
+          job: item.job,
+          tone: "amber",
+        });
+      }
+
+      if (
+        item.foreman !== "Foreman unassigned" &&
+        item.foreman === otherItem.foreman
+      ) {
+        conflicts.push({
+          id: `foreman-${item.job.id}-${otherItem.job.id}`,
+          label: "Foreman overlap",
+          detail: `${item.foreman} is scheduled on ${item.job.title} and ${otherItem.job.title}`,
+          job: item.job,
+          tone: "amber",
+        });
+      }
+    });
+  });
+
+  snapshot.jobs.forEach((job) => {
+    if (countScheduleEventConflicts(getJobScheduleEvents(snapshot, job.id)) > 0) {
+      conflicts.push({
+        id: `job-events-${job.id}`,
+        label: "Job schedule conflict",
+        detail: `${job.title} has overlapping schedule records`,
+        job,
+        tone: "amber",
+      });
+    }
+
+    if (isProductionActiveJob(job) && !getJobProductionScheduleWindow(snapshot, job)) {
+      conflicts.push({
+        id: `missing-schedule-${job.id}`,
+        label: "Missing schedule",
+        detail: `${job.title} is active without production dates`,
+        job,
+        tone: "amber",
+      });
+    }
+
+    if (
+      (job.status === "scheduled" || getJobProductionScheduleWindow(snapshot, job)) &&
+      !jobHasCrew(snapshot, job)
+    ) {
+      conflicts.push({
+        id: `missing-crew-${job.id}`,
+        label: "Missing crew",
+        detail: `${job.title} is scheduled without a crew`,
+        job,
+        tone: "amber",
+      });
+    }
+  });
+
+  snapshot.inspections.forEach((inspection) => {
+    if (!inspection.job_id || !inspection.scheduled_start || !inspection.scheduled_end) {
+      return;
+    }
+
+    const job = snapshot.jobs.find((item) => item.id === inspection.job_id) ?? null;
+    const window = job ? getJobProductionScheduleWindow(snapshot, job) : null;
+
+    if (job && window && rangesOverlap(window, {
+      start: inspection.scheduled_start,
+      end: inspection.scheduled_end,
+    })) {
+      conflicts.push({
+        id: `inspection-${inspection.id}`,
+        label: "Inspection overlap",
+        detail: `${inspection.title} overlaps production schedule for ${job.title}`,
+        job,
+        tone: "amber",
+      });
+    }
+  });
+
+  return conflicts;
+}
+
+function buildCrewScheduleGroups(snapshot: CrmSnapshot, jobs: JobRecord[]): CrewScheduleGroup[] {
+  const conflicts = buildScheduleConflicts(snapshot);
+  const grouped = new Map<string, CrewScheduleGroup>();
+
+  jobs.forEach((job) => {
+    const crew = getJobCrewLabel(snapshot, job);
+    const company = snapshot.companies.find((item) => item.id === job.company_id) ?? null;
+    const id = `${job.company_id}:${crew}`;
+
+    if (!grouped.has(id)) {
+      grouped.set(id, {
+        id,
+        crew,
+        foreman: getJobForemanLabel(snapshot, job),
+        company,
+        jobs: [],
+        conflicts: [],
+      });
+    }
+
+    grouped.get(id)?.jobs.push(job);
+  });
+
+  grouped.forEach((group) => {
+    group.conflicts = conflicts.filter(
+      (conflict) => conflict.job && group.jobs.some((job) => job.id === conflict.job?.id),
+    );
+    group.jobs.sort((a, b) => {
+      const left = getJobProductionScheduleWindow(snapshot, a)?.start ?? a.updated_at;
+      const right = getJobProductionScheduleWindow(snapshot, b)?.start ?? b.updated_at;
+
+      return left.localeCompare(right);
+    });
+  });
+
+  return [...grouped.values()].sort((a, b) => a.crew.localeCompare(b.crew));
+}
+
+function buildProductionLogItems(snapshot: CrmSnapshot, job: JobRecord): ProductionLogItem[] {
+  const items: ProductionLogItem[] = buildJobActivityItems(snapshot, job).map((item) => ({
+    id: item.id,
+    label: item.label,
+    detail: item.detail,
+    occurredAt: item.occurredAt,
+    meta: item.meta ?? "Activity",
+    icon:
+      item.label.includes("Photo")
+        ? Camera
+        : item.label.includes("Material")
+          ? Package
+          : item.label.includes("Invoice")
+            ? ReceiptText
+            : item.label.includes("Change")
+              ? ReceiptText
+              : item.label.includes("Checklist")
+                ? ClipboardList
+                : Activity,
+  }));
+
+  snapshot.dailyLogs
+    .filter((log) => log.job_id === job.id)
+    .forEach((log) => {
+      items.push({
+        id: `daily-log-${log.id}`,
+        label: "Daily production log",
+        detail: log.work_completed,
+        occurredAt: log.log_date,
+        meta: log.blockers ? "Blocker recorded" : "Crew log",
+        icon: ClipboardList,
+      });
+    });
+
+  return items
+    .sort((a, b) => {
+      const left = a.occurredAt ? Date.parse(a.occurredAt) : 0;
+      const right = b.occurredAt ? Date.parse(b.occurredAt) : 0;
+
+      return right - left;
+    })
+    .slice(0, 8);
+}
+
+function buildPhotoProgressGroups(photos: JobPhotoRecord[]): PhotoProgressGroup[] {
+  const groups = [
+    { id: "before", label: "Before", keywords: ["before"] },
+    { id: "during", label: "During", keywords: ["during", "progress"] },
+    { id: "after", label: "After", keywords: ["after"] },
+    { id: "issue", label: "Issue", keywords: ["issue", "damage", "repair", "leak"] },
+    { id: "completion", label: "Completion", keywords: ["completion", "complete", "final"] },
+  ];
+
+  return groups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    photos: photos.filter((photo) => {
+      const text = [photo.label, photo.caption, photo.file_path]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return group.keywords.some((keyword) => text.includes(keyword));
+    }),
+  }));
 }
 
 function buildJobProductionBuckets({
@@ -7378,6 +8037,603 @@ function ActionCenterCard({
   );
 }
 
+function ProductionBoardPanel({
+  columns,
+  snapshot,
+  companyMap,
+  filters,
+  options,
+  onFilterChange,
+  onSelectJob,
+  onOpenJobTab,
+  onViewChange,
+}: {
+  columns: ProductionBoardColumn[];
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  filters: {
+    search: string;
+    company: string;
+    location: ProductionLocationFilter;
+    crew: string;
+    foreman: string;
+    material: ProductionMaterialFilter;
+    inspection: ProductionInspectionFilter;
+  };
+  options: {
+    crews: string[];
+    foremen: string[];
+  };
+  onFilterChange: (
+    key: "search" | "company" | "location" | "crew" | "foreman" | "material" | "inspection",
+    value: string,
+  ) => void;
+  onSelectJob: (job: JobRecord) => void;
+  onOpenJobTab: (job: JobRecord, tab: JobWorkspaceTab) => void;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const totalJobs = columns.reduce((total, column) => total + column.jobs.length, 0);
+
+  return (
+    <section
+      className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      data-testid="production-board"
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-orange-600">Production Board</p>
+          <h3 className="mt-1 text-lg font-bold text-slate-950">
+            Visual production queues
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">
+            Read-only board using existing job, schedule, crew, material, inspection, checklist,
+            and document records. Drag-and-drop status movement is intentionally disabled until
+            undo and drop validation are designed.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge label={`${totalJobs} board signals`} tone={totalJobs ? "blue" : "green"} />
+          <Badge label="No fake dispatch" tone="green" />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="relative md:col-span-2 xl:col-span-1">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            aria-label="Search production board"
+            data-testid="production-board-search"
+            value={filters.search}
+            onChange={(event) => onFilterChange("search", event.target.value)}
+            className="w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            placeholder="Search jobs, customers, addresses"
+          />
+        </div>
+        <select
+          aria-label="Filter production board by company"
+          data-testid="production-board-company-filter"
+          value={filters.company}
+          onChange={(event) => onFilterChange("company", event.target.value)}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All companies</option>
+          {snapshot.companies.map((company) => (
+            <option key={company.id} value={company.id}>
+              {company.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter production board by branch"
+          data-testid="production-board-location-filter"
+          value={filters.location}
+          onChange={(event) =>
+            onFilterChange("location", event.target.value as ProductionLocationFilter)
+          }
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All branches</option>
+          <option value="Phoenix">Phoenix</option>
+          <option value="Tucson">Tucson</option>
+          <option value="Other">Other locations</option>
+        </select>
+        <select
+          aria-label="Filter production board by crew"
+          data-testid="production-board-crew-filter"
+          value={filters.crew}
+          onChange={(event) => onFilterChange("crew", event.target.value)}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All crews</option>
+          <option value="unassigned">Unassigned crews</option>
+          {options.crews.map((crew) => (
+            <option key={crew} value={crew}>
+              {crew}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter production board by foreman"
+          data-testid="production-board-foreman-filter"
+          value={filters.foreman}
+          onChange={(event) => onFilterChange("foreman", event.target.value)}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All foremen</option>
+          <option value="unassigned">Unassigned foremen</option>
+          {options.foremen.map((foreman) => (
+            <option key={foreman} value={foreman}>
+              {foreman}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter production board by material readiness"
+          data-testid="production-board-material-filter"
+          value={filters.material}
+          onChange={(event) =>
+            onFilterChange("material", event.target.value as ProductionMaterialFilter)
+          }
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All material states</option>
+          <option value="ready">Ready</option>
+          <option value="needs_attention">Needs material attention</option>
+          <option value="not_recorded">Not recorded</option>
+        </select>
+        <select
+          aria-label="Filter production board by inspection state"
+          data-testid="production-board-inspection-filter"
+          value={filters.inspection}
+          onChange={(event) =>
+            onFilterChange("inspection", event.target.value as ProductionInspectionFilter)
+          }
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All inspection states</option>
+          <option value="required">Inspection required</option>
+          <option value="complete">Inspection complete</option>
+          <option value="not_recorded">Inspection not recorded</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => {
+            onFilterChange("search", "");
+            onFilterChange("company", "all");
+            onFilterChange("location", "all");
+            onFilterChange("crew", "all");
+            onFilterChange("foreman", "all");
+            onFilterChange("material", "all");
+            onFilterChange("inspection", "all");
+          }}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Clear board filters
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+        {columns.map((column) => (
+          <section
+            key={column.id}
+            className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3"
+            data-testid={`production-board-column-${column.id}`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-950">{column.label}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{column.detail}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge label={String(column.jobs.length)} tone={column.tone} />
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-white text-slate-600">
+                  <column.icon className="h-4 w-4" />
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3">
+              {column.jobs.slice(0, 8).map((job) => (
+                <ProductionBoardJobCard
+                  key={`${column.id}-${job.id}`}
+                  snapshot={snapshot}
+                  companyMap={companyMap}
+                  job={job}
+                  onSelectJob={onSelectJob}
+                  onOpenJobTab={onOpenJobTab}
+                  onViewChange={onViewChange}
+                />
+              ))}
+              {column.jobs.length > 8 ? (
+                <p className="text-xs font-semibold uppercase text-slate-400">
+                  {column.jobs.length - 8} more in this queue
+                </p>
+              ) : null}
+              {!column.jobs.length ? (
+                <EmptyState label={`No jobs in ${column.label.toLowerCase()}.`} />
+              ) : null}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProductionBoardJobCard({
+  snapshot,
+  companyMap,
+  job,
+  onSelectJob,
+  onOpenJobTab,
+  onViewChange,
+}: {
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  job: JobRecord;
+  onSelectJob: (job: JobRecord) => void;
+  onOpenJobTab: (job: JobRecord, tab: JobWorkspaceTab) => void;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const materialReadiness = getJobMaterialReadiness(snapshot, job);
+  const inspectionReadiness = getJobInspectionReadiness(snapshot, job);
+  const company = companyMap.get(job.company_id) ?? null;
+  const progress = getJobProductionProgressPercent(snapshot, job);
+  const schedule = getJobScheduleSummary(snapshot, job);
+  const crew = getJobCrewLabel(snapshot, job);
+  const foreman = getJobForemanLabel(snapshot, job);
+  const priority = getJobPriorityLabel(snapshot, job);
+  const issue = getJobOutstandingIssue(snapshot, job);
+
+  return (
+    <article className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-slate-950">{job.title}</p>
+          <p className="mt-1 truncate text-xs font-semibold uppercase text-sky-700">
+            {company?.name ?? "Company"} · {serviceLabel(job.service_type)}
+          </p>
+        </div>
+        <Badge
+          label={jobStatusLabel(job.status)}
+          tone={
+            job.status === "completed" || job.status === "closed"
+              ? "green"
+              : job.status === "blocked" || job.status === "cancelled" || job.status === "canceled"
+                ? "amber"
+                : "blue"
+          }
+        />
+      </div>
+      <div className="mt-3 grid gap-2 text-sm text-slate-600">
+        <ContactLine icon={UserRound} value={getJobTargetName(snapshot, job)} />
+        <ContactLine icon={MapPin} value={getJobDisplayAddress(job)} />
+        <ContactLine icon={CalendarClock} value={schedule} />
+        <ContactLine icon={Users} value={`${crew} · ${foreman}`} />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <Badge label={materialReadiness.label} tone={materialReadiness.tone} />
+        <Badge label={inspectionReadiness.label} tone={inspectionReadiness.tone} />
+        <Badge label={`Priority ${priority}`} tone={priority === "high" ? "amber" : "blue"} />
+        <Badge label={issue} tone={issue === "No outstanding issue recorded" ? "green" : "amber"} />
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+        <div className="h-full rounded-full wt-progress-fill" style={{ width: `${progress}%` }} />
+      </div>
+      <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+        {progress}% checklist progress
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => onSelectJob(job)}
+          className="min-h-11 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          Open Job
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenJobTab(job, "schedule")}
+          className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Schedule Job
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenJobTab(job, "crew")}
+          className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Assign Crew
+        </button>
+        <button
+          type="button"
+          onClick={() => onViewChange("calendar")}
+          className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Open Calendar
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function CrewSchedulerPanel({
+  snapshot,
+  groups,
+  conflicts,
+  view,
+  date,
+  onViewChange,
+  onDateChange,
+  onSelectJob,
+  onOpenJobTab,
+  onOpenCalendar,
+}: {
+  snapshot: CrmSnapshot;
+  groups: CrewScheduleGroup[];
+  conflicts: ScheduleConflict[];
+  view: CrewSchedulerView;
+  date: string;
+  onViewChange: (view: CrewSchedulerView) => void;
+  onDateChange: (date: string) => void;
+  onSelectJob: (job: JobRecord) => void;
+  onOpenJobTab: (job: JobRecord, tab: JobWorkspaceTab) => void;
+  onOpenCalendar: () => void;
+}) {
+  return (
+    <section
+      className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      data-testid="crew-scheduler"
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">Crew Scheduler</p>
+          <h3 className="mt-1 text-lg font-bold text-slate-950">
+            Crew and foreman schedule foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">
+            Day and week views based on saved job dates, schedule events, crew names,
+            project managers, and assignment records. Capacity and travel time are not tracked yet.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge label={`${groups.length} crew groups`} tone={groups.length ? "blue" : "green"} />
+          <Badge label={`${conflicts.length} alerts`} tone={conflicts.length ? "amber" : "green"} />
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_auto_auto]">
+        <input
+          aria-label="Crew scheduler date"
+          data-testid="crew-scheduler-date"
+          type="date"
+          value={date}
+          onChange={(event) => onDateChange(event.target.value)}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          {(["day", "week"] as CrewSchedulerView[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onViewChange(item)}
+              className={`min-h-10 rounded-md border px-3 py-2 text-sm font-semibold capitalize ${
+                view === item
+                  ? "border-sky-300 bg-sky-50 text-sky-800"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={onOpenCalendar}
+          className="min-h-10 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          Open Calendar
+        </button>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {groups.map((group) => (
+          <article key={group.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-slate-950">{group.crew}</p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                  {group.company?.name ?? "Company"} · Foreman: {group.foreman}
+                </p>
+              </div>
+              <Badge label={`${group.jobs.length} jobs`} tone={group.conflicts.length ? "amber" : "blue"} />
+            </div>
+            <div className="mt-3 grid gap-2">
+              {group.jobs.map((job) => {
+                const readiness = getJobMaterialReadiness(snapshot, job);
+                const inspection = getJobInspectionReadiness(snapshot, job);
+
+                return (
+                  <button
+                    key={job.id}
+                    type="button"
+                    onClick={() => onSelectJob(job)}
+                    className="rounded-md border border-slate-200 bg-white p-3 text-left hover:border-sky-200 hover:bg-sky-50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-950">{job.title}</p>
+                        <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                          {getJobScheduleSummary(snapshot, job)} · {getJobDisplayAddress(job)}
+                        </p>
+                      </div>
+                      <Badge label={jobStatusLabel(job.status)} tone={job.status === "blocked" ? "amber" : "blue"} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge label={readiness.label} tone={readiness.tone} />
+                      <Badge label={inspection.label} tone={inspection.tone} />
+                    </div>
+                  </button>
+                );
+              })}
+              {!group.jobs.length ? <EmptyState label="No assigned jobs in this view." /> : null}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => group.jobs[0] && onOpenJobTab(group.jobs[0], "crew")}
+                disabled={!group.jobs.length}
+                className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Assign Crew
+              </button>
+              <button
+                type="button"
+                onClick={() => group.jobs[0] && onOpenJobTab(group.jobs[0], "schedule")}
+                disabled={!group.jobs.length}
+                className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Schedule Job
+              </button>
+            </div>
+          </article>
+        ))}
+        {!groups.length ? (
+          <EmptyState label="No crew schedule records match this view." />
+        ) : null}
+      </div>
+      <ScheduleConflictPanel conflicts={conflicts} onSelectJob={onSelectJob} />
+      <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+        Equipment and vehicle readiness is not tracked in the current job schema. Vehicle,
+        trailer, lift, sprayer, and trade-equipment assignments need a future workflow before
+        they can be displayed truthfully.
+      </div>
+    </section>
+  );
+}
+
+function ScheduleConflictPanel({
+  conflicts,
+  onSelectJob,
+}: {
+  conflicts: ScheduleConflict[];
+  onSelectJob: (job: JobRecord) => void;
+}) {
+  return (
+    <section className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-950">Schedule conflicts and setup alerts</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Only data-supported overlaps and missing production setup are shown.
+          </p>
+        </div>
+        <Badge label={conflicts.length ? `${conflicts.length} alerts` : "Clear"} tone={conflicts.length ? "amber" : "green"} />
+      </div>
+      <div className="mt-3 grid gap-2 lg:grid-cols-2">
+        {conflicts.slice(0, 6).map((conflict) => (
+          <button
+            key={conflict.id}
+            type="button"
+            onClick={() => conflict.job && onSelectJob(conflict.job)}
+            disabled={!conflict.job}
+            className="rounded-md border border-slate-200 bg-white p-3 text-left hover:border-amber-200 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">{conflict.label}</p>
+                <p className="mt-1 text-sm text-slate-600">{conflict.detail}</p>
+              </div>
+              <Badge label="Review" tone={conflict.tone} />
+            </div>
+          </button>
+        ))}
+        {!conflicts.length ? <EmptyState label="No data-supported conflicts detected." /> : null}
+      </div>
+    </section>
+  );
+}
+
+function DailyProductionLogPanel({ items }: { items: ProductionLogItem[] }) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+      data-testid="daily-production-log"
+    >
+      <div>
+        <p className="text-sm font-bold text-slate-950">Daily production log</p>
+        <p className="mt-1 text-sm text-slate-500">
+          Read-only activity from notes, checklist, photos, documents, invoices, change orders,
+          and daily log records.
+        </p>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {items.map((item) => (
+          <div key={item.id} className="rounded-md border border-slate-200 bg-white p-3">
+            <div className="flex items-start gap-3">
+              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-600">
+                <item.icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-950">{item.label}</p>
+                <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+                <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                  {item.occurredAt ? formatDateTime(item.occurredAt) : "Time not recorded"} · {item.meta}
+                </p>
+              </div>
+            </div>
+          </div>
+        ))}
+        {!items.length ? <EmptyState label="No production activity recorded yet." /> : null}
+      </div>
+    </section>
+  );
+}
+
+function PhotoProgressPanel({
+  groups,
+  onOpenPhotos,
+}: {
+  groups: PhotoProgressGroup[];
+  onOpenPhotos: () => void;
+}) {
+  const total = groups.reduce((sum, group) => sum + group.photos.length, 0);
+
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+      data-testid="photo-progress-panel"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-950">Photo progress</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Existing job photos grouped by current caption, label, and file metadata.
+          </p>
+        </div>
+        <Badge label={`${total} photos`} tone={total ? "blue" : "green"} />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {groups.map((group) => (
+          <div key={group.id} className="rounded-md border border-slate-200 bg-white p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-bold text-slate-950">{group.label}</p>
+              <Badge label={String(group.photos.length)} tone={group.photos.length ? "blue" : "green"} />
+            </div>
+            <p className="mt-2 truncate text-xs font-semibold text-slate-500">
+              {group.photos[0]?.caption ?? group.photos[0]?.label ?? "No matching photos"}
+            </p>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onOpenPhotos}
+        className="mt-3 min-h-11 w-full rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+      >
+        Open Photos
+      </button>
+    </section>
+  );
+}
+
 function JobProductionCommandCenter({
   buckets,
   companyMap,
@@ -7604,6 +8860,7 @@ function JobProductionSummaryPanel({
     { label: "Change orders", value: String(changeOrdersCount) },
     { label: "Invoices", value: String(invoicesCount) },
     { label: "Communications", value: String(communicationsCount) },
+    { label: "Weather delay", value: getJobWeatherDelayReadiness(job).label },
   ];
 
   return (
@@ -15528,6 +16785,18 @@ function JobsView({
   const [crewFilter, setCrewFilter] = useState<JobCrewFilter>("all");
   const [scheduleFilter, setScheduleFilter] = useState<JobScheduleFilter>("all");
   const [workspaceTab, setWorkspaceTab] = useState<JobWorkspaceTab>("overview");
+  const [productionBoardSearch, setProductionBoardSearch] = useState("");
+  const [productionBoardCompanyFilter, setProductionBoardCompanyFilter] = useState("all");
+  const [productionBoardLocationFilter, setProductionBoardLocationFilter] =
+    useState<ProductionLocationFilter>("all");
+  const [productionBoardCrewFilter, setProductionBoardCrewFilter] = useState("all");
+  const [productionBoardForemanFilter, setProductionBoardForemanFilter] = useState("all");
+  const [productionBoardMaterialFilter, setProductionBoardMaterialFilter] =
+    useState<ProductionMaterialFilter>("all");
+  const [productionBoardInspectionFilter, setProductionBoardInspectionFilter] =
+    useState<ProductionInspectionFilter>("all");
+  const [crewSchedulerView, setCrewSchedulerView] = useState<CrewSchedulerView>("day");
+  const [crewSchedulerDate, setCrewSchedulerDate] = useState(todayIsoDate());
   const [isSaving, setIsSaving] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [productionAction, setProductionAction] = useState<string | null>(null);
@@ -16490,6 +17759,46 @@ function JobsView({
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
+
+  const handleSelectJobAndOpenTab = (job: JobRecord, tab: JobWorkspaceTab) => {
+    setSelectedJobId(job.id);
+    setJobFormCompanyId(job.company_id);
+    setJobFormServiceType(job.service_type);
+    setWorkspaceTab(tab);
+    setEditingTaskId(null);
+    setProductionAction(null);
+
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`job-section-${tab}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const handleProductionBoardFilterChange = (
+    key: "search" | "company" | "location" | "crew" | "foreman" | "material" | "inspection",
+    value: string,
+  ) => {
+    if (key === "search") {
+      setProductionBoardSearch(value);
+    } else if (key === "company") {
+      setProductionBoardCompanyFilter(value);
+    } else if (key === "location") {
+      setProductionBoardLocationFilter(value as ProductionLocationFilter);
+    } else if (key === "crew") {
+      setProductionBoardCrewFilter(value);
+    } else if (key === "foreman") {
+      setProductionBoardForemanFilter(value);
+    } else if (key === "material") {
+      setProductionBoardMaterialFilter(value as ProductionMaterialFilter);
+    } else {
+      setProductionBoardInspectionFilter(value as ProductionInspectionFilter);
+    }
+  };
   const jobInboxItems = useMemo(
     () => buildUnifiedInboxItems(snapshot, companyMap),
     [companyMap, snapshot],
@@ -16503,8 +17812,152 @@ function JobsView({
   const crewAssignmentSummaries = buildCrewAssignmentSummaries(snapshot);
   const roofingProductionCards = buildRoofingProductionCards(snapshot);
   const paintingProductionCards = buildPaintingProductionCards(snapshot);
+  const productionBoardFilterOptions = useMemo(() => {
+    const crews = new Set<string>();
+    const foremen = new Set<string>();
+
+    snapshot.jobs.forEach((job) => {
+      const crew = getJobCrewLabel(snapshot, job);
+      const foreman = getJobForemanLabel(snapshot, job);
+
+      if (crew !== "Crew needed") {
+        crews.add(crew);
+      }
+
+      if (foreman !== "Foreman unassigned") {
+        foremen.add(foreman);
+      }
+    });
+
+    return {
+      crews: [...crews].sort((a, b) => a.localeCompare(b)),
+      foremen: [...foremen].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [snapshot]);
+  const productionBoardFilters = {
+    search: productionBoardSearch,
+    company: productionBoardCompanyFilter,
+    location: productionBoardLocationFilter,
+    crew: productionBoardCrewFilter,
+    foreman: productionBoardForemanFilter,
+    material: productionBoardMaterialFilter,
+    inspection: productionBoardInspectionFilter,
+  };
+  const productionBoardJobs = useMemo(() => {
+    const query = productionBoardSearch.trim().toLowerCase();
+
+    return snapshot.jobs.filter((job) => {
+      const materialReadiness = getJobMaterialReadiness(snapshot, job);
+      const inspectionReadiness = getJobInspectionReadiness(snapshot, job);
+      const crew = getJobCrewLabel(snapshot, job);
+      const foreman = getJobForemanLabel(snapshot, job);
+      const searchText = [
+        job.title,
+        job.business,
+        job.location,
+        job.address,
+        job.property_address,
+        job.scope_of_work,
+        job.notes,
+        getJobTargetName(snapshot, job),
+        crew,
+        foreman,
+        getJobDisplayBusiness(snapshot, job),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const matchesSearch = !query || searchText.includes(query);
+      const matchesCompany =
+        productionBoardCompanyFilter === "all" ||
+        job.company_id === productionBoardCompanyFilter;
+      const matchesLocation =
+        productionBoardLocationFilter === "all" ||
+        getJobBranchLocation(job) === productionBoardLocationFilter;
+      const matchesCrew =
+        productionBoardCrewFilter === "all" ||
+        (productionBoardCrewFilter === "unassigned" && crew === "Crew needed") ||
+        crew === productionBoardCrewFilter;
+      const matchesForeman =
+        productionBoardForemanFilter === "all" ||
+        (productionBoardForemanFilter === "unassigned" &&
+          foreman === "Foreman unassigned") ||
+        foreman === productionBoardForemanFilter;
+      const matchesMaterial =
+        productionBoardMaterialFilter === "all" ||
+        (productionBoardMaterialFilter === "ready" && materialReadiness.label === "Ready") ||
+        (productionBoardMaterialFilter === "needs_attention" &&
+          materialReadiness.tone === "amber" &&
+          materialReadiness.label !== "Not Recorded") ||
+        (productionBoardMaterialFilter === "not_recorded" &&
+          materialReadiness.label === "Not Recorded");
+      const matchesInspection =
+        productionBoardInspectionFilter === "all" ||
+        (productionBoardInspectionFilter === "required" &&
+          inspectionReadiness.label === "Inspection Required") ||
+        (productionBoardInspectionFilter === "complete" &&
+          (inspectionReadiness.label === "Inspection Complete" ||
+            inspectionReadiness.label === "Final Complete")) ||
+        (productionBoardInspectionFilter === "not_recorded" &&
+          inspectionReadiness.label === "Inspection Not Recorded");
+
+      return (
+        matchesSearch &&
+        matchesCompany &&
+        matchesLocation &&
+        matchesCrew &&
+        matchesForeman &&
+        matchesMaterial &&
+        matchesInspection
+      );
+    });
+  }, [
+    productionBoardCompanyFilter,
+    productionBoardCrewFilter,
+    productionBoardForemanFilter,
+    productionBoardInspectionFilter,
+    productionBoardLocationFilter,
+    productionBoardMaterialFilter,
+    productionBoardSearch,
+    snapshot,
+  ]);
+  const productionBoardColumns = useMemo(
+    () => buildProductionBoardColumns(snapshot, productionBoardJobs),
+    [productionBoardJobs, snapshot],
+  );
+  const productionScheduleConflicts = useMemo(() => {
+    const boardJobIds = new Set(productionBoardJobs.map((job) => job.id));
+
+    return buildScheduleConflicts(snapshot).filter(
+      (conflict) => conflict.job === null || boardJobIds.has(conflict.job.id),
+    );
+  }, [productionBoardJobs, snapshot]);
+  const crewSchedulerJobs = useMemo(() => {
+    const startDate = crewSchedulerDate;
+    const endDate = crewSchedulerView === "week" ? addDaysToIsoDate(startDate, 6) : startDate;
+
+    return productionBoardJobs.filter((job) => {
+      const dates = getJobScheduleDateParts(snapshot, job);
+
+      if (!dates.length) {
+        return isProductionActiveJob(job);
+      }
+
+      return dates.some((date) => date >= startDate && date <= endDate);
+    });
+  }, [crewSchedulerDate, crewSchedulerView, productionBoardJobs, snapshot]);
+  const crewScheduleGroups = useMemo(
+    () => buildCrewScheduleGroups(snapshot, crewSchedulerJobs),
+    [crewSchedulerJobs, snapshot],
+  );
   const selectedJobTimelineItems = selectedJob
     ? buildJobProductionTimelineItems(snapshot, selectedJob)
+    : [];
+  const selectedJobProductionLogItems = selectedJob
+    ? buildProductionLogItems(snapshot, selectedJob)
+    : [];
+  const selectedJobPhotoProgressGroups = selectedJob
+    ? buildPhotoProgressGroups(selectedJobPhotos)
     : [];
   const selectedJobCommunications = selectedJob
     ? jobInboxItems.filter(
@@ -16527,11 +17980,24 @@ function JobsView({
   const productionQuickActions = selectedJob
     ? [
         {
+          label: "Update Job Status",
+          detail: "Use the existing job editor",
+          icon: Pencil,
+          onClick: () => focusJobBuilder(),
+        },
+        {
           label: "Start Job",
           detail: selectedJob.status === "in_progress" ? "Already in production" : "Mark job in progress",
           icon: Activity,
           disabled: selectedJob.status === "in_progress" || productionAction !== null,
           onClick: () => void handleUpdateJobStatus("in_progress"),
+        },
+        {
+          label: "Open Customer 360",
+          detail: selectedJob.customer_id ? "Open customer workspace" : "No customer linked",
+          icon: UserRound,
+          disabled: selectedJob.customer_id === null,
+          onClick: () => onViewChange("customers"),
         },
         {
           label: "Complete Inspection",
@@ -16540,10 +18006,23 @@ function JobsView({
           onClick: () => onViewChange("inspections"),
         },
         {
+          label: "View Inspection",
+          detail: selectedJobRelatedInspection ? "Open inspections" : "No linked inspection",
+          icon: ClipboardList,
+          disabled: selectedJobRelatedInspection === null,
+          onClick: () => onViewChange("inspections"),
+        },
+        {
           label: "Upload Photos",
           detail: "Open photo documentation",
           icon: Camera,
           onClick: () => onViewChange("photos"),
+        },
+        {
+          label: "Upload Documents",
+          detail: "Open document center",
+          icon: FileText,
+          onClick: () => onViewChange("documents"),
         },
         {
           label: "Create Change Order",
@@ -16659,6 +18138,29 @@ function JobsView({
             description="Painting operations from existing IHC jobs, estimates, scopes, and material records."
             cards={paintingProductionCards}
             painting
+          />
+          <ProductionBoardPanel
+            columns={productionBoardColumns}
+            snapshot={snapshot}
+            companyMap={companyMap}
+            filters={productionBoardFilters}
+            options={productionBoardFilterOptions}
+            onFilterChange={handleProductionBoardFilterChange}
+            onSelectJob={handleSelectJob}
+            onOpenJobTab={handleSelectJobAndOpenTab}
+            onViewChange={onViewChange}
+          />
+          <CrewSchedulerPanel
+            snapshot={snapshot}
+            groups={crewScheduleGroups}
+            conflicts={productionScheduleConflicts}
+            view={crewSchedulerView}
+            date={crewSchedulerDate}
+            onViewChange={setCrewSchedulerView}
+            onDateChange={setCrewSchedulerDate}
+            onSelectJob={handleSelectJob}
+            onOpenJobTab={handleSelectJobAndOpenTab}
+            onOpenCalendar={() => onViewChange("calendar")}
           />
           <div className="mt-4 flex flex-wrap gap-2">
             <button
@@ -16946,6 +18448,13 @@ function JobsView({
               <ProductionQuickActionsPanel actions={productionQuickActions} />
 
               <JobProductionTimeline items={selectedJobTimelineItems} />
+
+              <DailyProductionLogPanel items={selectedJobProductionLogItems} />
+
+              <PhotoProgressPanel
+                groups={selectedJobPhotoProgressGroups}
+                onOpenPhotos={() => onViewChange("photos")}
+              />
 
               <div
                 role="tablist"
