@@ -26,6 +26,7 @@ try {
     [
       "lib/crm/leadRouting.ts",
       "lib/crm/websiteLeadCapture.ts",
+      "lib/crm/yelpLeadCapture.ts",
       "--target",
       "ES2022",
       "--module",
@@ -52,6 +53,9 @@ try {
   const routing = await import(pathToFileURL(join(outDir, "leadRouting.js")));
   const websiteCapture = await import(
     pathToFileURL(join(outDir, "websiteLeadCapture.js"))
+  );
+  const yelpCapture = await import(
+    pathToFileURL(join(outDir, "yelpLeadCapture.js"))
   );
 
   const website = routing.normalizeWebsiteLeadIntake({
@@ -228,15 +232,205 @@ try {
   );
   assertEqual(honeypot.status, "review_required", "Honeypot submissions require review");
 
-  const yelp = routing.normalizeYelpLeadIntake({
-    yelpBusinessId: "IHC Painting Yelp Account",
+  const rawYelpBody = JSON.stringify({
+    yelpAccountKey: "weathertech-phoenix",
+    yelpBusinessId: "weathertech-phoenix",
+    yelpConversationId: "TEST_YELP_CONVERSATION",
+    yelpLeadId: "TEST_YELP_LEAD",
     name: "TEST Yelp Lead",
+    phone: "6025550199",
     email: "test@example.com",
-    location: "Tempe",
-    serviceType: "painting",
+    location: "Phoenix",
+    serviceType: "roofing",
+    message: "Need a roofing estimate",
+    submittedAt: new Date().toISOString(),
   });
-  assertEqual(yelp.companyKey, "ihc_painting", "Yelp routes to IHC");
-  assertEqual(yelp.branchKey, "ihc", "Yelp IHC routes to IHC branch");
+  const yelpSignatureTimestamp = new Date().toISOString();
+  const yelpTestSecret = "test-only-yelp-capture-secret";
+  const validYelpSignature = yelpCapture.createYelpLeadCaptureSignature({
+    rawBody: rawYelpBody,
+    timestamp: yelpSignatureTimestamp,
+    secret: yelpTestSecret,
+  });
+  const yelpPhoenixResolution = yelpCapture.resolveYelpLeadCaptureAccount(
+    JSON.parse(rawYelpBody),
+  );
+  assertEqual(yelpPhoenixResolution.status, "matched", "Phoenix Yelp account resolves");
+  assertEqual(
+    yelpPhoenixResolution.account?.branchKey,
+    "weathertech_phoenix",
+    "Phoenix Yelp account resolves to Phoenix branch",
+  );
+
+  const verifiedYelpCapture = yelpCapture.verifyYelpLeadCaptureRequest({
+    rawBody: rawYelpBody,
+    headers: {
+      "x-weathertech-timestamp": yelpSignatureTimestamp,
+      "x-weathertech-signature": `sha256=${validYelpSignature}`,
+    },
+    account: yelpPhoenixResolution.account,
+    secretOverride: yelpTestSecret,
+    now: new Date(yelpSignatureTimestamp),
+  });
+  assertEqual(verifiedYelpCapture.status, "valid", "Valid Yelp capture signature passes");
+
+  const missingYelpSignature = yelpCapture.verifyYelpLeadCaptureRequest({
+    rawBody: rawYelpBody,
+    headers: {},
+    account: yelpPhoenixResolution.account,
+    secretOverride: yelpTestSecret,
+    now: new Date(yelpSignatureTimestamp),
+  });
+  assertEqual(
+    missingYelpSignature.status,
+    "missing_signature",
+    "Missing Yelp capture signature is rejected",
+  );
+
+  const invalidYelpSignature = yelpCapture.verifyYelpLeadCaptureRequest({
+    rawBody: rawYelpBody,
+    headers: {
+      "x-weathertech-timestamp": yelpSignatureTimestamp,
+      "x-weathertech-signature": `sha256=${"0".repeat(64)}`,
+    },
+    account: yelpPhoenixResolution.account,
+    secretOverride: yelpTestSecret,
+    now: new Date(yelpSignatureTimestamp),
+  });
+  assertEqual(
+    invalidYelpSignature.status,
+    "invalid_signature",
+    "Invalid Yelp capture signature is rejected",
+  );
+
+  const yelpPhoenixCaptureBody = yelpCapture.buildYelpLeadCaptureRequestBody({
+    body: JSON.parse(rawYelpBody),
+    resolution: yelpPhoenixResolution,
+    verification: verifiedYelpCapture,
+    abuse: yelpCapture.evaluateYelpLeadCaptureAbuse(
+      JSON.parse(rawYelpBody),
+      yelpPhoenixResolution,
+    ),
+    correlationId: "test-yelp-phoenix-correlation",
+  });
+  const yelpPhoenix = routing.normalizeYelpLeadIntake(yelpPhoenixCaptureBody);
+  assertEqual(yelpPhoenix.companyKey, "weathertech_roofing", "Phoenix Yelp routes to WeatherTech");
+  assertEqual(yelpPhoenix.branchKey, "weathertech_phoenix", "Phoenix Yelp routes to Phoenix branch");
+
+  const yelpTucsonResolution = yelpCapture.resolveYelpLeadCaptureAccount({
+    yelpAccountKey: "weathertech-tucson",
+  });
+  const yelpTucson = routing.normalizeYelpLeadIntake(
+    yelpCapture.buildYelpLeadCaptureRequestBody({
+      body: {
+        yelpAccountKey: "weathertech-tucson",
+        yelpBusinessId: "weathertech-tucson",
+        name: "TEST Tucson Yelp",
+        phone: "5205550101",
+        location: "Tucson",
+        serviceType: "roofing",
+      },
+      resolution: yelpTucsonResolution,
+      verification: verifiedYelpCapture,
+      abuse: yelpCapture.evaluateYelpLeadCaptureAbuse(
+        { yelpAccountKey: "weathertech-tucson" },
+        yelpTucsonResolution,
+      ),
+      correlationId: "test-yelp-tucson-correlation",
+    }),
+  );
+  assertEqual(yelpTucson.branchKey, "weathertech_tucson", "Tucson Yelp routes to Tucson branch");
+
+  const yelpIhcResolution = yelpCapture.resolveYelpLeadCaptureAccount({
+    yelpAccountKey: "ihc",
+  });
+  const yelpIhc = routing.normalizeYelpLeadIntake(
+    yelpCapture.buildYelpLeadCaptureRequestBody({
+      body: {
+        yelpAccountKey: "ihc",
+        yelpBusinessId: "ihc",
+        name: "TEST IHC Yelp",
+        email: "ihc-yelp@example.test",
+        location: "Tempe",
+        serviceType: "painting",
+      },
+      resolution: yelpIhcResolution,
+      verification: verifiedYelpCapture,
+      abuse: yelpCapture.evaluateYelpLeadCaptureAbuse(
+        { yelpAccountKey: "ihc" },
+        yelpIhcResolution,
+      ),
+      correlationId: "test-yelp-ihc-correlation",
+    }),
+  );
+  assertEqual(yelpIhc.companyKey, "ihc_painting", "IHC Yelp routes to IHC");
+  assertEqual(yelpIhc.branchKey, "ihc", "IHC Yelp routes to IHC branch");
+
+  const unknownYelpResolution = yelpCapture.resolveYelpLeadCaptureAccount({
+    yelpAccountKey: "unknown-yelp-account",
+    serviceType: "roofing",
+  });
+  const unknownYelp = routing.normalizeYelpLeadIntake(
+    yelpCapture.buildYelpLeadCaptureRequestBody({
+      body: {
+        yelpAccountKey: "unknown-yelp-account",
+        name: "TEST Unknown Yelp",
+        phone: "6025550199",
+        serviceType: "roofing",
+      },
+      resolution: unknownYelpResolution,
+      verification: verifiedYelpCapture,
+      abuse: yelpCapture.evaluateYelpLeadCaptureAbuse(
+        { yelpAccountKey: "unknown-yelp-account" },
+        unknownYelpResolution,
+      ),
+      correlationId: "test-yelp-unknown-correlation",
+    }),
+  );
+  assertEqual(unknownYelpResolution.status, "unknown", "Unknown Yelp account remains unknown");
+  assertEqual(
+    unknownYelp.companyKey,
+    "unassigned",
+    "Unknown Yelp account does not infer company from service type",
+  );
+  assertEqual(
+    unknownYelp.routing.status,
+    "needs_review",
+    "Unknown Yelp account routes to review",
+  );
+
+  const yelpHoneypot = yelpCapture.evaluateYelpLeadCaptureAbuse(
+    { honeypot: "filled" },
+    yelpPhoenixResolution,
+  );
+  assertEqual(yelpHoneypot.status, "review_required", "Yelp honeypot submissions require review");
+
+  const yelpEmailMatches = routing.detectLeadIntakeDuplicates(yelpIhc, [
+    {
+      id: "customer-yelp-email",
+      recordType: "customer",
+      companyId: "company",
+      name: "Existing Yelp Customer",
+      phone: null,
+      email: "ihc-yelp@example.test",
+      address: "999 Different Way",
+    },
+  ]);
+  assertEqual(yelpEmailMatches[0]?.confidence, "likely_match", "Yelp email duplicate is likely");
+  assertEqual(yelpEmailMatches[0]?.autoMerge, false, "Yelp email duplicates do not auto-merge");
+
+  const yelpPhoneMatches = routing.detectLeadIntakeDuplicates(yelpPhoenix, [
+    {
+      id: "lead-yelp-phone",
+      recordType: "lead",
+      companyId: "company",
+      name: "Existing Yelp Phone Lead",
+      phone: "+16025550199",
+      email: null,
+      address: "999 Different Way",
+    },
+  ]);
+  assertEqual(yelpPhoneMatches[0]?.confidence, "likely_match", "Yelp phone duplicate is likely");
 
   const manual = routing.normalizeManualLeadIntake({
     name: "TEST Manual Unknown",

@@ -473,18 +473,18 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     label: "Yelp",
     shortLabel: "Yelp",
     family: "lead_intake",
-    description: "Yelp lead intake, account routing, duplicate protection, and source attribution.",
+    description: "Secure Yelp lead intake, account registry routing, duplicate protection, and source attribution.",
     connectionProviders: ["yelp"],
     capabilities: ["website_leads", "reviews", "crm_sync", "webhooks"],
     iconKey: "reviews",
-    requiresCredentials: false,
+    requiresCredentials: true,
     supportsOAuth: false,
     supportsWebhooks: true,
     configurationFields: [
       {
         id: "account_mapping",
         label: "Yelp account mapping",
-        description: "Maps each Yelp account, location, or city to the correct company.",
+        description: "Maps each approved Yelp account to WeatherTech Phoenix, WeatherTech Tucson, or IHC.",
         required: true,
         sensitive: false,
         kind: "text",
@@ -492,10 +492,18 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "webhook_endpoint",
         label: "Webhook endpoint",
-        description: "Production endpoint Yelp will post lead payloads to.",
+        description: "Production endpoint for owner-approved Yelp lead payload delivery.",
         required: true,
         sensitive: false,
         kind: "webhook",
+      },
+      {
+        id: "signing_secret",
+        label: "Signing secret",
+        description: "Server-only secret used to reject spoofed or replayed Yelp submissions.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
       },
       {
         id: "dedupe_key",
@@ -510,12 +518,17 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "payload_schema",
         label: "Payload schema check",
-        description: "Validate supported Yelp payload formats before creating CRM leads.",
+        description: "Validate supported Yelp payload formats through dry-run previews before creating CRM leads.",
+      },
+      {
+        id: "signature",
+        label: "Signature check",
+        description: "Reject unsigned, stale, or invalid signed Yelp submissions.",
       },
       {
         id: "company_routing",
         label: "Company routing check",
-        description: "Confirm each Yelp account or city routes to WeatherTech Roofing LLC or IHC.",
+        description: "Confirm each Yelp account routes to the approved company and branch.",
       },
       {
         id: "dedupe",
@@ -531,16 +544,17 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       summary: "Yelp intake is webhook-based and does not use OAuth in the current architecture.",
     },
     connectionSteps: [
-      "Confirm each Yelp account, city, or campaign has an approved company route.",
-      "Configure Yelp to post lead payloads to the production webhook endpoint.",
-      "Validate payload schema, dedupe key, and safe logging.",
+      "Confirm the production Yelp delivery method and supported payload shape.",
+      "Add server-side Yelp account IDs and signing secrets in hosting.",
+      "Run dry-run previews for WeatherTech Phoenix, WeatherTech Tucson, and IHC.",
+      "Run signed live tests before marking any Yelp account connected.",
       "Monitor intake logs before enabling any automated follow-up.",
     ],
     disconnectSummary:
       "A future disconnect will stop accepting live Yelp intake for that account while preserving existing leads.",
     reconnectSummary:
       "A future reconnect will revalidate account routing, dedupe, and retry behavior before intake resumes.",
-    summaryWhenDisconnected: "WeatherTech OS can receive Yelp payloads, but no live Yelp account is connected yet.",
+    summaryWhenDisconnected: "WeatherTech OS has the Yelp intake architecture, but no live Yelp account is connected yet.",
   },
   {
     id: "website_forms",
@@ -1004,7 +1018,6 @@ export function buildIntegrationCenterProviders(snapshot: CrmSnapshot) {
     );
     const primaryConnection = connections[0] ?? null;
     const syncState = buildSyncState(snapshot, metadata, connections);
-    const hasProviderActivity = syncState.total > 0 || syncState.relatedActivityCount > 0;
     const hasProviderErrors =
       syncState.failed > 0 ||
       syncState.retrying > 0 ||
@@ -1017,8 +1030,7 @@ export function buildIntegrationCenterProviders(snapshot: CrmSnapshot) {
     const readinessState: IntegrationReadinessState =
       metadata.id === "future_provider" || hasDisabledConnection
         ? "disabled"
-          : primaryConnection?.status === "connected" ||
-            (metadata.id === "yelp" && hasProviderActivity)
+        : primaryConnection?.status === "connected"
           ? "ready"
           : "requires_configuration";
     const healthState: IntegrationHealthState =

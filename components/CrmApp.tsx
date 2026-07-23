@@ -4634,6 +4634,16 @@ function LeadIntakeRoutingEnginePanel({
     "New/unread",
     "Follow-up required",
   ];
+  const yelpSourceFilters = [
+    "WeatherTech Phoenix Yelp",
+    "WeatherTech Tucson Yelp",
+    "IHC Yelp",
+    "Unassigned Yelp account",
+    "Possible duplicate",
+    "Needs review",
+    "New/unread",
+    "Follow-up required",
+  ];
 
   return (
     <div
@@ -4742,6 +4752,32 @@ function LeadIntakeRoutingEnginePanel({
             <p className="mt-3 text-xs leading-5 text-slate-500">
               Website posts use the source registry, HMAC verification, duplicate
               checks, and review queues before production records are created.
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-white p-3">
+            <p className="text-sm font-bold text-slate-950">
+              Yelp source filters
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {yelpSourceFilters.map((filter) => (
+                <Badge
+                  key={filter}
+                  label={filter}
+                  tone={
+                    filter.includes("Unassigned") ||
+                    filter.includes("Follow-up") ||
+                    filter.includes("Needs review")
+                      ? "amber"
+                      : "blue"
+                  }
+                />
+              ))}
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Yelp posts use account registry routing, signed request checks,
+              duplicate detection, and review queues before CRM leads are
+              created.
             </p>
           </div>
 
@@ -24692,7 +24728,8 @@ function ProviderHealthIndicator({ provider }: { provider: IntegrationProviderRe
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
-      <div className="flex items-center gap-2">
+      <p className="text-xs font-semibold uppercase text-slate-500">Health</p>
+      <div className="mt-2 flex items-center gap-2">
         <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
         <p className="text-sm font-bold text-slate-950">
           {integrationHealthStateLabel(provider.healthState)}
@@ -25197,6 +25234,129 @@ function WebsiteLeadCaptureFoundationPanel() {
   );
 }
 
+function YelpLeadCaptureFoundationPanel() {
+  const readinessStates = [
+    { label: "Not Configured", tone: "slate" as const },
+    { label: "Account Registry Ready", tone: "green" as const },
+    { label: "Credentials Required", tone: "amber" as const },
+    { label: "Verification Required", tone: "amber" as const },
+    { label: "Endpoint Ready", tone: "green" as const },
+    { label: "Testing Required", tone: "amber" as const },
+    { label: "Ready for Production Configuration", tone: "blue" as const },
+    { label: "Connected", tone: "green" as const },
+    { label: "Error", tone: "red" as const },
+  ];
+  const accounts = [
+    {
+      label: "WeatherTech Roofing LLC - Phoenix",
+      accountKey: "weathertech-phoenix",
+      queue: "weathertech-roofing-phoenix",
+      status: "Registry ready",
+    },
+    {
+      label: "WeatherTech Roofing LLC - Tucson",
+      accountKey: "weathertech-tucson",
+      queue: "weathertech-roofing-tucson",
+      status: "Registry ready",
+    },
+    {
+      label: "IHC",
+      accountKey: "ihc",
+      queue: "ihc-painting",
+      status: "Registry ready",
+    },
+  ];
+
+  return (
+    <section
+      className="rounded-lg border border-amber-200 bg-amber-50 p-5"
+      data-testid="yelp-lead-capture-foundation"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-amber-700">
+            Yelp Lead Integration
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Secure Yelp intake foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Live Yelp accounts are not connected yet. The server endpoint,
+            account registry, signed-request model, dry-run preview, duplicate
+            checks, review routing, retry support, and safe logging path are
+            prepared for owner-approved Yelp setup.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Credentials Required" tone="amber" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {readinessStates.map((state) => (
+          <ProviderStatusBadge
+            key={state.label}
+            label={state.label}
+            tone={state.tone}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Endpoint" value="/api/leads/yelp" />
+        <ProfileStat label="Dry run" value="?dryRun=1" />
+        <ProfileStat label="Accounts" value={accounts.length} />
+        <ProfileStat label="Live Yelp" value="Not Connected" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Approved Yelp Accounts
+          </p>
+          {accounts.map((account) => (
+            <div
+              key={account.accountKey}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{account.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Account key {account.accountKey}; queue {account.queue}.
+                    Private Yelp business IDs stay server-side in hosting
+                    environment variables.
+                  </p>
+                </div>
+                <ProviderStatusBadge label={account.status} tone="green" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Owner Setup Required
+          </p>
+          {[
+            "Confirm Yelp's production lead delivery method and payload fields.",
+            "Configure server-side Yelp signing secret environment variables in hosting.",
+            "Configure server-side Yelp account ID environment variables after account verification.",
+            "Run synthetic dry-run previews before signed live Yelp tests.",
+            "Run one signed test per Yelp account before marking Yelp connected.",
+          ].map((item) => (
+            <div
+              key={item}
+              className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white p-3 text-sm text-amber-900"
+            >
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProviderActionButton({
   action,
   onClick,
@@ -25673,6 +25833,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <WebsiteLeadCaptureFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <YelpLeadCaptureFoundationPanel />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">

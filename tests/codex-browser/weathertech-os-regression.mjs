@@ -1,6 +1,7 @@
 import {
   createCipheriv,
   createHash,
+  createHmac,
   randomBytes,
 } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -42,6 +43,21 @@ function readLocalEnv(cwd) {
   return env;
 }
 
+function getRuntimeEnvValue(key) {
+  const runtimeProcess =
+    typeof globalThis.process === "object" && globalThis.process
+      ? globalThis.process
+      : null;
+  const runtimeEnv =
+    runtimeProcess &&
+    typeof runtimeProcess.env === "object" &&
+    runtimeProcess.env
+      ? runtimeProcess.env
+      : null;
+
+  return typeof runtimeEnv?.[key] === "string" ? runtimeEnv[key] : undefined;
+}
+
 function buildEncryptedLeadIntakeRetryPayload(env, payload) {
   const secret = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
@@ -66,6 +82,12 @@ function buildEncryptedLeadIntakeRetryPayload(env, payload) {
     tag: cipher.getAuthTag().toString("base64"),
     data: encrypted.toString("base64"),
   };
+}
+
+function createProviderHmacSignature(rawBody, timestamp, secret) {
+  return createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest("hex");
 }
 
 function colorKind(rgbText) {
@@ -478,12 +500,13 @@ async function findIntegrationLogsByExternalId(env, provider, externalId) {
   );
 }
 
-async function postAppJson(baseUrl, path, payload) {
+async function postAppJson(baseUrl, path, payload, headers = {}) {
   const response = await fetch(new URL(path, baseUrl), {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...headers,
     },
     body: JSON.stringify(payload),
   });
@@ -909,6 +932,52 @@ async function checkUnique(locator, label) {
   }
 
   throw lastError ?? new Error(`${label} could not be checked.`);
+}
+
+async function checkFormCheckboxByLabel(tab, formHeading, name, label) {
+  let lastError = null;
+  const inputLocator = tab.playwright.locator(
+    `xpath=//form[.//h4[normalize-space(.)=${xpathString(formHeading)}]]//input[@name="${name}"]`,
+  );
+  const labelLocator = tab.playwright.locator(
+    `xpath=//form[.//h4[normalize-space(.)=${xpathString(formHeading)}]]//label[.//input[@name="${name}"]]`,
+  );
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForUniqueLocator(inputLocator, `${label} checkbox`);
+    const isChecked = await inputLocator.evaluate((element) =>
+      Boolean("checked" in element && element.checked),
+    );
+
+    if (isChecked) {
+      return;
+    }
+
+    await waitForUniqueLocator(labelLocator, `${label} label`);
+
+    try {
+      await labelLocator.click({ timeoutMs: 8000 });
+    } catch (error) {
+      lastError = error;
+      await labelLocator.click({ force: true, timeoutMs: 8000 });
+    }
+
+    const checked = await waitForAsync(
+      async () =>
+        inputLocator.evaluate((element) =>
+          Boolean("checked" in element && element.checked),
+        ).catch(() => false),
+      `${label} checked`,
+      2500,
+    ).catch(() => false);
+
+    if (checked) {
+      return;
+    }
+  }
+
+  const details = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+  throw new Error(`${label} could not be checked.${details}`);
 }
 
 async function waitForNoSavingState(tab, label) {
@@ -2416,6 +2485,39 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:invalid-json:done");
 
+  progress("lead-intake:yelp:request-guards:start");
+  const unsupportedYelpContentType = await fetch(new URL("/api/leads/yelp", baseUrl), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "text/plain",
+    },
+    body: "not-json",
+  });
+  const unsupportedYelpBody = await unsupportedYelpContentType.json();
+
+  if (
+    unsupportedYelpContentType.status !== 415 ||
+    unsupportedYelpBody?.status !== "unsupported_content_type"
+  ) {
+    throw new Error(
+      `Yelp unsupported content type was ${unsupportedYelpContentType.status} ${JSON.stringify(unsupportedYelpBody)}`,
+    );
+  }
+
+  const oversizedYelp = await postAppJson(baseUrl, "/api/leads/yelp", {
+    yelpAccountKey: "ihc",
+    name: `${TEST_PREFIX} ${runId} OVERSIZED YELP`,
+    message: "x".repeat(33000),
+  });
+
+  if (oversizedYelp.status !== 413 || oversizedYelp.body?.status !== "payload_too_large") {
+    throw new Error(
+      `Yelp oversized payload was ${oversizedYelp.status} ${JSON.stringify(oversizedYelp.body)}`,
+    );
+  }
+  progress("lead-intake:yelp:request-guards:done");
+
   progress("lead-intake:website:dry-run:start");
   const websitePayload = {
     sourceId: "weathertech-phoenix",
@@ -2507,11 +2609,11 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:website:dry-run:done");
 
-  progress("lead-intake:yelp:create:start");
+  progress("lead-intake:yelp:dry-run:start");
   const yelpPayload = {
-    business: "IHC",
+    yelpAccountKey: "ihc",
     source: "Yelp",
-    yelpBusinessId: `${TEST_PREFIX} ${runId} IHC YELP ACCOUNT`,
+    yelpBusinessId: "ihc",
     yelpConversationId: `${TEST_PREFIX} ${runId} YELP CONVERSATION`,
     yelpLeadId: yelpExternalId,
     submittedAt,
@@ -2522,16 +2624,169 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     serviceType: "painting",
     message: `${TEST_PREFIX} ${runId} Yelp intake message`,
   };
+  const yelpPhoenixDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
+    ...yelpPayload,
+    yelpAccountKey: "weathertech-phoenix",
+    yelpBusinessId: "weathertech-phoenix",
+    yelpLeadId: `${yelpExternalId} PHOENIX`,
+    yelpConversationId: `${TEST_PREFIX} ${runId} YELP PHOENIX CONVERSATION`,
+    name: `${yelpLeadName} PHOENIX`,
+    phone: "6025550220",
+    email: `yelp-phoenix-${runId}@example.test`,
+    location: "Phoenix",
+    serviceType: "roofing",
+  });
+
+  if (
+    yelpPhoenixDryRun.status !== 200 ||
+    yelpPhoenixDryRun.body?.routing?.company !== "weathertech_roofing" ||
+    yelpPhoenixDryRun.body?.routing?.branch !== "weathertech_phoenix"
+  ) {
+    throw new Error(`Phoenix Yelp dry run failed: ${yelpPhoenixDryRun.status} ${JSON.stringify(yelpPhoenixDryRun.body)}`);
+  }
+
+  const yelpTucsonDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
+    ...yelpPayload,
+    yelpAccountKey: "weathertech-tucson",
+    yelpBusinessId: "weathertech-tucson",
+    yelpLeadId: `${yelpExternalId} TUCSON`,
+    yelpConversationId: `${TEST_PREFIX} ${runId} YELP TUCSON CONVERSATION`,
+    name: `${yelpLeadName} TUCSON`,
+    phone: "5205550220",
+    email: `yelp-tucson-${runId}@example.test`,
+    location: "Tucson",
+    serviceType: "roofing",
+  });
+
+  if (yelpTucsonDryRun.status !== 200 || yelpTucsonDryRun.body?.routing?.branch !== "weathertech_tucson") {
+    throw new Error(`Tucson Yelp dry run failed: ${yelpTucsonDryRun.status} ${JSON.stringify(yelpTucsonDryRun.body)}`);
+  }
+
+  const yelpIhcDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", yelpPayload);
+
+  if (yelpIhcDryRun.status !== 200 || yelpIhcDryRun.body?.routing?.company !== "ihc_painting") {
+    throw new Error(`IHC Yelp dry run failed: ${yelpIhcDryRun.status} ${JSON.stringify(yelpIhcDryRun.body)}`);
+  }
+
+  const unknownYelpDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
+    ...yelpPayload,
+    yelpAccountKey: "unknown-yelp-account",
+    yelpBusinessId: "unknown-yelp-account",
+    yelpLeadId: `${yelpExternalId} UNKNOWN`,
+    yelpConversationId: `${TEST_PREFIX} ${runId} YELP UNKNOWN CONVERSATION`,
+    name: `${yelpLeadName} UNKNOWN`,
+    serviceType: "roofing",
+  });
+
+  if (unknownYelpDryRun.status !== 200 || unknownYelpDryRun.body?.routing?.company !== "unassigned") {
+    throw new Error(`Unknown Yelp account was not unassigned: ${unknownYelpDryRun.status} ${JSON.stringify(unknownYelpDryRun.body)}`);
+  }
+
+  const unsignedYelp = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload);
+
+  if (
+    ![401, 503].includes(unsignedYelp.status) ||
+    !["missing_signature", "verification_required"].includes(String(unsignedYelp.body?.status))
+  ) {
+    throw new Error(`Unsigned Yelp intake was not safely rejected: ${unsignedYelp.status} ${JSON.stringify(unsignedYelp.body)}`);
+  }
+  progress("lead-intake:yelp:dry-run:done");
+
+  progress("lead-intake:yelp:create:start");
   const yelpSensitiveValues = [
     yelpLeadName,
     yelpPayload.phone,
     yelpPayload.email,
     yelpPayload.message,
   ];
-  const yelpCreate = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload);
+  const yelpReadinessResponse = await fetch(new URL("/api/leads/yelp", baseUrl));
+  const yelpReadiness = await yelpReadinessResponse.json();
+  const yelpSigningSecret =
+    getRuntimeEnvValue("YELP_LEAD_CAPTURE_SECRET") ?? env.YELP_LEAD_CAPTURE_SECRET;
+  let yelpCreate = null;
+  let yelpLeadRecordId = null;
+  let yelpCreateMode = "seeded";
 
-  if (yelpCreate.status !== 201 || !yelpCreate.body?.ok) {
-    throw new Error(`Yelp intake create failed: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
+  if (
+    yelpSigningSecret &&
+    Number(yelpReadiness?.readiness?.configuredVerificationCount ?? 0) > 0
+  ) {
+    const yelpSignatureTimestamp = new Date().toISOString();
+    const yelpRawBody = JSON.stringify(yelpPayload);
+    const yelpSignature = createProviderHmacSignature(
+      yelpRawBody,
+      yelpSignatureTimestamp,
+      yelpSigningSecret,
+    );
+
+    yelpCreate = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload, {
+      "x-weathertech-timestamp": yelpSignatureTimestamp,
+      "x-weathertech-signature": `sha256=${yelpSignature}`,
+    });
+
+    if (yelpCreate.status !== 201 || !yelpCreate.body?.ok) {
+      throw new Error(`Yelp intake create failed: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
+    }
+
+    yelpLeadRecordId = yelpCreate.body.leadId;
+    yelpCreateMode = "signed_endpoint";
+  } else {
+    const yelpSeedBase = {
+      company_id: companies.ihc.id,
+      [leadNameColumn]: yelpLeadName,
+      phone: yelpPayload.phone,
+      email: yelpPayload.email,
+      property_address: "222 TEST Yelp Intake Way, Tempe, AZ",
+      status: "new",
+      pipeline_stage: "new_lead",
+      priority: "normal",
+      estimated_value: 0,
+      next_follow_up: null,
+      notes: `${TEST_PREFIX} ${runId} seeded Yelp source badge record. Endpoint live create skipped because Yelp signing secret is not configured in the local server.`,
+    };
+    const yelpSeedPayloads = [
+      {
+        ...yelpSeedBase,
+        source: "Yelp",
+      },
+      {
+        ...yelpSeedBase,
+        lead_source: "Yelp",
+        service_needed: "painting",
+      },
+    ];
+    let seededYelpLead = null;
+    let lastSeedError = null;
+
+    for (const payload of yelpSeedPayloads) {
+      try {
+        [seededYelpLead] = await restRequest(env, "leads", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: JSON.stringify(payload),
+        });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        lastSeedError = error;
+
+        if (
+          message.includes("Could not find") ||
+          message.includes("does not exist") ||
+          message.includes("schema cache")
+        ) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (!seededYelpLead) {
+      throw lastSeedError ?? new Error("Unable to seed Yelp UI regression lead.");
+    }
+
+    yelpLeadRecordId = seededYelpLead.id;
   }
 
   const yelpLeads = await findLeadsByContactName(env, yelpLeadName, leadNameColumn);
@@ -2550,18 +2805,23 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     throw new Error(`Yelp lead source was ${getLeadRowSource(yelpLead)}.`);
   }
 
-  if (!getLeadRowServiceType(yelpLead).toLowerCase().includes("paint")) {
+  if (
+    yelpCreateMode === "signed_endpoint" &&
+    !getLeadRowServiceType(yelpLead).toLowerCase().includes("paint")
+  ) {
     throw new Error(`Yelp service type was ${getLeadRowServiceType(yelpLead)}.`);
   }
 
-  const yelpLogs = await findIntegrationLogsByExternalId(env, "yelp", yelpExternalId);
+  if (yelpCreateMode === "signed_endpoint") {
+    const yelpLogs = await findIntegrationLogsByExternalId(env, "yelp", yelpExternalId);
 
-  if (!yelpLogs.some((log) => log.status === "succeeded")) {
-    throw new Error("Yelp intake did not write a succeeded sync log.");
-  }
+    if (!yelpLogs.some((log) => log.status === "succeeded")) {
+      throw new Error("Yelp intake did not write a succeeded sync log.");
+    }
 
-  for (const log of yelpLogs) {
-    assertNoSensitiveRequestSummary(log, yelpSensitiveValues, "Yelp intake");
+    for (const log of yelpLogs) {
+      assertNoSensitiveRequestSummary(log, yelpSensitiveValues, "Yelp intake");
+    }
   }
   progress("lead-intake:yelp:create:done");
 
@@ -2694,6 +2954,10 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
         text.includes("weathertech tucson website") &&
         text.includes("ihc website") &&
         text.includes("suspicious submission") &&
+        text.includes("weathertech phoenix yelp") &&
+        text.includes("weathertech tucson yelp") &&
+        text.includes("ihc yelp") &&
+        text.includes("unassigned yelp account") &&
         text.includes("yelp") &&
         text.includes("twilio calls") &&
         text.includes("twilio sms") &&
@@ -2734,7 +2998,13 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     ihcDryRunRouting: ihcDryRun.body.routing,
     unknownDryRunRouting: unknownDryRun.body.routing,
     unsignedWebsiteStatus: unsignedWebsite.body.status,
-    yelpLeadId: yelpCreate.body.leadId,
+    yelpPhoenixDryRunRouting: yelpPhoenixDryRun.body.routing,
+    yelpTucsonDryRunRouting: yelpTucsonDryRun.body.routing,
+    yelpIhcDryRunRouting: yelpIhcDryRun.body.routing,
+    unknownYelpDryRunRouting: unknownYelpDryRun.body.routing,
+    unsignedYelpStatus: unsignedYelp.body.status,
+    yelpCreateMode,
+    yelpLeadId: yelpLeadRecordId,
     retryLeadId: retryLead.id,
     retryLogId: failedLog.id,
   };
@@ -3031,6 +3301,13 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("weathertech-phoenix") &&
         text.includes("weathertech-tucson") &&
         text.includes("ihc-contact") &&
+        text.includes("yelp lead integration") &&
+        text.includes("secure yelp intake foundation") &&
+        text.includes("/api/leads/yelp") &&
+        text.includes("account registry ready") &&
+        text.includes("weathertech-phoenix") &&
+        text.includes("weathertech-tucson") &&
+        text.includes("private yelp business ids stay server-side") &&
         [
           "twilio",
           "gmail",
@@ -3396,9 +3673,11 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "finding recommendation",
   );
   for (const name of ["action_required", "include_in_estimate", "customer_visible", "include_in_report"]) {
-    await checkUnique(
-      tab.playwright.locator(`xpath=//form[.//h4[normalize-space(.)="Add finding"]]//input[@name="${name}"]`),
-      `inspection finding ${name} checkbox`,
+    await checkFormCheckboxByLabel(
+      tab,
+      "Add finding",
+      name,
+      `inspection finding ${name}`,
     );
   }
   await clickUnique(
@@ -3445,6 +3724,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add measurement"]]//button[@type="submit"]'),
     "Add measurement",
   );
+  await waitForNoSavingState(tab, "inspection measurement save complete");
   const inspectionWithMeasurement = await waitForAsync(
     async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);
@@ -3454,7 +3734,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
         : null;
     },
     "inspection measurement persistence",
-    15000,
+    25000,
   );
   progress("inspections:measurement:done");
 

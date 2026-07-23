@@ -516,7 +516,7 @@ export function routeCanonicalLeadIntake(input: {
   if (input.forceUnassignedRouting) {
     const reason =
       forceReviewReason ??
-      "Website source registry could not verify the company or branch.";
+      "Lead source registry could not verify the company or branch.";
 
     return {
       companyKey: "unassigned",
@@ -803,37 +803,92 @@ export function normalizeWebsiteLeadIntake(payload: GenericPayload) {
 }
 
 export function normalizeYelpLeadIntake(payload: GenericPayload) {
-  const yelpBusinessId = getText(payload.yelpBusinessId, 160);
+  const yelpBusinessId = getText(
+    payload.yelpBusinessId ??
+      payload.businessId ??
+      payload.businessAlias ??
+      payload.businessName,
+    160,
+  );
   const submittedAt = normalizeTimestamp(
     payload.submittedAt,
     payload.timestamp,
     payload.receivedAt,
   );
+  const firstName = getText(payload.firstName, 80);
+  const lastName = getText(payload.lastName, 120);
+  const fullName =
+    getText(payload.name ?? payload.contactName ?? payload.customerName, 160) ??
+    ([firstName, lastName].filter(Boolean).join(" ") || null);
+  const preferredContactToken = getToken(
+    getText(payload.preferredContactMethod ?? payload.preferredContact, 40),
+  );
+  const verifiedCompanyKey = getVerifiedCompanyKey(payload.verifiedCompanyKey);
+  const verifiedBranchKey = getVerifiedBranchKey(payload.verifiedBranchKey);
+  const hasVerifiedRegistryRouting = Boolean(verifiedCompanyKey && verifiedBranchKey);
 
   return createCanonicalLeadIntake({
     provider: "yelp",
-    fullName: getText(payload.name, 160),
+    fullName,
+    companyName: getText(payload.companyName, 160),
     phone: normalizeLeadIntakePhone(payload.phone),
     email: normalizeLeadIntakeEmail(payload.email),
-    serviceAddress: getText(payload.address ?? payload.location, 240),
+    serviceAddress: getText(payload.address ?? payload.serviceAddress, 240),
     city: getText(payload.city ?? payload.location, 120),
     state: getText(payload.state, 40) ?? "AZ",
     postalCode: getText(payload.zip ?? payload.postalCode, 20),
-    requestedService: normalizeService(payload.serviceType ?? payload.requestedService),
-    message: getText(payload.message, 1500),
+    requestedService: normalizeService(
+      payload.serviceType ?? payload.requestedService ?? payload.service,
+    ),
+    message: getText(payload.message ?? payload.comments ?? payload.notes, 1500),
+    preferredContactMethod: preferredContactToken.includes("email")
+      ? "email"
+      : preferredContactToken.includes("sms")
+        ? "sms"
+        : preferredContactToken.includes("phone") || preferredContactToken.includes("call")
+          ? "phone"
+          : "unknown",
     leadSource: getText(payload.source, 80) ?? "Yelp",
-    sourceDetail: yelpBusinessId,
+    sourceDetail: getText(
+      payload.sourceDetail ??
+        payload.sourceAccount ??
+        payload.yelpAccountKey ??
+        payload.yelpAccountId ??
+        payload.providerAccountId ??
+        yelpBusinessId,
+      240,
+    ),
     providerExternalId: getExternalId(payload, [
       "yelpLeadId",
       "yelpConversationId",
+      "conversationId",
+      "leadId",
       "externalLeadId",
+      "sourceExternalId",
+      "externalId",
       "id",
     ]),
     campaign: getText(payload.campaign, 160),
     explicitCompany: getText(payload.business ?? payload.company, 120),
+    verifiedCompanyKey,
+    verifiedBranchKey,
+    forceUnassignedRouting:
+      payload.forceUnassignedRouting === true || !hasVerifiedRegistryRouting,
+    forceReviewReason:
+      getText(payload.forceReviewReason, 240) ??
+      (!hasVerifiedRegistryRouting
+        ? "Yelp account registry could not verify the company or branch."
+        : null),
     yelpBusinessId,
     intakeTimestamp: new Date().toISOString(),
     originalSubmissionTimestamp: submittedAt,
+    consentMetadata: {
+      smsConsent: typeof payload.smsConsent === "boolean" ? payload.smsConsent : null,
+      emailConsent:
+        typeof payload.emailConsent === "boolean" ? payload.emailConsent : null,
+      source: getText(payload.consentSource, 120),
+      capturedAt: getText(payload.consentCapturedAt, 80),
+    },
   });
 }
 

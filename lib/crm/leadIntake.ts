@@ -117,19 +117,66 @@ export type WebsiteLeadRequestBody = {
 
 export type YelpLeadRequestBody = {
   yelpBusinessId?: unknown;
+  yelpAccountKey?: unknown;
+  yelpAccountId?: unknown;
+  accountId?: unknown;
+  providerAccountId?: unknown;
+  sourceAccount?: unknown;
+  sourceId?: unknown;
+  yelpSource?: unknown;
+  businessId?: unknown;
+  businessAlias?: unknown;
+  businessName?: unknown;
   business?: unknown;
+  company?: unknown;
   location?: unknown;
+  city?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  postalCode?: unknown;
+  sourceDetail?: unknown;
   name?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
+  contactName?: unknown;
+  customerName?: unknown;
+  companyName?: unknown;
   phone?: unknown;
   email?: unknown;
+  address?: unknown;
+  serviceAddress?: unknown;
   message?: unknown;
+  comments?: unknown;
+  notes?: unknown;
   serviceType?: unknown;
+  requestedService?: unknown;
+  service?: unknown;
+  preferredContactMethod?: unknown;
+  preferredContact?: unknown;
   yelpConversationId?: unknown;
+  conversationId?: unknown;
+  threadId?: unknown;
   yelpLeadId?: unknown;
+  leadId?: unknown;
+  externalLeadId?: unknown;
+  sourceExternalId?: unknown;
+  externalId?: unknown;
+  id?: unknown;
   source?: unknown;
+  campaign?: unknown;
   submittedAt?: unknown;
   timestamp?: unknown;
   receivedAt?: unknown;
+  smsConsent?: unknown;
+  emailConsent?: unknown;
+  consentSource?: unknown;
+  consentCapturedAt?: unknown;
+  correlationId?: unknown;
+  verifiedCompanyKey?: unknown;
+  verifiedBranchKey?: unknown;
+  forceUnassignedRouting?: unknown;
+  forceReviewReason?: unknown;
+  verifiedSourceMetadata?: unknown;
 };
 
 export type LeadIntakeResponseStatus =
@@ -601,14 +648,13 @@ function applyLeadSourceMapping(
   resolution: LeadSourceMappingResolution,
 ) {
   const warnings = [...lead.warnings, ...resolution.warnings];
-  const websiteSourceResolutionStatus =
-    lead.provider === "website" &&
+  const registrySourceResolutionStatus =
     lead.sourceMetadata &&
     typeof lead.sourceMetadata.sourceResolutionStatus === "string"
       ? lead.sourceMetadata.sourceResolutionStatus
       : null;
 
-  if (websiteSourceResolutionStatus) {
+  if (registrySourceResolutionStatus) {
     return {
       ...lead,
       warnings,
@@ -783,7 +829,7 @@ export function normalizeYelpLeadBody(
   const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
   const phone = canonical.phone ?? normalizePhone(body.phone);
   const { email, warning: emailWarning } = normalizeEmail(body.email);
-  const message = canonical.message ?? getText(body.message, 1500);
+  const message = canonical.message ?? getText(body.message ?? body.comments ?? body.notes, 1500);
   const business = businessFromCompanyKey(canonical.companyKey);
 
   if (emailWarning) {
@@ -802,9 +848,9 @@ export function normalizeYelpLeadBody(
     return { lead: null, errors, warnings };
   }
 
-  const location = canonical.city ?? getText(body.location, 160);
+  const location = canonical.city ?? getText(body.city ?? body.location, 160);
   const { serviceType, warning: serviceWarning } = normalizeServiceType(
-    body.serviceType,
+    body.serviceType ?? body.requestedService ?? body.service,
     business === "Unassigned" ? "WeatherTech" : business,
   );
 
@@ -816,9 +862,35 @@ export function normalizeYelpLeadBody(
     warnings.push(serviceWarning);
   }
 
-  const yelpLeadId = getText(body.yelpLeadId, 160);
-  const yelpConversationId = getText(body.yelpConversationId, 160);
-  const yelpBusinessId = getText(body.yelpBusinessId, 160);
+  const yelpLeadId =
+    getText(body.yelpLeadId, 160) ??
+    getText(body.leadId, 160) ??
+    getText(body.externalLeadId, 160) ??
+    getText(body.sourceExternalId, 160) ??
+    getText(body.externalId, 160) ??
+    getText(body.id, 160);
+  const yelpConversationId =
+    getText(body.yelpConversationId, 160) ??
+    getText(body.conversationId, 160) ??
+    getText(body.threadId, 160);
+  const yelpBusinessId =
+    getText(body.yelpBusinessId, 160) ??
+    getText(body.businessId, 160) ??
+    getText(body.businessAlias, 160) ??
+    getText(body.businessName, 160) ??
+    getText(body.yelpAccountId, 160) ??
+    getText(body.providerAccountId, 160);
+  const sourceAccount =
+    getText(
+      body.sourceDetail ??
+        body.sourceAccount ??
+        body.yelpAccountKey ??
+        body.yelpAccountId ??
+        body.providerAccountId ??
+        yelpBusinessId,
+      240,
+    ) ??
+    (business === "Unassigned" ? yelpBusinessId : getYelpAccountLabel(body, business));
 
   return {
     lead: {
@@ -845,10 +917,7 @@ export function normalizeYelpLeadBody(
       message,
       externalLeadId: yelpLeadId ?? yelpConversationId,
       submittedAt: normalizeTimestamp(body.submittedAt, body.timestamp, body.receivedAt),
-      sourceAccount:
-        business === "Unassigned"
-          ? getText(body.yelpBusinessId, 160)
-          : getYelpAccountLabel(body, business),
+      sourceAccount,
       campaign: canonical.campaign,
       receivingBusinessPhoneNumber: canonical.receivingBusinessPhoneNumber,
       assignedUserId: canonical.assignedUserId,
@@ -864,8 +933,8 @@ export function normalizeYelpLeadBody(
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
-      sourceMetadata: null,
-      correlationId: null,
+      sourceMetadata: getSafeSourceMetadata(body.verifiedSourceMetadata),
+      correlationId: getText(body.correlationId, 120),
       duplicateConfidence: "no_match",
       warnings,
     },
