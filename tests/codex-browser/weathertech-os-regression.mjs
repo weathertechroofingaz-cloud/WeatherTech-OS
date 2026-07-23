@@ -1526,6 +1526,7 @@ async function testDashboardLiveMode(tab) {
 
   const state = await tab.playwright.evaluate(() => {
     const text = document.body.innerText;
+    const normalizedText = text.toLowerCase();
     const main = document.querySelector("main");
 
     return {
@@ -1535,6 +1536,18 @@ async function testDashboardLiveMode(tab) {
         text.includes("Open leads") &&
         text.includes("Open estimates") &&
         text.includes("Active jobs"),
+      hasOperationsDashboard:
+        normalizedText.includes("crm operations dashboard") &&
+        normalizedText.includes("morning command center") &&
+        normalizedText.includes("owner priorities"),
+      hasOperationsSections:
+        normalizedText.includes("today") &&
+        normalizedText.includes("lead pipeline") &&
+        normalizedText.includes("customer activity") &&
+        normalizedText.includes("operations") &&
+        normalizedText.includes("communications") &&
+        normalizedText.includes("integration health") &&
+        normalizedText.includes("quick actions"),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -1554,6 +1567,10 @@ async function testDashboardLiveMode(tab) {
 
   if (!state.hasDashboardMetrics) {
     throw new Error("Dashboard metrics are not visible.");
+  }
+
+  if (!state.hasOperationsDashboard || !state.hasOperationsSections) {
+    throw new Error("CRM operations dashboard sections are not visible.");
   }
 
   return state;
@@ -3219,6 +3236,54 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
 
     return { checked: buttons.length, collisions };
   });
+  const commandCenterOverlaps = await tab.playwright.evaluate(() => {
+    const quickActionLabels = [
+      "New Lead",
+      "New Customer",
+      "New Estimate",
+      "Schedule Inspection",
+      "Schedule Job",
+      "Compose Email",
+      "Send SMS",
+      "Create Invoice",
+    ];
+    const buttons = [...document.querySelectorAll('[data-testid="crm-operations-dashboard"] button')]
+      .filter((button) => quickActionLabels.some((label) => button.innerText.includes(label)))
+      .map((button) => {
+        const rect = button.getBoundingClientRect();
+        const label = quickActionLabels.find((candidate) => button.innerText.includes(candidate)) ?? button.innerText.trim();
+
+        return {
+          label,
+          top: rect.top,
+          left: rect.left,
+          right: rect.right,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        };
+      })
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    const collisions = [];
+
+    for (let index = 0; index < buttons.length; index += 1) {
+      for (let otherIndex = index + 1; otherIndex < buttons.length; otherIndex += 1) {
+        const a = buttons[index];
+        const b = buttons[otherIndex];
+        const overlap =
+          a.left < b.right - 1 &&
+          a.right > b.left + 1 &&
+          a.top < b.bottom - 1 &&
+          a.bottom > b.top + 1;
+
+        if (overlap) {
+          collisions.push([a, b]);
+        }
+      }
+    }
+
+    return { checked: buttons.length, collisions };
+  });
 
   if (overlaps.checked < 4) {
     throw new Error(`Expected at least 4 dashboard quick-action buttons, checked ${overlaps.checked}.`);
@@ -3228,7 +3293,37 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     throw new Error(`Found ${overlaps.collisions.length} overlapping quick-action button pairs.`);
   }
 
-  return overlaps;
+  if (commandCenterOverlaps.checked < 8) {
+    throw new Error(`Expected 8 CRM operations quick-action buttons, checked ${commandCenterOverlaps.checked}.`);
+  }
+
+  if (commandCenterOverlaps.collisions.length) {
+    throw new Error(`Found ${commandCenterOverlaps.collisions.length} overlapping CRM operations quick-action button pairs.`);
+  }
+
+  await viewport.set({ width: 390, height: 844 });
+  await tab.playwright.waitForTimeout(500);
+  const mobileLayout = await tab.playwright.evaluate(() => {
+    const commandCenter = document.querySelector('[data-testid="crm-operations-dashboard"]');
+    return {
+      visible: Boolean(commandCenter),
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    };
+  });
+
+  if (!mobileLayout.visible) {
+    throw new Error("CRM operations dashboard is not visible on mobile viewport.");
+  }
+
+  if (mobileLayout.hasHorizontalOverflow) {
+    throw new Error(`Dashboard mobile layout overflows horizontally: ${mobileLayout.scrollWidth} > ${mobileLayout.viewportWidth}.`);
+  }
+
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  return { ...overlaps, commandCenter: commandCenterOverlaps, mobileLayout };
 }
 
 async function testSettingsIntegrationCenter(tab) {

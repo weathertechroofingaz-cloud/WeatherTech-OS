@@ -2787,7 +2787,7 @@ function CrmWorkspace({
     >
       <ToastViewport notice={notice} error={error} />
       <div className="grid min-w-0 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:min-h-[calc(100vh-48px)]">
+        <aside className="max-h-[54vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:max-h-none xl:min-h-[calc(100vh-48px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
             <div
               className="grid h-11 w-11 place-items-center rounded-md font-bold text-white"
@@ -2905,6 +2905,7 @@ function CrmWorkspace({
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
+              isDemoMode={isDemoMode}
               onCompanyScopeChange={setSelectedCompanyId}
               onViewChange={onViewChange}
               onCreateLead={() => onViewChange("leads")}
@@ -3184,25 +3185,28 @@ function CompanyScopeSwitcher({
   );
 
   return (
-    <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,0.8fr)_repeat(2,minmax(220px,1fr))]">
+    <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-[minmax(220px,0.8fr)_repeat(2,minmax(220px,1fr))]">
       <button
         type="button"
         onClick={() => onChange("all")}
         aria-pressed={activeCompanyId === "all"}
-        className={`rounded-lg border p-4 text-left transition ${
+        className={`rounded-lg border p-3 text-left transition sm:p-4 ${
           activeCompanyId === "all"
             ? "border-sky-400 bg-sky-50 shadow-sm"
             : "border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white"
         }`}
       >
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <p className="text-xs font-bold uppercase text-sky-700">Owner view</p>
-            <p className="mt-1 text-base font-bold text-slate-950">All companies</p>
+            <p className="mt-1 truncate text-sm font-bold text-slate-950 sm:text-base">
+              <span className="sm:hidden">All</span>
+              <span className="hidden sm:inline">All companies</span>
+            </p>
           </div>
-          <Building2 className="h-5 w-5 text-sky-600" />
+          <Building2 className="hidden h-5 w-5 shrink-0 text-sky-600 sm:block" />
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+        <div className="mt-4 hidden grid-cols-3 gap-2 text-sm sm:grid">
           <div>
             <p className="text-xs font-semibold text-slate-500">Revenue</p>
             <p className="font-bold text-slate-950">
@@ -3230,7 +3234,7 @@ function CompanyScopeSwitcher({
             type="button"
             onClick={() => onChange(summary.company.id)}
             aria-pressed={isActive}
-            className={`relative overflow-hidden rounded-lg border p-4 text-left transition ${
+            className={`relative overflow-hidden rounded-lg border p-3 text-left transition sm:p-4 ${
               isActive
                 ? "border-slate-400 bg-white shadow-sm"
                 : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -3241,22 +3245,25 @@ function CompanyScopeSwitcher({
               style={{ backgroundColor: brandColor }}
             />
             <div className="flex items-start justify-between gap-3">
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs font-bold uppercase text-slate-500">
                   {summary.company.trade === "painting" ? "Painting" : "Roofing"}
                 </p>
-                <p className="mt-1 text-base font-bold text-slate-950">
-                  {summary.company.name}
+                <p className="mt-1 truncate text-sm font-bold text-slate-950 sm:text-base">
+                  <span className="sm:hidden">
+                    {summary.company.short_name ?? summary.company.name}
+                  </span>
+                  <span className="hidden sm:inline">{summary.company.name}</span>
                 </p>
               </div>
               <div
-                className="grid h-9 w-9 place-items-center rounded-md text-sm font-bold text-white"
+                className="hidden h-9 w-9 shrink-0 place-items-center rounded-md text-sm font-bold text-white sm:grid"
                 style={{ backgroundColor: brandColor }}
               >
                 {companyInitials(summary.company)}
               </div>
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+            <div className="mt-4 hidden grid-cols-3 gap-2 text-sm sm:grid">
               <div>
                 <p className="text-xs font-semibold text-slate-500">Estimates</p>
                 <p className="font-bold text-slate-950">{summary.openEstimates}</p>
@@ -3284,6 +3291,7 @@ type DashboardViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
+  isDemoMode: boolean;
   onCompanyScopeChange: (companyId: CompanyScopeId) => void;
   onViewChange: (view: WorkspaceView) => void;
   onCreateLead: () => void;
@@ -3445,19 +3453,1596 @@ function buildRecentActivity(
     .slice(0, 8);
 }
 
+type OperationsDashboardItem = {
+  id: string;
+  title: string;
+  detail: string;
+  meta: string;
+  companyId: string | null;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+};
+
+type OperationsDashboardSummary = {
+  id: string;
+  label: string;
+  value: number | string;
+  detail: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+  items: OperationsDashboardItem[];
+};
+
+type DashboardPipelineFilter = "all" | "weathertech_phoenix" | "weathertech_tucson" | "ihc";
+
+const dashboardPipelineFilters: {
+  value: DashboardPipelineFilter;
+  label: string;
+}[] = [
+  { value: "all", label: "All" },
+  { value: "weathertech_phoenix", label: "WeatherTech Phoenix" },
+  { value: "weathertech_tucson", label: "WeatherTech Tucson" },
+  { value: "ihc", label: "IHC" },
+];
+
+const dashboardPipelineBuckets: {
+  key:
+    | "new_leads"
+    | "needs_review"
+    | "contacted"
+    | "scheduled"
+    | "estimate_sent"
+    | "sold"
+    | "lost";
+  label: string;
+  tone: "blue" | "green" | "amber";
+}[] = [
+  { key: "new_leads", label: "New Leads", tone: "blue" },
+  { key: "needs_review", label: "Needs Review", tone: "amber" },
+  { key: "contacted", label: "Contacted", tone: "blue" },
+  { key: "scheduled", label: "Scheduled", tone: "green" },
+  { key: "estimate_sent", label: "Estimate Sent", tone: "blue" },
+  { key: "sold", label: "Sold", tone: "green" },
+  { key: "lost", label: "Lost", tone: "amber" },
+];
+
+function dateKey(value: string | null | undefined) {
+  return value ? value.slice(0, 10) : null;
+}
+
+function isTodayDate(value: string | null | undefined, today: string) {
+  return dateKey(value) === today;
+}
+
+function isUpcomingDate(value: string | null | undefined, today: string) {
+  const key = dateKey(value);
+  return Boolean(key && key >= today);
+}
+
+function sortByNewest<T extends { created_at?: string; updated_at?: string }>(
+  items: T[],
+) {
+  return [...items].sort((a, b) =>
+    (b.updated_at ?? b.created_at ?? "").localeCompare(a.updated_at ?? a.created_at ?? ""),
+  );
+}
+
+function sortByDateField<T>(
+  items: T[],
+  getValue: (item: T) => string | null | undefined,
+) {
+  return [...items].sort((a, b) => {
+    const left = getValue(a) ?? "";
+    const right = getValue(b) ?? "";
+    return left.localeCompare(right);
+  });
+}
+
+function getDashboardItemCompanyLabel(
+  companyMap: Map<string, CompanyRecord>,
+  companyId: string | null,
+) {
+  return companyId
+    ? companyMap.get(companyId)?.short_name ?? companyMap.get(companyId)?.name ?? "Company"
+    : "All companies";
+}
+
+function leadHasReviewMetadata(lead: LeadRecord) {
+  const text = `${lead.source} ${lead.notes ?? ""} ${lead.pipeline_stage}`.toLowerCase();
+
+  return (
+    text.includes("needs review") ||
+    text.includes("review_required") ||
+    text.includes("unassigned") ||
+    text.includes("lead-intake-review")
+  );
+}
+
+function leadMatchesDashboardPipelineFilter(
+  lead: LeadRecord,
+  companyMap: Map<string, CompanyRecord>,
+  filter: DashboardPipelineFilter,
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  const company = companyMap.get(lead.company_id);
+  const locationText = `${lead.city ?? ""} ${lead.property_address} ${lead.source}`.toLowerCase();
+
+  if (filter === "ihc") {
+    return Boolean(company && isPaintingCompany(company));
+  }
+
+  if (!company || isPaintingCompany(company)) {
+    return false;
+  }
+
+  if (filter === "weathertech_tucson") {
+    return locationText.includes("tucson");
+  }
+
+  return locationText.includes("phoenix");
+}
+
+function getLeadDashboardPipelineBucket(
+  lead: LeadRecord,
+  scheduleEvents: ScheduleEventRecord[],
+) {
+  if (lead.status === "lost" || lead.pipeline_stage === "lost") {
+    return "lost";
+  }
+
+  if (
+    lead.status === "won" ||
+    lead.pipeline_stage === "approved" ||
+    lead.pipeline_stage === "completed" ||
+    lead.pipeline_stage === "paid"
+  ) {
+    return "sold";
+  }
+
+  if (leadHasReviewMetadata(lead)) {
+    return "needs_review";
+  }
+
+  if (lead.status === "estimate_sent" || lead.pipeline_stage === "estimate_sent") {
+    return "estimate_sent";
+  }
+
+  if (
+    lead.pipeline_stage === "estimate_scheduled" ||
+    lead.pipeline_stage === "job_scheduled" ||
+    scheduleEvents.some(
+      (event) =>
+        event.lead_id === lead.id &&
+        event.status === "scheduled" &&
+        isUpcomingDate(event.start_at, todayIsoDate()),
+    )
+  ) {
+    return "scheduled";
+  }
+
+  if (lead.status === "contacted" || lead.status === "qualified" || lead.pipeline_stage === "contacted") {
+    return "contacted";
+  }
+
+  return "new_leads";
+}
+
+function isActiveDashboardJob(job: JobRecord) {
+  return job.status === "scheduled" || job.status === "in_progress" || job.status === "blocked";
+}
+
+function getJobDashboardScheduledDate(job: JobRecord) {
+  return getJobScheduledStart(job) ?? job.start_date;
+}
+
+function getDashboardScheduleConflicts(events: ScheduleEventRecord[]) {
+  const scheduled = events
+    .filter((event) => event.status === "scheduled")
+    .map((event) => ({
+      event,
+      start: new Date(event.start_at).getTime(),
+      end: new Date(event.end_at).getTime(),
+      day: event.start_at.slice(0, 10),
+    }))
+    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end));
+  const conflicts: ScheduleEventRecord[] = [];
+
+  for (let index = 0; index < scheduled.length; index += 1) {
+    for (let compareIndex = index + 1; compareIndex < scheduled.length; compareIndex += 1) {
+      const left = scheduled[index];
+      const right = scheduled[compareIndex];
+
+      if (
+        left.event.company_id === right.event.company_id &&
+        left.day === right.day &&
+        left.start < right.end &&
+        left.end > right.start
+      ) {
+        conflicts.push(left.event, right.event);
+      }
+    }
+  }
+
+  return [...new Map(conflicts.map((event) => [event.id, event])).values()];
+}
+
+function buildDashboardRecordItem({
+  id,
+  title,
+  detail,
+  meta,
+  companyId,
+  view,
+  icon,
+  tone = "blue",
+}: OperationsDashboardItem) {
+  return { id, title, detail, meta, companyId, view, icon, tone };
+}
+
+function buildDashboardOperationData({
+  snapshot,
+  companyMap,
+  isDemoMode,
+  pipelineFilter,
+}: {
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  isDemoMode: boolean;
+  pipelineFilter: DashboardPipelineFilter;
+}) {
+  const today = todayIsoDate();
+  const tomorrow = addDaysIsoDate(1);
+  const inboxItems = buildUnifiedInboxItems(snapshot, companyMap);
+  const providerReadiness = buildCommunicationProviderReadiness(snapshot, inboxItems);
+  const todaysInspections = sortByDateField(
+    snapshot.inspections.filter(
+      (inspection) =>
+        inspection.status !== "canceled" &&
+        isTodayDate(inspection.scheduled_start, today),
+    ),
+    (inspection) => inspection.scheduled_start,
+  );
+  const todaysAppointments = sortByDateField(
+    snapshot.scheduleEvents.filter(
+      (event) => event.status === "scheduled" && isTodayDate(event.start_at, today),
+    ),
+    (event) => event.start_at,
+  );
+  const todaysScheduledJobs = sortByDateField(
+    snapshot.jobs.filter(
+      (job) => isActiveDashboardJob(job) && isTodayDate(getJobDashboardScheduledDate(job), today),
+    ),
+    getJobDashboardScheduledDate,
+  );
+  const todaysEstimates = sortByNewest(
+    snapshot.estimates.filter(
+      (estimate) =>
+        estimate.status !== "declined" &&
+        estimate.status !== "rejected" &&
+        (estimate.issue_date === today || isTodayDate(estimate.updated_at, today)),
+    ),
+  );
+  const todaysCallbacks = sortByDateField(
+    snapshot.leads.filter((lead) => lead.next_follow_up === today),
+    (lead) => lead.next_follow_up,
+  );
+  const todaysFollowUps = inboxItems
+    .filter((item) => isTodayDate(item.followUpAt, today))
+    .slice(0, 6);
+  const pipelineLeads = snapshot.leads.filter((lead) =>
+    leadMatchesDashboardPipelineFilter(lead, companyMap, pipelineFilter),
+  );
+  const pipelineGroups = dashboardPipelineBuckets.map((bucket) => {
+    const leads = pipelineLeads.filter(
+      (lead) =>
+        getLeadDashboardPipelineBucket(lead, snapshot.scheduleEvents) === bucket.key,
+    );
+
+    return {
+      ...bucket,
+      count: leads.length,
+      value: leads.reduce((total, lead) => total + lead.estimated_value, 0),
+      items: leads.slice(0, 3),
+    };
+  });
+  const recentCustomers = sortByNewest(snapshot.customers).slice(0, 4);
+  const recentCommunications = inboxItems.slice(0, 4);
+  const openEstimates = sortByNewest(
+    snapshot.estimates.filter(
+      (estimate) => estimate.status === "draft" || estimate.status === "sent",
+    ),
+  ).slice(0, 4);
+  const activeJobs = sortByNewest(snapshot.jobs.filter(isActiveDashboardJob));
+  const upcomingInspections = sortByDateField(
+    snapshot.inspections.filter(
+      (inspection) =>
+        inspection.status !== "canceled" &&
+        isUpcomingDate(inspection.scheduled_start, today),
+    ),
+    (inspection) => inspection.scheduled_start,
+  );
+  const pendingInvoices = sortByDateField(
+    snapshot.invoices.filter(
+      (invoice) =>
+        invoice.balance_due > 0 &&
+        invoice.status !== "paid" &&
+        invoice.status !== "void",
+    ),
+    (invoice) => invoice.due_date ?? invoice.issue_date,
+  );
+  const openChangeOrders = sortByNewest(
+    snapshot.changeOrders.filter(
+      (changeOrder) =>
+        changeOrder.status === "draft" || changeOrder.status === "sent",
+    ),
+  );
+  const materialRequests = sortByDateField(
+    snapshot.materialOrders.filter(
+      (order) =>
+        order.status === "draft" ||
+        order.status === "ordered" ||
+        order.status === "partial",
+    ),
+    (order) => order.expected_delivery_date ?? order.requested_date,
+  );
+  const calendarConflicts = getDashboardScheduleConflicts(snapshot.scheduleEvents);
+  const todaySummaries: OperationsDashboardSummary[] = [
+    {
+      id: "today-inspections",
+      label: "Today's inspections",
+      value: todaysInspections.length,
+      detail: "Site visits scheduled for today",
+      view: "inspections",
+      icon: ClipboardList,
+      tone: todaysInspections.length ? "amber" : "green",
+      items: todaysInspections.slice(0, 3).map((inspection) =>
+        buildDashboardRecordItem({
+          id: inspection.id,
+          title: inspection.title,
+          detail: inspection.assigned_inspector ?? inspectionStatusLabel(inspection.status),
+          meta: inspection.scheduled_start ? formatDateTime(inspection.scheduled_start) : "No time",
+          companyId: inspection.company_id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "today-appointments",
+      label: "Today's appointments",
+      value: todaysAppointments.length,
+      detail: "Calendar events and customer visits",
+      view: "calendar",
+      icon: CalendarClock,
+      tone: todaysAppointments.length ? "blue" : "green",
+      items: todaysAppointments.slice(0, 3).map((event) =>
+        buildDashboardRecordItem({
+          id: event.id,
+          title: event.title,
+          detail: scheduleEventTypeLabel(event.event_type),
+          meta: formatDateTime(event.start_at),
+          companyId: event.company_id,
+          view: "calendar",
+          icon: CalendarClock,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "today-jobs",
+      label: "Today's scheduled jobs",
+      value: todaysScheduledJobs.length,
+      detail: "Production work dated for today",
+      view: "jobs",
+      icon: Home,
+      tone: todaysScheduledJobs.length ? "blue" : "green",
+      items: todaysScheduledJobs.slice(0, 3).map((job) =>
+        buildDashboardRecordItem({
+          id: job.id,
+          title: job.title,
+          detail: jobStatusLabel(job.status),
+          meta: getJobDashboardScheduledDate(job)
+            ? formatDateTime(getJobDashboardScheduledDate(job) ?? "")
+            : "No time",
+          companyId: job.company_id,
+          view: "jobs",
+          icon: Home,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "today-estimates",
+      label: "Today's estimates",
+      value: todaysEstimates.length,
+      detail: "Drafted, issued, or updated today",
+      view: "estimates",
+      icon: FileText,
+      tone: todaysEstimates.length ? "blue" : "green",
+      items: todaysEstimates.slice(0, 3).map((estimate) =>
+        buildDashboardRecordItem({
+          id: estimate.id,
+          title: estimate.title,
+          detail: estimateStatusLabel(estimate.status),
+          meta: formatMoney(estimate.total),
+          companyId: estimate.company_id,
+          view: "estimates",
+          icon: FileText,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "today-callbacks",
+      label: "Today's callbacks",
+      value: todaysCallbacks.length,
+      detail: "Lead follow-up dates due today",
+      view: "leads",
+      icon: Phone,
+      tone: todaysCallbacks.length ? "amber" : "green",
+      items: todaysCallbacks.slice(0, 3).map((lead) =>
+        buildDashboardRecordItem({
+          id: lead.id,
+          title: lead.contact_name,
+          detail: statusLabel(lead.status),
+          meta: lead.phone ?? lead.email ?? "No contact detail",
+          companyId: lead.company_id,
+          view: "leads",
+          icon: Phone,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "today-follow-ups",
+      label: "Today's follow-ups",
+      value: todaysFollowUps.length,
+      detail: "Communications or reminders due today",
+      view: "inbox",
+      icon: MessageSquare,
+      tone: todaysFollowUps.length ? "amber" : "green",
+      items: todaysFollowUps.slice(0, 3).map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: `${item.kind} - ${item.status}`,
+          meta: item.followUpAt ? formatDateTime(item.followUpAt) : "Due today",
+          companyId: item.companyId,
+          view: "inbox",
+          icon: MessageSquare,
+          tone: "amber",
+        }),
+      ),
+    },
+  ];
+  const customerActivitySections = [
+    {
+      id: "recent-customers",
+      label: "Recently created customers",
+      view: "customers" as const,
+      items: recentCustomers.map((customer) =>
+        buildDashboardRecordItem({
+          id: customer.id,
+          title: customer.display_name,
+          detail: customerStatusLabel(customer.status),
+          meta: formatDate(customer.created_at),
+          companyId: customer.company_id,
+          view: "customers",
+          icon: Users,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "recent-communications",
+      label: "Recent communications",
+      view: "inbox" as const,
+      items: recentCommunications.map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: `${item.sourceLabel} - ${item.kind}`,
+          meta: formatDateTime(item.createdAt),
+          companyId: item.companyId,
+          view: "inbox",
+          icon: MessageSquare,
+          tone: item.isFailed ? "amber" : "blue",
+        }),
+      ),
+    },
+    {
+      id: "open-estimates",
+      label: "Open estimates",
+      view: "estimates" as const,
+      items: openEstimates.map((estimate) =>
+        buildDashboardRecordItem({
+          id: estimate.id,
+          title: estimate.title,
+          detail: estimateStatusLabel(estimate.status),
+          meta: formatMoney(estimate.total),
+          companyId: estimate.company_id,
+          view: "estimates",
+          icon: FileText,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "active-jobs",
+      label: "Active jobs",
+      view: "jobs" as const,
+      items: activeJobs.slice(0, 4).map((job) =>
+        buildDashboardRecordItem({
+          id: job.id,
+          title: job.title,
+          detail: jobStatusLabel(job.status),
+          meta: getJobDisplayLocation(job),
+          companyId: job.company_id,
+          view: "jobs",
+          icon: Home,
+          tone: job.status === "blocked" ? "amber" : "blue",
+        }),
+      ),
+    },
+    {
+      id: "upcoming-inspections",
+      label: "Upcoming inspections",
+      view: "inspections" as const,
+      items: upcomingInspections.slice(0, 4).map((inspection) =>
+        buildDashboardRecordItem({
+          id: inspection.id,
+          title: inspection.title,
+          detail: inspectionStatusLabel(inspection.status),
+          meta: inspection.scheduled_start ? formatDateTime(inspection.scheduled_start) : "No date",
+          companyId: inspection.company_id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: "blue",
+        }),
+      ),
+    },
+  ];
+  const operationsSummaries: OperationsDashboardSummary[] = [
+    {
+      id: "operations-active-jobs",
+      label: "Active jobs",
+      value: activeJobs.length,
+      detail: "Scheduled, in progress, or blocked",
+      view: "jobs",
+      icon: Home,
+      tone: activeJobs.length ? "blue" : "green",
+      items: activeJobs.slice(0, 3).map((job) =>
+        buildDashboardRecordItem({
+          id: job.id,
+          title: job.title,
+          detail: jobStatusLabel(job.status),
+          meta: getJobDisplayBusiness(snapshot, job),
+          companyId: job.company_id,
+          view: "jobs",
+          icon: Home,
+          tone: job.status === "blocked" ? "amber" : "blue",
+        }),
+      ),
+    },
+    {
+      id: "operations-inspections",
+      label: "Upcoming inspections",
+      value: upcomingInspections.length,
+      detail: "Scheduled inspection workload",
+      view: "inspections",
+      icon: ClipboardList,
+      tone: upcomingInspections.length ? "blue" : "green",
+      items: upcomingInspections.slice(0, 3).map((inspection) =>
+        buildDashboardRecordItem({
+          id: inspection.id,
+          title: inspection.title,
+          detail: inspection.assigned_inspector ?? inspectionStatusLabel(inspection.status),
+          meta: inspection.scheduled_start ? formatDateTime(inspection.scheduled_start) : "No date",
+          companyId: inspection.company_id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "operations-conflicts",
+      label: "Calendar conflicts",
+      value: calendarConflicts.length,
+      detail: "Overlapping scheduled events",
+      view: "calendar",
+      icon: CalendarClock,
+      tone: calendarConflicts.length ? "amber" : "green",
+      items: calendarConflicts.slice(0, 3).map((event) =>
+        buildDashboardRecordItem({
+          id: event.id,
+          title: event.title,
+          detail: scheduleEventTypeLabel(event.event_type),
+          meta: formatDateTime(event.start_at),
+          companyId: event.company_id,
+          view: "calendar",
+          icon: CalendarClock,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "operations-invoices",
+      label: "Pending invoices",
+      value: formatMoney(pendingInvoices.reduce((total, invoice) => total + invoice.balance_due, 0)),
+      detail: `${pendingInvoices.length} invoice${pendingInvoices.length === 1 ? "" : "s"} with balance`,
+      view: "invoices",
+      icon: ReceiptText,
+      tone: pendingInvoices.length ? "amber" : "green",
+      items: pendingInvoices.slice(0, 3).map((invoice) =>
+        buildDashboardRecordItem({
+          id: invoice.id,
+          title: invoice.invoice_number,
+          detail: invoiceStatusLabel(invoice.status),
+          meta: formatMoney(invoice.balance_due),
+          companyId: invoice.company_id,
+          view: "invoices",
+          icon: ReceiptText,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "operations-change-orders",
+      label: "Open change orders",
+      value: openChangeOrders.length,
+      detail: "Draft or sent change orders",
+      view: "changeOrders",
+      icon: ReceiptText,
+      tone: openChangeOrders.length ? "amber" : "green",
+      items: openChangeOrders.slice(0, 3).map((changeOrder) =>
+        buildDashboardRecordItem({
+          id: changeOrder.id,
+          title: changeOrder.title,
+          detail: changeOrderStatusLabel(changeOrder.status),
+          meta: formatMoney(changeOrder.total),
+          companyId: changeOrder.company_id,
+          view: "changeOrders",
+          icon: ReceiptText,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "operations-materials",
+      label: "Material requests",
+      value: materialRequests.length,
+      detail: materialRequests.length ? "Pending supplier activity" : "No material requests recorded",
+      view: "orders",
+      icon: Package,
+      tone: materialRequests.length ? "blue" : "green",
+      items: materialRequests.slice(0, 3).map((order) =>
+        buildDashboardRecordItem({
+          id: order.id,
+          title: order.supplier_name,
+          detail: materialOrderStatusLabel(order.status),
+          meta: order.expected_delivery_date ? formatDate(order.expected_delivery_date) : "No delivery date",
+          companyId: order.company_id,
+          view: "orders",
+          icon: Package,
+          tone: "blue",
+        }),
+      ),
+    },
+  ];
+  const unreadInboxItems = inboxItems.filter((item) => item.isUnread);
+  const missedCalls = inboxItems.filter((item) => item.isMissedCall);
+  const pendingSms = snapshot.smsMessages.filter(
+    (message) => message.status === "draft" || message.status === "queued",
+  );
+  const pendingEmails = snapshot.emailMessages.filter(
+    (message) => message.status === "draft" || message.status === "queued",
+  );
+  const yelpItems = inboxItems.filter((item) => item.provider === "yelp");
+  const websiteItems = inboxItems.filter((item) => item.provider === "website");
+  const goHighLevelReadiness =
+    providerReadiness.find((provider) => provider.provider === "gohighlevel") ?? null;
+  const communicationsSummaries: OperationsDashboardSummary[] = [
+    {
+      id: "communications-unread",
+      label: "Unread inbox items",
+      value: unreadInboxItems.length,
+      detail: "New leads, failed syncs, or inbound items",
+      view: "inbox",
+      icon: MessageSquare,
+      tone: unreadInboxItems.length ? "amber" : "green",
+      items: unreadInboxItems.slice(0, 3).map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: `${item.sourceLabel} - ${item.kind}`,
+          meta: item.status,
+          companyId: item.companyId,
+          view: "inbox",
+          icon: MessageSquare,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "communications-missed-calls",
+      label: "Missed calls",
+      value: missedCalls.length,
+      detail: "Available after live call events are connected",
+      view: "inbox",
+      icon: Phone,
+      tone: missedCalls.length ? "amber" : "green",
+      items: missedCalls.slice(0, 3).map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: item.summary,
+          meta: formatDateTime(item.createdAt),
+          companyId: item.companyId,
+          view: "inbox",
+          icon: Phone,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "communications-sms",
+      label: "Pending SMS",
+      value: pendingSms.length,
+      detail: "Draft or queued SMS records",
+      view: "inbox",
+      icon: MessageSquare,
+      tone: pendingSms.length ? "amber" : "green",
+      items: pendingSms.slice(0, 3).map((message) =>
+        buildDashboardRecordItem({
+          id: message.id,
+          title: message.to_phone ?? "SMS recipient",
+          detail: smsMessageStatusLabel(message.status),
+          meta: message.queued_at ? formatDateTime(message.queued_at) : formatDate(message.created_at),
+          companyId: message.company_id,
+          view: "inbox",
+          icon: MessageSquare,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "communications-email",
+      label: "Pending emails",
+      value: pendingEmails.length,
+      detail: "Draft or queued email records",
+      view: "inbox",
+      icon: Mail,
+      tone: pendingEmails.length ? "amber" : "green",
+      items: pendingEmails.slice(0, 3).map((message) =>
+        buildDashboardRecordItem({
+          id: message.id,
+          title: message.subject || message.to_email,
+          detail: emailMessageStatusLabel(message.status),
+          meta: message.sent_at ? formatDateTime(message.sent_at) : formatDate(message.created_at),
+          companyId: message.company_id,
+          view: "inbox",
+          icon: Mail,
+          tone: "amber",
+        }),
+      ),
+    },
+    {
+      id: "communications-yelp",
+      label: "Yelp conversations",
+      value: yelpItems.length,
+      detail: "Yelp activity routed through lead intake",
+      view: "inbox",
+      icon: Star,
+      tone: yelpItems.length ? "blue" : "green",
+      items: yelpItems.slice(0, 3).map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: item.summary,
+          meta: formatDateTime(item.createdAt),
+          companyId: item.companyId,
+          view: "inbox",
+          icon: Star,
+          tone: "blue",
+        }),
+      ),
+    },
+    {
+      id: "communications-ghl",
+      label: "GoHighLevel readiness",
+      value: goHighLevelReadiness?.connectionStatus ?? "Not connected",
+      detail: goHighLevelReadiness?.syncHealth ?? "Not configured",
+      view: "settings",
+      icon: PlugZap,
+      tone: goHighLevelReadiness?.tone ?? "blue",
+      items: goHighLevelReadiness
+        ? [
+            buildDashboardRecordItem({
+              id: "gohighlevel-readiness",
+              title: goHighLevelReadiness.label,
+              detail: goHighLevelReadiness.errorState === "None" ? goHighLevelReadiness.detail : goHighLevelReadiness.errorState,
+              meta: goHighLevelReadiness.lastActivityAt
+                ? formatDateTime(goHighLevelReadiness.lastActivityAt)
+                : "No activity yet",
+              companyId: null,
+              view: "settings",
+              icon: PlugZap,
+              tone: goHighLevelReadiness.tone,
+            }),
+          ]
+        : [],
+    },
+    {
+      id: "communications-website",
+      label: "Website intake activity",
+      value: websiteItems.length,
+      detail: "Website leads visible in Communications Hub",
+      view: "inbox",
+      icon: Globe2,
+      tone: websiteItems.length ? "blue" : "green",
+      items: websiteItems.slice(0, 3).map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: item.summary,
+          meta: formatDateTime(item.createdAt),
+          companyId: item.companyId,
+          view: "inbox",
+          icon: Globe2,
+          tone: "blue",
+        }),
+      ),
+    },
+  ];
+  const integrationHealth = [
+    {
+      id: "supabase",
+      label: "Supabase",
+      value: isDemoMode ? "Demo fallback" : "Live CRM loaded",
+      detail: isDemoMode
+        ? "Local demo data is active; live CRM is not confirmed in this session."
+        : "Dashboard is rendering the loaded CRM snapshot.",
+      view: "settings" as const,
+      icon: ShieldCheck,
+      tone: isDemoMode ? "amber" as const : "green" as const,
+    },
+    ...["twilio", "gohighlevel", "website", "yelp", "gmail"].map((provider) => {
+      const readiness = providerReadiness.find((item) => item.provider === provider);
+
+      return {
+        id: provider,
+        label: readiness?.label ?? provider,
+        value: readiness?.connectionStatus ?? "Not connected",
+        detail: readiness?.syncHealth ?? "Configuration required",
+        view: "settings" as const,
+        icon: provider === "gmail" ? Mail : provider === "website" ? Globe2 : provider === "yelp" ? Star : PlugZap,
+        tone: readiness?.tone ?? "blue" as const,
+      };
+    }),
+  ];
+  const jobsMissingSchedule = activeJobs.filter(
+    (job) =>
+      !hasSavedJobSchedule(job) &&
+      !snapshot.scheduleEvents.some(
+        (event) =>
+          event.job_id === job.id &&
+          event.status === "scheduled" &&
+          isUpcomingDate(event.start_at, today),
+      ),
+  );
+  const leadsWaitingTooLong = snapshot.leads.filter((lead) => {
+    if (lead.status === "won" || lead.status === "lost") {
+      return false;
+    }
+
+    const updated = dateKey(lead.updated_at);
+    return Boolean(updated && updated < addDaysIsoDate(-3));
+  });
+  const unassignedLeads = snapshot.leads.filter(
+    (lead) => lead.status !== "won" && lead.status !== "lost" && !lead.created_by,
+  );
+  const estimatesAwaitingFollowUp = snapshot.estimates.filter(
+    (estimate) =>
+      estimate.status === "sent" &&
+      dateKey(estimate.updated_at) !== null &&
+      dateKey(estimate.updated_at)! < tomorrow,
+  );
+  const communicationFailures = inboxItems.filter((item) => item.isFailed);
+  const integrationWarnings = providerReadiness.filter(
+    (provider) =>
+      provider.syncHealth === "Needs attention" ||
+      provider.connectionStatus !== "Connected",
+  );
+  const ownerPriorities: OperationsDashboardItem[] = [];
+  const ownerPriorityRecordKeys = new Set<string>();
+  const addOwnerPriority = (recordKey: string, item: OperationsDashboardItem) => {
+    if (ownerPriorities.length >= 8 || ownerPriorityRecordKeys.has(recordKey)) {
+      return;
+    }
+
+    ownerPriorityRecordKeys.add(recordKey);
+    ownerPriorities.push(item);
+  };
+
+  leadsWaitingTooLong.slice(0, 3).forEach((lead) => {
+    addOwnerPriority(
+      `lead-${lead.id}`,
+      buildDashboardRecordItem({
+        id: `waiting-${lead.id}`,
+        title: lead.contact_name,
+        detail: "Lead waiting more than 3 days",
+        meta: formatDate(lead.updated_at),
+        companyId: lead.company_id,
+        view: "leads",
+        icon: ClipboardList,
+        tone: "amber",
+      }),
+    );
+  });
+
+  unassignedLeads.slice(0, 3).forEach((lead) => {
+    addOwnerPriority(
+      `lead-${lead.id}`,
+      buildDashboardRecordItem({
+        id: `unassigned-${lead.id}`,
+        title: lead.contact_name,
+        detail: "Unassigned lead",
+        meta: lead.source,
+        companyId: lead.company_id,
+        view: "leads",
+        icon: UserRound,
+        tone: "amber",
+      }),
+    );
+  });
+
+  jobsMissingSchedule.slice(0, 3).forEach((job) => {
+    addOwnerPriority(
+      `job-${job.id}`,
+      buildDashboardRecordItem({
+        id: `missing-schedule-${job.id}`,
+        title: job.title,
+        detail: "Job missing schedule",
+        meta: jobStatusLabel(job.status),
+        companyId: job.company_id,
+        view: "jobs",
+        icon: CalendarClock,
+        tone: "amber",
+      }),
+    );
+  });
+
+  estimatesAwaitingFollowUp.slice(0, 3).forEach((estimate) => {
+    addOwnerPriority(
+      `estimate-${estimate.id}`,
+      buildDashboardRecordItem({
+        id: `estimate-follow-up-${estimate.id}`,
+        title: estimate.title,
+        detail: "Estimate awaiting follow-up",
+        meta: formatMoney(estimate.total),
+        companyId: estimate.company_id,
+        view: "estimates",
+        icon: FileText,
+        tone: "amber",
+      }),
+    );
+  });
+
+  communicationFailures.slice(0, 3).forEach((item) => {
+    addOwnerPriority(
+      `communication-${item.id}`,
+      buildDashboardRecordItem({
+        id: `communication-failure-${item.id}`,
+        title: item.customerName,
+        detail: "Communication failure",
+        meta: item.failureDetail ?? item.status,
+        companyId: item.companyId,
+        view: "inbox",
+        icon: MessageSquare,
+        tone: "amber",
+      }),
+    );
+  });
+
+  integrationWarnings.slice(0, 3).forEach((provider) => {
+    addOwnerPriority(
+      `integration-${provider.provider}`,
+      buildDashboardRecordItem({
+        id: `integration-warning-${provider.provider}`,
+        title: provider.label,
+        detail: provider.syncHealth,
+        meta: provider.connectionStatus,
+        companyId: null,
+        view: "settings",
+        icon: PlugZap,
+        tone: "amber",
+      }),
+    );
+  });
+
+  return {
+    inboxItems,
+    providerReadiness,
+    todaySummaries,
+    pipelineGroups,
+    customerActivitySections,
+    operationsSummaries,
+    communicationsSummaries,
+    integrationHealth,
+    ownerPriorities,
+  };
+}
+
+type DashboardOperationData = ReturnType<typeof buildDashboardOperationData>;
+
+function OperationsCommandCenter({
+  data,
+  pipelineFilter,
+  onPipelineFilterChange,
+  companyMap,
+  onCompanyScopeChange,
+  onViewChange,
+  onCreateLead,
+}: {
+  data: DashboardOperationData;
+  pipelineFilter: DashboardPipelineFilter;
+  onPipelineFilterChange: (filter: DashboardPipelineFilter) => void;
+  companyMap: Map<string, CompanyRecord>;
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onViewChange: (view: WorkspaceView) => void;
+  onCreateLead: () => void;
+}) {
+  const openView = (view: WorkspaceView, companyId: string | null = null) => {
+    if (companyId) {
+      onCompanyScopeChange(companyId);
+    }
+
+    onViewChange(view);
+  };
+  const quickActions = [
+    {
+      label: "New Lead",
+      detail: "Open the lead workspace",
+      icon: Plus,
+      onClick: onCreateLead,
+      primary: true,
+    },
+    {
+      label: "New Customer",
+      detail: "Create or find a customer",
+      icon: Users,
+      onClick: () => openView("customers"),
+    },
+    {
+      label: "New Estimate",
+      detail: "Build a draft estimate",
+      icon: Calculator,
+      onClick: () => openView("estimates"),
+    },
+    {
+      label: "Schedule Inspection",
+      detail: "Queue a site visit",
+      icon: ClipboardList,
+      onClick: () => openView("inspections"),
+    },
+    {
+      label: "Schedule Job",
+      detail: "Open the calendar",
+      icon: CalendarClock,
+      onClick: () => openView("calendar"),
+    },
+    {
+      label: "Compose Email",
+      detail: "Review email workflow",
+      icon: Mail,
+      onClick: () => openView("inbox"),
+    },
+    {
+      label: "Send SMS",
+      detail: "Review SMS workflow",
+      icon: MessageSquare,
+      onClick: () => openView("inbox"),
+    },
+    {
+      label: "Create Invoice",
+      detail: "Open invoice workspace",
+      icon: ReceiptText,
+      onClick: () => openView("invoices"),
+    },
+  ];
+  const attentionCount = data.ownerPriorities.length;
+
+  return (
+    <section
+      className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 text-white shadow-sm"
+      data-testid="crm-operations-dashboard"
+    >
+      <div className="grid gap-5 p-4 sm:p-5 2xl:grid-cols-[minmax(0,1.2fr)_420px]">
+        <div>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase text-orange-300">
+                CRM Operations Dashboard
+              </p>
+              <h2 className="mt-1 text-2xl font-bold text-white">
+                Morning command center
+              </h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                Live CRM priorities across today&apos;s work, lead intake, jobs,
+                customer activity, communications, and integration readiness.
+              </p>
+            </div>
+            <Badge
+              label={attentionCount ? `${attentionCount} priorities` : "No urgent priorities"}
+              tone={attentionCount ? "amber" : "green"}
+            />
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            <OwnerPriorityPanel
+              items={data.ownerPriorities}
+              companyMap={companyMap}
+              onOpen={openView}
+            />
+            <DashboardSummaryColumn
+              title="Today"
+              description="Inspections, callbacks, scheduled work, and follow-ups."
+              summaries={data.todaySummaries}
+              companyMap={companyMap}
+              onOpen={openView}
+            />
+            <QuickActionPanel actions={quickActions} />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-white/10 bg-white/10 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold text-white">Integration health</p>
+              <p className="mt-1 text-sm text-slate-300">
+                Compact setup and sync readiness.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => openView("settings")}
+              className="inline-flex min-h-10 items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+            >
+              Settings
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="mt-4 grid gap-2">
+            {data.integrationHealth.map((provider) => (
+              <button
+                key={provider.id}
+                type="button"
+                onClick={() => openView(provider.view)}
+                className="flex items-center gap-3 rounded-lg border border-white/10 bg-white p-3 text-left text-slate-950 transition hover:border-orange-200 hover:bg-orange-50"
+              >
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+                  <provider.icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="truncate text-sm font-bold">{provider.label}</p>
+                    <Badge label={provider.value} tone={provider.tone} />
+                  </div>
+                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                    {provider.detail}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-5 border-t border-white/10 bg-white p-4 text-slate-950 sm:p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-lg font-bold">Lead pipeline</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Existing CRM stages grouped for owner review.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2" aria-label="Dashboard lead pipeline filters">
+              {dashboardPipelineFilters.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => onPipelineFilterChange(filter.value)}
+                  className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                    pipelineFilter === filter.value
+                      ? "border-slate-950 bg-slate-950 text-white"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {data.pipelineGroups.map((group) => (
+              <button
+                key={group.key}
+                type="button"
+                onClick={() => openView("leads")}
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-sky-200 hover:shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">{group.label}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      {formatMoney(group.value)}
+                    </p>
+                  </div>
+                  <Badge label={String(group.count)} tone={group.tone} />
+                </div>
+                <div className="mt-3 grid gap-1.5">
+                  {group.items.length ? (
+                    group.items.map((lead) => (
+                      <p key={lead.id} className="truncate text-sm text-slate-500">
+                        {lead.contact_name}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500">No leads in this stage.</p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <DashboardSummaryColumn
+          title="Communications"
+          description="Inbox, calls, SMS, email, Yelp, GoHighLevel, and website activity."
+          summaries={data.communicationsSummaries}
+          companyMap={companyMap}
+          onOpen={openView}
+          light
+        />
+
+        <DashboardActivityGrid
+          title="Customer activity"
+          description="Recently created customers, open estimates, jobs, inspections, and linked communications."
+          sections={data.customerActivitySections}
+          companyMap={companyMap}
+          onOpen={openView}
+        />
+
+        <DashboardSummaryColumn
+          title="Operations"
+          description="Production workload, invoices, calendar conflicts, change orders, and material requests."
+          summaries={data.operationsSummaries}
+          companyMap={companyMap}
+          onOpen={openView}
+          light
+        />
+      </div>
+    </section>
+  );
+}
+
+function OwnerPriorityPanel({
+  items,
+  companyMap,
+  onOpen,
+}: {
+  items: OperationsDashboardItem[];
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/10 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-white">Owner priorities</h3>
+          <p className="mt-1 text-sm text-slate-300">
+            The first things to check this morning.
+          </p>
+        </div>
+        <Badge label={String(items.length)} tone={items.length ? "amber" : "green"} />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {items.length ? (
+          items.map((item) => (
+            <DashboardListButton
+              key={item.id}
+              item={item}
+              companyMap={companyMap}
+              onOpen={onOpen}
+              dark
+            />
+          ))
+        ) : (
+          <div className="rounded-lg border border-white/10 bg-white/10 p-4 text-sm font-semibold text-slate-200">
+            No urgent owner priorities from current CRM records.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function QuickActionPanel({
+  actions,
+}: {
+  actions: {
+    label: string;
+    detail: string;
+    icon: typeof Home;
+    onClick: () => void;
+    primary?: boolean;
+  }[];
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/10 p-4">
+      <h3 className="text-lg font-bold text-white">Quick actions</h3>
+      <p className="mt-1 text-sm text-slate-300">
+        Jump into the existing workflow. No outbound messages are sent here.
+      </p>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+        {actions.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            onClick={action.onClick}
+            className={`flex min-h-14 items-center gap-3 rounded-lg border p-3 text-left transition ${
+              action.primary
+                ? "border-orange-300 bg-orange-500 text-white hover:bg-orange-400"
+                : "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50"
+            }`}
+          >
+            <div
+              className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ${
+                action.primary ? "bg-white/20 text-white" : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              <action.icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold">{action.label}</p>
+              <p className={`mt-1 truncate text-xs font-semibold ${action.primary ? "text-orange-50" : "text-slate-500"}`}>
+                {action.detail}
+              </p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardSummaryColumn({
+  title,
+  description,
+  summaries,
+  companyMap,
+  onOpen,
+  light = false,
+}: {
+  title: string;
+  description: string;
+  summaries: OperationsDashboardSummary[];
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+  light?: boolean;
+}) {
+  return (
+    <section
+      className={`rounded-lg border p-4 ${
+        light
+          ? "border-slate-200 bg-slate-50"
+          : "border-white/10 bg-white/10"
+      }`}
+    >
+      <div>
+        <h3 className={`text-lg font-bold ${light ? "text-slate-950" : "text-white"}`}>
+          {title}
+        </h3>
+        <p className={`mt-1 text-sm ${light ? "text-slate-500" : "text-slate-300"}`}>
+          {description}
+        </p>
+      </div>
+      <div className="mt-4 grid gap-3">
+        {summaries.map((summary) => (
+          <DashboardSummaryCard
+            key={summary.id}
+            summary={summary}
+            companyMap={companyMap}
+            onOpen={onOpen}
+            light={light}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardSummaryCard({
+  summary,
+  companyMap,
+  onOpen,
+  light,
+}: {
+  summary: OperationsDashboardSummary;
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+  light: boolean;
+}) {
+  return (
+    <div className={`rounded-lg border p-3 ${light ? "border-slate-200 bg-white" : "border-white/10 bg-white"}`}>
+      <button
+        type="button"
+        onClick={() => onOpen(summary.view)}
+        className="flex w-full items-start justify-between gap-3 text-left"
+      >
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-slate-950">{summary.label}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{summary.detail}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <summary.icon className="h-4 w-4 text-sky-700" />
+          <Badge label={String(summary.value)} tone={summary.tone} />
+        </div>
+      </button>
+      <div className="mt-3 grid gap-2">
+        {summary.items.length ? (
+          summary.items.map((item) => (
+            <DashboardListButton
+              key={item.id}
+              item={item}
+              companyMap={companyMap}
+              onOpen={onOpen}
+            />
+          ))
+        ) : (
+          <p className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
+            No records in this view.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DashboardActivityGrid({
+  title,
+  description,
+  sections,
+  companyMap,
+  onOpen,
+}: {
+  title: string;
+  description: string;
+  sections: {
+    id: string;
+    label: string;
+    view: WorkspaceView;
+    items: OperationsDashboardItem[];
+  }[];
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+          <p className="mt-1 text-sm text-slate-500">{description}</p>
+        </div>
+        <Badge label="Customer hub" tone="blue" />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {sections.map((section) => (
+          <div key={section.id} className="rounded-lg border border-slate-200 bg-white p-3">
+            <button
+              type="button"
+              onClick={() => onOpen(section.view)}
+              className="flex w-full items-center justify-between gap-3 text-left"
+            >
+              <p className="text-sm font-bold text-slate-950">{section.label}</p>
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </button>
+            <div className="mt-3 grid gap-2">
+              {section.items.length ? (
+                section.items.map((item) => (
+                  <DashboardListButton
+                    key={item.id}
+                    item={item}
+                    companyMap={companyMap}
+                    onOpen={onOpen}
+                  />
+                ))
+              ) : (
+                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
+                  No records yet.
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardListButton({
+  item,
+  companyMap,
+  onOpen,
+  dark = false,
+}: {
+  item: OperationsDashboardItem;
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+  dark?: boolean;
+}) {
+  const companyLabel = getDashboardItemCompanyLabel(companyMap, item.companyId);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item.view, item.companyId)}
+      className={`flex min-w-0 items-start gap-3 rounded-md border p-3 text-left transition ${
+        dark
+          ? "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50"
+          : "border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white"
+      }`}
+    >
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+        <item.icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <p className="truncate text-sm font-bold text-slate-950">{item.title}</p>
+          <Badge label={companyLabel} tone={item.tone} />
+        </div>
+        <p className="mt-1 truncate text-sm text-slate-600">{item.detail}</p>
+        <p className="mt-1 truncate text-xs font-semibold text-slate-400">{item.meta}</p>
+      </div>
+    </button>
+  );
+}
+
 function DashboardView({
   metrics,
   snapshot,
   companyMap,
   activeCompanyId,
+  isDemoMode,
   onCompanyScopeChange,
   onViewChange,
   onCreateLead,
 }: DashboardViewProps) {
+  const [pipelineFilter, setPipelineFilter] =
+    useState<DashboardPipelineFilter>("all");
   const today = todayIsoDate();
   const productionKpis = calculateProductionKpis(snapshot);
   const companySummaries = snapshot.companies.map((company) =>
     buildCompanyDashboardSummary(snapshot, company),
+  );
+  const operationsDashboard = useMemo(
+    () =>
+      buildDashboardOperationData({
+        snapshot,
+        companyMap,
+        isDemoMode,
+        pipelineFilter,
+      }),
+    [companyMap, isDemoMode, pipelineFilter, snapshot],
   );
   const recentActivity = buildRecentActivity(snapshot, companyMap);
   const isOwnerDashboard = activeCompanyId === "all" && snapshot.companies.length > 1;
@@ -3621,6 +5206,16 @@ function DashboardView({
 
   return (
     <div className="space-y-5">
+      <OperationsCommandCenter
+        data={operationsDashboard}
+        pipelineFilter={pipelineFilter}
+        onPipelineFilterChange={setPipelineFilter}
+        companyMap={companyMap}
+        onCompanyScopeChange={onCompanyScopeChange}
+        onViewChange={onViewChange}
+        onCreateLead={onCreateLead}
+      />
+
       {isOwnerDashboard ? (
         <OwnerDashboardPanel
           summaries={companySummaries}
