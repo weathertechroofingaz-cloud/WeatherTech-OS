@@ -1020,6 +1020,12 @@ function buttonContainingText(tab, text) {
   );
 }
 
+function jobListItemContainingText(tab, text) {
+  return tab.playwright.locator(
+    `xpath=//button[@data-testid="jobs-list-item" and contains(normalize-space(.), ${xpathString(text)})]`,
+  );
+}
+
 async function clickListRowByParagraph(
   tab,
   sectionHeading,
@@ -1425,7 +1431,7 @@ async function selectTestJob(tab, jobTitle) {
 
   await fillUnique(tab.playwright.locator('[data-testid="jobs-search"]'), jobTitle, "job search");
   await tab.playwright.waitForTimeout(600);
-  const jobCard = buttonContainingText(tab, jobTitle);
+  const jobCard = jobListItemContainingText(tab, jobTitle);
   await clickUnique(jobCard, `job card ${jobTitle}`);
   await waitFor(
     tab,
@@ -3724,8 +3730,185 @@ async function testCalendarScreen(tab) {
   return { opened: true };
 }
 
-async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
+async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJob) {
+  const viewport = await browser.capabilities.get("viewport");
+
+  await viewport.set(LAPTOP_VIEWPORT);
   await selectTestJob(tab, testJob.title);
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="job-production-command-center"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+
+  const commandCenterLabels = [
+    "Job production command center",
+    "Active jobs",
+    "Scheduled today",
+    "Waiting on customer",
+    "Waiting on material",
+    "In production",
+    "Final walkthrough",
+    "Completed",
+    "Warranty",
+  ];
+  const roofingLabels = [
+    "WeatherTech Roofing production",
+    "Roof inspections",
+    "Roof replacements",
+    "Roof repairs",
+    "Foam roofing",
+    "Tile roofing",
+    "Flat roofing",
+    "Warranty calls",
+    "Emergency leaks",
+  ];
+  const paintingLabels = [
+    "IHC Painting production",
+    "Exterior painting",
+    "Interior painting",
+    "Commercial painting",
+    "HOA projects",
+    "Cabinet refinishing",
+    "Stucco repair",
+    "Drywall repair",
+    "Surface preparation",
+  ];
+  const quickActionLabels = [
+    "Start Job",
+    "Complete Inspection",
+    "Upload Photos",
+    "Create Change Order",
+    "Request Material",
+    "Create Invoice",
+    "Schedule Follow-up",
+    "Send Customer Update",
+  ];
+  const timelineLabels = [
+    "Inspection",
+    "Estimate",
+    "Contract",
+    "Material ordered",
+    "Production scheduled",
+    "Work started",
+    "Final inspection",
+    "Invoice",
+    "Paid",
+  ];
+
+  const productionWorkspace = await tab.playwright.evaluate(
+    ({ commandCenterLabels, roofingLabels, paintingLabels, quickActionLabels, timelineLabels }) => {
+      const byTestId = (id) => document.querySelector(`[data-testid="${id}"]`);
+      const textFor = (id) => byTestId(id)?.textContent ?? "";
+      const panelIds = [
+        "job-production-command-center",
+        "crew-assignment-panel",
+        "weathertech-roofing-production-cards",
+        "ihc-painting-production-cards",
+        "job-production-summary",
+        "job-production-quick-actions",
+        "job-production-timeline",
+      ];
+
+      return {
+        missingPanels: panelIds.filter((id) => !byTestId(id)),
+        missingCommandLabels: commandCenterLabels.filter(
+          (label) => !textFor("job-production-command-center").includes(label),
+        ),
+        missingRoofingLabels: roofingLabels.filter(
+          (label) => !textFor("weathertech-roofing-production-cards").includes(label),
+        ),
+        missingPaintingLabels: paintingLabels.filter(
+          (label) => !textFor("ihc-painting-production-cards").includes(label),
+        ),
+        missingSummaryLabels: [
+          "Job production summary",
+          "Customer",
+          "Address",
+          "Company",
+          "Crew",
+          "Status",
+          "Estimate",
+          "Inspection",
+          "Photos",
+          "Documents",
+          "Change orders",
+          "Invoices",
+          "Communications",
+        ].filter((label) => !textFor("job-production-summary").includes(label)),
+        missingQuickActions: quickActionLabels.filter(
+          (label) => !textFor("job-production-quick-actions").includes(label),
+        ),
+        missingTimelineLabels: timelineLabels.filter(
+          (label) => !textFor("job-production-timeline").includes(label),
+        ),
+      };
+    },
+    { commandCenterLabels, roofingLabels, paintingLabels, quickActionLabels, timelineLabels },
+  );
+
+  const missingProductionWorkspaceItems = Object.entries(productionWorkspace)
+    .filter(([, value]) => Array.isArray(value) && value.length > 0)
+    .map(([key, value]) => `${key}: ${value.join(", ")}`);
+
+  if (missingProductionWorkspaceItems.length) {
+    throw new Error(
+      `Job production workspace is missing expected items: ${missingProductionWorkspaceItems.join("; ")}`,
+    );
+  }
+
+  const responsiveChecks = [];
+
+  for (const [label, dimensions] of [
+    ["tablet", { width: 768, height: 1024 }],
+    ["mobile", { width: 390, height: 844 }],
+  ]) {
+    await viewport.set(dimensions);
+    await tab.playwright.evaluate(() => {
+      document
+        .querySelector('[data-testid="job-production-command-center"]')
+        ?.scrollIntoView({ block: "center" });
+    });
+    await tab.playwright.waitForTimeout(300);
+    responsiveChecks.push({
+      label,
+      ...(await tab.playwright.evaluate(() => {
+        const commandCenter = document.querySelector('[data-testid="job-production-command-center"]');
+        const quickActions = document.querySelector('[data-testid="job-production-quick-actions"]');
+
+        return {
+          commandCenterVisible: Boolean(commandCenter),
+          quickActionsVisible: Boolean(quickActions),
+          scrollWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+          touchTargets: [...(quickActions?.querySelectorAll("button") ?? [])].map((button) => {
+            const rect = button.getBoundingClientRect();
+
+            return { width: rect.width, height: rect.height };
+          }),
+        };
+      })),
+    });
+  }
+
+  for (const check of responsiveChecks) {
+    if (!check.commandCenterVisible || !check.quickActionsVisible) {
+      throw new Error(`Job production workspace is missing on ${check.label} viewport.`);
+    }
+
+    if (check.hasHorizontalOverflow) {
+      throw new Error(
+        `Job production workspace overflows horizontally on ${check.label}: ${check.scrollWidth} > ${check.viewportWidth}.`,
+      );
+    }
+
+    if (check.touchTargets.some((target) => target.height < 44)) {
+      throw new Error(`Job production quick-action touch targets are too small on ${check.label}.`);
+    }
+  }
+
+  await viewport.set(LAPTOP_VIEWPORT);
 
   await fillUnique(
     tab.playwright.locator('[data-testid="jobs-search"]'),
@@ -3800,6 +3983,8 @@ async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
   return {
     search: "passed",
     filters: ["company", "service", "crew", "schedule"],
+    productionWorkspace,
+    responsiveChecks,
     sections,
   };
 }
@@ -4331,7 +4516,7 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   await fillUnique(tab.playwright.getByPlaceholder("Search jobs", { exact: true }), testJob.title, "job search");
   await tab.playwright.waitForTimeout(300);
   await tab.playwright.evaluate(() => window.scrollTo(0, 260));
-  await clickUnique(tab.playwright.locator("button").filter({ hasText: testJob.title }), `job card ${testJob.title}`);
+  await clickUnique(jobListItemContainingText(tab, testJob.title), `job card ${testJob.title}`);
   await waitFor(
     tab,
     () => {
@@ -4907,7 +5092,7 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("jobs-workspace")) {
       await record("Jobs workspace filters and section navigation render", () =>
-        testJobsWorkspaceFiltersAndSections(tab, weatherTech, seededJob),
+        testJobsWorkspaceFiltersAndSections(browser, tab, weatherTech, seededJob),
       );
     }
 

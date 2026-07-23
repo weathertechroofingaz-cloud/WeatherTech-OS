@@ -1859,6 +1859,637 @@ function calculateProductionKpis(snapshot: CrmSnapshot) {
   };
 }
 
+type JobProductionBucket = {
+  id: string;
+  label: string;
+  detail: string;
+  value: number;
+  jobs: JobRecord[];
+  tone: "blue" | "green" | "amber";
+  icon: typeof Home;
+  onClick?: () => void;
+};
+
+type JobProductionTradeCard = {
+  id: string;
+  label: string;
+  detail: string;
+  value: number;
+  items: string[];
+  icon: typeof Home;
+};
+
+type JobProductionTimelineItem = {
+  id: string;
+  label: string;
+  detail: string;
+  status: "complete" | "current" | "pending";
+  occurredAt: string | null;
+  meta: string;
+  icon: typeof Home;
+};
+
+function jobProductionText(job: JobRecord) {
+  return [
+    job.title,
+    job.service_type,
+    job.status,
+    job.business,
+    job.location,
+    job.scope_of_work,
+    job.notes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function jobMatchesProductionKeywords(job: JobRecord, keywords: string[]) {
+  const text = jobProductionText(job);
+
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function isProductionActiveJob(job: JobRecord) {
+  return job.status === "scheduled" || job.status === "in_progress" || job.status === "blocked";
+}
+
+function getJobProductionProgressPercent(snapshot: CrmSnapshot, job: JobRecord) {
+  const tasks = getJobTasks(snapshot, job.id);
+
+  if (job.status === "completed" || job.status === "closed") {
+    return 100;
+  }
+
+  if (!tasks.length) {
+    return job.status === "in_progress" ? 35 : job.status === "scheduled" ? 15 : 0;
+  }
+
+  return Math.round(
+    (tasks.filter((task) => task.status === "done").length / tasks.length) * 100,
+  );
+}
+
+function getJobForemanLabel(snapshot: CrmSnapshot, job: JobRecord) {
+  if (job.project_manager?.trim()) {
+    return job.project_manager;
+  }
+
+  const leadAssignment = getJobAssignments(snapshot, job.id).find(
+    (assignment) =>
+      assignment.title.toLowerCase().includes("foreman") ||
+      assignment.title.toLowerCase().includes("lead") ||
+      assignment.status === "accepted",
+  );
+
+  return getEmployeeName(snapshot, leadAssignment?.employee_id ?? null) ?? "Foreman unassigned";
+}
+
+function buildJobProductionBuckets({
+  snapshot,
+  onSelectJob,
+  onStatusFilter,
+  onScheduleFilter,
+}: {
+  snapshot: CrmSnapshot;
+  onSelectJob: (job: JobRecord) => void;
+  onStatusFilter: (status: JobStatus | "all") => void;
+  onScheduleFilter: (filter: JobScheduleFilter) => void;
+}): JobProductionBucket[] {
+  const today = todayIsoDate();
+  const activeJobs = snapshot.jobs.filter(isProductionActiveJob);
+  const scheduledToday = snapshot.jobs.filter((job) =>
+    getJobScheduleDateParts(snapshot, job).some((date) => date === today),
+  );
+  const waitingOnCustomer = activeJobs.filter((job) => {
+    const text = jobProductionText(job);
+    const hasCustomerSignal =
+      text.includes("customer") ||
+      text.includes("approval") ||
+      text.includes("hoa") ||
+      getJobChangeOrders(snapshot, job.id).some((changeOrder) => changeOrder.status === "sent");
+
+    return job.status === "blocked" && hasCustomerSignal;
+  });
+  const waitingOnMaterial = activeJobs.filter((job) =>
+    getJobMaterialOrders(snapshot, job.id).some(
+      (order) => order.status === "ordered" || order.status === "partial",
+    ),
+  );
+  const inProduction = snapshot.jobs.filter((job) => job.status === "in_progress");
+  const finalWalkthrough = activeJobs.filter((job) => {
+    const tasks = getJobTasks(snapshot, job.id);
+    return (
+      tasks.length > 0 &&
+      tasks.every((task) => task.status === "done") &&
+      job.status !== "completed" &&
+      job.status !== "closed"
+    );
+  });
+  const completed = snapshot.jobs.filter(
+    (job) => job.status === "completed" || job.status === "closed",
+  );
+  const warranty = snapshot.jobs.filter((job) =>
+    jobMatchesProductionKeywords(job, ["warranty"]) ||
+    getJobDocuments(snapshot, job).some((document) => document.category === "warranty"),
+  );
+
+  const openFirst = (jobs: JobRecord[], fallback?: () => void) => {
+    if (jobs[0]) {
+      onSelectJob(jobs[0]);
+      return;
+    }
+
+    fallback?.();
+  };
+
+  return [
+    {
+      id: "active",
+      label: "Active jobs",
+      detail: "Scheduled, in production, or blocked",
+      value: activeJobs.length,
+      jobs: activeJobs,
+      tone: activeJobs.length ? "blue" : "green",
+      icon: Home,
+      onClick: () => {
+        onStatusFilter("all");
+        openFirst(activeJobs);
+      },
+    },
+    {
+      id: "today",
+      label: "Scheduled today",
+      detail: "Jobs or events dated for today",
+      value: scheduledToday.length,
+      jobs: scheduledToday,
+      tone: scheduledToday.length ? "amber" : "green",
+      icon: CalendarClock,
+      onClick: () => {
+        onScheduleFilter("today");
+        openFirst(scheduledToday);
+      },
+    },
+    {
+      id: "customer",
+      label: "Waiting on customer",
+      detail: "Blocked with customer, HOA, or approval signals",
+      value: waitingOnCustomer.length,
+      jobs: waitingOnCustomer,
+      tone: waitingOnCustomer.length ? "amber" : "green",
+      icon: UserRound,
+      onClick: () => {
+        onStatusFilter("blocked");
+        openFirst(waitingOnCustomer);
+      },
+    },
+    {
+      id: "materials",
+      label: "Waiting on material",
+      detail: "Ordered or partially received material orders",
+      value: waitingOnMaterial.length,
+      jobs: waitingOnMaterial,
+      tone: waitingOnMaterial.length ? "amber" : "green",
+      icon: Package,
+      onClick: () => openFirst(waitingOnMaterial),
+    },
+    {
+      id: "production",
+      label: "In production",
+      detail: "Jobs currently marked in progress",
+      value: inProduction.length,
+      jobs: inProduction,
+      tone: inProduction.length ? "blue" : "green",
+      icon: Activity,
+      onClick: () => {
+        onStatusFilter("in_progress");
+        openFirst(inProduction);
+      },
+    },
+    {
+      id: "walkthrough",
+      label: "Final walkthrough",
+      detail: "Checklist complete, still open",
+      value: finalWalkthrough.length,
+      jobs: finalWalkthrough,
+      tone: finalWalkthrough.length ? "amber" : "green",
+      icon: CheckCircle2,
+      onClick: () => openFirst(finalWalkthrough),
+    },
+    {
+      id: "completed",
+      label: "Completed",
+      detail: "Completed or closed production",
+      value: completed.length,
+      jobs: completed,
+      tone: completed.length ? "green" : "blue",
+      icon: CheckCircle2,
+      onClick: () => {
+        onStatusFilter("completed");
+        openFirst(completed);
+      },
+    },
+    {
+      id: "warranty",
+      label: "Warranty",
+      detail: "Warranty jobs or linked warranty documents",
+      value: warranty.length,
+      jobs: warranty,
+      tone: warranty.length ? "amber" : "green",
+      icon: ShieldCheck,
+      onClick: () => openFirst(warranty),
+    },
+  ];
+}
+
+function buildCrewAssignmentSummaries(snapshot: CrmSnapshot) {
+  return snapshot.jobs
+    .filter((job) => isProductionActiveJob(job) || hasSavedJobSchedule(job))
+    .map((job) => {
+      const company = snapshot.companies.find((item) => item.id === job.company_id) ?? null;
+
+      return {
+        job,
+        company,
+        crew: getJobCrewLabel(snapshot, job),
+        foreman: getJobForemanLabel(snapshot, job),
+        scheduledDate: getJobScheduleSummary(snapshot, job),
+        progress: getJobProductionProgressPercent(snapshot, job),
+      };
+    })
+    .sort((a, b) => {
+      const left = getJobScheduledStart(a.job) ?? a.job.start_date ?? a.job.updated_at;
+      const right = getJobScheduledStart(b.job) ?? b.job.start_date ?? b.job.updated_at;
+
+      return left.localeCompare(right);
+    });
+}
+
+function buildRoofingProductionCards(snapshot: CrmSnapshot): JobProductionTradeCard[] {
+  const roofingCompanies = new Set(
+    snapshot.companies
+      .filter((company) => company.trade === "roofing" || company.workflow_profile === "roofing")
+      .map((company) => company.id),
+  );
+  const roofingJobs = snapshot.jobs.filter((job) => roofingCompanies.has(job.company_id));
+  const roofingInspections = snapshot.inspections.filter((inspection) =>
+    roofingCompanies.has(inspection.company_id),
+  );
+  const card = (
+    id: string,
+    label: string,
+    detail: string,
+    icon: typeof Home,
+    jobs: JobRecord[],
+  ): JobProductionTradeCard => ({
+    id,
+    label,
+    detail,
+    icon,
+    value: jobs.length,
+    items: jobs.slice(0, 3).map((job) => job.title),
+  });
+
+  return [
+    {
+      id: "roof-inspections",
+      label: "Roof inspections",
+      detail: "WeatherTech inspection records",
+      icon: ClipboardList,
+      value: roofingInspections.length,
+      items: roofingInspections.slice(0, 3).map((inspection) => inspection.title),
+    },
+    card(
+      "roof-replacements",
+      "Roof replacements",
+      "Replacement or re-roof jobs",
+      Home,
+      roofingJobs.filter((job) =>
+        jobMatchesProductionKeywords(job, ["replacement", "replace", "re-roof", "reroof"]),
+      ),
+    ),
+    card(
+      "roof-repairs",
+      "Roof repairs",
+      "Repair-scoped roof jobs",
+      ShieldCheck,
+      roofingJobs.filter((job) => jobMatchesProductionKeywords(job, ["repair", "patch"])),
+    ),
+    card(
+      "foam-roofing",
+      "Foam roofing",
+      "Foam roofing signals in scope or title",
+      Home,
+      roofingJobs.filter((job) =>
+        jobMatchesProductionKeywords(job, ["foam", "spray polyurethane"]),
+      ),
+    ),
+    card(
+      "tile-roofing",
+      "Tile roofing",
+      "Tile roof or underlayment jobs",
+      Home,
+      roofingJobs.filter((job) =>
+        jobMatchesProductionKeywords(job, ["tile", "underlayment"]),
+      ),
+    ),
+    card(
+      "flat-roofing",
+      "Flat roofing",
+      "Flat or low-slope roofing jobs",
+      Home,
+      roofingJobs.filter((job) =>
+        jobMatchesProductionKeywords(job, [
+          "flat",
+          "low slope",
+          "low-slope",
+          "modified bitumen",
+        ]),
+      ),
+    ),
+    card(
+      "warranty-calls",
+      "Warranty calls",
+      "Warranty-related jobs",
+      ShieldCheck,
+      roofingJobs.filter((job) => jobMatchesProductionKeywords(job, ["warranty"])),
+    ),
+    card(
+      "emergency-leaks",
+      "Emergency leaks",
+      "Leak or emergency roof work",
+      ShieldCheck,
+      roofingJobs.filter((job) =>
+        jobMatchesProductionKeywords(job, ["leak", "emergency", "urgent"]),
+      ),
+    ),
+  ];
+}
+
+function buildPaintingProductionCards(snapshot: CrmSnapshot): JobProductionTradeCard[] {
+  const paintingCompanies = new Set(
+    snapshot.companies
+      .filter((company) => isPaintingCompany(company))
+      .map((company) => company.id),
+  );
+  const paintingJobs = snapshot.jobs.filter((job) => paintingCompanies.has(job.company_id));
+  const paintingEstimates = snapshot.estimates.filter((estimate) =>
+    paintingCompanies.has(estimate.company_id),
+  );
+  const customerById = new Map(snapshot.customers.map((customer) => [customer.id, customer]));
+  const card = (
+    id: string,
+    label: string,
+    detail: string,
+    icon: typeof Home,
+    jobs: JobRecord[],
+  ): JobProductionTradeCard => ({
+    id,
+    label,
+    detail,
+    icon,
+    value: jobs.length,
+    items: jobs.slice(0, 3).map((job) => job.title),
+  });
+
+  return [
+    card(
+      "exterior-painting",
+      "Exterior painting",
+      "Exterior painting jobs",
+      Paintbrush,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["exterior", "outside"])),
+    ),
+    card(
+      "interior-painting",
+      "Interior painting",
+      "Interior painting jobs",
+      Paintbrush,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["interior", "inside"])),
+    ),
+    card(
+      "commercial-painting",
+      "Commercial painting",
+      "Commercial customer or job signals",
+      Building2,
+      paintingJobs.filter(
+        (job) =>
+          customerById.get(job.customer_id ?? "")?.customer_type === "commercial" ||
+          jobMatchesProductionKeywords(job, ["commercial"]),
+      ),
+    ),
+    card(
+      "hoa-projects",
+      "HOA projects",
+      "HOA-related painting jobs",
+      Building2,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["hoa"])),
+    ),
+    card(
+      "cabinet-refinishing",
+      "Cabinet refinishing",
+      "Cabinet or refinishing jobs",
+      Palette,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["cabinet", "refinish"])),
+    ),
+    card(
+      "stucco-repair",
+      "Stucco repair",
+      "Stucco repair signals",
+      Paintbrush,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["stucco"])),
+    ),
+    card(
+      "drywall-repair",
+      "Drywall repair",
+      "Drywall repair signals",
+      Paintbrush,
+      paintingJobs.filter((job) => jobMatchesProductionKeywords(job, ["drywall", "sheetrock"])),
+    ),
+    {
+      id: "surface-preparation",
+      label: "Surface preparation",
+      detail: "Existing prep fields or job notes",
+      icon: Paintbrush,
+      value:
+        paintingJobs.filter((job) =>
+          jobMatchesProductionKeywords(job, ["prep", "preparation", "scrape", "sand", "prime"]),
+        ).length + paintingEstimates.filter((estimate) => estimate.surface_prep_level !== null).length,
+      items: [
+        ...paintingJobs
+          .filter((job) =>
+            jobMatchesProductionKeywords(job, ["prep", "preparation", "scrape", "sand", "prime"]),
+          )
+          .map((job) => job.title),
+        ...paintingEstimates
+          .filter((estimate) => estimate.surface_prep_level !== null)
+          .map((estimate) => estimate.title),
+      ].slice(0, 3),
+    },
+  ];
+}
+
+function buildJobProductionTimelineItems(
+  snapshot: CrmSnapshot,
+  job: JobRecord,
+): JobProductionTimelineItem[] {
+  const estimate = job.estimate_id
+    ? snapshot.estimates.find((item) => item.id === job.estimate_id) ?? null
+    : null;
+  const inspections = snapshot.inspections.filter(
+    (inspection) =>
+      inspection.job_id === job.id ||
+      (job.lead_id !== null && inspection.lead_id === job.lead_id) ||
+      (job.customer_id !== null && inspection.customer_id === job.customer_id),
+  );
+  const contract = getJobDocuments(snapshot, job).find(
+    (document) => document.category === "contract",
+  );
+  const materialOrder = getJobMaterialOrders(snapshot, job.id)[0] ?? null;
+  const schedule = getJobScheduleEvents(snapshot, job.id).find(
+    (event) => event.status === "scheduled",
+  );
+  const finalInspection = inspections.find(
+    (inspection) =>
+      inspection.status === "completed" ||
+      inspection.report_created_at !== null ||
+      inspection.title.toLowerCase().includes("final"),
+  );
+  const invoice = getJobInvoices(snapshot, job.id)[0] ?? null;
+  const paidInvoice = getJobInvoices(snapshot, job.id).find(
+    (item) => item.status === "paid" || item.balance_due <= 0,
+  );
+  const completionDocument = getJobDocuments(snapshot, job).find(
+    (document) => document.category === "completion_certificate",
+  );
+
+  const item = ({
+    id,
+    label,
+    detail,
+    occurredAt,
+    pendingDetail,
+    icon,
+    complete,
+  }: {
+    id: string;
+    label: string;
+    detail: string;
+    occurredAt: string | null;
+    pendingDetail: string;
+    icon: typeof Home;
+    complete: boolean;
+  }): JobProductionTimelineItem => ({
+    id,
+    label,
+    detail: complete ? detail : pendingDetail,
+    occurredAt,
+    meta: complete && occurredAt ? formatDate(occurredAt) : "Not recorded",
+    status: complete ? "complete" : "pending",
+    icon,
+  });
+
+  const timeline = [
+    item({
+      id: "inspection",
+      label: "Inspection",
+      detail: inspections[0]?.title ?? "Inspection linked",
+      occurredAt:
+        inspections[0]?.completed_at ??
+        inspections[0]?.scheduled_start ??
+        inspections[0]?.created_at ??
+        null,
+      pendingDetail: "No linked inspection yet",
+      icon: ClipboardList,
+      complete: inspections.length > 0,
+    }),
+    item({
+      id: "estimate",
+      label: "Estimate",
+      detail: estimate ? `${estimate.title} · ${formatMoney(estimate.total)}` : "Estimate linked",
+      occurredAt: estimate?.issue_date ?? estimate?.created_at ?? null,
+      pendingDetail: "No estimate linked yet",
+      icon: FileText,
+      complete: Boolean(estimate),
+    }),
+    item({
+      id: "contract",
+      label: "Contract",
+      detail: contract ? `${contract.title} · ${documentStatusLabel(contract.status)}` : "Contract ready",
+      occurredAt: contract?.updated_at ?? null,
+      pendingDetail: "No contract document linked",
+      icon: FileText,
+      complete: Boolean(contract),
+    }),
+    item({
+      id: "material",
+      label: "Material ordered",
+      detail: materialOrder ? `${materialOrder.supplier_name} · ${materialOrderStatusLabel(materialOrder.status)}` : "Material order linked",
+      occurredAt: materialOrder?.requested_date ?? null,
+      pendingDetail: "No material order linked",
+      icon: Package,
+      complete: Boolean(materialOrder),
+    }),
+    item({
+      id: "scheduled",
+      label: "Production scheduled",
+      detail: schedule ? schedule.title : "Production dates saved",
+      occurredAt: schedule?.start_at ?? getJobScheduledStart(job) ?? job.start_date,
+      pendingDetail: "No production schedule saved",
+      icon: CalendarClock,
+      complete: Boolean(schedule || hasSavedJobSchedule(job)),
+    }),
+    item({
+      id: "started",
+      label: "Work started",
+      detail: job.status === "in_progress" ? "Job is in production" : "Production started",
+      occurredAt: job.status === "in_progress" ? job.updated_at : null,
+      pendingDetail: "Not marked in progress",
+      icon: Activity,
+      complete: job.status === "in_progress" || job.status === "completed" || job.status === "closed",
+    }),
+    item({
+      id: "final",
+      label: "Final inspection",
+      detail:
+        finalInspection?.title ??
+        completionDocument?.title ??
+        "Completion documentation linked",
+      occurredAt:
+        finalInspection?.completed_at ??
+        finalInspection?.updated_at ??
+        completionDocument?.updated_at ??
+        null,
+      pendingDetail: "No final inspection or completion certificate yet",
+      icon: CheckCircle2,
+      complete: Boolean(finalInspection || completionDocument),
+    }),
+    item({
+      id: "invoice",
+      label: "Invoice",
+      detail: invoice ? `${invoice.invoice_number} · ${formatMoney(invoice.total)}` : "Invoice linked",
+      occurredAt: invoice?.issue_date ?? null,
+      pendingDetail: "No invoice linked yet",
+      icon: ReceiptText,
+      complete: Boolean(invoice),
+    }),
+    item({
+      id: "paid",
+      label: "Paid",
+      detail: paidInvoice ? `${paidInvoice.invoice_number} paid` : "Payment posted",
+      occurredAt: paidInvoice?.updated_at ?? null,
+      pendingDetail: "No paid invoice recorded",
+      icon: DollarSign,
+      complete: Boolean(paidInvoice),
+    }),
+  ];
+  const firstPendingIndex = timeline.findIndex((entry) => entry.status === "pending");
+
+  return timeline.map((entry, index) =>
+    index === firstPendingIndex ? { ...entry, status: "current" } : entry,
+  );
+}
+
 function getChangeOrderTargetName(snapshot: CrmSnapshot, changeOrder: ChangeOrderRecord) {
   return (
     getJobName(snapshot, changeOrder.job_id) ??
@@ -2936,10 +3567,10 @@ function CrmWorkspace({
               client={client}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              onViewChange={onViewChange}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
-              onViewChange={onViewChange}
             />
           ) : null}
 
@@ -2971,6 +3602,7 @@ function CrmWorkspace({
               isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              onViewChange={onViewChange}
               onReload={onReload}
               onScrollPreservingReload={onScrollPreservingReload}
               onDemoSnapshotChange={onDemoSnapshotChange}
@@ -6743,6 +7375,370 @@ function ActionCenterCard({
         )}
       </div>
     </div>
+  );
+}
+
+function JobProductionCommandCenter({
+  buckets,
+  companyMap,
+}: {
+  buckets: JobProductionBucket[];
+  companyMap: Map<string, CompanyRecord>;
+}) {
+  return (
+    <section
+      className="mt-5 rounded-lg border border-slate-200 bg-slate-950 p-4 text-white"
+      data-testid="job-production-command-center"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-orange-300">
+            Job production command center
+          </p>
+          <h3 className="mt-1 text-lg font-bold text-white">
+            Production status by action queue
+          </h3>
+          <p className="mt-1 text-sm text-slate-300">
+            Existing job, schedule, material, checklist, document, and warranty signals.
+          </p>
+        </div>
+        <Badge
+          label={`${buckets.reduce((total, bucket) => total + bucket.value, 0)} signals`}
+          tone="blue"
+        />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {buckets.map((bucket) => (
+          <button
+            key={bucket.id}
+            type="button"
+            onClick={bucket.onClick}
+            className="rounded-lg border border-white/10 bg-white p-3 text-left text-slate-950 transition hover:border-orange-200 hover:bg-orange-50"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold">{bucket.label}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {bucket.detail}
+                </p>
+              </div>
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+                <bucket.icon className="h-4 w-4" />
+              </div>
+            </div>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <p className="text-3xl font-bold">{bucket.value}</p>
+              <Badge label={bucket.value ? "Review" : "Clear"} tone={bucket.tone} />
+            </div>
+            <div className="mt-3 grid gap-1.5">
+              {bucket.jobs.slice(0, 2).map((job) => (
+                <p key={job.id} className="truncate text-xs font-semibold text-slate-500">
+                  {job.title} · {getDashboardItemCompanyLabel(companyMap, job.company_id)}
+                </p>
+              ))}
+              {!bucket.jobs.length ? (
+                <p className="text-xs font-semibold text-slate-500">No jobs in this queue.</p>
+              ) : null}
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CrewAssignmentPanel({
+  assignments,
+  onSelectJob,
+}: {
+  assignments: {
+    job: JobRecord;
+    company: CompanyRecord | null;
+    crew: string;
+    foreman: string;
+    scheduledDate: string;
+    progress: number;
+  }[];
+  onSelectJob: (job: JobRecord) => void;
+}) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      data-testid="crew-assignment-panel"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Crew assignment panel</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Crew, foreman, schedule, status, and checklist progress from current jobs.
+          </p>
+        </div>
+        <Badge label={String(assignments.length)} tone={assignments.length ? "blue" : "green"} />
+      </div>
+      <div className="mt-4 grid gap-3">
+        {assignments.slice(0, 6).map((assignment) => (
+          <button
+            key={assignment.job.id}
+            type="button"
+            onClick={() => onSelectJob(assignment.job)}
+            className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-slate-950">
+                  {assignment.job.title}
+                </p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                  {assignment.company?.name ?? "Company"} · {jobStatusLabel(assignment.job.status)}
+                </p>
+              </div>
+              <Badge
+                label={`${assignment.progress}%`}
+                tone={assignment.progress === 100 ? "green" : "blue"}
+              />
+            </div>
+            <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+              <span>Crew: {assignment.crew}</span>
+              <span>Foreman: {assignment.foreman}</span>
+              <span>Scheduled: {assignment.scheduledDate}</span>
+              <span>Status: {jobStatusLabel(assignment.job.status)}</span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className="h-full rounded-full wt-progress-fill"
+                style={{ width: `${assignment.progress}%` }}
+              />
+            </div>
+          </button>
+        ))}
+        {!assignments.length ? (
+          <EmptyState label="No active scheduled jobs or crew assignments yet." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function ProductionTradeCardsPanel({
+  title,
+  description,
+  cards,
+  painting = false,
+}: {
+  title: string;
+  description: string;
+  cards: JobProductionTradeCard[];
+  painting?: boolean;
+}) {
+  return (
+    <section
+      data-testid={
+        painting ? "ihc-painting-production-cards" : "weathertech-roofing-production-cards"
+      }
+      className={`rounded-lg border border-slate-200 bg-white p-4 shadow-sm ${
+        painting ? "mt-4 wt-company-painting" : ""
+      }`}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+          <p className="mt-1 text-sm text-slate-500">{description}</p>
+        </div>
+        <Badge label={painting ? "Painting" : "Roofing"} tone="amber" />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map((card) => (
+          <ActionCenterCard
+            key={card.id}
+            icon={card.icon}
+            label={card.label}
+            value={card.value}
+            detail={card.detail}
+            items={card.items}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function JobProductionSummaryPanel({
+  snapshot,
+  job,
+  company,
+  customer,
+  estimate,
+  inspection,
+  crewLabel,
+  taskCompletionPercent,
+  photosCount,
+  documentsCount,
+  changeOrdersCount,
+  invoicesCount,
+  communicationsCount,
+}: {
+  snapshot: CrmSnapshot;
+  job: JobRecord;
+  company: CompanyRecord | null;
+  customer: CustomerRecord | null;
+  estimate: EstimateRecord | null;
+  inspection: InspectionRecord | null;
+  crewLabel: string;
+  taskCompletionPercent: number;
+  photosCount: number;
+  documentsCount: number;
+  changeOrdersCount: number;
+  invoicesCount: number;
+  communicationsCount: number;
+}) {
+  const items = [
+    { label: "Customer", value: customer?.display_name ?? getJobTargetName(snapshot, job) },
+    { label: "Address", value: getJobDisplayAddress(job) },
+    { label: "Company", value: company?.name ?? "Company" },
+    { label: "Crew", value: crewLabel },
+    { label: "Status", value: jobStatusLabel(job.status) },
+    { label: "Estimate", value: estimate?.title ?? "No estimate linked" },
+    { label: "Inspection", value: inspection?.title ?? "No inspection linked" },
+    { label: "Photos", value: String(photosCount) },
+    { label: "Documents", value: String(documentsCount) },
+    { label: "Change orders", value: String(changeOrdersCount) },
+    { label: "Invoices", value: String(invoicesCount) },
+    { label: "Communications", value: String(communicationsCount) },
+  ];
+
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+      data-testid="job-production-summary"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-950">Job production summary</p>
+          <p className="mt-1 text-sm text-slate-500">
+            One production snapshot using linked CRM records.
+          </p>
+        </div>
+        <Badge
+          label={`${taskCompletionPercent}% checklist`}
+          tone={taskCompletionPercent === 100 ? "green" : "blue"}
+        />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.label} className="rounded-md border border-slate-200 bg-white p-3">
+            <p className="text-xs font-semibold uppercase text-slate-500">{item.label}</p>
+            <p className="mt-1 truncate text-sm font-bold text-slate-950">{item.value}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProductionQuickActionsPanel({
+  actions,
+}: {
+  actions: {
+    label: string;
+    detail: string;
+    icon: typeof Home;
+    onClick: () => void;
+    disabled?: boolean;
+  }[];
+}) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-slate-950 p-3 text-white"
+      data-testid="job-production-quick-actions"
+    >
+      <div>
+        <p className="text-sm font-bold">Production quick actions</p>
+        <p className="mt-1 text-sm text-slate-300">
+          Opens existing workflows; no customer messages are sent automatically.
+        </p>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {actions.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            onClick={action.onClick}
+            disabled={action.disabled}
+            className="flex min-h-12 items-center gap-3 rounded-md border border-white/10 bg-white px-3 py-2 text-left text-slate-950 transition hover:border-orange-200 hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+              <action.icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold">{action.label}</p>
+              <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                {action.detail}
+              </p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function JobProductionTimeline({ items }: { items: JobProductionTimelineItem[] }) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+      data-testid="job-production-timeline"
+    >
+      <div>
+        <p className="text-sm font-bold text-slate-950">Production timeline</p>
+        <p className="mt-1 text-sm text-slate-500">
+          Inspection through payment milestones, based only on linked records.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-3">
+        {items.map((item) => (
+          <div key={item.id} className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3">
+            <div
+              className={`grid h-9 w-9 place-items-center rounded-full border ${
+                item.status === "complete"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : item.status === "current"
+                    ? "border-orange-200 bg-orange-50 text-orange-700"
+                    : "border-slate-200 bg-white text-slate-400"
+              }`}
+            >
+              <item.icon className="h-4 w-4" />
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-950">{item.label}</p>
+                  <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+                </div>
+                <Badge
+                  label={
+                    item.status === "complete"
+                      ? "Done"
+                      : item.status === "current"
+                        ? "Next"
+                        : "Pending"
+                  }
+                  tone={
+                    item.status === "complete"
+                      ? "green"
+                      : item.status === "current"
+                        ? "amber"
+                        : "blue"
+                  }
+                />
+              </div>
+              <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                {item.meta}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -14491,6 +15487,7 @@ type JobsViewProps = {
   isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  onViewChange: (view: WorkspaceView) => void;
   onReload: () => Promise<void>;
   onScrollPreservingReload: () => Promise<void>;
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
@@ -14503,6 +15500,7 @@ function JobsView({
   isDemoMode,
   snapshot,
   companyMap,
+  onViewChange,
   onReload,
   onScrollPreservingReload,
   onDemoSnapshotChange,
@@ -15492,6 +16490,93 @@ function JobsView({
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
+  const jobInboxItems = useMemo(
+    () => buildUnifiedInboxItems(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const productionBuckets = buildJobProductionBuckets({
+    snapshot,
+    onSelectJob: handleSelectJob,
+    onStatusFilter: setStatusFilter,
+    onScheduleFilter: setScheduleFilter,
+  });
+  const crewAssignmentSummaries = buildCrewAssignmentSummaries(snapshot);
+  const roofingProductionCards = buildRoofingProductionCards(snapshot);
+  const paintingProductionCards = buildPaintingProductionCards(snapshot);
+  const selectedJobTimelineItems = selectedJob
+    ? buildJobProductionTimelineItems(snapshot, selectedJob)
+    : [];
+  const selectedJobCommunications = selectedJob
+    ? jobInboxItems.filter(
+        (item) =>
+          item.jobId === selectedJob.id ||
+          (selectedJob.customer_id !== null && item.customerId === selectedJob.customer_id) ||
+          (selectedJob.estimate_id !== null && item.estimateId === selectedJob.estimate_id),
+      )
+    : [];
+  const selectedJobRelatedInspection =
+    selectedJob !== null
+      ? snapshot.inspections.find(
+          (inspection) =>
+            inspection.job_id === selectedJob.id ||
+            (selectedJob.lead_id !== null && inspection.lead_id === selectedJob.lead_id) ||
+            (selectedJob.customer_id !== null &&
+              inspection.customer_id === selectedJob.customer_id),
+        ) ?? null
+      : null;
+  const productionQuickActions = selectedJob
+    ? [
+        {
+          label: "Start Job",
+          detail: selectedJob.status === "in_progress" ? "Already in production" : "Mark job in progress",
+          icon: Activity,
+          disabled: selectedJob.status === "in_progress" || productionAction !== null,
+          onClick: () => void handleUpdateJobStatus("in_progress"),
+        },
+        {
+          label: "Complete Inspection",
+          detail: "Open inspection workspace",
+          icon: ClipboardList,
+          onClick: () => onViewChange("inspections"),
+        },
+        {
+          label: "Upload Photos",
+          detail: "Open photo documentation",
+          icon: Camera,
+          onClick: () => onViewChange("photos"),
+        },
+        {
+          label: "Create Change Order",
+          detail: "Open change orders",
+          icon: ReceiptText,
+          onClick: () => onViewChange("changeOrders"),
+        },
+        {
+          label: "Request Material",
+          detail: "Open materials workspace",
+          icon: Package,
+          onClick: () => onViewChange("orders"),
+        },
+        {
+          label: "Create Invoice",
+          detail: "Open invoice workspace",
+          icon: ReceiptText,
+          onClick: () => onViewChange("invoices"),
+        },
+        {
+          label: "Schedule Follow-up",
+          detail: "Open calendar",
+          icon: CalendarClock,
+          onClick: () => onViewChange("calendar"),
+        },
+        {
+          label: "Send Customer Update",
+          detail: "Open communications",
+          icon: MessageSquare,
+          onClick: () => onViewChange("inbox"),
+        },
+      ]
+    : [];
 
   return (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_460px]">
@@ -15554,6 +16639,27 @@ function JobsView({
             <ProfileStat label="Crew coverage" value={`${productionKpis.crewCoverage}%`} />
             <ProfileStat label="At risk" value={productionKpis.atRiskJobs.length} />
           </div>
+          <JobProductionCommandCenter
+            buckets={productionBuckets}
+            companyMap={companyMap}
+          />
+          <div className="mt-5 grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
+            <CrewAssignmentPanel
+              assignments={crewAssignmentSummaries}
+              onSelectJob={handleSelectJob}
+            />
+            <ProductionTradeCardsPanel
+              title="WeatherTech Roofing production"
+              description="Roofing operations from existing WeatherTech jobs, inspections, documents, and material records."
+              cards={roofingProductionCards}
+            />
+          </div>
+          <ProductionTradeCardsPanel
+            title="IHC Painting production"
+            description="Painting operations from existing IHC jobs, estimates, scopes, and material records."
+            cards={paintingProductionCards}
+            painting
+          />
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
@@ -15682,7 +16788,7 @@ function JobsView({
           </div>
         </div>
 
-        <div className="divide-y divide-slate-100">
+        <div className="divide-y divide-slate-100" data-testid="jobs-list">
           {pagedJobs.map((job) => {
             const scheduleSummary = getJobScheduleSummary(snapshot, job);
             const crewLabel = getJobCrewLabel(snapshot, job);
@@ -15692,6 +16798,7 @@ function JobsView({
               <button
                 key={job.id}
                 type="button"
+                data-testid="jobs-list-item"
                 aria-pressed={isSelected}
                 onClick={() => handleSelectJob(job)}
                 className={`grid w-full gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_130px_150px_150px_120px] xl:items-center ${
@@ -15819,6 +16926,26 @@ function JobsView({
                   value={formatMoney(selectedJobProductionTotal)}
                 />
               </div>
+
+              <JobProductionSummaryPanel
+                snapshot={snapshot}
+                job={selectedJob}
+                company={selectedJobCompany}
+                customer={selectedJobCustomer}
+                estimate={selectedJobEstimate}
+                inspection={selectedJobRelatedInspection}
+                crewLabel={getJobCrewLabel(snapshot, selectedJob)}
+                taskCompletionPercent={selectedJobTaskCompletionPercent}
+                photosCount={selectedJobPhotos.length}
+                documentsCount={selectedJobDocuments.length}
+                changeOrdersCount={selectedJobChangeOrders.length}
+                invoicesCount={selectedJobInvoices.length}
+                communicationsCount={selectedJobCommunications.length}
+              />
+
+              <ProductionQuickActionsPanel actions={productionQuickActions} />
+
+              <JobProductionTimeline items={selectedJobTimelineItems} />
 
               <div
                 role="tablist"
