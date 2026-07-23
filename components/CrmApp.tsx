@@ -7730,6 +7730,7 @@ type CustomerWorkspaceSection =
   | "inspections"
   | "jobs"
   | "invoices"
+  | "changeOrders"
   | "photos"
   | "documents"
   | "notes"
@@ -7745,6 +7746,7 @@ type CustomerRelatedRecords = {
   inspections: InspectionRecord[];
   jobs: JobRecord[];
   invoices: InvoiceRecord[];
+  changeOrders: ChangeOrderRecord[];
   photos: JobPhotoRecord[];
   documents: DocumentRecord[];
   scheduleEvents: ScheduleEventRecord[];
@@ -7783,6 +7785,7 @@ type CustomerTimelineKind =
   | "document"
   | "photo"
   | "calendar"
+  | "change_order"
   | "communication"
   | "note"
   | "future";
@@ -7810,6 +7813,7 @@ const customerWorkspaceSections: {
   { value: "inspections", label: "Inspections" },
   { value: "jobs", label: "Jobs" },
   { value: "invoices", label: "Invoices" },
+  { value: "changeOrders", label: "Change Orders" },
   { value: "photos", label: "Photos" },
   { value: "documents", label: "Documents" },
   { value: "notes", label: "Notes" },
@@ -7829,6 +7833,7 @@ const customerTimelineFilters: {
   { value: "inspection", label: "Inspections" },
   { value: "job", label: "Jobs" },
   { value: "invoice", label: "Invoices" },
+  { value: "change_order", label: "Change Orders" },
   { value: "calendar", label: "Calendar" },
   { value: "document", label: "Documents" },
   { value: "photo", label: "Photos" },
@@ -8369,6 +8374,15 @@ function getCustomerRelatedRecords(
     ),
   );
   const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
+  const changeOrders = uniqueById(
+    snapshot.changeOrders.filter(
+      (changeOrder) =>
+        changeOrder.customer_id === customer.id ||
+        (changeOrder.job_id !== null && jobIds.has(changeOrder.job_id)) ||
+        (changeOrder.estimate_id !== null && estimateIds.has(changeOrder.estimate_id)),
+    ),
+  );
+  const changeOrderIds = new Set(changeOrders.map((changeOrder) => changeOrder.id));
   const photos = uniqueById(
     snapshot.jobPhotos.filter(
       (photo) =>
@@ -8384,7 +8398,9 @@ function getCustomerRelatedRecords(
         document.customer_id === customer.id ||
         (document.job_id !== null && jobIds.has(document.job_id)) ||
         (document.estimate_id !== null && estimateIds.has(document.estimate_id)) ||
-        (document.invoice_id !== null && invoiceIds.has(document.invoice_id)),
+        (document.invoice_id !== null && invoiceIds.has(document.invoice_id)) ||
+        (document.change_order_id !== null &&
+          changeOrderIds.has(document.change_order_id)),
     ),
   );
   const scheduleEvents = uniqueById(
@@ -8403,6 +8419,7 @@ function getCustomerRelatedRecords(
     inspections,
     jobs,
     invoices,
+    changeOrders,
     photos,
     documents,
     scheduleEvents,
@@ -8536,6 +8553,13 @@ function buildCustomerSearchText(
       invoice.invoice_number,
       invoice.title,
       invoiceStatusLabel(invoice.status),
+    ]),
+    ...related.changeOrders.flatMap((changeOrder) => [
+      changeOrder.id,
+      changeOrder.title,
+      changeOrderStatusLabel(changeOrder.status),
+      changeOrder.reason,
+      changeOrder.notes,
     ]),
     ...related.scheduleEvents.flatMap((event) => [
       event.id,
@@ -8895,6 +8919,21 @@ function buildCustomerTimelineItems(
     });
   });
 
+  related.changeOrders.forEach((changeOrder) => {
+    items.push({
+      id: `change-order-${changeOrder.id}`,
+      label: "Change order",
+      description: `${changeOrder.title} - ${changeOrderStatusLabel(
+        changeOrder.status,
+      )} - ${formatMoney(changeOrder.total)}`,
+      occurredAt: changeOrder.updated_at,
+      user: "Financial",
+      icon: FileText,
+      tone: changeOrder.status === "approved" ? "green" : "amber",
+      kind: "change_order",
+    });
+  });
+
   related.documents.forEach((document) => {
     items.push({
       id: `document-${document.id}`,
@@ -9016,6 +9055,90 @@ function getLeadTimelineLabel(lead: LeadRecord) {
   }
 
   return "Lead created";
+}
+
+function getCustomerAssignedSalesperson(
+  related: CustomerRelatedRecords,
+  fallback = "Unassigned",
+) {
+  return (
+    related.leads.find((lead) => lead.created_by)?.created_by ??
+    related.jobs.find((job) => job.project_manager)?.project_manager ??
+    related.jobs.find((job) => job.crew_name)?.crew_name ??
+    fallback
+  );
+}
+
+function getCustomerDerivedTags(
+  customer: CustomerRecord,
+  related: CustomerRelatedRecords,
+  company?: CompanyRecord,
+) {
+  const tags = [
+    customerStatusLabel(customer.status),
+    customerTypeLabel(customer.customer_type),
+    company ? companyTradeLabel(company) : null,
+    related.jobs.some(isActiveJob) ? "Active work" : null,
+    related.estimates.some(isOpenEstimate) ? "Open estimate" : null,
+    related.invoices.some(isOutstandingInvoice) ? "Outstanding balance" : null,
+    related.inspections.some(
+      (inspection) => inspection.status !== "completed" && inspection.status !== "canceled",
+    )
+      ? "Inspection pending"
+      : null,
+    ...related.leads.map((lead) => lead.source).filter(Boolean),
+  ];
+
+  return [...new Set(tags.filter((tag): tag is string => Boolean(tag)))].slice(0, 8);
+}
+
+function getCustomerUpcomingInspections(related: CustomerRelatedRecords) {
+  return related.inspections
+    .filter(
+      (inspection) =>
+        inspection.status !== "completed" &&
+        inspection.status !== "canceled" &&
+        (!inspection.scheduled_start || isFutureDateTime(inspection.scheduled_start)),
+    )
+    .sort((a, b) =>
+      (a.scheduled_start ?? a.updated_at).localeCompare(b.scheduled_start ?? b.updated_at),
+    );
+}
+
+function getCustomerScheduledJobs(related: CustomerRelatedRecords) {
+  const today = todayIsoDate();
+
+  return related.jobs
+    .filter((job) => {
+      const scheduledStart = getJobScheduledStart(job) ?? job.start_date;
+
+      return (
+        isActiveJob(job) &&
+        Boolean(scheduledStart) &&
+        isUpcomingDate(scheduledStart, today)
+      );
+    })
+    .sort((a, b) =>
+      (getJobScheduledStart(a) ?? a.start_date ?? "").localeCompare(
+        getJobScheduledStart(b) ?? b.start_date ?? "",
+      ),
+    );
+}
+
+function getCustomerIntegrationProviders(providers: IntegrationProviderReadiness[]) {
+  const supportedProviderIds: IntegrationProviderId[] = [
+    "twilio",
+    "gmail",
+    "gohighlevel",
+    "website_forms",
+    "yelp",
+  ];
+
+  return supportedProviderIds
+    .map((providerId) =>
+      providers.find((provider) => provider.metadata.id === providerId),
+    )
+    .filter((provider): provider is IntegrationProviderReadiness => Boolean(provider));
 }
 
 function CustomersView({
@@ -9566,6 +9689,10 @@ function CustomerProfilePanel({
     () => buildCustomerTimelineItems(customer, related, communicationItems),
     [communicationItems, customer, related],
   );
+  const integrationProviders = useMemo(
+    () => buildIntegrationCenterProviders(snapshot),
+    [snapshot],
+  );
   const duplicateMatches = useMemo(
     () =>
       findPotentialCustomerDuplicates(
@@ -9591,14 +9718,18 @@ function CustomerProfilePanel({
   const company = companyMap.get(customer.company_id);
   const openEstimates = related.estimates.filter(isOpenEstimate);
   const activeJobs = related.jobs.filter(isActiveJob);
+  const scheduledJobs = getCustomerScheduledJobs(related);
+  const upcomingInspections = getCustomerUpcomingInspections(related);
   const outstandingInvoices = related.invoices.filter(isOutstandingInvoice);
   const realTimelineItems = timelineItems.filter((item) => item.kind !== "future");
   const lastActivity = realTimelineItems[0];
+  const assignedSalesperson = getCustomerAssignedSalesperson(related);
   const leadSources = uniqueById(
     related.leads.map((lead) => ({ id: lead.source, label: lead.source })),
   )
     .map((lead) => lead.label)
     .filter(Boolean);
+  const customerTags = getCustomerDerivedTags(customer, related, company);
   const outstandingInvoiceTotal = outstandingInvoices.reduce(
     (total, invoice) => total + invoice.balance_due,
     0,
@@ -9617,6 +9748,7 @@ function CustomerProfilePanel({
     inspections: related.inspections.length,
     jobs: related.jobs.length,
     invoices: related.invoices.length,
+    changeOrders: related.changeOrders.length,
     photos: related.photos.length,
     documents: related.documents.length,
     notes: customer.notes ? 1 : 0,
@@ -9651,9 +9783,9 @@ function CustomerProfilePanel({
               <h4 className="mt-1 text-2xl font-black tracking-tight text-slate-950">
                 {customer.display_name}
               </h4>
-              <p className="mt-1 text-sm text-slate-600">
-                {company?.name ?? "Company"} - {customer.contact_name}
-              </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {company?.name ?? "Company"} - {customer.contact_name}
+                </p>
               <div className="mt-3 flex flex-wrap gap-2" aria-label="Customer status badges">
                 <Badge
                   label={customerStatusLabel(customer.status)}
@@ -9664,6 +9796,7 @@ function CustomerProfilePanel({
                   label={leadSources.length ? leadSources[0] : "No linked source"}
                   tone="amber"
                 />
+                <Badge label={`Sales: ${assignedSalesperson}`} tone="blue" />
                 <Badge label={warrantyStatus.label} tone={warrantyStatus.tone} />
               </div>
               <div className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
@@ -9751,7 +9884,7 @@ function CustomerProfilePanel({
         data-testid="customer-quick-actions"
       >
         <CustomerQuickAction
-          label="Create Estimate"
+          label="New Estimate"
           detail="Build pricing from this customer context."
           icon={Calculator}
           onClick={() => onViewChange("estimates")}
@@ -9769,10 +9902,16 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("jobs")}
         />
         <CustomerQuickAction
-          label="Open Communications"
-          detail="Review website, Yelp, SMS, and email activity."
-          icon={MessageSquare}
-          onClick={() => setActiveSection("communications")}
+          label="Send SMS"
+          detail="Open the SMS workflow for this customer."
+          icon={Phone}
+          onClick={() => onViewChange("inbox")}
+        />
+        <CustomerQuickAction
+          label="Compose Email"
+          detail="Open the email workflow for this customer."
+          icon={Mail}
+          onClick={() => onViewChange("inbox")}
         />
         <CustomerQuickAction
           label="Add Internal Note"
@@ -9787,10 +9926,22 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("photos")}
         />
         <CustomerQuickAction
+          label="Upload Documents"
+          detail="Attach estimates, scopes, warranties, and packets."
+          icon={Upload}
+          onClick={() => onViewChange("documents")}
+        />
+        <CustomerQuickAction
           label="Create Invoice"
           detail="Prepare billing for linked work."
           icon={ReceiptText}
           onClick={() => onViewChange("invoices")}
+        />
+        <CustomerQuickAction
+          label="Create Change Order"
+          detail="Price and approve scope changes."
+          icon={FileText}
+          onClick={() => onViewChange("changeOrders")}
         />
         <CustomerQuickAction
           label="Open Calendar"
@@ -9849,6 +10000,13 @@ function CustomerProfilePanel({
             properties={properties}
             leadSources={leadSources}
             communicationsCount={communicationItems.length}
+            scheduledJobs={scheduledJobs}
+            upcomingInspections={upcomingInspections}
+            outstandingInvoices={outstandingInvoices}
+            communicationItems={communicationItems}
+            integrationProviders={integrationProviders}
+            assignedSalesperson={assignedSalesperson}
+            customerTags={customerTags}
           />
         ) : null}
 
@@ -9930,6 +10088,20 @@ function CustomerProfilePanel({
               meta: `${invoiceStatusLabel(invoice.status)} - ${formatMoney(
                 invoice.balance_due,
               )} due`,
+            }))}
+          />
+        ) : null}
+
+        {activeSection === "changeOrders" ? (
+          <RelatedList
+            title="Change Orders"
+            emptyLabel="No change orders linked yet."
+            items={related.changeOrders.map((changeOrder) => ({
+              id: changeOrder.id,
+              title: changeOrder.title,
+              meta: `${changeOrderStatusLabel(changeOrder.status)} - ${formatMoney(
+                changeOrder.total,
+              )}`,
             }))}
           />
         ) : null}
@@ -10056,6 +10228,13 @@ function CustomerOverviewSection({
   properties,
   leadSources,
   communicationsCount,
+  scheduledJobs,
+  upcomingInspections,
+  outstandingInvoices,
+  communicationItems,
+  integrationProviders,
+  assignedSalesperson,
+  customerTags,
 }: {
   customer: CustomerRecord;
   company?: CompanyRecord;
@@ -10063,6 +10242,13 @@ function CustomerOverviewSection({
   properties: CustomerPropertySummary[];
   leadSources: string[];
   communicationsCount: number;
+  scheduledJobs: JobRecord[];
+  upcomingInspections: InspectionRecord[];
+  outstandingInvoices: InvoiceRecord[];
+  communicationItems: UnifiedInboxItem[];
+  integrationProviders: IntegrationProviderReadiness[];
+  assignedSalesperson: string;
+  customerTags: string[];
 }) {
   const openEstimateTotal = related.estimates
     .filter(isOpenEstimate)
@@ -10073,6 +10259,8 @@ function CustomerOverviewSection({
   const completedInspectionCount = related.inspections.filter(
     (inspection) => inspection.status === "completed" || inspection.completed_at,
   ).length;
+  const openEstimates = related.estimates.filter(isOpenEstimate);
+  const customerIntegrationProviders = getCustomerIntegrationProviders(integrationProviders);
 
   return (
     <div className="grid gap-3">
@@ -10130,6 +10318,15 @@ function CustomerOverviewSection({
             label="Lead source"
             value={leadSources.length ? leadSources.join(", ") : "No linked source"}
           />
+          <CustomerDetail label="Assigned salesperson" value={assignedSalesperson} />
+          <CustomerDetail
+            label="Tags"
+            value={customerTags.length ? customerTags.join(", ") : "No tags yet"}
+          />
+          <CustomerDetail
+            label="Internal notes"
+            value={customer.notes ? truncateTimelineText(customer.notes, 140) : "No notes"}
+          />
           <CustomerDetail
             label="Property count"
             value={`${properties.length} ${
@@ -10169,7 +10366,188 @@ function CustomerOverviewSection({
           tone="green"
         />
       </div>
+      <div className="grid gap-3 xl:grid-cols-2" data-testid="customer-relationship-panels">
+        <CustomerRelationshipCard
+          title="Open Estimates"
+          icon={Calculator}
+          emptyLabel="No open estimates."
+          items={openEstimates.slice(0, 4).map((estimate) => ({
+            id: estimate.id,
+            title: estimate.title,
+            meta: `${estimateStatusLabel(estimate.status)} - ${formatMoney(
+              estimate.total,
+            )}`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Scheduled Jobs"
+          icon={Building2}
+          emptyLabel="No scheduled jobs."
+          items={scheduledJobs.slice(0, 4).map((job) => ({
+            id: job.id,
+            title: job.title,
+            meta: `${jobStatusLabel(job.status)} - ${formatDate(
+              getJobScheduledStart(job) ?? job.start_date,
+            )}`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Upcoming Inspections"
+          icon={ClipboardList}
+          emptyLabel="No upcoming inspections."
+          items={upcomingInspections.slice(0, 4).map((inspection) => ({
+            id: inspection.id,
+            title: inspection.title,
+            meta: `${inspectionStatusLabel(inspection.status)} - ${
+              inspection.scheduled_start
+                ? formatDateTime(inspection.scheduled_start)
+                : "Not scheduled"
+            }`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Outstanding Invoices"
+          icon={ReceiptText}
+          emptyLabel="No outstanding invoices."
+          items={outstandingInvoices.slice(0, 4).map((invoice) => ({
+            id: invoice.id,
+            title: invoice.invoice_number,
+            meta: `${invoiceStatusLabel(invoice.status)} - ${formatMoney(
+              invoice.balance_due,
+            )} due`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Recent Communications"
+          icon={MessageSquare}
+          emptyLabel="No recent communications."
+          items={communicationItems.slice(0, 4).map((item) => ({
+            id: item.id,
+            title: `${communicationChannelLabels[item.channel]} - ${item.sourceLabel}`,
+            meta: `${item.status} - ${formatDateTime(item.createdAt)}`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Documents"
+          icon={FileText}
+          emptyLabel="No documents linked."
+          items={related.documents.slice(0, 4).map((document) => ({
+            id: document.id,
+            title: document.title,
+            meta: `${documentCategoryLabel(document.category)} - ${documentStatusLabel(
+              document.status,
+            )}`,
+          }))}
+        />
+        <CustomerRelationshipCard
+          title="Photos"
+          icon={Camera}
+          emptyLabel="No photos linked."
+          items={related.photos.slice(0, 4).map((photo) => ({
+            id: photo.id,
+            title: photo.caption ?? photo.label ?? "Jobsite photo",
+            meta: `${photo.is_customer_visible ? "Customer visible" : "Internal"} - ${formatDate(
+              photo.taken_at ?? photo.created_at,
+            )}`,
+          }))}
+        />
+        <CustomerIntegrationStatusPanel providers={customerIntegrationProviders} />
+      </div>
     </div>
+  );
+}
+
+function CustomerRelationshipCard({
+  title,
+  icon: Icon,
+  items,
+  emptyLabel,
+}: {
+  title: string;
+  icon: typeof Home;
+  items: { id: string; title: string; meta: string }[];
+  emptyLabel: string;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="grid h-9 w-9 place-items-center rounded-md bg-slate-100 text-slate-600">
+            <Icon className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="text-sm font-bold text-slate-950">{title}</p>
+            <p className="text-xs font-semibold uppercase text-slate-400">
+              {items.length ? `${items.length} linked` : "Empty"}
+            </p>
+          </div>
+        </div>
+      </div>
+      {items.length ? (
+        <div className="mt-3 divide-y divide-slate-100">
+          {items.map((item) => (
+            <div key={item.id} className="py-2">
+              <p className="truncate text-sm font-semibold text-slate-900">
+                {item.title}
+              </p>
+              <p className="mt-0.5 truncate text-xs text-slate-500">{item.meta}</p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
+          {emptyLabel}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function CustomerIntegrationStatusPanel({
+  providers,
+}: {
+  providers: IntegrationProviderReadiness[];
+}) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+      data-testid="customer-integration-status"
+    >
+      <div className="flex items-center gap-2">
+        <span className="grid h-9 w-9 place-items-center rounded-md bg-slate-100 text-slate-600">
+          <PlugZap className="h-4 w-4" />
+        </span>
+        <div>
+          <p className="text-sm font-bold text-slate-950">Integration Status</p>
+          <p className="text-xs font-semibold uppercase text-slate-400">
+            Provider readiness
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {providers.map((provider) => (
+          <div
+            key={provider.metadata.id}
+            className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-900">
+                {provider.metadata.label}
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                {integrationConnectionStateLabel(provider.connectionState)} -{" "}
+                {integrationHealthStateLabel(provider.healthState)}
+              </p>
+            </div>
+            <Badge
+              label={integrationReadinessStateLabel(provider.readinessState)}
+              tone={getReadinessTone(provider.readinessState)}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

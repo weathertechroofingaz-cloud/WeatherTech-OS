@@ -1059,7 +1059,28 @@ async function clickListRowByParagraph(
   }
 
   if (!selected) {
-    const box = await waitFor(
+    try {
+      await row.press("Enter", { timeoutMs: 10000 });
+      selected = await waitFor(
+        tab,
+        (input) => {
+          const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+          const targetText = normalize(input.paragraphText);
+          return [...document.querySelectorAll("aside, aside section")].some((section) =>
+            normalize(section.textContent).includes(targetText),
+          );
+        },
+        `${label} selected through keyboard`,
+        1200,
+        input,
+      ).catch(() => false);
+    } catch {
+      selected = false;
+    }
+  }
+
+  if (!selected) {
+    const target = await waitFor(
       tab,
       (input) => {
         const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
@@ -1079,7 +1100,6 @@ async function clickListRowByParagraph(
         }
 
         row.scrollIntoView({ block: "center", behavior: "auto" });
-
         const rect = row.getBoundingClientRect();
 
         if (
@@ -1092,18 +1112,78 @@ async function clickListRowByParagraph(
         }
 
         return {
-          x: Math.round(rect.left + rect.width / 2),
+          x: Math.round(Math.min(rect.right - 24, rect.left + 120)),
           y: Math.round(rect.top + rect.height / 2),
         };
       },
-      `${label} fallback click target`,
+      `${label} fallback visible row`,
       timeoutMs,
       input,
     );
-
-    await tab.cua.click({ x: box.x, y: box.y });
+    await tab.cua.click(target);
+    selected = await waitFor(
+      tab,
+      (input) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const targetText = normalize(input.paragraphText);
+        return [...document.querySelectorAll("aside, aside section")].some((section) =>
+          normalize(section.textContent).includes(targetText),
+        );
+      },
+      `${label} selected through fallback click`,
+      2000,
+      input,
+    ).catch(() => false);
   }
   await tab.playwright.waitForTimeout(600);
+}
+
+async function clickTabAndWaitSelected(tab, label, description) {
+  const tabLocator = tab.playwright.getByRole("tab", { name: label });
+  let selected = false;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForUniqueLocator(tabLocator, `${description} attempt ${attempt}`);
+
+    try {
+      await tabLocator.click({ timeoutMs: 5000 });
+    } catch {
+      await tabLocator.press("Enter", { timeoutMs: 5000 });
+    }
+
+    selected = await waitFor(
+      tab,
+      (label) => {
+        const selected = document.querySelector('[role="tab"][aria-selected="true"]');
+        return selected?.textContent?.trim() === label;
+      },
+      `${description} selected attempt ${attempt}`,
+      3000,
+      label,
+    ).catch(() => false);
+
+    if (selected) {
+      return;
+    }
+
+    await tabLocator.press("Enter", { timeoutMs: 5000 }).catch(() => undefined);
+    selected = await waitFor(
+      tab,
+      (label) => {
+        const selected = document.querySelector('[role="tab"][aria-selected="true"]');
+        return selected?.textContent?.trim() === label;
+      },
+      `${description} keyboard selected attempt ${attempt}`,
+      3000,
+      label,
+    ).catch(() => false);
+
+    if (selected) {
+      return;
+    }
+  }
+
+  throw new Error(`Timed out waiting for selected ${label} job workspace tab.`);
 }
 
 async function clickCustomerWorkspaceTab(tab, label) {
@@ -1329,6 +1409,14 @@ async function clickCompanyScope(tab, companyName) {
 async function selectTestJob(tab, jobTitle) {
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await clickNav(tab, "Jobs");
+  await waitFor(
+    tab,
+    () =>
+      Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+      document.body.innerText.includes("Jobs / Projects"),
+    "jobs screen ready",
+    15000,
+  );
   const clearFilters = tab.playwright.getByRole("button", { name: "Clear filters" });
 
   if ((await clearFilters.count()) === 1) {
@@ -2195,12 +2283,30 @@ async function testCustomersWorkflow(tab, env, company, runId) {
         workspaceText.includes("Warranty") &&
         workspaceText.includes("Maintenance") &&
         workspaceText.includes("Financial") &&
-        quickActionText.includes("Create Estimate") &&
+        workspaceText.includes("Assigned salesperson") &&
+        workspaceText.includes("Tags") &&
+        workspaceText.includes("Internal notes") &&
+        workspaceText.includes("Open Estimates") &&
+        workspaceText.includes("Scheduled Jobs") &&
+        workspaceText.includes("Upcoming Inspections") &&
+        workspaceText.includes("Outstanding Invoices") &&
+        workspaceText.includes("Recent Communications") &&
+        workspaceText.includes("Integration Status") &&
+        workspaceText.includes("Twilio") &&
+        workspaceText.includes("Gmail") &&
+        workspaceText.includes("GoHighLevel") &&
+        workspaceText.includes("Website Lead Capture") &&
+        workspaceText.includes("Yelp") &&
+        quickActionText.includes("New Estimate") &&
         quickActionText.includes("Schedule Inspection") &&
         quickActionText.includes("Schedule Job") &&
-        quickActionText.includes("Open Communications") &&
+        quickActionText.includes("Send SMS") &&
+        quickActionText.includes("Compose Email") &&
         quickActionText.includes("Add Internal Note") &&
+        quickActionText.includes("Upload Photos") &&
+        quickActionText.includes("Upload Documents") &&
         quickActionText.includes("Create Invoice") &&
+        quickActionText.includes("Create Change Order") &&
         quickActionText.includes("Open Calendar") &&
         workspaceText.includes("Communications")
       );
@@ -2255,6 +2361,31 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     tab.playwright.locator('[data-testid="customer-timeline-filter"]'),
     "all",
     "customer timeline all filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customer-timeline-filter"]'),
+    "change_order",
+    "customer timeline change order filter",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("No activity matches this filter."),
+    "customer filtered change order empty timeline",
+    10000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="customer-timeline-filter"]'),
+    "all",
+    "customer timeline all filter after change order",
+  );
+  await clickCustomerWorkspaceTab(tab, "Change Orders");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Change Orders") &&
+      document.body.innerText.includes("No change orders linked yet."),
+    "customer change orders workspace section",
+    10000,
   );
   await clickCustomerWorkspaceTab(tab, "Warranty");
   await waitFor(
@@ -3579,17 +3710,7 @@ async function testJobsWorkspaceFiltersAndSections(tab, company, testJob) {
   const sections = ["Overview", "Checklist", "Schedule", "Crew", "Activity", "Materials", "Financial", "Files"];
 
   for (const section of sections) {
-    await clickUnique(tab.playwright.getByRole("tab", { name: section }), `job workspace ${section} tab`);
-    await waitFor(
-      tab,
-      (label) => {
-        const selected = document.querySelector('[role="tab"][aria-selected="true"]');
-        return selected?.textContent?.trim() === label;
-      },
-      `selected ${section} job workspace tab`,
-      10000,
-      section,
-    );
+    await clickTabAndWaitSelected(tab, section, `job workspace ${section} tab`);
   }
 
   return {
@@ -3638,8 +3759,9 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     inspectionTitle,
     "inspection title",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//aside//form//button[@type="submit"]'),
+  await clickVisibleDomSubmitByText(
+    tab,
+    "Create inspection",
     "Create inspection validation",
   );
   await waitFor(
