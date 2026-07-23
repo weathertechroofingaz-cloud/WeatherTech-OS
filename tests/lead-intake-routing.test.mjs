@@ -25,6 +25,7 @@ try {
     tsc,
     [
       "lib/crm/leadRouting.ts",
+      "lib/crm/websiteLeadCapture.ts",
       "--target",
       "ES2022",
       "--module",
@@ -49,6 +50,9 @@ try {
   }
 
   const routing = await import(pathToFileURL(join(outDir, "leadRouting.js")));
+  const websiteCapture = await import(
+    pathToFileURL(join(outDir, "websiteLeadCapture.js"))
+  );
 
   const website = routing.normalizeWebsiteLeadIntake({
     business: "WeatherTech",
@@ -62,6 +66,167 @@ try {
   assertEqual(website.companyKey, "weathertech_roofing", "Website routes to WeatherTech");
   assertEqual(website.branchKey, "weathertech_tucson", "Website Tucson routes to Tucson branch");
   assertEqual(website.routing.status, "ready_to_create", "Website routed lead is ready");
+
+  const rawWebsiteBody = JSON.stringify({
+    sourceId: "weathertech-phoenix",
+    formIdentifier: "weathertech-phoenix-contact",
+    name: "TEST Website Capture",
+    phone: "6025550108",
+    email: "capture@example.test",
+    serviceType: "roofing",
+    message: "Need a roofing estimate",
+    websiteUrl: "https://weathertechroofingaz.com/contact",
+    submittedAt: new Date().toISOString(),
+  });
+  const signatureTimestamp = new Date().toISOString();
+  const testSecret = "test-only-website-capture-secret";
+  const validSignature = websiteCapture.createWebsiteLeadCaptureSignature({
+    rawBody: rawWebsiteBody,
+    timestamp: signatureTimestamp,
+    secret: testSecret,
+  });
+  const phoenixResolution = websiteCapture.resolveWebsiteLeadCaptureSource(
+    JSON.parse(rawWebsiteBody),
+  );
+  assertEqual(phoenixResolution.status, "matched", "Phoenix website source resolves");
+  assertEqual(
+    phoenixResolution.source?.branchKey,
+    "weathertech_phoenix",
+    "Phoenix website source resolves to Phoenix branch",
+  );
+
+  const verifiedCapture = websiteCapture.verifyWebsiteLeadCaptureRequest({
+    rawBody: rawWebsiteBody,
+    headers: {
+      "x-weathertech-timestamp": signatureTimestamp,
+      "x-weathertech-signature": `sha256=${validSignature}`,
+    },
+    source: phoenixResolution.source,
+    secretOverride: testSecret,
+    now: new Date(signatureTimestamp),
+  });
+  assertEqual(verifiedCapture.status, "valid", "Valid website capture signature passes");
+
+  const missingSignature = websiteCapture.verifyWebsiteLeadCaptureRequest({
+    rawBody: rawWebsiteBody,
+    headers: {},
+    source: phoenixResolution.source,
+    secretOverride: testSecret,
+    now: new Date(signatureTimestamp),
+  });
+  assertEqual(
+    missingSignature.status,
+    "missing_signature",
+    "Missing website capture signature is rejected",
+  );
+
+  const invalidSignature = websiteCapture.verifyWebsiteLeadCaptureRequest({
+    rawBody: rawWebsiteBody,
+    headers: {
+      "x-weathertech-timestamp": signatureTimestamp,
+      "x-weathertech-signature": `sha256=${"0".repeat(64)}`,
+    },
+    source: phoenixResolution.source,
+    secretOverride: testSecret,
+    now: new Date(signatureTimestamp),
+  });
+  assertEqual(
+    invalidSignature.status,
+    "invalid_signature",
+    "Invalid website capture signature is rejected",
+  );
+
+  const tucsonResolution = websiteCapture.resolveWebsiteLeadCaptureSource({
+    sourceId: "weathertech-tucson",
+    formIdentifier: "weathertech-tucson-contact",
+  });
+  const tucsonCaptureBody = websiteCapture.buildWebsiteLeadCaptureRequestBody({
+    body: {
+      sourceId: "weathertech-tucson",
+      formIdentifier: "weathertech-tucson-contact",
+      firstName: "TEST",
+      lastName: "Tucson",
+      phone: "5205550109",
+      serviceType: "roofing",
+    },
+    resolution: tucsonResolution,
+    verification: verifiedCapture,
+    abuse: websiteCapture.evaluateWebsiteLeadCaptureAbuse(
+      { sourceId: "weathertech-tucson" },
+      tucsonResolution,
+    ),
+    correlationId: "test-tucson-correlation",
+  });
+  const tucsonCanonical = routing.normalizeWebsiteLeadIntake(tucsonCaptureBody);
+  assertEqual(
+    tucsonCanonical.branchKey,
+    "weathertech_tucson",
+    "Tucson source registry routes to Tucson branch",
+  );
+
+  const ihcResolution = websiteCapture.resolveWebsiteLeadCaptureSource({
+    sourceId: "ihc",
+    formIdentifier: "ihc-contact",
+  });
+  const ihcCaptureBody = websiteCapture.buildWebsiteLeadCaptureRequestBody({
+    body: {
+      sourceId: "ihc",
+      formIdentifier: "ihc-contact",
+      name: "TEST IHC Website",
+      email: "ihc-capture@example.test",
+      serviceType: "painting",
+    },
+    resolution: ihcResolution,
+    verification: verifiedCapture,
+    abuse: websiteCapture.evaluateWebsiteLeadCaptureAbuse(
+      { sourceId: "ihc" },
+      ihcResolution,
+    ),
+    correlationId: "test-ihc-correlation",
+  });
+  const ihcCanonical = routing.normalizeWebsiteLeadIntake(ihcCaptureBody);
+  assertEqual(ihcCanonical.companyKey, "ihc_painting", "IHC source registry routes to IHC");
+  assertEqual(ihcCanonical.branchKey, "ihc", "IHC source registry routes to IHC branch");
+
+  const unknownResolution = websiteCapture.resolveWebsiteLeadCaptureSource({
+    sourceId: "unknown-source",
+    serviceType: "roofing",
+    websiteUrl: "https://unknown.example/form",
+  });
+  const unknownCaptureBody = websiteCapture.buildWebsiteLeadCaptureRequestBody({
+    body: {
+      sourceId: "unknown-source",
+      name: "TEST Unknown Website",
+      phone: "6025550110",
+      serviceType: "roofing",
+      websiteUrl: "https://unknown.example/form",
+    },
+    resolution: unknownResolution,
+    verification: verifiedCapture,
+    abuse: websiteCapture.evaluateWebsiteLeadCaptureAbuse(
+      { sourceId: "unknown-source" },
+      unknownResolution,
+    ),
+    correlationId: "test-unknown-correlation",
+  });
+  const unknownCanonical = routing.normalizeWebsiteLeadIntake(unknownCaptureBody);
+  assertEqual(unknownResolution.status, "unknown", "Unknown website source remains unknown");
+  assertEqual(
+    unknownCanonical.companyKey,
+    "unassigned",
+    "Unknown website source does not infer company from service type",
+  );
+  assertEqual(
+    unknownCanonical.routing.status,
+    "needs_review",
+    "Unknown website source routes to review",
+  );
+
+  const honeypot = websiteCapture.evaluateWebsiteLeadCaptureAbuse(
+    { honeypot: "filled" },
+    phoenixResolution,
+  );
+  assertEqual(honeypot.status, "review_required", "Honeypot submissions require review");
 
   const yelp = routing.normalizeYelpLeadIntake({
     yelpBusinessId: "IHC Painting Yelp Account",

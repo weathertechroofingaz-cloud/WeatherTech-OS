@@ -2416,9 +2416,10 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:invalid-json:done");
 
-  progress("lead-intake:website:create:start");
+  progress("lead-intake:website:dry-run:start");
   const websitePayload = {
-    business: "WeatherTech",
+    sourceId: "weathertech-phoenix",
+    formIdentifier: "weathertech-phoenix-contact",
     websiteUrl: "https://weathertechroofingaz.com/test-intake",
     source: "Website",
     utmSource: "test-suite",
@@ -2434,80 +2435,77 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     serviceType: "roofing",
     message: `${TEST_PREFIX} ${runId} website intake message`,
   };
-  const websiteSensitiveValues = [
-    websiteLeadName,
-    websitePayload.phone,
-    websitePayload.email,
-    websitePayload.address,
-    websitePayload.message,
-  ];
-  const websiteCreate = await postAppJson(baseUrl, "/api/leads/website", websitePayload);
+  const websiteDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", websitePayload);
 
-  if (websiteCreate.status !== 201 || !websiteCreate.body?.ok) {
-    throw new Error(`Website intake create failed: ${websiteCreate.status} ${JSON.stringify(websiteCreate.body)}`);
+  if (websiteDryRun.status !== 200 || !websiteDryRun.body?.ok || websiteDryRun.body.status !== "dry_run") {
+    throw new Error(`Website dry run failed: ${websiteDryRun.status} ${JSON.stringify(websiteDryRun.body)}`);
   }
 
-  if (!websiteCreate.body.leadId) {
-    throw new Error("Website intake did not return a leadId.");
-  }
-  progress("lead-intake:website:create:done");
-
-  progress("lead-intake:website:duplicate:start");
-  const websiteDuplicate = await postAppJson(baseUrl, "/api/leads/website", websitePayload);
-
-  if (websiteDuplicate.status !== 200 || !websiteDuplicate.body?.ok) {
-    throw new Error(`Website intake duplicate failed: ${websiteDuplicate.status} ${JSON.stringify(websiteDuplicate.body)}`);
+  if (websiteDryRun.body.routing?.company !== "weathertech_roofing") {
+    throw new Error("Website dry run did not route to WeatherTech Roofing LLC.");
   }
 
-  if (!String(websiteDuplicate.body.status).includes("duplicate")) {
-    throw new Error(`Website duplicate status was ${websiteDuplicate.body.status}.`);
+  if (websiteDryRun.body.routing?.branch !== "weathertech_phoenix") {
+    throw new Error(`Website dry run branch was ${websiteDryRun.body.routing?.branch}.`);
   }
 
-  if (websiteDuplicate.body.leadId !== websiteCreate.body.leadId) {
-    throw new Error("Website duplicate did not return the original leadId.");
-  }
-  progress("lead-intake:website:duplicate:done");
-
-  const websiteLeads = await findLeadsByContactName(env, websiteLeadName, leadNameColumn);
-
-  if (websiteLeads.length !== 1) {
-    throw new Error(`Website intake created ${websiteLeads.length} matching leads, expected 1.`);
+  if (websiteDryRun.body.source?.key !== "weathertech-phoenix") {
+    throw new Error(`Website dry run source was ${JSON.stringify(websiteDryRun.body.source)}.`);
   }
 
-  const websiteLead = websiteLeads[0];
+  const tucsonDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
+    ...websitePayload,
+    sourceId: "weathertech-tucson",
+    formIdentifier: "weathertech-tucson-contact",
+    externalLeadId: `${websiteExternalId} TUCSON`,
+    name: `${websiteLeadName} TUCSON`,
+    location: "Tucson",
+    phone: "5205550111",
+    email: `website-tucson-${runId}@example.test`,
+  });
 
-  if (websiteLead.company_id !== companies.weatherTech.id) {
-    throw new Error("Website intake did not route to WeatherTech Roofing LLC.");
+  if (tucsonDryRun.status !== 200 || tucsonDryRun.body?.routing?.branch !== "weathertech_tucson") {
+    throw new Error(`Tucson website dry run failed: ${tucsonDryRun.status} ${JSON.stringify(tucsonDryRun.body)}`);
   }
 
-  if (!getLeadRowSource(websiteLead).toLowerCase().includes("website")) {
-    throw new Error(`Website lead source was ${getLeadRowSource(websiteLead)}.`);
+  const ihcDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
+    ...websitePayload,
+    sourceId: "ihc",
+    formIdentifier: "ihc-contact",
+    externalLeadId: `${websiteExternalId} IHC`,
+    name: `${websiteLeadName} IHC`,
+    location: "Tempe",
+    serviceType: "painting",
+    phone: "6025550112",
+    email: `website-ihc-${runId}@example.test`,
+  });
+
+  if (ihcDryRun.status !== 200 || ihcDryRun.body?.routing?.company !== "ihc_painting") {
+    throw new Error(`IHC website dry run failed: ${ihcDryRun.status} ${JSON.stringify(ihcDryRun.body)}`);
   }
 
-  if (!String(websiteLead.notes ?? "").includes(websiteExternalId)) {
-    throw new Error("Website lead notes did not preserve external lead ID.");
+  const unknownDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
+    ...websitePayload,
+    sourceId: "unknown-website-source",
+    formIdentifier: "unknown-form",
+    websiteUrl: "https://unknown.example/form",
+    externalLeadId: `${websiteExternalId} UNKNOWN`,
+    name: `${websiteLeadName} UNKNOWN`,
+  });
+
+  if (unknownDryRun.status !== 200 || unknownDryRun.body?.routing?.company !== "unassigned") {
+    throw new Error(`Unknown website source was not unassigned: ${unknownDryRun.status} ${JSON.stringify(unknownDryRun.body)}`);
   }
 
-  const websiteLogs = await findIntegrationLogsByExternalId(env, "website", websiteExternalId);
-  const websiteStatuses = websiteLogs.map((log) => log.status);
+  const unsignedWebsite = await postAppJson(baseUrl, "/api/leads/website", websitePayload);
 
-  if (!websiteStatuses.includes("succeeded") || !websiteStatuses.includes("skipped")) {
-    throw new Error(`Website intake logs did not include succeeded and skipped statuses: ${websiteStatuses.join(", ")}`);
+  if (
+    ![401, 503].includes(unsignedWebsite.status) ||
+    !["missing_signature", "verification_required"].includes(String(unsignedWebsite.body?.status))
+  ) {
+    throw new Error(`Unsigned website intake was not safely rejected: ${unsignedWebsite.status} ${JSON.stringify(unsignedWebsite.body)}`);
   }
-
-  const websiteSuccessLog = websiteLogs.find((log) => log.status === "succeeded");
-
-  if (!websiteSuccessLog?.request_fingerprint) {
-    throw new Error("Website intake success log did not store a request fingerprint.");
-  }
-
-  if (websiteSuccessLog.related_record_id !== websiteCreate.body.leadId) {
-    throw new Error("Website intake success log was not associated with the created lead.");
-  }
-
-  for (const log of websiteLogs) {
-    assertNoSensitiveRequestSummary(log, websiteSensitiveValues, "Website intake");
-  }
+  progress("lead-intake:website:dry-run:done");
 
   progress("lead-intake:yelp:create:start");
   const yelpPayload = {
@@ -2681,7 +2679,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     },
     "Website and Yelp intake records in Inbox",
     15000,
-    { websiteName: websiteLeadName, yelpName: yelpLeadName },
+    { websiteName: retryLeadName, yelpName: yelpLeadName },
   );
   await waitFor(
     tab,
@@ -2692,6 +2690,10 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
         text.includes("lead intake & routing engine") &&
         text.includes("manual crm entry") &&
         text.includes("website forms") &&
+        text.includes("weathertech phoenix website") &&
+        text.includes("weathertech tucson website") &&
+        text.includes("ihc website") &&
+        text.includes("suspicious submission") &&
         text.includes("yelp") &&
         text.includes("twilio calls") &&
         text.includes("twilio sms") &&
@@ -2708,13 +2710,13 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   );
 
   await clickNav(tab, "Leads");
-  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), websiteLeadName, "website lead search");
+  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), retryLeadName, "website lead search");
   await waitFor(
     tab,
     (name) => document.body.innerText.includes(name) && document.body.innerText.includes("Website"),
     "Website source badge in Leads",
     15000,
-    websiteLeadName,
+    retryLeadName,
   );
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), yelpLeadName, "Yelp lead search");
   await waitFor(
@@ -2727,12 +2729,14 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   progress("lead-intake:ui:done");
 
   return {
-    websiteLeadId: websiteCreate.body.leadId,
-    websiteDuplicateStatus: websiteDuplicate.body.status,
+    websiteDryRunRouting: websiteDryRun.body.routing,
+    tucsonDryRunRouting: tucsonDryRun.body.routing,
+    ihcDryRunRouting: ihcDryRun.body.routing,
+    unknownDryRunRouting: unknownDryRun.body.routing,
+    unsignedWebsiteStatus: unsignedWebsite.body.status,
     yelpLeadId: yelpCreate.body.leadId,
     retryLeadId: retryLead.id,
     retryLogId: failedLog.id,
-    websiteLogStatuses: websiteStatuses,
   };
 }
 
@@ -3018,13 +3022,22 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("pipeline discovery") &&
         text.includes("/api/integrations/gohighlevel/readiness") &&
         text.includes("0021_gohighlevel_sync_foundation.sql") &&
+        text.includes("website lead capture") &&
+        text.includes("secure form-intake foundation") &&
+        text.includes("/api/leads/website") &&
+        text.includes("?dryrun=1") &&
+        text.includes("source registry ready") &&
+        text.includes("verification required") &&
+        text.includes("weathertech-phoenix") &&
+        text.includes("weathertech-tucson") &&
+        text.includes("ihc-contact") &&
         [
           "twilio",
           "gmail",
           "google calendar",
           "google business profile",
           "yelp",
-          "website forms",
+          "website lead capture",
           "gohighlevel",
         ].every((provider) => text.includes(provider)) &&
         [
@@ -3609,7 +3622,11 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Cancel inspection confirmation did not explain the action.");
   }
 
-  await clickVisibleDomButtonByText(tab, "Confirm cancel", "Confirm cancel inspection");
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-confirm-cancel-button"]'),
+    "Confirm cancel inspection",
+    { retryTransientClick: true },
+  );
   await waitForAsync(
     async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);
@@ -3685,7 +3702,11 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Restore inspection confirmation did not explain the action.");
   }
 
-  await clickVisibleDomButtonByText(tab, "Confirm restore", "Confirm restore inspection");
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
+    "Confirm restore inspection",
+    { retryTransientClick: true },
+  );
   await waitForAsync(
     async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);

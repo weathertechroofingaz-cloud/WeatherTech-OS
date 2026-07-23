@@ -243,6 +243,52 @@ function getSearchText(values: Array<string | null | undefined>) {
   return values.map((value) => getToken(value)).join(" ");
 }
 
+function getCompanyLabel(companyKey: CanonicalLeadCompanyKey) {
+  const labels: Record<CanonicalLeadCompanyKey, string> = {
+    weathertech_roofing: "WeatherTech Roofing LLC",
+    ihc_painting: "IHC Painting",
+    unassigned: "Unassigned",
+  };
+
+  return labels[companyKey];
+}
+
+function getBranchLabel(branchKey: CanonicalLeadBranchKey) {
+  const labels: Record<CanonicalLeadBranchKey, string> = {
+    weathertech_phoenix: "WeatherTech Phoenix",
+    weathertech_tucson: "WeatherTech Tucson",
+    ihc: "IHC",
+    unassigned: "Unassigned",
+  };
+
+  return labels[branchKey];
+}
+
+function getVerifiedCompanyKey(value: unknown): CanonicalLeadCompanyKey | null {
+  if (
+    value === "weathertech_roofing" ||
+    value === "ihc_painting" ||
+    value === "unassigned"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function getVerifiedBranchKey(value: unknown): CanonicalLeadBranchKey | null {
+  if (
+    value === "weathertech_phoenix" ||
+    value === "weathertech_tucson" ||
+    value === "ihc" ||
+    value === "unassigned"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
 export function normalizeLeadIntakePhone(value: unknown) {
   const text = getText(value, 40);
 
@@ -449,6 +495,10 @@ function resolveWeatherTechBranch(input: {
 
 export function routeCanonicalLeadIntake(input: {
   explicitCompany?: string | null;
+  verifiedCompanyKey?: CanonicalLeadCompanyKey | null;
+  verifiedBranchKey?: CanonicalLeadBranchKey | null;
+  forceUnassignedRouting?: boolean;
+  forceReviewReason?: string | null;
   requestedService?: ServiceType | null;
   city?: string | null;
   postalCode?: string | null;
@@ -459,12 +509,44 @@ export function routeCanonicalLeadIntake(input: {
 }): LeadIntakeRoutingDecision {
   const reasons: string[] = [];
   const warnings: string[] = [];
-  const company = resolveCompanyKey(input);
+  const forceReviewReason = input.forceReviewReason?.trim() || null;
+  const verifiedCompanyKey = input.verifiedCompanyKey ?? null;
+  const verifiedBranchKey = input.verifiedBranchKey ?? null;
+
+  if (input.forceUnassignedRouting) {
+    const reason =
+      forceReviewReason ??
+      "Website source registry could not verify the company or branch.";
+
+    return {
+      companyKey: "unassigned",
+      branchKey: "unassigned",
+      status: "needs_review",
+      confidence: "uncertain",
+      assignedQueue: "lead-intake-review",
+      reasons: [reason],
+      warnings: [
+        "Lead intake routing is unassigned. Review the source before creating production records.",
+      ],
+    };
+  }
+
+  const company =
+    verifiedCompanyKey && verifiedCompanyKey !== "unassigned"
+      ? {
+          companyKey: verifiedCompanyKey,
+          confidence: "verified" as const,
+          reason: `Verified source registry selected ${getCompanyLabel(verifiedCompanyKey)}.`,
+        }
+      : resolveCompanyKey(input);
   let branchKey: CanonicalLeadBranchKey = "unassigned";
 
   reasons.push(company.reason);
 
-  if (company.companyKey === "ihc_painting") {
+  if (verifiedBranchKey && verifiedBranchKey !== "unassigned") {
+    branchKey = verifiedBranchKey;
+    reasons.push(`Verified source registry selected ${getBranchLabel(verifiedBranchKey)}.`);
+  } else if (company.companyKey === "ihc_painting") {
     branchKey = "ihc";
     reasons.push("IHC uses the IHC review/dispatch queue.");
   } else if (company.companyKey === "weathertech_roofing") {
@@ -474,15 +556,21 @@ export function routeCanonicalLeadIntake(input: {
   }
 
   const branch = leadIntakeRoutingBranches.find((item) => item.key === branchKey);
-  const status =
+  const baseStatus =
     company.companyKey === "unassigned" || branchKey === "unassigned"
       ? "needs_review"
       : "ready_to_create";
+  const status = forceReviewReason ? "needs_review" : baseStatus;
 
   if (status === "needs_review") {
     warnings.push(
       "Lead intake routing is uncertain. Keep this item in the review queue before creating production records.",
     );
+  }
+
+  if (forceReviewReason) {
+    reasons.push(forceReviewReason);
+    warnings.push(forceReviewReason);
   }
 
   return {
@@ -516,6 +604,10 @@ function createCanonicalLeadIntake(input: {
   providerExternalId?: string | null;
   campaign?: string | null;
   explicitCompany?: string | null;
+  verifiedCompanyKey?: CanonicalLeadCompanyKey | null;
+  verifiedBranchKey?: CanonicalLeadBranchKey | null;
+  forceUnassignedRouting?: boolean;
+  forceReviewReason?: string | null;
   websiteUrl?: string | null;
   yelpBusinessId?: string | null;
   goHighLevelLocation?: string | null;
@@ -530,6 +622,10 @@ function createCanonicalLeadIntake(input: {
   const name = splitName(input.fullName);
   const routing = routeCanonicalLeadIntake({
     explicitCompany: input.explicitCompany,
+    verifiedCompanyKey: input.verifiedCompanyKey,
+    verifiedBranchKey: input.verifiedBranchKey,
+    forceUnassignedRouting: input.forceUnassignedRouting,
+    forceReviewReason: input.forceReviewReason,
     requestedService: input.requestedService,
     city: input.city,
     postalCode: input.postalCode,
@@ -636,32 +732,64 @@ export function normalizeWebsiteLeadIntake(payload: GenericPayload) {
     payload.timestamp,
     payload.receivedAt,
   );
+  const firstName = getText(payload.firstName, 80);
+  const lastName = getText(payload.lastName, 120);
+  const fullName =
+    getText(payload.name, 160) ??
+    ([firstName, lastName].filter(Boolean).join(" ") || null);
+  const preferredContactToken = getToken(
+    getText(payload.preferredContactMethod ?? payload.preferredContact, 40),
+  );
 
   return createCanonicalLeadIntake({
     provider: "website",
-    fullName: getText(payload.name, 160),
+    fullName,
     companyName: getText(payload.companyName, 160),
     phone: normalizeLeadIntakePhone(payload.phone),
     email: normalizeLeadIntakeEmail(payload.email),
-    serviceAddress: getText(payload.address ?? payload.serviceAddress, 240),
+    serviceAddress: getText(
+      payload.address ?? payload.serviceAddress ?? payload.streetAddress,
+      240,
+    ),
     city: getText(payload.city ?? payload.location, 120),
     state: getText(payload.state, 40) ?? "AZ",
     postalCode: getText(payload.zip ?? payload.postalCode, 20),
-    requestedService: normalizeService(payload.serviceType ?? payload.requestedService),
-    message: getText(payload.message, 1500),
-    preferredContactMethod: "unknown",
+    requestedService: normalizeService(
+      payload.serviceType ?? payload.requestedService ?? payload.service,
+    ),
+    message: getText(payload.message ?? payload.comments ?? payload.notes, 1500),
+    preferredContactMethod: preferredContactToken.includes("email")
+      ? "email"
+      : preferredContactToken.includes("sms")
+        ? "sms"
+        : preferredContactToken.includes("phone") || preferredContactToken.includes("call")
+          ? "phone"
+          : "unknown",
     leadSource: getText(payload.source, 80) ?? "Website",
-    sourceDetail: getText(payload.websiteUrl, 240),
+    sourceDetail: getText(
+      payload.sourceDetail ??
+        payload.formIdentifier ??
+        payload.formId ??
+        payload.websiteSource ??
+        payload.websiteUrl,
+      240,
+    ),
     providerExternalId: getExternalId(payload, [
       "externalLeadId",
       "leadId",
       "submissionId",
       "formSubmissionId",
+      "sourceExternalId",
+      "externalId",
       "id",
     ]),
     campaign: getText(payload.utmCampaign ?? payload.campaign, 160),
     explicitCompany: getText(payload.business ?? payload.company, 120),
-    websiteUrl: getText(payload.websiteUrl, 240),
+    verifiedCompanyKey: getVerifiedCompanyKey(payload.verifiedCompanyKey),
+    verifiedBranchKey: getVerifiedBranchKey(payload.verifiedBranchKey),
+    forceUnassignedRouting: payload.forceUnassignedRouting === true,
+    forceReviewReason: getText(payload.forceReviewReason, 240),
+    websiteUrl: getText(payload.websiteUrl ?? payload.pageUrl ?? payload.referrer, 240),
     intakeTimestamp: new Date().toISOString(),
     originalSubmissionTimestamp: submittedAt,
     consentMetadata: {

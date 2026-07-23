@@ -56,27 +56,63 @@ export type LeadIntakeProvider = Extract<IntegrationProvider, "website" | "yelp"
 
 export type WebsiteLeadRequestBody = {
   business?: unknown;
+  company?: unknown;
   location?: unknown;
+  city?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  postalCode?: unknown;
   source?: unknown;
+  sourceDetail?: unknown;
+  sourceId?: unknown;
+  websiteSource?: unknown;
+  formId?: unknown;
+  formIdentifier?: unknown;
   name?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
+  companyName?: unknown;
   phone?: unknown;
   email?: unknown;
   address?: unknown;
+  serviceAddress?: unknown;
+  streetAddress?: unknown;
   serviceType?: unknown;
+  requestedService?: unknown;
+  service?: unknown;
   message?: unknown;
+  comments?: unknown;
+  notes?: unknown;
+  preferredContactMethod?: unknown;
+  preferredContact?: unknown;
   yelpBusinessId?: unknown;
   websiteUrl?: unknown;
+  pageUrl?: unknown;
+  referrer?: unknown;
   utmSource?: unknown;
   utmCampaign?: unknown;
   utmMedium?: unknown;
+  campaign?: unknown;
   externalLeadId?: unknown;
   leadId?: unknown;
   submissionId?: unknown;
   formSubmissionId?: unknown;
+  sourceExternalId?: unknown;
+  externalId?: unknown;
+  correlationId?: unknown;
   id?: unknown;
   submittedAt?: unknown;
   timestamp?: unknown;
   receivedAt?: unknown;
+  smsConsent?: unknown;
+  emailConsent?: unknown;
+  consentSource?: unknown;
+  consentCapturedAt?: unknown;
+  verifiedCompanyKey?: unknown;
+  verifiedBranchKey?: unknown;
+  forceUnassignedRouting?: unknown;
+  forceReviewReason?: unknown;
+  verifiedSourceMetadata?: unknown;
 };
 
 export type YelpLeadRequestBody = {
@@ -108,6 +144,13 @@ export type LeadIntakeResponseStatus =
   | "retry_not_allowed"
   | "invalid_json"
   | "validation_failed"
+  | "unsupported_content_type"
+  | "payload_too_large"
+  | "verification_required"
+  | "missing_signature"
+  | "invalid_signature"
+  | "source_disabled"
+  | "dry_run"
   | "crm_not_configured"
   | "company_not_found"
   | "routing_needs_review"
@@ -178,6 +221,8 @@ type NormalizedLeadIntake = {
   sourceMappingId: string | null;
   sourceMappingDisplayName: string | null;
   sourceMappingMatchType: string | null;
+  sourceMetadata: Record<string, unknown> | null;
+  correlationId: string | null;
   duplicateConfidence: LeadIntakeDuplicateConfidence;
   warnings: string[];
 };
@@ -200,6 +245,13 @@ type LeadIntakeProcessOptions = {
 type LeadIntakeProcessResult = LeadIntakeResponse & {
   requestFingerprint?: string;
   externalId?: string | null;
+};
+
+export type LeadIntakePreviewResult = LeadIntakeResponse & {
+  requestFingerprint?: string;
+  externalId?: string | null;
+  wouldCreateLead: boolean;
+  possibleMatches: LeadIntakeDuplicateMatch[];
 };
 
 type RetryPayloadEncryptionEnvelope = {
@@ -349,8 +401,18 @@ function normalizeWebsiteExternalLeadId(body: WebsiteLeadRequestBody) {
     getText(body.leadId, 160) ??
     getText(body.submissionId, 160) ??
     getText(body.formSubmissionId, 160) ??
+    getText(body.sourceExternalId, 160) ??
+    getText(body.externalId, 160) ??
     getText(body.id, 160)
   );
+}
+
+function getSafeSourceMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
 }
 
 function normalizeBusinessFromWebsite(body: WebsiteLeadRequestBody):
@@ -539,6 +601,19 @@ function applyLeadSourceMapping(
   resolution: LeadSourceMappingResolution,
 ) {
   const warnings = [...lead.warnings, ...resolution.warnings];
+  const websiteSourceResolutionStatus =
+    lead.provider === "website" &&
+    lead.sourceMetadata &&
+    typeof lead.sourceMetadata.sourceResolutionStatus === "string"
+      ? lead.sourceMetadata.sourceResolutionStatus
+      : null;
+
+  if (websiteSourceResolutionStatus) {
+    return {
+      ...lead,
+      warnings,
+    };
+  }
 
   if (!resolution.mapping) {
     return {
@@ -626,7 +701,7 @@ export function normalizeWebsiteLeadBody(
   const location = canonical.city ?? getText(body.location, 160);
   const address = canonical.serviceAddress ?? location ?? DEFAULT_WEBSITE_ADDRESS;
   const { serviceType, warning: serviceWarning } = normalizeServiceType(
-    body.serviceType,
+    body.serviceType ?? body.requestedService ?? body.service,
     business === "Unassigned" ? "WeatherTech" : business,
   );
 
@@ -664,16 +739,23 @@ export function normalizeWebsiteLeadBody(
       state: canonical.state,
       postalCode: canonical.postalCode,
       serviceType,
-      message: getText(body.message, 1500),
+      message: getText(body.message ?? body.comments ?? body.notes, 1500),
       externalLeadId: normalizeWebsiteExternalLeadId(body),
       submittedAt: normalizeTimestamp(body.submittedAt, body.timestamp, body.receivedAt),
-      sourceAccount: getText(body.websiteUrl, 240),
+      sourceAccount: getText(
+        body.sourceDetail ??
+          body.formIdentifier ??
+          body.formId ??
+          body.websiteSource ??
+          body.websiteUrl,
+        240,
+      ),
       campaign: canonical.campaign,
       receivingBusinessPhoneNumber: canonical.receivingBusinessPhoneNumber,
       assignedUserId: canonical.assignedUserId,
       urgency: canonical.urgency,
       preferredContactMethod: canonical.preferredContactMethod,
-      websiteUrl: getText(body.websiteUrl, 240),
+      websiteUrl: getText(body.websiteUrl ?? body.pageUrl ?? body.referrer, 240),
       yelpBusinessId: getText(body.yelpBusinessId, 160),
       yelpConversationId: null,
       yelpLeadId: null,
@@ -683,6 +765,8 @@ export function normalizeWebsiteLeadBody(
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
+      sourceMetadata: getSafeSourceMetadata(body.verifiedSourceMetadata),
+      correlationId: getText(body.correlationId, 120),
       duplicateConfidence: "no_match",
       warnings,
     },
@@ -780,6 +864,8 @@ export function normalizeYelpLeadBody(
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
+      sourceMetadata: null,
+      correlationId: null,
       duplicateConfidence: "no_match",
       warnings,
     },
@@ -837,6 +923,7 @@ function buildIntakeRecordMetadata(
       displayName: lead.sourceMappingDisplayName,
       matchType: lead.sourceMappingMatchType,
     },
+    sourceMetadata: lead.sourceMetadata,
     duplicatePolicy: {
       autoMerge: false,
       confidence: lead.duplicateConfidence,
@@ -880,6 +967,7 @@ async function tryCreateLeadIntakeRecord({
     company_id: company?.id ?? null,
     linked_lead_id: linkedLeadId,
     integration_sync_log_id: syncLogId,
+    correlation_id: lead.correlationId ?? undefined,
     provider: lead.provider,
     provider_event_id: lead.externalLeadId,
     source: lead.source,
@@ -997,6 +1085,7 @@ function buildRetryPayload(lead: NormalizedLeadIntake) {
     business: lead.business,
     companyKey: lead.companyKey,
     branchKey: lead.branchKey,
+    correlationId: lead.correlationId,
     routingStatus: lead.routingStatus,
     routingConfidence: lead.routingConfidence,
     routingReasons: lead.routingReasons,
@@ -1029,6 +1118,7 @@ function buildRetryPayload(lead: NormalizedLeadIntake) {
     utmSource: lead.utmSource,
     utmCampaign: lead.utmCampaign,
     utmMedium: lead.utmMedium,
+    sourceMetadata: lead.sourceMetadata,
   };
 }
 
@@ -1159,6 +1249,8 @@ function buildRequestSummary(lead: NormalizedLeadIntake) {
       displayName: lead.sourceMappingDisplayName,
       matchType: lead.sourceMappingMatchType,
     },
+    correlationId: lead.correlationId,
+    sourceMetadata: lead.sourceMetadata,
     duplicate: {
       confidence: lead.duplicateConfidence,
       autoMerge: false,
@@ -1615,6 +1707,71 @@ function responseStatusForDuplicate(warnings: string[]) {
   return warnings.length > 0 ? "duplicate_with_warning" : "duplicate";
 }
 
+export async function previewLeadIntake(
+  client: CrmClient,
+  lead: NormalizedLeadIntake,
+): Promise<LeadIntakePreviewResult> {
+  let mappedLead = applyLeadSourceMapping(
+    lead,
+    await resolveSourceMapping(client, lead),
+  );
+  const requestFingerprint = buildLeadIntakeFingerprint(mappedLead);
+  const externalId = getLeadIntakeExternalId(mappedLead);
+  const company = await getCompanyForLeadIntake(client, mappedLead.business);
+
+  if (!company || mappedLead.routingStatus !== "ready_to_create") {
+    return {
+      ok: true,
+      provider: mappedLead.provider,
+      status: "dry_run",
+      routing: responseRouting(mappedLead),
+      duplicateConfidence: mappedLead.duplicateConfidence,
+      warnings: mappedLead.warnings,
+      requestFingerprint,
+      externalId,
+      wouldCreateLead: false,
+      possibleMatches: [],
+    };
+  }
+
+  const duplicate = await findDuplicateIntakeLog({
+    client,
+    lead: mappedLead,
+    externalId,
+    requestFingerprint,
+  });
+  const duplicateMatches = await findCrmDuplicateMatches(client, company, mappedLead);
+  const duplicateConfidence =
+    duplicate?.related_record_id
+      ? "exact_match"
+      : getStrongestLeadIntakeDuplicateConfidence(duplicateMatches);
+  mappedLead = {
+    ...mappedLead,
+    duplicateConfidence,
+  };
+  const exactLeadMatch = duplicateMatches.find(
+    (match) =>
+      match.confidence === "exact_match" && match.candidate?.recordType === "lead",
+  );
+  const duplicateLeadId =
+    duplicate?.related_record_id ?? exactLeadMatch?.candidate?.id ?? undefined;
+
+  return {
+    ok: true,
+    provider: mappedLead.provider,
+    status: "dry_run",
+    leadId: duplicateLeadId,
+    duplicateOfLeadId: duplicateLeadId,
+    routing: responseRouting(mappedLead),
+    duplicateConfidence,
+    warnings: mappedLead.warnings,
+    requestFingerprint,
+    externalId,
+    wouldCreateLead: !duplicateLeadId,
+    possibleMatches: duplicateMatches,
+  };
+}
+
 export async function processLeadIntake(
   client: CrmClient,
   lead: NormalizedLeadIntake,
@@ -1638,7 +1795,9 @@ export async function processLeadIntake(
         reviewNotes:
           mappedLead.business === "Unassigned"
             ? "Company routing is unassigned. Review before creating a CRM lead."
-            : "Branch routing is unassigned. Review before creating a CRM lead.",
+            : mappedLead.branchKey === "unassigned"
+              ? "Branch routing is unassigned. Review before creating a CRM lead."
+              : "Submission requires manual review before creating a CRM lead.",
       });
 
       if (intakeRecord.status === "missing_table") {
@@ -1999,6 +2158,8 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
     sourceMappingId: null,
     sourceMappingDisplayName: null,
     sourceMappingMatchType: null,
+    sourceMetadata: getSafeSourceMetadata(payload.sourceMetadata),
+    correlationId: getText(payload.correlationId, 120),
     duplicateConfidence: "no_match",
     warnings: [],
   };
@@ -2131,6 +2292,10 @@ export async function retryLeadIntake(
 
 export function getLeadIntakeHttpStatus(result: LeadIntakeResponse) {
   if (result.ok) {
+    if (result.status === "dry_run") {
+      return 200;
+    }
+
     if (result.status === "accepted_for_review") {
       return 202;
     }
@@ -2138,14 +2303,34 @@ export function getLeadIntakeHttpStatus(result: LeadIntakeResponse) {
     return result.status.includes("duplicate") ? 200 : 201;
   }
 
-  if (result.status === "validation_failed") {
+  if (result.status === "validation_failed" || result.status === "invalid_json") {
     return 400;
+  }
+
+  if (result.status === "unsupported_content_type") {
+    return 415;
+  }
+
+  if (result.status === "payload_too_large") {
+    return 413;
+  }
+
+  if (
+    result.status === "missing_signature" ||
+    result.status === "invalid_signature"
+  ) {
+    return 401;
+  }
+
+  if (result.status === "source_disabled") {
+    return 403;
   }
 
   if (
     result.status === "crm_not_configured" ||
     result.status === "company_not_found" ||
-    result.status === "migration_required"
+    result.status === "migration_required" ||
+    result.status === "verification_required"
   ) {
     return 503;
   }

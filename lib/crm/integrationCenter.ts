@@ -544,38 +544,46 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
   },
   {
     id: "website_forms",
-    label: "Website Forms",
+    label: "Website Lead Capture",
     shortLabel: "Website",
     family: "lead_intake",
-    description: "WeatherTech and IHC website lead forms, campaign metadata, retries, and inbox visibility.",
+    description: "Secure intake endpoint, source registry, campaign metadata, review routing, retries, and inbox visibility for WeatherTech and IHC website forms.",
     connectionProviders: ["website"],
     capabilities: ["website_leads", "crm_sync", "webhooks"],
     iconKey: "website",
-    requiresCredentials: false,
+    requiresCredentials: true,
     supportsOAuth: false,
     supportsWebhooks: true,
     configurationFields: [
       {
         id: "form_endpoint",
         label: "Form endpoint",
-        description: "Production endpoint each WeatherTech or IHC website form posts to.",
+        description: "POST /api/leads/website accepts signed server-side form submissions and supports ?dryRun=1 for synthetic previews.",
         required: true,
         sensitive: false,
         kind: "webhook",
       },
       {
-        id: "source_mapping",
-        label: "Source mapping",
-        description: "Routes website, campaign, and service metadata to the correct company.",
+        id: "source_registry",
+        label: "Website source registry",
+        description: "Maps WeatherTech Phoenix, WeatherTech Tucson, and IHC form identifiers to the correct company, branch, campaign, and review queue.",
         required: true,
         sensitive: false,
         kind: "text",
       },
       {
-        id: "spam_protection",
-        label: "Spam protection",
-        description: "Future validation hook for signed forms, captcha, or trusted website origins.",
-        required: false,
+        id: "hmac_signature",
+        label: "HMAC signature secret",
+        description: "Server-only shared or per-source secret required before live website submissions are trusted.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "abuse_review",
+        label: "Spam and review policy",
+        description: "Honeypot, timestamp, size, duplicate replay, suspicious-link, and review-state controls before CRM lead creation.",
+        required: true,
         sensitive: false,
         kind: "text",
       },
@@ -589,7 +597,12 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "company_routing",
         label: "Company routing check",
-        description: "Confirm each website, campaign, or service routes to WeatherTech Roofing LLC or IHC.",
+        description: "Confirm verified source IDs route to WeatherTech Phoenix, WeatherTech Tucson, or IHC without guessing unknown sources.",
+      },
+      {
+        id: "signature",
+        label: "Signed request check",
+        description: "Validate HMAC timestamp and signature headers before accepting live production submissions.",
       },
       {
         id: "safe_logging",
@@ -602,19 +615,21 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       label: "Webhook intake",
       callbackPath: null,
       scopes: [],
-      summary: "Website forms post directly to WeatherTech OS intake endpoints; OAuth is not required.",
+      summary: "Website forms use signed server-to-server POST requests; OAuth is not required.",
     },
     connectionSteps: [
-      "Map each website form to the correct WeatherTech OS company.",
-      "Configure production forms to post supported lead payloads to the intake endpoint.",
-      "Validate source, campaign, dedupe, and safe logging behavior.",
-      "Monitor lead creation before enabling automated follow-up.",
+      "Keep the source registry aligned with WeatherTech Phoenix, WeatherTech Tucson, and IHC forms.",
+      "Configure server-side HMAC secrets in hosting without exposing them to browser code.",
+      "Add hidden sourceId or formIdentifier values to each production website form.",
+      "Run dry-run previews, then signed live test submissions, before marking the provider connected.",
+      "Monitor accepted, reviewed, rejected, duplicate, and retry outcomes before enabling automated follow-up.",
     ],
     disconnectSummary:
       "A future disconnect will stop accepting live form posts from a configured website source.",
     reconnectSummary:
       "A future reconnect will revalidate source routing, payload format, and dedupe before intake resumes.",
-    summaryWhenDisconnected: "Website intake endpoints are ready, but production forms still need to post to them.",
+    summaryWhenDisconnected:
+      "Source registry and endpoint are ready, but production websites are not connected until HMAC secrets and signed tests are configured.",
   },
   {
     id: "gohighlevel",
@@ -1002,8 +1017,8 @@ export function buildIntegrationCenterProviders(snapshot: CrmSnapshot) {
     const readinessState: IntegrationReadinessState =
       metadata.id === "future_provider" || hasDisabledConnection
         ? "disabled"
-        : primaryConnection?.status === "connected" ||
-            ((metadata.id === "website_forms" || metadata.id === "yelp") && hasProviderActivity)
+          : primaryConnection?.status === "connected" ||
+            (metadata.id === "yelp" && hasProviderActivity)
           ? "ready"
           : "requires_configuration";
     const healthState: IntegrationHealthState =

@@ -4624,6 +4624,16 @@ function LeadIntakeRoutingEnginePanel({
       count,
     };
   });
+  const websiteSourceFilters = [
+    "WeatherTech Phoenix website",
+    "WeatherTech Tucson website",
+    "IHC website",
+    "Unassigned source",
+    "Suspicious submission",
+    "Possible duplicate",
+    "New/unread",
+    "Follow-up required",
+  ];
 
   return (
     <div
@@ -4708,6 +4718,31 @@ function LeadIntakeRoutingEnginePanel({
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="rounded-lg bg-white p-3">
+            <p className="text-sm font-bold text-slate-950">
+              Website source filters
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {websiteSourceFilters.map((filter) => (
+                <Badge
+                  key={filter}
+                  label={filter}
+                  tone={
+                    filter.includes("Suspicious") ||
+                    filter.includes("Unassigned") ||
+                    filter.includes("Follow-up")
+                      ? "amber"
+                      : "blue"
+                  }
+                />
+              ))}
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Website posts use the source registry, HMAC verification, duplicate
+              checks, and review queues before production records are created.
+            </p>
           </div>
 
           <div className="rounded-lg bg-white p-3">
@@ -25039,6 +25074,129 @@ function GoHighLevelLiveSyncFoundationPanel() {
   );
 }
 
+function WebsiteLeadCaptureFoundationPanel() {
+  const readinessStates = [
+    { label: "Not Configured", tone: "slate" as const },
+    { label: "Source Registry Ready", tone: "green" as const },
+    { label: "Verification Required", tone: "amber" as const },
+    { label: "Endpoint Ready", tone: "green" as const },
+    { label: "Testing Required", tone: "amber" as const },
+    { label: "Ready for Production Configuration", tone: "blue" as const },
+    { label: "Connected", tone: "green" as const },
+    { label: "Error", tone: "red" as const },
+  ];
+  const sources = [
+    {
+      label: "WeatherTech Roofing LLC - Phoenix",
+      sourceId: "weathertech-phoenix",
+      formId: "weathertech-phoenix-contact",
+      queue: "weathertech-roofing-phoenix",
+      status: "Registry ready",
+    },
+    {
+      label: "WeatherTech Roofing LLC - Tucson",
+      sourceId: "weathertech-tucson",
+      formId: "weathertech-tucson-contact",
+      queue: "weathertech-roofing-tucson",
+      status: "Registry ready",
+    },
+    {
+      label: "IHC",
+      sourceId: "ihc",
+      formId: "ihc-contact",
+      queue: "ihc-painting",
+      status: "Domain required",
+    },
+  ];
+
+  return (
+    <section
+      className="rounded-lg border border-sky-200 bg-sky-50 p-5"
+      data-testid="website-lead-capture-foundation"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Website Lead Capture
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Secure form-intake foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Production websites are not connected yet. The server endpoint,
+            source registry, signed-request model, review routing, dry-run
+            preview, duplicate checks, and safe logging path are prepared for
+            owner-approved website setup.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Verification Required" tone="amber" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {readinessStates.map((state) => (
+          <ProviderStatusBadge
+            key={state.label}
+            label={state.label}
+            tone={state.tone}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Endpoint" value="/api/leads/website" />
+        <ProfileStat label="Dry run" value="?dryRun=1" />
+        <ProfileStat label="Sources" value={sources.length} />
+        <ProfileStat label="Live forms" value="Not Connected" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Approved Website Sources
+          </p>
+          {sources.map((source) => (
+            <div
+              key={source.sourceId}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{source.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Source {source.sourceId}; form {source.formId}; queue{" "}
+                    {source.queue}.
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={source.status}
+                  tone={source.status === "Registry ready" ? "green" : "amber"}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Owner Setup Required
+          </p>
+          {[
+            "Configure server-side HMAC secrets in hosting.",
+            "Add sourceId or formIdentifier to each approved website form.",
+            "Run synthetic dry-run previews before live tests.",
+            "Run signed test submissions before marking any source connected.",
+          ].map((item) => (
+            <div key={item} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProviderActionButton({
   action,
   onClick,
@@ -25511,6 +25669,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <GoHighLevelLiveSyncFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <WebsiteLeadCaptureFoundationPanel />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
