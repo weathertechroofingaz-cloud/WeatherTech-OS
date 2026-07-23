@@ -2194,7 +2194,12 @@ async function testCustomersWorkflow(tab, env, company, runId) {
       return (
         text.includes("Communications") &&
         text.includes("Open Hub") &&
-        text.includes("Internal records stay staff-facing")
+        text.includes("Internal records stay staff-facing") &&
+        text.includes("Latest SMS") &&
+        text.includes("Latest call") &&
+        text.includes("Missed calls") &&
+        text.includes("Unread messages") &&
+        text.includes("Live Twilio SMS/call routing is setup-required")
       );
     },
     "customer communications workspace section",
@@ -2289,7 +2294,12 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
         text.includes("sync health") &&
         text.includes("last sync") &&
         text.includes("last activity") &&
-        text.includes("error state")
+        text.includes("error state") &&
+        text.includes("twilio live setup required") &&
+        text.includes("no outbound sms or calls") &&
+        text.includes("weathertech roofing llc - phoenix") &&
+        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("ihc painting - ihc")
       );
     },
     "unified inbox",
@@ -2956,6 +2966,20 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("configuration page") &&
         text.includes("disconnect flow") &&
         text.includes("reconnect flow") &&
+        text.includes("twilio live integration foundation") &&
+        text.includes("calls and sms routing setup") &&
+        text.includes("backend ready") &&
+        text.includes("credentials required") &&
+        text.includes("migration required") &&
+        text.includes("webhook setup required") &&
+        text.includes("ready for live test") &&
+        text.includes("weathertech roofing llc - phoenix") &&
+        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("ihc painting - ihc") &&
+        text.includes("/api/integrations/twilio/webhook") &&
+        text.includes("/api/integrations/twilio/status") &&
+        text.includes("/api/integrations/twilio/voice") &&
+        text.includes("/api/integrations/twilio/recording") &&
         [
           "twilio",
           "gmail",

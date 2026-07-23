@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
-  return handleTwilioWebhook(request, "sms_inbound");
+  return handleTwilioWebhook(request, "voice_inbound");
 }

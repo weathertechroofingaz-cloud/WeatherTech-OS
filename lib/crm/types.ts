@@ -208,6 +208,56 @@ export type SmsMessageCategory =
   | "weather_delay"
   | "general";
 export type SmsMessageStatus = "draft" | "queued" | "sent" | "failed";
+export type SmsMessageDirection = "inbound" | "outbound";
+export type SmsDeliveryStatus =
+  | "accepted"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "delivered"
+  | "undelivered"
+  | "failed"
+  | "received";
+export type BusinessPhoneProvider = "twilio" | "twilio_sms";
+export type BusinessPhoneCommunicationChannel = "sms" | "voice" | "sms_voice";
+export type BusinessPhoneRoutingStatus =
+  | "active"
+  | "needs_review"
+  | "disabled"
+  | "unassigned";
+export type ProviderEventType =
+  | "sms_inbound"
+  | "sms_status"
+  | "voice_inbound"
+  | "voice_status"
+  | "recording_status";
+export type ProviderEventChannel = "sms" | "voice";
+export type ProviderEventDirection = "inbound" | "outbound";
+export type ProviderEventRoutingStatus =
+  | "matched"
+  | "needs_review"
+  | "unassigned"
+  | "migration_required";
+export type CallRecordStatus =
+  | "incoming"
+  | "ringing"
+  | "in_progress"
+  | "answered"
+  | "completed"
+  | "missed"
+  | "busy"
+  | "failed"
+  | "voicemail";
+export type CallRecordingStatus =
+  | "not_requested"
+  | "in_progress"
+  | "completed"
+  | "failed";
+export type CallTranscriptStatus =
+  | "not_requested"
+  | "queued"
+  | "completed"
+  | "failed";
 export type RoutePlanStatus = "draft" | "optimized" | "dispatched";
 export type RouteStopType = "lead" | "job";
 export type RouteTravelMode = "driving";
@@ -835,13 +885,112 @@ export type SmsMessageRecord = {
   provider: Extract<IntegrationProvider, "twilio_sms">;
   category: SmsMessageCategory;
   status: SmsMessageStatus;
+  business_phone_number_id?: string | null;
+  direction?: SmsMessageDirection;
+  delivery_status?: SmsDeliveryStatus | null;
+  provider_account_sid?: string | null;
+  provider_messaging_service_sid?: string | null;
   to_phone: string;
   from_phone: string | null;
   body: string;
   twilio_message_sid: string | null;
   queued_at: string | null;
   sent_at: string | null;
+  delivered_at?: string | null;
+  failed_at?: string | null;
+  correlation_id?: string;
+  provider_payload_fingerprint?: string | null;
+  metadata?: Record<string, unknown>;
   last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BusinessPhoneNumberRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string | null;
+  provider: BusinessPhoneProvider;
+  provider_account_sid: string | null;
+  messaging_service_sid: string | null;
+  phone_number_e164: string | null;
+  display_name: string;
+  routing_key: string;
+  business_location: string;
+  team_queue: string;
+  lead_source: string;
+  communication_channel: BusinessPhoneCommunicationChannel;
+  time_zone: string;
+  routing_status: BusinessPhoneRoutingStatus;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommunicationProviderEventRecord = {
+  id: string;
+  company_id: string | null;
+  business_phone_number_id: string | null;
+  integration_connection_id: string | null;
+  customer_id: string | null;
+  lead_id: string | null;
+  job_id: string | null;
+  sms_message_id: string | null;
+  provider: BusinessPhoneProvider;
+  provider_account_sid: string | null;
+  provider_event_sid: string | null;
+  provider_parent_sid: string | null;
+  event_type: ProviderEventType;
+  channel: ProviderEventChannel;
+  direction: ProviderEventDirection;
+  status: string;
+  from_phone: string | null;
+  to_phone: string | null;
+  business_phone: string | null;
+  customer_phone: string | null;
+  routing_status: ProviderEventRoutingStatus;
+  correlation_id: string;
+  request_fingerprint: string | null;
+  payload_summary: Record<string, unknown>;
+  response_summary: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  occurred_at: string;
+  received_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CallRecord = {
+  id: string;
+  company_id: string | null;
+  business_phone_number_id: string | null;
+  integration_connection_id: string | null;
+  customer_id: string | null;
+  lead_id: string | null;
+  job_id: string | null;
+  provider: Extract<BusinessPhoneProvider, "twilio">;
+  provider_account_sid: string | null;
+  provider_call_sid: string | null;
+  provider_parent_call_sid: string | null;
+  direction: ProviderEventDirection;
+  call_status: CallRecordStatus;
+  from_phone: string | null;
+  to_phone: string | null;
+  business_phone: string | null;
+  customer_phone: string | null;
+  routing_status: ProviderEventRoutingStatus;
+  started_at: string | null;
+  answered_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  recording_sid: string | null;
+  recording_status: CallRecordingStatus | null;
+  recording_duration_seconds: number | null;
+  transcript_status: CallTranscriptStatus | null;
+  follow_up_required: boolean;
+  correlation_id: string;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -1352,13 +1501,102 @@ export type SmsMessageInput = {
   provider?: Extract<IntegrationProvider, "twilio_sms">;
   category: SmsMessageCategory;
   status?: SmsMessageStatus;
+  business_phone_number_id?: string | null;
+  direction?: SmsMessageDirection;
+  delivery_status?: SmsDeliveryStatus | null;
+  provider_account_sid?: string | null;
+  provider_messaging_service_sid?: string | null;
   to_phone: string;
   from_phone?: string | null;
   body: string;
   twilio_message_sid?: string | null;
   queued_at?: string | null;
   sent_at?: string | null;
+  delivered_at?: string | null;
+  failed_at?: string | null;
+  correlation_id?: string;
+  provider_payload_fingerprint?: string | null;
+  metadata?: Record<string, unknown>;
   last_error?: string | null;
+};
+
+export type BusinessPhoneNumberInput = {
+  company_id: string;
+  integration_connection_id?: string | null;
+  provider?: BusinessPhoneProvider;
+  provider_account_sid?: string | null;
+  messaging_service_sid?: string | null;
+  phone_number_e164?: string | null;
+  display_name: string;
+  routing_key: string;
+  business_location: string;
+  team_queue: string;
+  lead_source: string;
+  communication_channel?: BusinessPhoneCommunicationChannel;
+  time_zone?: string;
+  routing_status?: BusinessPhoneRoutingStatus;
+  settings?: Record<string, unknown>;
+};
+
+export type CommunicationProviderEventInput = {
+  company_id?: string | null;
+  business_phone_number_id?: string | null;
+  integration_connection_id?: string | null;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  sms_message_id?: string | null;
+  provider?: BusinessPhoneProvider;
+  provider_account_sid?: string | null;
+  provider_event_sid?: string | null;
+  provider_parent_sid?: string | null;
+  event_type: ProviderEventType;
+  channel: ProviderEventChannel;
+  direction: ProviderEventDirection;
+  status: string;
+  from_phone?: string | null;
+  to_phone?: string | null;
+  business_phone?: string | null;
+  customer_phone?: string | null;
+  routing_status?: ProviderEventRoutingStatus;
+  correlation_id?: string;
+  request_fingerprint?: string | null;
+  payload_summary?: Record<string, unknown>;
+  response_summary?: Record<string, unknown>;
+  error_code?: string | null;
+  error_message?: string | null;
+  occurred_at?: string;
+};
+
+export type CallRecordInput = {
+  company_id?: string | null;
+  business_phone_number_id?: string | null;
+  integration_connection_id?: string | null;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  provider?: Extract<BusinessPhoneProvider, "twilio">;
+  provider_account_sid?: string | null;
+  provider_call_sid?: string | null;
+  provider_parent_call_sid?: string | null;
+  direction?: ProviderEventDirection;
+  call_status?: CallRecordStatus;
+  from_phone?: string | null;
+  to_phone?: string | null;
+  business_phone?: string | null;
+  customer_phone?: string | null;
+  routing_status?: ProviderEventRoutingStatus;
+  started_at?: string | null;
+  answered_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  recording_sid?: string | null;
+  recording_status?: CallRecordingStatus | null;
+  recording_duration_seconds?: number | null;
+  transcript_status?: CallTranscriptStatus | null;
+  follow_up_required?: boolean;
+  correlation_id?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type RoutePlanInput = {
@@ -1642,6 +1880,25 @@ export type EmailMessageInsert = EmailMessageInput & {
 };
 
 export type SmsMessageInsert = SmsMessageInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type BusinessPhoneNumberInsert = BusinessPhoneNumberInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CommunicationProviderEventInsert = CommunicationProviderEventInput & {
+  id?: string;
+  received_at?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CallRecordInsert = CallRecordInput & {
   id?: string;
   created_at?: string;
   updated_at?: string;
@@ -1951,6 +2208,28 @@ export type Database = {
         Row: SmsMessageRecord;
         Insert: SmsMessageInsert;
         Update: Partial<Database["public"]["Tables"]["sms_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      business_phone_numbers: {
+        Row: BusinessPhoneNumberRecord;
+        Insert: BusinessPhoneNumberInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["business_phone_numbers"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      communication_provider_events: {
+        Row: CommunicationProviderEventRecord;
+        Insert: CommunicationProviderEventInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_provider_events"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      call_records: {
+        Row: CallRecord;
+        Insert: CallRecordInsert;
+        Update: Partial<Database["public"]["Tables"]["call_records"]["Insert"]>;
         Relationships: [];
       };
       route_plans: {

@@ -35,9 +35,15 @@ export const googleMapsEnvVars = {
 export const twilioEnvVars = {
   accountSid: "TWILIO_ACCOUNT_SID",
   authToken: "TWILIO_AUTH_TOKEN",
+  apiKeySid: "TWILIO_API_KEY_SID",
+  apiKeySecret: "TWILIO_API_KEY_SECRET",
   messagingServiceSid: "TWILIO_MESSAGING_SERVICE_SID",
   fromNumber: "TWILIO_FROM_NUMBER",
   messagesEndpoint: "https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json",
+  inboundSmsWebhookPath: "/api/integrations/twilio/webhook",
+  smsStatusCallbackPath: "/api/integrations/twilio/status",
+  voiceWebhookPath: "/api/integrations/twilio/voice",
+  recordingCallbackPath: "/api/integrations/twilio/recording",
 };
 
 export const goHighLevelEnvVars = {

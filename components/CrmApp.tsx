@@ -168,6 +168,13 @@ import {
   type IntegrationReadinessState,
 } from "../lib/crm/integrationCenter";
 import {
+  twilioBusinessNumberRouteTemplates,
+  twilioLiveFoundationChecklist,
+  twilioLiveReadinessLabels,
+  twilioWebhookEndpoints,
+  type TwilioLiveReadinessStatus,
+} from "../lib/twilio/foundation";
+import {
   getEstimateTemplatesForTrade,
   type EstimateTemplate,
 } from "../lib/crm/estimateTemplates";
@@ -4750,6 +4757,10 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
           ))}
         </div>
 
+        <div className="mt-5">
+          <TwilioCommunicationsSetupNotice />
+        </div>
+
         <div className="mt-5 flex flex-wrap gap-2" aria-label="Communication channels">
           {inboxFilters.map((filter) => (
             <button
@@ -5178,6 +5189,39 @@ function CommunicationDetailPanel({
         </div>
       </div>
     </aside>
+  );
+}
+
+function TwilioCommunicationsSetupNotice() {
+  return (
+    <div
+      className="rounded-lg border border-amber-200 bg-amber-50 p-4"
+      data-testid="twilio-communications-setup-required"
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-bold text-amber-950">
+            Twilio Live Setup Required
+          </p>
+          <p className="mt-1 text-sm leading-6 text-amber-900">
+            SMS and call history will appear here after migration 0020, business
+            number routing, credentials, webhook signatures, and live testing are
+            complete. Unknown callers/messages must remain unassigned for review.
+          </p>
+        </div>
+        <ProviderStatusBadge label="No Outbound SMS Or Calls" tone="red" />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {twilioBusinessNumberRouteTemplates.map((route) => (
+          <div key={route.key} className="rounded-lg bg-white px-3 py-2 text-sm">
+            <p className="font-bold text-slate-950">
+              {route.companyName} - {route.businessLocation}
+            </p>
+            <p className="mt-1 text-slate-500">{route.teamQueue}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -8438,6 +8482,9 @@ function CustomerCommunicationsSection({
   onOpenHub: () => void;
 }) {
   const latestItem = items[0];
+  const latestSms = items.find((item) => item.channel === "sms");
+  const latestCall = items.find((item) => item.channel === "phone_call");
+  const missedCallCount = items.filter((item) => item.isMissedCall).length;
   const failedCount = items.filter((item) => item.isFailed).length;
   const unreadCount = items.filter((item) => item.isUnread).length;
   const followUpCount = items.filter(communicationItemIsFollowUpDue).length;
@@ -8469,6 +8516,19 @@ function CustomerCommunicationsSection({
           <ProfileStat label="Follow-ups" value={followUpCount} />
         </div>
 
+        <div className="mt-3 grid gap-2 sm:grid-cols-4">
+          <ProfileStat
+            label="Latest SMS"
+            value={latestSms ? formatDateTime(latestSms.createdAt) : "None"}
+          />
+          <ProfileStat
+            label="Latest call"
+            value={latestCall ? formatDateTime(latestCall.createdAt) : "None"}
+          />
+          <ProfileStat label="Missed calls" value={missedCallCount} />
+          <ProfileStat label="Unread messages" value={unreadCount} />
+        </div>
+
         <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
           Most recent contact:{" "}
           <span className="font-semibold text-slate-900">
@@ -8478,6 +8538,12 @@ function CustomerCommunicationsSection({
                 )}`
               : "No linked communications yet"}
           </span>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Live Twilio SMS/call routing is setup-required. Existing linked
+          communications remain factual; future missed calls and unread messages
+          will appear only after verified Twilio webhooks are enabled.
         </div>
       </div>
 
@@ -24160,6 +24226,145 @@ function ProviderWorkflowStatusLegend() {
   );
 }
 
+function getTwilioReadinessTone(status: TwilioLiveReadinessStatus): ProviderBadgeTone {
+  if (status === "backend_ready" || status === "ready_for_live_test" || status === "connected") {
+    return "green";
+  }
+
+  if (status === "error") {
+    return "red";
+  }
+
+  if (status === "not_connected") {
+    return "slate";
+  }
+
+  return "amber";
+}
+
+function TwilioLiveFoundationPanel() {
+  const statuses: TwilioLiveReadinessStatus[] = [
+    "not_connected",
+    "backend_ready",
+    "configuration_required",
+    "credentials_required",
+    "migration_required",
+    "webhook_setup_required",
+    "ready_for_live_test",
+    "connected",
+    "error",
+  ];
+
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+      data-testid="twilio-live-foundation"
+    >
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Twilio Live Integration Foundation
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Calls and SMS routing setup
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            Backend webhook handlers are prepared for signed Twilio events, but
+            production calling and SMS remain disabled until migration 0020,
+            credentials, phone ownership, Twilio Console webhooks, and live tests
+            are complete.
+          </p>
+        </div>
+        <ProviderStatusBadge label="No Production Messaging" tone="red" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {statuses.map((status) => (
+          <ProviderStatusBadge
+            key={status}
+            label={twilioLiveReadinessLabels[status]}
+            tone={getTwilioReadinessTone(status)}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Required numbers" value={twilioBusinessNumberRouteTemplates.length} />
+        <ProfileStat label="Production SMS" value="Disabled" />
+        <ProfileStat label="Production calls" value="Disabled" />
+        <ProfileStat label="Database" value="Migration Required" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Business Number Routing
+          </p>
+          {twilioBusinessNumberRouteTemplates.map((route) => (
+            <div
+              key={route.key}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">
+                    {route.companyName} - {route.businessLocation}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Queue {route.teamQueue}; lead source {route.leadSource};
+                    channel {route.communicationChannel}; timezone {route.timeZone}.
+                  </p>
+                </div>
+                <ProviderStatusBadge label="Configuration Required" tone="amber" />
+              </div>
+              <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                Phone number not stored in code
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Twilio Console Webhooks
+          </p>
+          {twilioWebhookEndpoints.map((endpoint) => (
+            <div
+              key={endpoint.id}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">{endpoint.label}</p>
+                  <code className="mt-1 block break-all rounded bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+                    {endpoint.method} {endpoint.path}
+                  </code>
+                </div>
+                <ProviderStatusBadge label="Webhook Setup Required" tone="amber" />
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {endpoint.summary}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <p className="text-sm font-bold text-amber-950">Owner setup checklist</p>
+        <div className="mt-3 grid gap-2">
+          {twilioLiveFoundationChecklist.map((item) => (
+            <div key={item} className="flex items-start gap-2 text-sm text-amber-900">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProviderActionButton({
   action,
   onClick,
@@ -24624,6 +24829,10 @@ function IntegrationCenterSection({
           provider APIs, store credentials, send messages, or start sync jobs.
         </IntegrationNoticeBanner>
         <ProviderWorkflowStatusLegend />
+      </div>
+
+      <div className="mt-5">
+        <TwilioLiveFoundationPanel />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
