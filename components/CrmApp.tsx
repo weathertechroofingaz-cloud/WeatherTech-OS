@@ -54,6 +54,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import {
   addJobMaterial,
@@ -147,12 +148,21 @@ import {
   type UnifiedInboxItem,
 } from "../lib/crm/communications";
 import {
+  buildIntegrationConnectionWorkflow,
   buildIntegrationCenterProviders,
+  integrationConnectionActionLabel,
   integrationCapabilityLabels,
   integrationConnectionStateLabel,
+  integrationConnectionWorkflowStatusLabel,
+  integrationCredentialValidationStateLabel,
   integrationHealthStateLabel,
   integrationReadinessStateLabel,
+  type IntegrationConnectionAction,
+  type IntegrationConnectionWorkflow,
+  type IntegrationConnectionWorkflowStatus,
+  type IntegrationCredentialValidationState,
   type IntegrationHealthState,
+  type IntegrationProviderId,
   type IntegrationProviderMetadata,
   type IntegrationProviderReadiness,
   type IntegrationReadinessState,
@@ -23980,14 +23990,58 @@ function getHealthTone(state: IntegrationHealthState): "blue" | "green" | "amber
   return state === "healthy" ? "green" : state === "disabled" ? "blue" : "amber";
 }
 
+type ProviderBadgeTone = "blue" | "green" | "amber" | "red" | "slate";
+
+function getWorkflowTone(state: IntegrationConnectionWorkflowStatus): ProviderBadgeTone {
+  if (state === "connected") {
+    return "green";
+  }
+
+  if (state === "error") {
+    return "red";
+  }
+
+  if (state === "disabled") {
+    return "slate";
+  }
+
+  return state === "ready_to_configure" ? "amber" : "blue";
+}
+
+function getValidationTone(state: IntegrationCredentialValidationState): ProviderBadgeTone {
+  if (state === "ready_for_server_validation") {
+    return "green";
+  }
+
+  if (state === "blocked") {
+    return "slate";
+  }
+
+  return "amber";
+}
+
 function ProviderStatusBadge({
   label,
   tone,
 }: {
   label: string;
-  tone: "blue" | "green" | "amber";
+  tone: ProviderBadgeTone;
 }) {
-  return <Badge label={label} tone={tone} />;
+  const toneClass: Record<ProviderBadgeTone, string> = {
+    amber: "border-amber-200 bg-amber-50 text-amber-800",
+    blue: "border-sky-200 bg-sky-50 text-sky-800",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    red: "border-red-200 bg-red-50 text-red-800",
+    slate: "border-slate-200 bg-slate-100 text-slate-700",
+  };
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${toneClass[tone]}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function ProviderHealthIndicator({ provider }: { provider: IntegrationProviderReadiness }) {
@@ -24053,8 +24107,378 @@ function ProviderCapabilityPills({ provider }: { provider: IntegrationProviderRe
   );
 }
 
-function IntegrationProviderCard({ provider }: { provider: IntegrationProviderReadiness }) {
+function IntegrationNoticeBanner({
+  title,
+  tone,
+  children,
+}: {
+  title: string;
+  tone: "blue" | "amber" | "red";
+  children: ReactNode;
+}) {
+  const toneClass = {
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    blue: "border-sky-200 bg-sky-50 text-sky-900",
+    red: "border-red-200 bg-red-50 text-red-900",
+  }[tone];
+
+  return (
+    <div className={`rounded-lg border p-3 ${toneClass}`}>
+      <p className="text-sm font-bold">{title}</p>
+      <div className="mt-1 text-sm leading-6">{children}</div>
+    </div>
+  );
+}
+
+function ProviderWorkflowStatusLegend() {
+  const statuses: IntegrationConnectionWorkflowStatus[] = [
+    "not_connected",
+    "ready_to_configure",
+    "connected",
+    "disabled",
+    "error",
+  ];
+
+  return (
+    <div
+      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+      data-testid="integration-status-model"
+    >
+      <p className="text-xs font-semibold uppercase text-slate-500">
+        Connection Status Model
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {statuses.map((status) => (
+          <ProviderStatusBadge
+            key={status}
+            label={integrationConnectionWorkflowStatusLabel(status)}
+            tone={getWorkflowTone(status)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderActionButton({
+  action,
+  onClick,
+}: {
+  action: IntegrationConnectionAction;
+  onClick: () => void;
+}) {
+  const label = integrationConnectionActionLabel(action);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+    >
+      {label}
+    </button>
+  );
+}
+
+function IntegrationWorkflowSummary({
+  workflow,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+}) {
+  const { provider } = workflow;
+
+  return (
+    <div className="grid gap-3 md:grid-cols-3">
+      <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">
+          Connection Status
+        </p>
+        <div className="mt-2">
+          <ProviderStatusBadge
+            label={integrationConnectionWorkflowStatusLabel(workflow.status)}
+            tone={getWorkflowTone(workflow.status)}
+          />
+        </div>
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">Health</p>
+        <p className="mt-2 text-sm font-bold text-slate-950">
+          {integrationHealthStateLabel(provider.healthState)}
+        </p>
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">
+          Last Sync
+        </p>
+        <p className="mt-2 text-sm font-bold text-slate-950">
+          {formatOptionalDateTime(provider.syncState.lastSyncAt)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationConfigurationPage({
+  workflow,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+}) {
+  const { metadata } = workflow.provider;
+
+  return (
+    <div className="grid gap-3">
+      <h4 className="text-sm font-bold uppercase text-slate-500">
+        Configuration Page
+      </h4>
+      <div className="grid gap-3 md:grid-cols-2">
+        {metadata.configurationFields.map((field) => (
+          <div key={field.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold text-slate-950">{field.label}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  {field.description}
+                </p>
+              </div>
+              <ProviderStatusBadge
+                label={field.required ? "Required" : "Optional"}
+                tone={field.required ? "amber" : "blue"}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <ProviderStatusBadge label={field.kind.toUpperCase()} tone="blue" />
+              {field.sensitive ? (
+                <ProviderStatusBadge label="Server-side only" tone="red" />
+              ) : (
+                <ProviderStatusBadge label="Non-secret metadata" tone="slate" />
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function IntegrationCredentialValidationPanel({
+  workflow,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+}) {
+  return (
+    <div className="grid gap-3">
+      <h4 className="text-sm font-bold uppercase text-slate-500">
+        Credential Validation Interface
+      </h4>
+      {workflow.validationResults.map((check) => (
+        <div
+          key={check.id}
+          className="rounded-lg border border-slate-200 bg-white p-3"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-semibold text-slate-950">{check.label}</p>
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                {check.description}
+              </p>
+            </div>
+            <ProviderStatusBadge
+              label={integrationCredentialValidationStateLabel(check.state)}
+              tone={getValidationTone(check.state)}
+            />
+          </div>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            {check.summary}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function IntegrationOAuthReadinessPanel({
+  workflow,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+}) {
+  const { oauthReadiness } = workflow.provider.metadata;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-bold text-slate-950">OAuth Readiness</p>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            {oauthReadiness.summary}
+          </p>
+        </div>
+        <ProviderStatusBadge
+          label={oauthReadiness.enabled ? oauthReadiness.label : "OAuth Not Required"}
+          tone={oauthReadiness.enabled ? "amber" : "blue"}
+        />
+      </div>
+      <div className="mt-3 grid gap-2 text-sm text-slate-600">
+        <p>
+          <span className="font-semibold text-slate-800">Callback:</span>{" "}
+          {oauthReadiness.callbackPath ?? "Not configured"}
+        </p>
+        <p>
+          <span className="font-semibold text-slate-800">Scopes:</span>{" "}
+          {oauthReadiness.scopes.length ? oauthReadiness.scopes.join(", ") : "None"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationConnectionWizard({
+  workflow,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+}) {
+  return (
+    <div className="grid gap-3">
+      <h4 className="text-sm font-bold uppercase text-slate-500">
+        Connection Wizard
+      </h4>
+      <ol className="grid gap-3">
+        {workflow.provider.metadata.connectionSteps.map((step, index) => (
+          <li
+            key={step}
+            className="flex gap-3 rounded-lg border border-slate-200 bg-white p-3"
+          >
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-sky-100 text-sm font-bold text-sky-800">
+              {index + 1}
+            </span>
+            <p className="text-sm leading-6 text-slate-600">{step}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function IntegrationConnectionDialog({
+  workflow,
+  action,
+  onClose,
+}: {
+  workflow: IntegrationConnectionWorkflow;
+  action: IntegrationConnectionAction;
+  onClose: () => void;
+}) {
+  const { provider } = workflow;
+  const actionLabel = integrationConnectionActionLabel(action);
+  const isDisconnect = action === "disconnect";
+  const isReconnect = action === "reconnect";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-end bg-slate-950/40 p-0 sm:place-items-center sm:p-4"
+      role="presentation"
+    >
+      <section
+        aria-label={`${provider.metadata.label} ${actionLabel}`}
+        aria-modal="true"
+        className="max-h-[92vh] w-full overflow-y-auto rounded-t-xl bg-white shadow-2xl sm:max-w-4xl sm:rounded-xl"
+        data-testid="integration-connection-dialog"
+        role="dialog"
+      >
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              {actionLabel}
+            </p>
+            <h3 className="mt-1 text-xl font-bold text-slate-950">
+              {provider.metadata.label}
+            </h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              {workflow.statusSummary}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-300 p-2 text-slate-500 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+            aria-label="Close integration connection dialog"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid gap-5 p-5">
+          <IntegrationNoticeBanner title="Architecture Only" tone="blue">
+            This workflow does not connect a live account, validate credentials,
+            send messages, sync records, or disconnect anything. Live provider
+            operations must run through future server-side handlers after owner
+            approval.
+          </IntegrationNoticeBanner>
+
+          {provider.healthState === "needs_attention" ? (
+            <IntegrationNoticeBanner title="Error State" tone="red">
+              Existing records indicate this provider needs attention before a
+              live workflow can run. Review provider errors and retry history
+              before enabling connectivity.
+            </IntegrationNoticeBanner>
+          ) : null}
+
+          {isDisconnect ? (
+            <IntegrationNoticeBanner title="Disconnect Flow" tone="amber">
+              {provider.metadata.disconnectSummary} No live disconnect action is
+              available from this architecture preview.
+            </IntegrationNoticeBanner>
+          ) : null}
+
+          {isReconnect ? (
+            <IntegrationNoticeBanner title="Reconnect Flow" tone="amber">
+              {provider.metadata.reconnectSummary} No live reconnect action is
+              available from this architecture preview.
+            </IntegrationNoticeBanner>
+          ) : null}
+
+          <IntegrationWorkflowSummary workflow={workflow} />
+          <IntegrationConnectionWizard workflow={workflow} />
+          <IntegrationConfigurationPage workflow={workflow} />
+          <IntegrationCredentialValidationPanel workflow={workflow} />
+          <IntegrationOAuthReadinessPanel workflow={workflow} />
+
+          <div className="grid gap-3">
+            <h4 className="text-sm font-bold uppercase text-slate-500">
+              Capability Summary
+            </h4>
+            <ProviderCapabilityPills provider={provider} />
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm leading-6 text-slate-500">
+              Live connectivity is disabled in this sprint.
+            </p>
+            <button
+              type="button"
+              disabled
+              className="inline-flex min-h-10 items-center justify-center rounded-md bg-slate-200 px-4 py-2 text-sm font-bold text-slate-500"
+            >
+              Live action unavailable
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function IntegrationProviderCard({
+  provider,
+  onOpenWorkflow,
+}: {
+  provider: IntegrationProviderReadiness;
+  onOpenWorkflow: (
+    providerId: IntegrationProviderId,
+    action: IntegrationConnectionAction,
+  ) => void;
+}) {
   const Icon = integrationProviderIconMap[provider.metadata.iconKey];
+  const workflow = buildIntegrationConnectionWorkflow(provider);
   const connectionTone = provider.connectionState === "connected" ? "green" : "blue";
   const readinessTone = getReadinessTone(provider.readinessState);
 
@@ -24084,6 +24508,10 @@ function IntegrationProviderCard({ provider }: { provider: IntegrationProviderRe
 
       <div className="flex flex-wrap gap-2">
         <ProviderStatusBadge
+          label={integrationConnectionWorkflowStatusLabel(workflow.status)}
+          tone={getWorkflowTone(workflow.status)}
+        />
+        <ProviderStatusBadge
           label={integrationReadinessStateLabel(provider.readinessState)}
           tone={readinessTone}
         />
@@ -24111,6 +24539,16 @@ function IntegrationProviderCard({ provider }: { provider: IntegrationProviderRe
           {provider.connectionSummary}
         </p>
       </div>
+
+      <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+        {workflow.availableActions.map((action) => (
+          <ProviderActionButton
+            key={action}
+            action={action}
+            onClick={() => onOpenWorkflow(provider.metadata.id, action)}
+          />
+        ))}
+      </div>
     </article>
   );
 }
@@ -24118,9 +24556,14 @@ function IntegrationProviderCard({ provider }: { provider: IntegrationProviderRe
 function IntegrationCenterSection({
   providers,
   onOpenIntegrations,
+  onOpenWorkflow,
 }: {
   providers: IntegrationProviderReadiness[];
   onOpenIntegrations: () => void;
+  onOpenWorkflow: (
+    providerId: IntegrationProviderId,
+    action: IntegrationConnectionAction,
+  ) => void;
 }) {
   const connectedCount = providers.filter(
     (provider) => provider.connectionState === "connected",
@@ -24174,9 +24617,22 @@ function IntegrationCenterSection({
         />
       </div>
 
+      <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+        <IntegrationNoticeBanner title="No Live Connectivity" tone="blue">
+          Connection wizards, configuration pages, validation checks, reconnect,
+          and disconnect flows are architecture-ready only. They do not call
+          provider APIs, store credentials, send messages, or start sync jobs.
+        </IntegrationNoticeBanner>
+        <ProviderWorkflowStatusLegend />
+      </div>
+
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
         {providers.map((provider) => (
-          <IntegrationProviderCard key={provider.metadata.id} provider={provider} />
+          <IntegrationProviderCard
+            key={provider.metadata.id}
+            provider={provider}
+            onOpenWorkflow={onOpenWorkflow}
+          />
         ))}
       </div>
     </section>
@@ -24194,13 +24650,34 @@ function SettingsView({
     snapshot.companyWorkflowSettings.map((settings) => [settings.company_id, settings]),
   );
   const integrationProviders = buildIntegrationCenterProviders(snapshot);
+  const [connectionDialog, setConnectionDialog] = useState<{
+    providerId: IntegrationProviderId;
+    action: IntegrationConnectionAction;
+  } | null>(null);
+  const selectedProvider = connectionDialog
+    ? integrationProviders.find((provider) => provider.metadata.id === connectionDialog.providerId)
+    : null;
+  const selectedWorkflow = selectedProvider
+    ? buildIntegrationConnectionWorkflow(selectedProvider)
+    : null;
 
   return (
     <div className="space-y-5">
       <IntegrationCenterSection
         providers={integrationProviders}
         onOpenIntegrations={() => onViewChange("integrations")}
+        onOpenWorkflow={(providerId, action) =>
+          setConnectionDialog({ providerId, action })
+        }
       />
+
+      {selectedWorkflow && connectionDialog ? (
+        <IntegrationConnectionDialog
+          workflow={selectedWorkflow}
+          action={connectionDialog.action}
+          onClose={() => setConnectionDialog(null)}
+        />
+      ) : null}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-950">Multi-company settings</h2>

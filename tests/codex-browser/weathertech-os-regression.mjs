@@ -2948,6 +2948,14 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("last activity") &&
         text.includes("health") &&
         text.includes("connection summary") &&
+        text.includes("connection status model") &&
+        text.includes("ready to configure") &&
+        text.includes("error") &&
+        text.includes("no live connectivity") &&
+        text.includes("connection wizard") &&
+        text.includes("configuration page") &&
+        text.includes("disconnect flow") &&
+        text.includes("reconnect flow") &&
         [
           "twilio",
           "gmail",
@@ -2977,17 +2985,56 @@ async function testSettingsIntegrationCenter(tab) {
     15000,
   );
 
-  return await tab.playwright.evaluate(() => {
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-provider-id="twilio"]//button[normalize-space(.)="Connection wizard"]',
+    ),
+    "Twilio connection wizard",
+  );
+
+  await waitFor(
+    tab,
+    () => {
+      const dialog = document.querySelector('[data-testid="integration-connection-dialog"]');
+      const text = dialog?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("twilio") &&
+        text.includes("architecture only") &&
+        text.includes("connection wizard") &&
+        text.includes("configuration page") &&
+        text.includes("credential validation interface") &&
+        text.includes("oauth readiness") &&
+        text.includes("capability summary") &&
+        text.includes("live action unavailable") &&
+        text.includes("server-side only") &&
+        text.includes("webhook signature check")
+      );
+    },
+    "integration connection wizard dialog",
+    15000,
+  );
+
+  const result = await tab.playwright.evaluate(() => {
     const section = document.querySelector('[data-testid="integration-center"]');
+    const dialog = document.querySelector('[data-testid="integration-connection-dialog"]');
     const cards = [
       ...(section?.querySelectorAll('[data-testid="integration-provider-card"]') ?? []),
     ];
 
     return {
+      dialogOpened: Boolean(dialog),
       hasSettingsAccess: Boolean(section),
       providerCards: cards.length,
     };
   });
+
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Close integration connection dialog" }),
+    "Close integration connection dialog",
+  );
+
+  return result;
 }
 
 async function testCalendarScreen(tab) {

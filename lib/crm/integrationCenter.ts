@@ -37,6 +37,55 @@ export type IntegrationHealthState =
   | "needs_attention"
   | "configuration_required"
   | "disabled";
+export type IntegrationConnectionWorkflowStatus =
+  | "not_connected"
+  | "ready_to_configure"
+  | "connected"
+  | "disabled"
+  | "error";
+export type IntegrationConnectionAction =
+  | "connect"
+  | "configure"
+  | "disconnect"
+  | "reconnect";
+export type IntegrationConfigurationFieldKind =
+  | "text"
+  | "secret"
+  | "url"
+  | "oauth"
+  | "webhook";
+export type IntegrationCredentialValidationState =
+  | "ready_for_server_validation"
+  | "requires_configuration"
+  | "blocked";
+
+export type IntegrationConfigurationField = {
+  id: string;
+  label: string;
+  description: string;
+  required: boolean;
+  sensitive: boolean;
+  kind: IntegrationConfigurationFieldKind;
+};
+
+export type IntegrationCredentialValidationCheck = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+export type IntegrationCredentialValidationResult = IntegrationCredentialValidationCheck & {
+  state: IntegrationCredentialValidationState;
+  summary: string;
+};
+
+export type IntegrationOAuthReadiness = {
+  enabled: boolean;
+  label: string;
+  callbackPath: string | null;
+  scopes: string[];
+  summary: string;
+};
 
 export type IntegrationProviderMetadata = {
   id: IntegrationProviderId;
@@ -57,6 +106,12 @@ export type IntegrationProviderMetadata = {
   requiresCredentials: boolean;
   supportsOAuth: boolean;
   supportsWebhooks: boolean;
+  configurationFields: IntegrationConfigurationField[];
+  credentialValidationChecks: IntegrationCredentialValidationCheck[];
+  oauthReadiness: IntegrationOAuthReadiness;
+  connectionSteps: string[];
+  disconnectSummary: string;
+  reconnectSummary: string;
   summaryWhenDisconnected: string;
 };
 
@@ -83,6 +138,15 @@ export type IntegrationProviderReadiness = {
   syncState: IntegrationSyncState;
   connectionSummary: string;
   healthSummary: string;
+};
+
+export type IntegrationConnectionWorkflow = {
+  provider: IntegrationProviderReadiness;
+  status: IntegrationConnectionWorkflowStatus;
+  statusSummary: string;
+  availableActions: IntegrationConnectionAction[];
+  validationResults: IntegrationCredentialValidationResult[];
+  liveConnectivityEnabled: false;
 };
 
 export const integrationCapabilityLabels: Record<IntegrationCapability, string> = {
@@ -112,6 +176,74 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: false,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "account_sid",
+        label: "Account SID",
+        description: "Stored server-side only and used to identify the Twilio account.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "auth_token",
+        label: "Auth token",
+        description: "Stored server-side only for credential validation and approved messaging workflows.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "messaging_service",
+        label: "Messaging service or phone number",
+        description: "Routes future SMS traffic to the correct company-approved Twilio sender.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_signature",
+        label: "Webhook signing validation",
+        description: "Required before accepting inbound calls, SMS replies, or delivery callbacks.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "credentials",
+        label: "Server credential check",
+        description: "Validate the account SID and auth token from server-only storage.",
+      },
+      {
+        id: "sender",
+        label: "Sender ownership check",
+        description: "Confirm the sender belongs to the approved WeatherTech/IHC Twilio account.",
+      },
+      {
+        id: "webhook",
+        label: "Webhook signature check",
+        description: "Verify inbound webhook signatures before any message is trusted.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: false,
+      label: "API credential flow",
+      callbackPath: null,
+      scopes: [],
+      summary: "Twilio uses server-side API credentials rather than OAuth in this architecture.",
+    },
+    connectionSteps: [
+      "Collect server-only Twilio credentials from the approved business account.",
+      "Validate credentials and sender ownership on the server.",
+      "Configure signed inbound webhooks before accepting customer replies.",
+      "Enable live SMS or call workflows only after owner approval.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause Twilio sync and outbound messaging after live provider support exists.",
+    reconnectSummary:
+      "A future reconnect will revalidate credentials, sender ownership, and webhook signatures before syncing resumes.",
     summaryWhenDisconnected: "Add Twilio credentials later to enable live SMS/call ingestion and outbound controls.",
   },
   {
@@ -126,6 +258,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: true,
     supportsWebhooks: false,
+    configurationFields: [
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description: "Google OAuth application approved for WeatherTech OS email access.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "authorized_sender",
+        label: "Authorized sender",
+        description: "The Gmail mailbox that will be allowed to sync or send approved email.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "send_policy",
+        label: "Send policy",
+        description: "Owner-approved rules for draft, review, and send behavior.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description: "Confirm consent screen, redirect URI, and account ownership before live access.",
+      },
+      {
+        id: "scopes",
+        label: "Scope check",
+        description: "Verify only the minimum Gmail scopes required by approved workflows are requested.",
+      },
+      {
+        id: "mailbox",
+        label: "Mailbox access check",
+        description: "Validate the connected mailbox without sending customer email.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: null,
+      scopes: ["gmail.readonly", "gmail.send"],
+      summary: "OAuth is required. The live callback route and consent screen must be configured before connection.",
+    },
+    connectionSteps: [
+      "Register the Google OAuth app and approved redirect URI.",
+      "Request only minimum Gmail scopes for the selected workflow.",
+      "Validate mailbox access without sending customer email.",
+      "Enable outbound email only after explicit owner approval.",
+    ],
+    disconnectSummary:
+      "A future disconnect will revoke or pause Gmail access and stop mailbox sync and sending workflows.",
+    reconnectSummary:
+      "A future reconnect will refresh OAuth consent and revalidate mailbox access before syncing resumes.",
     summaryWhenDisconnected: "Connect Gmail OAuth later before enabling live send or mailbox sync.",
   },
   {
@@ -140,6 +332,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: true,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description: "Google OAuth application approved for calendar access.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "calendar_id",
+        label: "Default calendar",
+        description: "Company calendar used for inspections, jobs, deliveries, and follow-ups.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_channel",
+        label: "Calendar webhook channel",
+        description: "Future push notification channel for two-way calendar updates.",
+        required: false,
+        sensitive: true,
+        kind: "webhook",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description: "Confirm redirect URI, refresh token storage, and calendar account ownership.",
+      },
+      {
+        id: "calendar_access",
+        label: "Calendar access check",
+        description: "Validate read/write access to the selected company calendar.",
+      },
+      {
+        id: "webhook",
+        label: "Push sync check",
+        description: "Confirm webhook channels can be renewed before enabling two-way sync.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: null,
+      scopes: ["calendar.events"],
+      summary: "OAuth and a server callback are required before live calendar sync is enabled.",
+    },
+    connectionSteps: [
+      "Register the Google OAuth app and approved redirect URI.",
+      "Select the company calendar for WeatherTech/IHC scheduling.",
+      "Validate read/write calendar permissions without changing existing appointments.",
+      "Enable two-way sync only after conflict handling is approved.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause external calendar sync while preserving WeatherTech OS schedules.",
+    reconnectSummary:
+      "A future reconnect will refresh OAuth consent, validate the default calendar, and reconcile pending events.",
     summaryWhenDisconnected: "Connect Google Calendar OAuth later to sync scheduled inspections, jobs, and follow-ups.",
   },
   {
@@ -154,6 +406,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: true,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "business_account",
+        label: "Business account",
+        description: "Approved Google Business Profile account for WeatherTech or IHC locations.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "location_mapping",
+        label: "Location mapping",
+        description: "Maps each Google location to the correct WeatherTech OS company.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description: "Google OAuth application approved for reviews, messages, and local-search activity.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description: "Confirm the connected Google account can access the approved business profile.",
+      },
+      {
+        id: "location_scope",
+        label: "Location ownership check",
+        description: "Verify every synced location maps to WeatherTech Roofing LLC or IHC.",
+      },
+      {
+        id: "webhook",
+        label: "Webhook readiness check",
+        description: "Validate future review/message callbacks before accepting live activity.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: null,
+      scopes: ["business.manage"],
+      summary: "Google Business Profile requires OAuth and approved location mapping before live sync.",
+    },
+    connectionSteps: [
+      "Approve the Google Business Profile account and owned locations.",
+      "Map each location to WeatherTech Roofing LLC or IHC.",
+      "Validate minimum OAuth scope and account access.",
+      "Enable review/message sync after routing and response rules are approved.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause review/message sync without deleting CRM history.",
+    reconnectSummary:
+      "A future reconnect will revalidate account ownership and company location mapping.",
     summaryWhenDisconnected: "Configuration is required before Google Business Profile reviews or messages can sync.",
   },
   {
@@ -168,6 +480,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: false,
     supportsOAuth: false,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "account_mapping",
+        label: "Yelp account mapping",
+        description: "Maps each Yelp account, location, or city to the correct company.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_endpoint",
+        label: "Webhook endpoint",
+        description: "Production endpoint Yelp will post lead payloads to.",
+        required: true,
+        sensitive: false,
+        kind: "webhook",
+      },
+      {
+        id: "dedupe_key",
+        label: "External lead ID",
+        description: "Used with source/account metadata to prevent duplicate CRM leads.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "payload_schema",
+        label: "Payload schema check",
+        description: "Validate supported Yelp payload formats before creating CRM leads.",
+      },
+      {
+        id: "company_routing",
+        label: "Company routing check",
+        description: "Confirm each Yelp account or city routes to WeatherTech Roofing LLC or IHC.",
+      },
+      {
+        id: "dedupe",
+        label: "Duplicate protection check",
+        description: "Confirm external IDs and fingerprints prevent duplicate lead creation.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: false,
+      label: "Webhook intake",
+      callbackPath: null,
+      scopes: [],
+      summary: "Yelp intake is webhook-based and does not use OAuth in the current architecture.",
+    },
+    connectionSteps: [
+      "Confirm each Yelp account, city, or campaign has an approved company route.",
+      "Configure Yelp to post lead payloads to the production webhook endpoint.",
+      "Validate payload schema, dedupe key, and safe logging.",
+      "Monitor intake logs before enabling any automated follow-up.",
+    ],
+    disconnectSummary:
+      "A future disconnect will stop accepting live Yelp intake for that account while preserving existing leads.",
+    reconnectSummary:
+      "A future reconnect will revalidate account routing, dedupe, and retry behavior before intake resumes.",
     summaryWhenDisconnected: "WeatherTech OS can receive Yelp payloads, but no live Yelp account is connected yet.",
   },
   {
@@ -182,6 +554,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: false,
     supportsOAuth: false,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "form_endpoint",
+        label: "Form endpoint",
+        description: "Production endpoint each WeatherTech or IHC website form posts to.",
+        required: true,
+        sensitive: false,
+        kind: "webhook",
+      },
+      {
+        id: "source_mapping",
+        label: "Source mapping",
+        description: "Routes website, campaign, and service metadata to the correct company.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "spam_protection",
+        label: "Spam protection",
+        description: "Future validation hook for signed forms, captcha, or trusted website origins.",
+        required: false,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "payload_schema",
+        label: "Payload schema check",
+        description: "Validate supported website form fields before creating CRM leads.",
+      },
+      {
+        id: "company_routing",
+        label: "Company routing check",
+        description: "Confirm each website, campaign, or service routes to WeatherTech Roofing LLC or IHC.",
+      },
+      {
+        id: "safe_logging",
+        label: "Safe logging check",
+        description: "Confirm intake logs preserve audit metadata without storing sensitive message bodies.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: false,
+      label: "Webhook intake",
+      callbackPath: null,
+      scopes: [],
+      summary: "Website forms post directly to WeatherTech OS intake endpoints; OAuth is not required.",
+    },
+    connectionSteps: [
+      "Map each website form to the correct WeatherTech OS company.",
+      "Configure production forms to post supported lead payloads to the intake endpoint.",
+      "Validate source, campaign, dedupe, and safe logging behavior.",
+      "Monitor lead creation before enabling automated follow-up.",
+    ],
+    disconnectSummary:
+      "A future disconnect will stop accepting live form posts from a configured website source.",
+    reconnectSummary:
+      "A future reconnect will revalidate source routing, payload format, and dedupe before intake resumes.",
     summaryWhenDisconnected: "Website intake endpoints are ready, but production forms still need to post to them.",
   },
   {
@@ -196,6 +628,74 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: false,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "api_base",
+        label: "API base URL",
+        description: "Approved GoHighLevel API base for the business account.",
+        required: true,
+        sensitive: false,
+        kind: "url",
+      },
+      {
+        id: "private_token",
+        label: "Private token",
+        description: "Stored server-side only for approved sync workers and dry-run checks.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "location_id",
+        label: "Location ID",
+        description: "Maps the GoHighLevel location to WeatherTech Roofing LLC or IHC.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_secret",
+        label: "Webhook signing secret",
+        description: "Required before trusting inbound automation events.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "credentials",
+        label: "Server credential check",
+        description: "Validate the private token from server-only storage without triggering campaigns.",
+      },
+      {
+        id: "location",
+        label: "Location mapping check",
+        description: "Confirm the GoHighLevel location maps to the correct WeatherTech OS company.",
+      },
+      {
+        id: "workflow_safety",
+        label: "Automation safety check",
+        description: "Confirm live workflows cannot send customer messages without owner approval.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: false,
+      label: "API credential flow",
+      callbackPath: null,
+      scopes: [],
+      summary: "GoHighLevel uses server-side API credentials in the current architecture.",
+    },
+    connectionSteps: [
+      "Collect server-only GoHighLevel credentials from the approved account.",
+      "Validate the API base, token, and location mapping in dry-run mode.",
+      "Confirm workflow safety before any outbound automation is enabled.",
+      "Enable sync workers only after account routing and owner approval are complete.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause GoHighLevel sync and automation handoff without deleting CRM history.",
+    reconnectSummary:
+      "A future reconnect will rerun credential, location, and workflow-safety validation.",
     summaryWhenDisconnected: "Server configuration is required before GoHighLevel sync workers can run.",
   },
   {
@@ -210,6 +710,66 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     requiresCredentials: true,
     supportsOAuth: true,
     supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "provider_type",
+        label: "Provider type",
+        description: "Future approved category such as payments, accounting, documents, photos, or AI.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "credential_strategy",
+        label: "Credential strategy",
+        description: "Defines OAuth, API key, webhook, or server-to-server credential handling.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "data_scope",
+        label: "Data scope",
+        description: "Minimum WeatherTech OS data the future provider is approved to access.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "security_review",
+        label: "Security review",
+        description: "Confirm credential storage, scopes, and webhook trust before adding a new provider.",
+      },
+      {
+        id: "data_contract",
+        label: "Data contract check",
+        description: "Confirm the provider maps to existing WeatherTech OS records without schema drift.",
+      },
+      {
+        id: "owner_approval",
+        label: "Owner approval check",
+        description: "Confirm business approval before live credentials, sync, or automation are enabled.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "Provider-specific",
+      callbackPath: null,
+      scopes: [],
+      summary: "OAuth readiness depends on the future provider selected and is disabled until approved.",
+    },
+    connectionSteps: [
+      "Approve the future provider and business workflow.",
+      "Define the minimum data contract and credential strategy.",
+      "Add provider-specific validation and test coverage.",
+      "Enable live access only after security and owner approval.",
+    ],
+    disconnectSummary:
+      "Future provider disconnect behavior will be defined with the approved provider contract.",
+    reconnectSummary:
+      "Future provider reconnect behavior will require provider-specific validation before sync resumes.",
     summaryWhenDisconnected: "Disabled until a future provider is approved for implementation.",
   },
 ];
@@ -458,4 +1018,145 @@ export function integrationHealthStateLabel(state: IntegrationHealthState) {
   };
 
   return labels[state];
+}
+
+export function integrationConnectionWorkflowStatusLabel(
+  state: IntegrationConnectionWorkflowStatus,
+) {
+  const labels: Record<IntegrationConnectionWorkflowStatus, string> = {
+    not_connected: "Not Connected",
+    ready_to_configure: "Ready To Configure",
+    connected: "Connected",
+    disabled: "Disabled",
+    error: "Error",
+  };
+
+  return labels[state];
+}
+
+export function integrationConnectionActionLabel(action: IntegrationConnectionAction) {
+  const labels: Record<IntegrationConnectionAction, string> = {
+    connect: "Connection wizard",
+    configure: "Configuration page",
+    disconnect: "Disconnect flow",
+    reconnect: "Reconnect flow",
+  };
+
+  return labels[action];
+}
+
+function getWorkflowStatus(provider: IntegrationProviderReadiness): IntegrationConnectionWorkflowStatus {
+  if (provider.healthState === "needs_attention") {
+    return "error";
+  }
+
+  if (provider.readinessState === "disabled") {
+    return "disabled";
+  }
+
+  if (provider.connectionState === "connected") {
+    return "connected";
+  }
+
+  if (provider.readinessState === "requires_configuration") {
+    return "ready_to_configure";
+  }
+
+  return "not_connected";
+}
+
+function getWorkflowSummary(
+  provider: IntegrationProviderReadiness,
+  status: IntegrationConnectionWorkflowStatus,
+) {
+  if (status === "connected") {
+    return `${provider.metadata.label} has a saved connection record. Live operations still depend on approved provider credentials and server validation.`;
+  }
+
+  if (status === "error") {
+    return `${provider.metadata.label} needs attention before any live provider workflow can run.`;
+  }
+
+  if (status === "disabled") {
+    return `${provider.metadata.label} is disabled until it is explicitly approved and configured.`;
+  }
+
+  if (status === "ready_to_configure") {
+    return `${provider.metadata.label} has a configuration workflow ready, but no live account is connected.`;
+  }
+
+  return `${provider.metadata.label} is not connected.`;
+}
+
+function getAvailableActions(
+  provider: IntegrationProviderReadiness,
+  status: IntegrationConnectionWorkflowStatus,
+): IntegrationConnectionAction[] {
+  if (provider.metadata.id === "future_provider") {
+    return ["configure"];
+  }
+
+  if (status === "connected" || status === "error") {
+    return ["configure", "reconnect", "disconnect"];
+  }
+
+  if (status === "disabled") {
+    return ["configure", "reconnect"];
+  }
+
+  return ["connect", "configure", "reconnect", "disconnect"];
+}
+
+function getValidationState(
+  provider: IntegrationProviderReadiness,
+): IntegrationCredentialValidationState {
+  if (provider.readinessState === "disabled") {
+    return "blocked";
+  }
+
+  if (provider.connectionState === "connected") {
+    return "ready_for_server_validation";
+  }
+
+  return "requires_configuration";
+}
+
+export function integrationCredentialValidationStateLabel(
+  state: IntegrationCredentialValidationState,
+) {
+  const labels: Record<IntegrationCredentialValidationState, string> = {
+    ready_for_server_validation: "Ready For Server Validation",
+    requires_configuration: "Requires Configuration",
+    blocked: "Blocked",
+  };
+
+  return labels[state];
+}
+
+export function buildIntegrationConnectionWorkflow(
+  provider: IntegrationProviderReadiness,
+): IntegrationConnectionWorkflow {
+  const status = getWorkflowStatus(provider);
+  const validationState = getValidationState(provider);
+  const validationSummary: Record<IntegrationCredentialValidationState, string> = {
+    ready_for_server_validation:
+      "A saved connection record exists. Live validation must run server-side before sync or outbound actions.",
+    requires_configuration:
+      "Configuration is required before server-side credential validation can run.",
+    blocked:
+      "Validation is blocked until this provider is enabled and approved for setup.",
+  };
+
+  return {
+    provider,
+    status,
+    statusSummary: getWorkflowSummary(provider, status),
+    availableActions: getAvailableActions(provider, status),
+    validationResults: provider.metadata.credentialValidationChecks.map((check) => ({
+      ...check,
+      state: validationState,
+      summary: validationSummary[validationState],
+    })),
+    liveConnectivityEnabled: false,
+  };
 }
