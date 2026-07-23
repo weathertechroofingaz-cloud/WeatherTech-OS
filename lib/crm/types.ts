@@ -265,6 +265,51 @@ export type ProviderEventRoutingStatus =
   | "needs_review"
   | "unassigned"
   | "migration_required";
+export type LeadIntakeRecordProvider =
+  | "manual"
+  | "website"
+  | "yelp"
+  | "twilio"
+  | "twilio_sms"
+  | "gohighlevel"
+  | "gmail"
+  | "referral"
+  | "email";
+export type LeadIntakeCompanyKey =
+  | "weathertech_roofing"
+  | "ihc_painting"
+  | "unassigned";
+export type LeadIntakeBranchKey =
+  | "weathertech_phoenix"
+  | "weathertech_tucson"
+  | "ihc"
+  | "unassigned";
+export type LeadIntakeRoutingStatus =
+  | "ready_to_create"
+  | "needs_review"
+  | "unassigned";
+export type LeadIntakeRecordStatus =
+  | "new"
+  | "needs_review"
+  | "lead_created"
+  | "duplicate"
+  | "non_lead"
+  | "dismissed";
+export type LeadIntakeDuplicateConfidence =
+  | "exact_match"
+  | "likely_match"
+  | "possible_match"
+  | "no_match";
+export type LeadIntakeFollowUpState =
+  | "not_required"
+  | "required"
+  | "scheduled"
+  | "completed";
+export type LeadIntakePreferredContactMethod =
+  | "phone"
+  | "sms"
+  | "email"
+  | "unknown";
 export type CallRecordStatus =
   | "incoming"
   | "ringing"
@@ -1032,6 +1077,57 @@ export type CommunicationProviderEventRecord = {
   updated_at: string;
 };
 
+export type LeadIntakeRecord = {
+  id: string;
+  company_id: string | null;
+  linked_lead_id: string | null;
+  linked_customer_id: string | null;
+  related_communication_event_id: string | null;
+  integration_sync_log_id: string | null;
+  provider: LeadIntakeRecordProvider;
+  provider_event_id: string | null;
+  source: string;
+  source_detail: string | null;
+  campaign: string | null;
+  correlation_id: string;
+  company_key: LeadIntakeCompanyKey;
+  branch_key: LeadIntakeBranchKey;
+  routing_status: LeadIntakeRoutingStatus;
+  status: LeadIntakeRecordStatus;
+  duplicate_confidence: LeadIntakeDuplicateConfidence;
+  follow_up_state: LeadIntakeFollowUpState;
+  urgency: LeadPriority;
+  assigned_queue: string | null;
+  assigned_user_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  contact_name: string;
+  company_name: string | null;
+  phone: string | null;
+  email: string | null;
+  service_address: string | null;
+  city: string | null;
+  state: string;
+  postal_code: string | null;
+  requested_service: ServiceType | null;
+  message: string | null;
+  preferred_contact_method: LeadIntakePreferredContactMethod;
+  receiving_business_phone_number: string | null;
+  consent_metadata: Record<string, unknown>;
+  source_metadata: Record<string, unknown>;
+  safe_raw_source_reference: string | null;
+  possible_matches: unknown[];
+  routing_reasons: unknown[];
+  review_notes: string | null;
+  dismissed_at: string | null;
+  dismissed_by: string | null;
+  non_lead_reason: string | null;
+  intake_timestamp: string;
+  original_submission_timestamp: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CallRecord = {
   id: string;
   company_id: string | null;
@@ -1397,6 +1493,54 @@ export type InspectionInput = {
   measurements?: InspectionMeasurement[];
   photo_ids?: string[];
   activity?: InspectionActivityItem[];
+};
+
+export type LeadIntakeRecordInput = {
+  company_id?: string | null;
+  linked_lead_id?: string | null;
+  linked_customer_id?: string | null;
+  related_communication_event_id?: string | null;
+  integration_sync_log_id?: string | null;
+  provider: LeadIntakeRecordProvider;
+  provider_event_id?: string | null;
+  source: string;
+  source_detail?: string | null;
+  campaign?: string | null;
+  correlation_id?: string;
+  company_key?: LeadIntakeCompanyKey;
+  branch_key?: LeadIntakeBranchKey;
+  routing_status?: LeadIntakeRoutingStatus;
+  status?: LeadIntakeRecordStatus;
+  duplicate_confidence?: LeadIntakeDuplicateConfidence;
+  follow_up_state?: LeadIntakeFollowUpState;
+  urgency?: LeadPriority;
+  assigned_queue?: string | null;
+  assigned_user_id?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  contact_name: string;
+  company_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  service_address?: string | null;
+  city?: string | null;
+  state?: string;
+  postal_code?: string | null;
+  requested_service?: ServiceType | null;
+  message?: string | null;
+  preferred_contact_method?: LeadIntakePreferredContactMethod;
+  receiving_business_phone_number?: string | null;
+  consent_metadata?: Record<string, unknown>;
+  source_metadata?: Record<string, unknown>;
+  safe_raw_source_reference?: string | null;
+  possible_matches?: unknown[];
+  routing_reasons?: unknown[];
+  review_notes?: string | null;
+  dismissed_at?: string | null;
+  dismissed_by?: string | null;
+  non_lead_reason?: string | null;
+  intake_timestamp?: string;
+  original_submission_timestamp?: string | null;
 };
 
 export type DailyLogInput = {
@@ -1920,6 +2064,12 @@ export type InspectionInsert = InspectionInput & {
   updated_at?: string;
 };
 
+export type LeadIntakeRecordInsert = LeadIntakeRecordInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type DailyLogInsert = DailyLogInput & {
   id?: string;
   created_at?: string;
@@ -2325,6 +2475,14 @@ export type Database = {
         Insert: LeadSourceMappingInsert;
         Update: Partial<
           Database["public"]["Tables"]["lead_source_mappings"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      lead_intake_records: {
+        Row: LeadIntakeRecord;
+        Insert: LeadIntakeRecordInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["lead_intake_records"]["Insert"]
         >;
         Relationships: [];
       };

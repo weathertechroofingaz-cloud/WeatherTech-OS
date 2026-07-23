@@ -177,6 +177,12 @@ import {
   type GoHighLevelSyncResource,
 } from "../lib/gohighlevel/foundation";
 import {
+  leadIntakeAdapterDefinitions,
+  leadIntakeDuplicateConfidenceLabels,
+  leadIntakeDuplicatePolicy,
+  leadIntakeRoutingBranches,
+} from "../lib/crm/leadRouting";
+import {
   twilioBusinessNumberRouteTemplates,
   twilioLiveFoundationChecklist,
   twilioLiveReadinessLabels,
@@ -4575,6 +4581,156 @@ type UnifiedInboxViewProps = {
   onViewChange: (view: WorkspaceView) => void;
 };
 
+function LeadIntakeRoutingEnginePanel({
+  snapshot,
+  inboxItems,
+}: {
+  snapshot: CrmSnapshot;
+  inboxItems: UnifiedInboxItem[];
+}) {
+  const leadItems = inboxItems.filter((item) => item.kind === "Lead");
+  const intakeLogs = snapshot.integrationSyncLogs.filter((log) =>
+    ["website", "yelp", "twilio", "twilio_sms", "gohighlevel"].includes(log.provider),
+  );
+  const failedIntakeLogs = intakeLogs.filter(
+    (log) => log.status === "failed" || log.status === "retrying",
+  );
+  const reviewItems = leadItems.filter(
+    (item) =>
+      item.isUnassigned ||
+      item.isFailed ||
+      item.status.toLowerCase().includes("new") ||
+      item.summary.toLowerCase().includes("needs review"),
+  );
+  const sourceCounts = leadIntakeAdapterDefinitions.map((adapter) => {
+    const count = leadItems.filter((item) => {
+      if (adapter.provider === "twilio_call") {
+        return item.channel === "phone_call";
+      }
+
+      if (adapter.provider === "twilio_sms") {
+        return item.channel === "sms";
+      }
+
+      if (adapter.provider === "gohighlevel") {
+        return item.channel === "gohighlevel";
+      }
+
+      return item.provider === adapter.provider;
+    }).length;
+
+    return {
+      ...adapter,
+      count,
+    };
+  });
+
+  return (
+    <div
+      className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4"
+      data-testid="lead-intake-routing-engine"
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-bold uppercase text-sky-700">
+            Unified Lead Intake
+          </p>
+          <h3 className="mt-1 text-lg font-black text-slate-950">
+            Lead Intake & Routing Engine
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Normalizes manual entry, website, Yelp, Twilio, and GoHighLevel
+            leads into one reviewable queue. Uncertain company or branch routing
+            stays unassigned for review instead of being guessed.
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[420px]">
+          <ProfileStat label="Intake leads" value={leadItems.length} />
+          <ProfileStat label="Needs review" value={reviewItems.length} />
+          <ProfileStat label="Failed/retry logs" value={failedIntakeLogs.length} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {sourceCounts.map((adapter) => (
+            <div key={adapter.provider} className="rounded-lg bg-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-bold text-slate-950">{adapter.label}</p>
+                <Badge
+                  label={
+                    adapter.status === "active"
+                      ? "Active"
+                      : adapter.status === "ready"
+                        ? "Ready"
+                        : "Setup required"
+                  }
+                  tone={adapter.status === "active" ? "green" : "amber"}
+                />
+              </div>
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                {adapter.summary}
+              </p>
+              <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                {adapter.count} visible CRM item{adapter.count === 1 ? "" : "s"}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <div className="rounded-lg bg-white p-3">
+            <p className="text-sm font-bold text-slate-950">Routing queues</p>
+            <div className="mt-3 grid gap-2">
+              {leadIntakeRoutingBranches.map((branch) => (
+                <div
+                  key={branch.key}
+                  className="flex flex-col gap-1 rounded-md border border-slate-100 p-2 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {branch.label}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Queue: {branch.queue ?? "Manual assignment"}
+                    </p>
+                  </div>
+                  <Badge
+                    label={
+                      branch.status === "review_only"
+                        ? "Needs review"
+                        : branch.status === "active"
+                          ? "Active"
+                          : "Configuration required"
+                    }
+                    tone={branch.status === "active" ? "green" : "amber"}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-white p-3">
+            <p className="text-sm font-bold text-slate-950">
+              Duplicate review policy
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {Object.values(leadIntakeDuplicateConfidenceLabels).map((label) => (
+                <Badge key={label} label={label} tone="blue" />
+              ))}
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Auto-merge is {leadIntakeDuplicatePolicy.autoMerge ? "enabled" : "disabled"}.
+              Exact provider duplicates skip new lead creation; possible customer
+              matches remain manual-review only.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxViewProps) {
   const [providerFilter, setProviderFilter] = useState<InboxFilter>("all");
   const [kindFilter, setKindFilter] = useState<InboxKindFilter>("all");
@@ -4769,6 +4925,11 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         <div className="mt-5">
           <TwilioCommunicationsSetupNotice />
         </div>
+
+        <LeadIntakeRoutingEnginePanel
+          snapshot={snapshot}
+          inboxItems={inboxItems}
+        />
 
         <div className="mt-5 flex flex-wrap gap-2" aria-label="Communication channels">
           {inboxFilters.map((filter) => (

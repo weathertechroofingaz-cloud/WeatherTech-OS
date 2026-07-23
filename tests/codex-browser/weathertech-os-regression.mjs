@@ -2683,6 +2683,29 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     15000,
     { websiteName: websiteLeadName, yelpName: yelpLeadName },
   );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes("lead intake & routing engine") &&
+        text.includes("manual crm entry") &&
+        text.includes("website forms") &&
+        text.includes("yelp") &&
+        text.includes("twilio calls") &&
+        text.includes("twilio sms") &&
+        text.includes("gohighlevel") &&
+        text.includes("weathertech roofing llc - phoenix") &&
+        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("ihc painting") &&
+        text.includes("unassigned review queue") &&
+        text.includes("auto-merge is disabled")
+      );
+    },
+    "Unified lead intake routing engine panel",
+    15000,
+  );
 
   await clickNav(tab, "Leads");
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), websiteLeadName, "website lead search");

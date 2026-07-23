@@ -19,21 +19,39 @@ import {
   type LeadSourceMappingResolution,
 } from "./leadSourceMappings";
 import {
+  detectLeadIntakeDuplicates,
+  getStrongestLeadIntakeDuplicateConfidence,
+  normalizeWebsiteLeadIntake,
+  normalizeYelpLeadIntake,
+  routeCanonicalLeadIntake,
+  type CanonicalLeadCompanyKey,
+  type CanonicalLeadIntake,
+  type CanonicalLeadBranchKey,
+  type LeadIntakeDuplicateConfidence,
+  type LeadIntakeDuplicateMatch,
+  type LeadIntakeRoutingConfidence,
+  type LeadIntakeRoutingStatus,
+  type LeadIntakeUrgency,
+} from "./leadRouting";
+import {
   createIntegrationSyncLog,
   createLead,
   updateIntegrationSyncLog,
 } from "./repository";
 import type {
   CompanyRecord,
+  CustomerRecord,
   Database,
   IntegrationProvider,
   IntegrationSyncLogRecord,
+  LeadIntakeRecordInput,
   LeadInput,
+  LeadRecord,
   ServiceType,
 } from "./types";
 
 type CrmClient = SupabaseClient<Database>;
-type BusinessKey = "IHC" | "WeatherTech";
+type BusinessKey = "IHC" | "WeatherTech" | "Unassigned";
 export type LeadIntakeProvider = Extract<IntegrationProvider, "website" | "yelp">;
 
 export type WebsiteLeadRequestBody = {
@@ -92,6 +110,9 @@ export type LeadIntakeResponseStatus =
   | "validation_failed"
   | "crm_not_configured"
   | "company_not_found"
+  | "routing_needs_review"
+  | "accepted_for_review"
+  | "migration_required"
   | "not_found"
   | "error";
 
@@ -101,25 +122,52 @@ export type LeadIntakeResponse = {
   provider?: LeadIntakeProvider;
   leadId?: string;
   duplicateOfLeadId?: string;
+  intakeRecordId?: string;
   syncLogId?: string;
   retriedSyncLogId?: string;
+  routing?: LeadIntakeResponseRouting;
+  duplicateConfidence?: LeadIntakeDuplicateConfidence;
   warnings: string[];
+};
+
+type LeadIntakeResponseRouting = {
+  company: CanonicalLeadCompanyKey;
+  branch: CanonicalLeadBranchKey;
+  status: LeadIntakeRoutingStatus;
+  confidence: LeadIntakeRoutingConfidence;
+  assignedQueue: string | null;
 };
 
 type NormalizedLeadIntake = {
   provider: LeadIntakeProvider;
   business: BusinessKey;
+  companyKey: CanonicalLeadCompanyKey;
+  branchKey: CanonicalLeadBranchKey;
+  routingStatus: LeadIntakeRoutingStatus;
+  routingConfidence: LeadIntakeRoutingConfidence;
+  routingReasons: string[];
+  assignedQueue: string | null;
   source: string;
   contactName: string;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   propertyAddress: string;
   location: string | null;
+  state: string | null;
+  postalCode: string | null;
   serviceType: ServiceType;
   message: string | null;
+  preferredContactMethod: CanonicalLeadIntake["preferredContactMethod"];
   externalLeadId: string | null;
   submittedAt: string;
   sourceAccount: string | null;
+  campaign: string | null;
+  receivingBusinessPhoneNumber: string | null;
+  assignedUserId: string | null;
+  urgency: LeadIntakeUrgency;
   websiteUrl: string | null;
   yelpBusinessId: string | null;
   yelpConversationId: string | null;
@@ -130,6 +178,7 @@ type NormalizedLeadIntake = {
   sourceMappingId: string | null;
   sourceMappingDisplayName: string | null;
   sourceMappingMatchType: string | null;
+  duplicateConfidence: LeadIntakeDuplicateConfidence;
   warnings: string[];
 };
 
@@ -169,6 +218,51 @@ export const LEAD_INTAKE_EVENT_TYPES: Record<LeadIntakeProvider, string> = {
 const DEFAULT_WEBSITE_ADDRESS = "Website lead - address pending";
 const DEFAULT_YELP_ADDRESS = "Yelp lead - address pending";
 const LEAD_INTAKE_MAX_ATTEMPTS = 3;
+
+function businessFromCompanyKey(companyKey: CanonicalLeadCompanyKey): BusinessKey {
+  if (companyKey === "ihc_painting") {
+    return "IHC";
+  }
+
+  if (companyKey === "weathertech_roofing") {
+    return "WeatherTech";
+  }
+
+  return "Unassigned";
+}
+
+function companyKeyFromBusiness(business: BusinessKey): CanonicalLeadCompanyKey {
+  if (business === "IHC") {
+    return "ihc_painting";
+  }
+
+  if (business === "WeatherTech") {
+    return "weathertech_roofing";
+  }
+
+  return "unassigned";
+}
+
+function branchLabel(branchKey: CanonicalLeadBranchKey) {
+  const labels: Record<CanonicalLeadBranchKey, string> = {
+    weathertech_phoenix: "WeatherTech Phoenix",
+    weathertech_tucson: "WeatherTech Tucson",
+    ihc: "IHC",
+    unassigned: "Unassigned",
+  };
+
+  return labels[branchKey];
+}
+
+function responseRouting(lead: NormalizedLeadIntake): LeadIntakeResponseRouting {
+  return {
+    company: lead.companyKey,
+    branch: lead.branchKey,
+    status: lead.routingStatus,
+    confidence: lead.routingConfidence,
+    assignedQueue: lead.assignedQueue,
+  };
+}
 
 function getText(value: unknown, maxLength = 500) {
   if (typeof value === "string") {
@@ -462,6 +556,17 @@ function applyLeadSourceMapping(
   }
 
   const mappedLocation = resolution.mapping.location || lead.location;
+  const nextBusiness = mappedBusiness ?? lead.business;
+  const nextCompanyKey = companyKeyFromBusiness(nextBusiness);
+  const nextRouting = routeCanonicalLeadIntake({
+    explicitCompany: resolution.mapping.business,
+    requestedService: lead.serviceType,
+    city: mappedLocation,
+    postalCode: lead.postalCode,
+    websiteUrl: lead.websiteUrl,
+    yelpBusinessId: lead.yelpBusinessId,
+    sourceDetail: resolution.mapping.external_source_id ?? resolution.mapping.display_name,
+  });
   const defaultAddress =
     lead.provider === "website" ? DEFAULT_WEBSITE_ADDRESS : DEFAULT_YELP_ADDRESS;
   const shouldUseMappedAddress =
@@ -471,7 +576,13 @@ function applyLeadSourceMapping(
 
   return {
     ...lead,
-    business: mappedBusiness ?? lead.business,
+    business: nextBusiness,
+    companyKey: nextCompanyKey,
+    branchKey: nextRouting.branchKey,
+    routingStatus: nextRouting.status,
+    routingConfidence: nextRouting.confidence,
+    routingReasons: [...lead.routingReasons, ...nextRouting.reasons],
+    assignedQueue: nextRouting.assignedQueue,
     sourceAccount:
       lead.provider === "yelp"
         ? resolution.mapping.display_name
@@ -492,36 +603,31 @@ export function normalizeWebsiteLeadBody(
 ): NormalizeSuccess | NormalizeFailure {
   const warnings: string[] = [];
   const errors: string[] = [];
-  const rawName = getText(body.name, 160);
-  const phone = normalizePhone(body.phone);
+  const canonical = normalizeWebsiteLeadIntake(body as Record<string, unknown>);
+  const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
+  const phone = canonical.phone ?? normalizePhone(body.phone);
   const { email, warning: emailWarning } = normalizeEmail(body.email);
-  const businessResult = normalizeBusinessFromWebsite(body);
+  const business = businessFromCompanyKey(canonical.companyKey);
 
   if (emailWarning) {
     warnings.push(emailWarning);
   }
 
-  if (businessResult.warning) {
-    warnings.push(businessResult.warning);
-  }
-
-  if (!businessResult.business) {
-    errors.push(businessResult.warning);
-  }
+  warnings.push(...canonical.warnings);
 
   if (!rawName && !phone && !email) {
     errors.push("At least one contact field is required: name, phone, or email.");
   }
 
-  if (errors.length > 0 || !businessResult.business) {
+  if (errors.length > 0) {
     return { lead: null, errors, warnings };
   }
 
-  const location = getText(body.location, 160);
-  const address = getText(body.address, 240) ?? location ?? DEFAULT_WEBSITE_ADDRESS;
+  const location = canonical.city ?? getText(body.location, 160);
+  const address = canonical.serviceAddress ?? location ?? DEFAULT_WEBSITE_ADDRESS;
   const { serviceType, warning: serviceWarning } = normalizeServiceType(
     body.serviceType,
-    businessResult.business,
+    business === "Unassigned" ? "WeatherTech" : business,
   );
 
   if (!getText(body.address, 240)) {
@@ -539,18 +645,34 @@ export function normalizeWebsiteLeadBody(
   return {
     lead: {
       provider: "website",
-      business: businessResult.business,
+      business,
+      companyKey: canonical.companyKey,
+      branchKey: canonical.branchKey,
+      routingStatus: canonical.routing.status,
+      routingConfidence: canonical.routing.confidence,
+      routingReasons: canonical.routing.reasons,
+      assignedQueue: canonical.assignedQueue,
       source: normalizeSource(body.source, "website"),
       contactName: rawName ?? phone ?? email ?? "Website lead",
+      firstName: canonical.firstName,
+      lastName: canonical.lastName,
+      companyName: canonical.companyName,
       phone,
       email,
       propertyAddress: address,
       location,
+      state: canonical.state,
+      postalCode: canonical.postalCode,
       serviceType,
       message: getText(body.message, 1500),
       externalLeadId: normalizeWebsiteExternalLeadId(body),
       submittedAt: normalizeTimestamp(body.submittedAt, body.timestamp, body.receivedAt),
       sourceAccount: getText(body.websiteUrl, 240),
+      campaign: canonical.campaign,
+      receivingBusinessPhoneNumber: canonical.receivingBusinessPhoneNumber,
+      assignedUserId: canonical.assignedUserId,
+      urgency: canonical.urgency,
+      preferredContactMethod: canonical.preferredContactMethod,
       websiteUrl: getText(body.websiteUrl, 240),
       yelpBusinessId: getText(body.yelpBusinessId, 160),
       yelpConversationId: null,
@@ -561,6 +683,7 @@ export function normalizeWebsiteLeadBody(
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
+      duplicateConfidence: "no_match",
       warnings,
     },
     errors: [],
@@ -572,23 +695,18 @@ export function normalizeYelpLeadBody(
 ): NormalizeSuccess | NormalizeFailure {
   const warnings: string[] = [];
   const errors: string[] = [];
-  const rawName = getText(body.name, 160);
-  const phone = normalizePhone(body.phone);
+  const canonical = normalizeYelpLeadIntake(body as Record<string, unknown>);
+  const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
+  const phone = canonical.phone ?? normalizePhone(body.phone);
   const { email, warning: emailWarning } = normalizeEmail(body.email);
-  const message = getText(body.message, 1500);
-  const businessResult = normalizeBusinessFromYelp(body);
+  const message = canonical.message ?? getText(body.message, 1500);
+  const business = businessFromCompanyKey(canonical.companyKey);
 
   if (emailWarning) {
     warnings.push(emailWarning);
   }
 
-  if (businessResult.warning) {
-    warnings.push(businessResult.warning);
-  }
-
-  if (!businessResult.business) {
-    errors.push(businessResult.warning);
-  }
+  warnings.push(...canonical.warnings);
 
   if (!rawName && !phone && !email && !message) {
     errors.push(
@@ -596,14 +714,14 @@ export function normalizeYelpLeadBody(
     );
   }
 
-  if (errors.length > 0 || !businessResult.business) {
+  if (errors.length > 0) {
     return { lead: null, errors, warnings };
   }
 
-  const location = getText(body.location, 160);
+  const location = canonical.city ?? getText(body.location, 160);
   const { serviceType, warning: serviceWarning } = normalizeServiceType(
     body.serviceType,
-    businessResult.business,
+    business === "Unassigned" ? "WeatherTech" : business,
   );
 
   if (!location) {
@@ -621,18 +739,37 @@ export function normalizeYelpLeadBody(
   return {
     lead: {
       provider: "yelp",
-      business: businessResult.business,
+      business,
+      companyKey: canonical.companyKey,
+      branchKey: canonical.branchKey,
+      routingStatus: canonical.routing.status,
+      routingConfidence: canonical.routing.confidence,
+      routingReasons: canonical.routing.reasons,
+      assignedQueue: canonical.assignedQueue,
       source: normalizeSource(body.source, "yelp"),
       contactName: rawName ?? phone ?? email ?? "Yelp lead",
+      firstName: canonical.firstName,
+      lastName: canonical.lastName,
+      companyName: canonical.companyName,
       phone,
       email,
-      propertyAddress: location ?? DEFAULT_YELP_ADDRESS,
+      propertyAddress: canonical.serviceAddress ?? location ?? DEFAULT_YELP_ADDRESS,
       location,
+      state: canonical.state,
+      postalCode: canonical.postalCode,
       serviceType,
       message,
       externalLeadId: yelpLeadId ?? yelpConversationId,
       submittedAt: normalizeTimestamp(body.submittedAt, body.timestamp, body.receivedAt),
-      sourceAccount: getYelpAccountLabel(body, businessResult.business),
+      sourceAccount:
+        business === "Unassigned"
+          ? getText(body.yelpBusinessId, 160)
+          : getYelpAccountLabel(body, business),
+      campaign: canonical.campaign,
+      receivingBusinessPhoneNumber: canonical.receivingBusinessPhoneNumber,
+      assignedUserId: canonical.assignedUserId,
+      urgency: canonical.urgency,
+      preferredContactMethod: canonical.preferredContactMethod,
       websiteUrl: null,
       yelpBusinessId,
       yelpConversationId,
@@ -643,6 +780,7 @@ export function normalizeYelpLeadBody(
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
+      duplicateConfidence: "no_match",
       warnings,
     },
     errors: [],
@@ -657,6 +795,10 @@ function findCompanyForBusiness(
   companies: CompanyRecord[],
   business: BusinessKey,
 ) {
+  if (business === "Unassigned") {
+    return null;
+  }
+
   if (business === "IHC") {
     return (
       companies.find((company) => getCompanyText(company).includes("ihc")) ??
@@ -668,6 +810,142 @@ function findCompanyForBusiness(
     companies.find((company) => getCompanyText(company).includes("weathertech")) ??
     companies.find((company) => company.trade === "roofing")
   );
+}
+
+function isMissingLeadIntakeRecordsTable(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+
+  return (
+    candidate.code === "42P01" ||
+    message.includes("lead_intake_records") ||
+    message.includes("Could not find the table")
+  );
+}
+
+function buildIntakeRecordMetadata(
+  lead: NormalizedLeadIntake,
+  matches: LeadIntakeDuplicateMatch[],
+) {
+  return {
+    sourceMapping: {
+      id: lead.sourceMappingId,
+      displayName: lead.sourceMappingDisplayName,
+      matchType: lead.sourceMappingMatchType,
+    },
+    duplicatePolicy: {
+      autoMerge: false,
+      confidence: lead.duplicateConfidence,
+    },
+    duplicateMatches: matches.slice(0, 6).map((match) => ({
+      confidence: match.confidence,
+      recordType: match.candidate?.recordType ?? null,
+      recordId: match.candidate?.id ?? null,
+      reasons: match.reasons,
+      autoMerge: false,
+    })),
+  };
+}
+
+async function tryCreateLeadIntakeRecord({
+  client,
+  company,
+  lead,
+  status,
+  linkedLeadId = null,
+  duplicateMatches = [],
+  syncLogId = null,
+  reviewNotes = null,
+}: {
+  client: CrmClient;
+  company: CompanyRecord | null;
+  lead: NormalizedLeadIntake;
+  status:
+    | "new"
+    | "needs_review"
+    | "lead_created"
+    | "duplicate"
+    | "non_lead"
+    | "dismissed";
+  linkedLeadId?: string | null;
+  duplicateMatches?: LeadIntakeDuplicateMatch[];
+  syncLogId?: string | null;
+  reviewNotes?: string | null;
+}) {
+  const insert: LeadIntakeRecordInput = {
+    company_id: company?.id ?? null,
+    linked_lead_id: linkedLeadId,
+    integration_sync_log_id: syncLogId,
+    provider: lead.provider,
+    provider_event_id: lead.externalLeadId,
+    source: lead.source,
+    source_detail: lead.sourceAccount,
+    campaign: lead.campaign,
+    company_key: lead.companyKey,
+    branch_key: lead.branchKey,
+    routing_status: lead.routingStatus,
+    status,
+    duplicate_confidence: lead.duplicateConfidence,
+    follow_up_state: lead.routingStatus === "needs_review" ? "required" : "not_required",
+    urgency: lead.urgency,
+    assigned_queue: lead.assignedQueue,
+    assigned_user_id: lead.assignedUserId,
+    first_name: lead.firstName,
+    last_name: lead.lastName,
+    contact_name: lead.contactName,
+    company_name: lead.companyName,
+    phone: lead.phone,
+    email: lead.email,
+    service_address: lead.propertyAddress,
+    city: lead.location,
+    state: lead.state ?? "AZ",
+    postal_code: lead.postalCode,
+    requested_service: lead.serviceType,
+    message: lead.message,
+    preferred_contact_method: lead.preferredContactMethod,
+    receiving_business_phone_number: lead.receivingBusinessPhoneNumber,
+    source_metadata: buildIntakeRecordMetadata(lead, duplicateMatches),
+    possible_matches: duplicateMatches.slice(0, 6).map((match) => ({
+      confidence: match.confidence,
+      recordType: match.candidate?.recordType ?? null,
+      recordId: match.candidate?.id ?? null,
+      name: match.candidate?.name ?? null,
+      reasons: match.reasons,
+    })),
+    routing_reasons: lead.routingReasons,
+    review_notes: reviewNotes,
+    intake_timestamp: new Date().toISOString(),
+    original_submission_timestamp: lead.submittedAt,
+  };
+
+  const { data, error } = await client
+    .from("lead_intake_records")
+    .insert(insert)
+    .select("id")
+    .single();
+
+  if (error) {
+    if (isMissingLeadIntakeRecordsTable(error)) {
+      return {
+        status: "missing_table" as const,
+        id: null,
+        warning:
+          "Lead intake review record was not stored because migration 0022 has not been applied.",
+      };
+    }
+
+    throw error;
+  }
+
+  return {
+    status: "created" as const,
+    id: data?.id ?? null,
+    warning: null,
+  };
 }
 
 async function getCompanyForLeadIntake(
@@ -717,17 +995,33 @@ function buildRetryPayload(lead: NormalizedLeadIntake) {
   return {
     provider: lead.provider,
     business: lead.business,
+    companyKey: lead.companyKey,
+    branchKey: lead.branchKey,
+    routingStatus: lead.routingStatus,
+    routingConfidence: lead.routingConfidence,
+    routingReasons: lead.routingReasons,
+    assignedQueue: lead.assignedQueue,
     source: lead.source,
     contactName: lead.contactName,
+    firstName: lead.firstName,
+    lastName: lead.lastName,
+    companyName: lead.companyName,
     phone: lead.phone,
     email: lead.email,
     propertyAddress: lead.propertyAddress,
     location: lead.location,
+    state: lead.state,
+    postalCode: lead.postalCode,
     serviceType: lead.serviceType,
     message: lead.message,
+    preferredContactMethod: lead.preferredContactMethod,
     externalLeadId: lead.externalLeadId,
     submittedAt: lead.submittedAt,
     sourceAccount: lead.sourceAccount,
+    campaign: lead.campaign,
+    receivingBusinessPhoneNumber: lead.receivingBusinessPhoneNumber,
+    assignedUserId: lead.assignedUserId,
+    urgency: lead.urgency,
     websiteUrl: lead.websiteUrl,
     yelpBusinessId: lead.yelpBusinessId,
     yelpConversationId: lead.yelpConversationId,
@@ -843,8 +1137,14 @@ function buildRequestSummary(lead: NormalizedLeadIntake) {
   return sanitizeIntegrationSyncLogSummary({
     provider: lead.provider,
     business: lead.business,
+    companyKey: lead.companyKey,
+    branchKey: lead.branchKey,
+    routingStatus: lead.routingStatus,
+    routingConfidence: lead.routingConfidence,
+    assignedQueue: lead.assignedQueue,
     source: lead.source,
     sourceAccount: lead.sourceAccount,
+    campaign: lead.campaign,
     submittedAt: lead.submittedAt,
     externalLeadId: lead.externalLeadId,
     websiteUrl: lead.websiteUrl,
@@ -858,6 +1158,10 @@ function buildRequestSummary(lead: NormalizedLeadIntake) {
       id: lead.sourceMappingId,
       displayName: lead.sourceMappingDisplayName,
       matchType: lead.sourceMappingMatchType,
+    },
+    duplicate: {
+      confidence: lead.duplicateConfidence,
+      autoMerge: false,
     },
     contact: {
       hasName: Boolean(lead.contactName),
@@ -893,6 +1197,12 @@ function buildLeadNotes(lead: NormalizedLeadIntake) {
   return [
     `${label} lead intake mapping:`,
     `Business: ${lead.business}`,
+    `Company routing: ${lead.companyKey}`,
+    `Branch routing: ${branchLabel(lead.branchKey)}`,
+    `Routing status: ${lead.routingStatus}`,
+    `Assigned queue: ${lead.assignedQueue ?? "Unassigned review"}`,
+    `Routing reasons: ${lead.routingReasons.join(" | ") || "Not provided"}`,
+    `Duplicate confidence: ${lead.duplicateConfidence}`,
     `Source: ${lead.source}`,
     `Account/campaign: ${lead.sourceAccount ?? lead.utmCampaign ?? "Not provided"}`,
     `External Lead ID: ${lead.externalLeadId ?? "Not provided"}`,
@@ -921,8 +1231,8 @@ function buildLeadInput(company: CompanyRecord, lead: NormalizedLeadIntake): Lea
     email: lead.email,
     property_address: lead.propertyAddress,
     city: lead.location,
-    state: "AZ",
-    postal_code: null,
+    state: lead.state ?? "AZ",
+    postal_code: lead.postalCode,
     service_type: lead.serviceType,
     source: lead.source,
     status: "new",
@@ -1021,6 +1331,123 @@ async function findDuplicateIntakeLog({
   }
 
   return findBy("request_fingerprint", requestFingerprint);
+}
+
+function toDuplicateCandidateFromLead(lead: LeadRecord) {
+  return {
+    id: lead.id,
+    recordType: "lead" as const,
+    companyId: lead.company_id,
+    name: lead.contact_name,
+    phone: lead.phone,
+    email: lead.email,
+    address: lead.property_address,
+    source: lead.source,
+    createdAt: lead.created_at,
+  };
+}
+
+function toDuplicateCandidateFromCustomer(customer: CustomerRecord) {
+  return {
+    id: customer.id,
+    recordType: "customer" as const,
+    companyId: customer.company_id,
+    name: customer.display_name || customer.contact_name,
+    phone: customer.phone,
+    email: customer.email,
+    address: customer.property_address,
+    source: "Customer",
+    createdAt: customer.created_at,
+  };
+}
+
+function toCanonicalForDuplicateCheck(
+  lead: NormalizedLeadIntake,
+): CanonicalLeadIntake {
+  return {
+    firstName: lead.firstName,
+    lastName: lead.lastName,
+    companyName: lead.companyName,
+    fullName: lead.contactName,
+    phone: lead.phone,
+    email: lead.email,
+    serviceAddress: lead.propertyAddress,
+    city: lead.location,
+    state: lead.state,
+    postalCode: lead.postalCode,
+    requestedService: lead.serviceType,
+    message: lead.message,
+    preferredContactMethod: lead.preferredContactMethod,
+    leadSource: lead.source,
+    sourceDetail: lead.sourceAccount,
+    provider: lead.provider,
+    providerExternalId: lead.externalLeadId,
+    campaign: lead.campaign,
+    companyKey: lead.companyKey,
+    branchKey: lead.branchKey,
+    receivingBusinessPhoneNumber: lead.receivingBusinessPhoneNumber,
+    assignedQueue: lead.assignedQueue,
+    assignedUserId: lead.assignedUserId,
+    intakeTimestamp: new Date().toISOString(),
+    originalSubmissionTimestamp: lead.submittedAt,
+    urgency: lead.urgency,
+    status: lead.routingStatus === "ready_to_create" ? "ready_to_create" : "needs_review",
+    duplicateConfidence: lead.duplicateConfidence,
+    followUpState: "not_required",
+    consentMetadata: {
+      smsConsent: null,
+      emailConsent: null,
+      source: null,
+      capturedAt: null,
+    },
+    safeRawSourceReference: null,
+    routing: {
+      companyKey: lead.companyKey,
+      branchKey: lead.branchKey,
+      status: lead.routingStatus,
+      confidence: lead.routingConfidence,
+      assignedQueue: lead.assignedQueue,
+      reasons: lead.routingReasons,
+      warnings: lead.warnings,
+    },
+    warnings: lead.warnings,
+  };
+}
+
+async function findCrmDuplicateMatches(
+  client: CrmClient,
+  company: CompanyRecord,
+  lead: NormalizedLeadIntake,
+) {
+  const [leadRows, customerRows] = await Promise.all([
+    client
+      .from("leads")
+      .select("*")
+      .eq("company_id", company.id)
+      .order("updated_at", { ascending: false })
+      .limit(250),
+    client
+      .from("customers")
+      .select("*")
+      .eq("company_id", company.id)
+      .order("updated_at", { ascending: false })
+      .limit(250),
+  ]);
+
+  if (leadRows.error) {
+    throw leadRows.error;
+  }
+
+  if (customerRows.error) {
+    throw customerRows.error;
+  }
+
+  return detectLeadIntakeDuplicates(toCanonicalForDuplicateCheck(lead), [
+    ...((leadRows.data ?? []) as LeadRecord[]).map(toDuplicateCandidateFromLead),
+    ...((customerRows.data ?? []) as CustomerRecord[]).map(
+      toDuplicateCandidateFromCustomer,
+    ),
+  ]);
 }
 
 async function logLeadIntakeSuccess({
@@ -1193,11 +1620,67 @@ export async function processLeadIntake(
   lead: NormalizedLeadIntake,
   { logOutcome = true }: LeadIntakeProcessOptions = {},
 ): Promise<LeadIntakeProcessResult> {
-  const mappedLead = applyLeadSourceMapping(
+  let mappedLead = applyLeadSourceMapping(
     lead,
     await resolveSourceMapping(client, lead),
   );
+  const requestFingerprint = buildLeadIntakeFingerprint(mappedLead);
+  const externalId = getLeadIntakeExternalId(mappedLead);
   const company = await getCompanyForLeadIntake(client, mappedLead.business);
+
+  if (!company || mappedLead.routingStatus !== "ready_to_create") {
+    try {
+      const intakeRecord = await tryCreateLeadIntakeRecord({
+        client,
+        company,
+        lead: mappedLead,
+        status: "needs_review",
+        reviewNotes:
+          mappedLead.business === "Unassigned"
+            ? "Company routing is unassigned. Review before creating a CRM lead."
+            : "Branch routing is unassigned. Review before creating a CRM lead.",
+      });
+
+      if (intakeRecord.status === "missing_table") {
+        return {
+          ok: false,
+          provider: mappedLead.provider,
+          status: "migration_required",
+          routing: responseRouting(mappedLead),
+          duplicateConfidence: mappedLead.duplicateConfidence,
+          warnings: [
+            intakeRecord.warning,
+            "Migration 0022 is required before uncertain intake can be safely retained for review.",
+          ],
+          requestFingerprint,
+          externalId,
+        };
+      }
+
+      return {
+        ok: true,
+        provider: mappedLead.provider,
+        status: "accepted_for_review",
+        intakeRecordId: intakeRecord.id ?? undefined,
+        routing: responseRouting(mappedLead),
+        duplicateConfidence: mappedLead.duplicateConfidence,
+        warnings: mappedLead.warnings,
+        requestFingerprint,
+        externalId,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        provider: mappedLead.provider,
+        status: "routing_needs_review",
+        routing: responseRouting(mappedLead),
+        duplicateConfidence: mappedLead.duplicateConfidence,
+        warnings: [describeSafeError(error)],
+        requestFingerprint,
+        externalId,
+      };
+    }
+  }
 
   if (!company) {
     return {
@@ -1208,18 +1691,32 @@ export async function processLeadIntake(
     };
   }
 
-  const requestFingerprint = buildLeadIntakeFingerprint(mappedLead);
-  const externalId = getLeadIntakeExternalId(mappedLead);
   const duplicate = await findDuplicateIntakeLog({
     client,
     lead: mappedLead,
     externalId,
     requestFingerprint,
   });
+  const duplicateMatches = await findCrmDuplicateMatches(client, company, mappedLead);
+  const duplicateConfidence =
+    duplicate?.related_record_id
+      ? "exact_match"
+      : getStrongestLeadIntakeDuplicateConfidence(duplicateMatches);
+  mappedLead = {
+    ...mappedLead,
+    duplicateConfidence,
+  };
+  const exactLeadMatch = duplicateMatches.find(
+    (match) =>
+      match.confidence === "exact_match" && match.candidate?.recordType === "lead",
+  );
   const warnings = [...mappedLead.warnings];
 
-  if (duplicate?.related_record_id) {
+  if (duplicate?.related_record_id || exactLeadMatch?.candidate?.id) {
+    const duplicateLeadId =
+      duplicate?.related_record_id ?? exactLeadMatch?.candidate?.id ?? "";
     let syncLogId: string | undefined;
+    let intakeRecordId: string | undefined;
 
     if (logOutcome) {
       try {
@@ -1227,7 +1724,7 @@ export async function processLeadIntake(
           client,
           company,
           lead: mappedLead,
-          duplicateLeadId: duplicate.related_record_id,
+          duplicateLeadId,
           requestFingerprint,
           externalId,
           warnings,
@@ -1240,13 +1737,39 @@ export async function processLeadIntake(
       }
     }
 
+    try {
+      const intakeRecord = await tryCreateLeadIntakeRecord({
+        client,
+        company,
+        lead: mappedLead,
+        status: "duplicate",
+        linkedLeadId: duplicateLeadId,
+        duplicateMatches,
+        syncLogId: syncLogId ?? null,
+        reviewNotes: "Duplicate lead creation skipped. Manual review can link records if needed.",
+      });
+
+      if (intakeRecord.status === "created" && intakeRecord.id) {
+        intakeRecordId = intakeRecord.id;
+      } else if (intakeRecord.warning) {
+        warnings.push(intakeRecord.warning);
+      }
+    } catch (error) {
+      warnings.push(
+        `Duplicate was detected, but intake review record creation failed: ${describeSafeError(error)}`,
+      );
+    }
+
     return {
       ok: true,
       provider: mappedLead.provider,
       status: responseStatusForDuplicate(warnings),
-      leadId: duplicate.related_record_id,
-      duplicateOfLeadId: duplicate.related_record_id,
+      leadId: duplicateLeadId,
+      duplicateOfLeadId: duplicateLeadId,
+      intakeRecordId,
       syncLogId,
+      routing: responseRouting(mappedLead),
+      duplicateConfidence,
       warnings,
       requestFingerprint,
       externalId,
@@ -1276,12 +1799,43 @@ export async function processLeadIntake(
       }
     }
 
+    let intakeRecordId: string | undefined;
+
+    try {
+      const intakeRecord = await tryCreateLeadIntakeRecord({
+        client,
+        company,
+        lead: mappedLead,
+        status: "lead_created",
+        linkedLeadId: createdLead.id,
+        duplicateMatches,
+        syncLogId: syncLogId ?? null,
+        reviewNotes:
+          duplicateConfidence === "no_match"
+            ? null
+            : "Possible existing record found. No records were merged automatically.",
+      });
+
+      if (intakeRecord.status === "created" && intakeRecord.id) {
+        intakeRecordId = intakeRecord.id;
+      } else if (intakeRecord.warning) {
+        warnings.push(intakeRecord.warning);
+      }
+    } catch (error) {
+      warnings.push(
+        `Lead was created, but intake review record creation failed: ${describeSafeError(error)}`,
+      );
+    }
+
     return {
       ok: true,
       provider: mappedLead.provider,
       status: responseStatusForSuccess(warnings),
       leadId: createdLead.id,
+      intakeRecordId,
       syncLogId,
+      routing: responseRouting(mappedLead),
+      duplicateConfidence,
       warnings,
       requestFingerprint,
       externalId,
@@ -1312,6 +1866,8 @@ export async function processLeadIntake(
       provider: mappedLead.provider,
       status: "error",
       syncLogId,
+      routing: responseRouting(mappedLead),
+      duplicateConfidence,
       warnings: [describeSafeError(error)],
       requestFingerprint,
       externalId,
@@ -1340,7 +1896,9 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
     : null;
   const business = payload.business === "IHC" || payload.business === "WeatherTech"
     ? payload.business
-    : null;
+    : payload.business === "Unassigned"
+      ? payload.business
+      : null;
   const serviceType =
     payload.serviceType === "roofing" ||
     payload.serviceType === "painting" ||
@@ -1354,20 +1912,83 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
     return null;
   }
 
+  const companyKey =
+    payload.companyKey === "weathertech_roofing" ||
+    payload.companyKey === "ihc_painting" ||
+    payload.companyKey === "unassigned"
+      ? payload.companyKey
+      : companyKeyFromBusiness(business);
+  const route = routeCanonicalLeadIntake({
+    explicitCompany: business,
+    requestedService: serviceType,
+    city: getText(payload.location, 160),
+    postalCode: getText(payload.postalCode, 20),
+    websiteUrl: getText(payload.websiteUrl, 240),
+    yelpBusinessId: getText(payload.yelpBusinessId, 160),
+    sourceDetail: getText(payload.sourceAccount, 240),
+  });
+  const branchKey =
+    payload.branchKey === "weathertech_phoenix" ||
+    payload.branchKey === "weathertech_tucson" ||
+    payload.branchKey === "ihc" ||
+    payload.branchKey === "unassigned"
+      ? payload.branchKey
+      : route.branchKey;
+
   return {
     provider,
     business,
+    companyKey,
+    branchKey,
+    routingStatus:
+      payload.routingStatus === "ready_to_create" ||
+      payload.routingStatus === "needs_review" ||
+      payload.routingStatus === "unassigned"
+        ? payload.routingStatus
+        : route.status,
+    routingConfidence:
+      payload.routingConfidence === "verified" ||
+      payload.routingConfidence === "inferred" ||
+      payload.routingConfidence === "uncertain"
+        ? payload.routingConfidence
+        : route.confidence,
+    routingReasons: Array.isArray(payload.routingReasons)
+      ? payload.routingReasons.filter((value): value is string => typeof value === "string")
+      : route.reasons,
+    assignedQueue: getText(payload.assignedQueue, 120) ?? route.assignedQueue,
     source: getText(payload.source, 80) ?? (provider === "website" ? "Website" : "Yelp"),
     contactName,
+    firstName: getText(payload.firstName, 80),
+    lastName: getText(payload.lastName, 120),
+    companyName: getText(payload.companyName, 160),
     phone: normalizePhone(payload.phone),
     email: normalizeEmail(payload.email).email,
     propertyAddress,
     location: getText(payload.location, 160),
+    state: getText(payload.state, 40) ?? "AZ",
+    postalCode: getText(payload.postalCode, 20),
     serviceType,
     message: getText(payload.message, 1500),
+    preferredContactMethod:
+      payload.preferredContactMethod === "phone" ||
+      payload.preferredContactMethod === "sms" ||
+      payload.preferredContactMethod === "email" ||
+      payload.preferredContactMethod === "unknown"
+        ? payload.preferredContactMethod
+        : "unknown",
     externalLeadId: getText(payload.externalLeadId, 160),
     submittedAt: normalizeTimestamp(payload.submittedAt),
     sourceAccount: getText(payload.sourceAccount, 240),
+    campaign: getText(payload.campaign, 160),
+    receivingBusinessPhoneNumber: getText(payload.receivingBusinessPhoneNumber, 40),
+    assignedUserId: getText(payload.assignedUserId, 80),
+    urgency:
+      payload.urgency === "low" ||
+      payload.urgency === "normal" ||
+      payload.urgency === "high" ||
+      payload.urgency === "urgent"
+        ? payload.urgency
+        : "normal",
     websiteUrl: getText(payload.websiteUrl, 240),
     yelpBusinessId: getText(payload.yelpBusinessId, 160),
     yelpConversationId: getText(payload.yelpConversationId, 160),
@@ -1378,6 +1999,7 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
     sourceMappingId: null,
     sourceMappingDisplayName: null,
     sourceMappingMatchType: null,
+    duplicateConfidence: "no_match",
     warnings: [],
   };
 }
@@ -1509,6 +2131,10 @@ export async function retryLeadIntake(
 
 export function getLeadIntakeHttpStatus(result: LeadIntakeResponse) {
   if (result.ok) {
+    if (result.status === "accepted_for_review") {
+      return 202;
+    }
+
     return result.status.includes("duplicate") ? 200 : 201;
   }
 
@@ -1516,8 +2142,16 @@ export function getLeadIntakeHttpStatus(result: LeadIntakeResponse) {
     return 400;
   }
 
-  if (result.status === "crm_not_configured" || result.status === "company_not_found") {
+  if (
+    result.status === "crm_not_configured" ||
+    result.status === "company_not_found" ||
+    result.status === "migration_required"
+  ) {
     return 503;
+  }
+
+  if (result.status === "routing_needs_review") {
+    return 409;
   }
 
   if (result.status === "not_found") {
