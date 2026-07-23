@@ -1610,6 +1610,7 @@ async function testTheme(tab, companyName, expectedPrimary, expectedAccent = nul
 }
 
 async function testDashboardLiveMode(tab) {
+  await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Dashboard");
 
   const state = await tab.playwright.evaluate(() => {
@@ -1629,13 +1630,35 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("morning command center") &&
         normalizedText.includes("owner priorities"),
       hasOperationsSections:
+        normalizedText.includes("command focus") &&
+        normalizedText.includes("all companies") &&
+        normalizedText.includes("weathertech roofing") &&
+        normalizedText.includes("ihc painting") &&
+        normalizedText.includes("phoenix") &&
+        normalizedText.includes("tucson") &&
+        normalizedText.includes("new or unassigned leads") &&
+        normalizedText.includes("overdue follow-ups") &&
+        normalizedText.includes("schedule gaps") &&
+        normalizedText.includes("comms and integrations") &&
         normalizedText.includes("today") &&
         normalizedText.includes("lead pipeline") &&
+        normalizedText.includes("website") &&
+        normalizedText.includes("yelp") &&
+        normalizedText.includes("unassigned") &&
         normalizedText.includes("customer activity") &&
         normalizedText.includes("operations") &&
         normalizedText.includes("communications") &&
         normalizedText.includes("integration health") &&
-        normalizedText.includes("quick actions"),
+        normalizedText.includes("quick actions") &&
+        normalizedText.includes("create change order") &&
+        normalizedText.includes("upload photos") &&
+        normalizedText.includes("upload documents") &&
+        normalizedText.includes("weathertech roofing workflow") &&
+        normalizedText.includes("ihc painting workflow") &&
+        normalizedText.includes("upcoming roof inspections") &&
+        normalizedText.includes("roofing production today") &&
+        normalizedText.includes("painting follow-ups") &&
+        normalizedText.includes("surface preparation"),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -1660,6 +1683,44 @@ async function testDashboardLiveMode(tab) {
   if (!state.hasOperationsDashboard || !state.hasOperationsSections) {
     throw new Error("CRM operations dashboard sections are not visible.");
   }
+
+  for (const filter of [
+    ["Phoenix", "Phoenix · Phoenix-area records"],
+    ["Tucson", "Tucson · Tucson-area records"],
+    ["IHC Painting", "IHC Painting · Painting workstream"],
+    ["WeatherTech Roofing", "WeatherTech Roofing · Roofing workstream"],
+    ["All companies", "All companies · Combined owner view"],
+  ]) {
+    await clickUnique(
+      tab.playwright.locator(
+        `xpath=//*[@data-testid="crm-operations-dashboard"]//button[normalize-space(.)=${xpathString(filter[0])}]`,
+      ),
+      `dashboard focus ${filter[0]}`,
+    );
+    await waitFor(
+      tab,
+      (expected) => document.body.innerText.includes(expected),
+      `dashboard focus result ${filter[0]}`,
+      8000,
+      filter[1],
+    );
+  }
+
+  for (const filter of ["Website", "Yelp", "Unassigned", "WeatherTech"]) {
+    await clickUnique(
+      tab.playwright.locator(
+        `xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//h3[normalize-space(.)="Lead pipeline"]]//button[normalize-space(.)=${xpathString(filter)}]`,
+      ),
+      `dashboard pipeline ${filter}`,
+    );
+  }
+
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//h3[normalize-space(.)="Lead pipeline"]]//button[normalize-space(.)="All"]',
+    ),
+    "dashboard pipeline all",
+  );
 
   return state;
 }
@@ -3377,6 +3438,9 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
       "Compose Email",
       "Send SMS",
       "Create Invoice",
+      "Create Change Order",
+      "Upload Photos",
+      "Upload Documents",
     ];
     const buttons = [...document.querySelectorAll('[data-testid="crm-operations-dashboard"] button')]
       .filter((button) => quickActionLabels.some((label) => button.innerText.includes(label)))
@@ -3424,8 +3488,8 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     throw new Error(`Found ${overlaps.collisions.length} overlapping quick-action button pairs.`);
   }
 
-  if (commandCenterOverlaps.checked < 8) {
-    throw new Error(`Expected 8 CRM operations quick-action buttons, checked ${commandCenterOverlaps.checked}.`);
+  if (commandCenterOverlaps.checked < 11) {
+    throw new Error(`Expected 11 CRM operations quick-action buttons, checked ${commandCenterOverlaps.checked}.`);
   }
 
   if (commandCenterOverlaps.collisions.length) {
@@ -3436,11 +3500,23 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   await tab.playwright.waitForTimeout(500);
   const mobileLayout = await tab.playwright.evaluate(() => {
     const commandCenter = document.querySelector('[data-testid="crm-operations-dashboard"]');
+    const findHeading = (text) =>
+      [...document.querySelectorAll("h3")].find(
+        (heading) => heading.textContent?.trim() === text,
+      );
+    const prioritiesRect = findHeading("Owner priorities")?.getBoundingClientRect() ?? null;
+    const todayRect = findHeading("Today")?.getBoundingClientRect() ?? null;
+    const quickActionsRect = findHeading("Quick actions")?.getBoundingClientRect() ?? null;
+
     return {
       visible: Boolean(commandCenter),
       scrollWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+      ownerPrioritiesBeforeToday:
+        Boolean(prioritiesRect && todayRect) && prioritiesRect.top <= todayRect.top,
+      quickActionsReachable:
+        Boolean(quickActionsRect) && quickActionsRect.top < window.innerHeight * 2.5,
     };
   });
 
@@ -3450,6 +3526,14 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
 
   if (mobileLayout.hasHorizontalOverflow) {
     throw new Error(`Dashboard mobile layout overflows horizontally: ${mobileLayout.scrollWidth} > ${mobileLayout.viewportWidth}.`);
+  }
+
+  if (!mobileLayout.ownerPrioritiesBeforeToday) {
+    throw new Error("Owner priorities do not appear before Today on mobile.");
+  }
+
+  if (!mobileLayout.quickActionsReachable) {
+    throw new Error("Dashboard quick actions are not reachable near the top on mobile.");
   }
 
   await viewport.set(LAPTOP_VIEWPORT);

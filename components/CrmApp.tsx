@@ -3475,16 +3475,42 @@ type OperationsDashboardSummary = {
   items: OperationsDashboardItem[];
 };
 
-type DashboardPipelineFilter = "all" | "weathertech_phoenix" | "weathertech_tucson" | "ihc";
+type DashboardFocusFilter = "all" | "weathertech" | "ihc" | "phoenix" | "tucson";
+
+type DashboardPipelineFilter =
+  | "all"
+  | "weathertech"
+  | "weathertech_phoenix"
+  | "weathertech_tucson"
+  | "ihc"
+  | "website"
+  | "yelp"
+  | "unassigned";
+
+const dashboardFocusFilters: {
+  value: DashboardFocusFilter;
+  label: string;
+  detail: string;
+}[] = [
+  { value: "all", label: "All companies", detail: "Combined owner view" },
+  { value: "weathertech", label: "WeatherTech Roofing", detail: "Roofing workstream" },
+  { value: "ihc", label: "IHC Painting", detail: "Painting workstream" },
+  { value: "phoenix", label: "Phoenix", detail: "Phoenix-area records" },
+  { value: "tucson", label: "Tucson", detail: "Tucson-area records" },
+];
 
 const dashboardPipelineFilters: {
   value: DashboardPipelineFilter;
   label: string;
 }[] = [
   { value: "all", label: "All" },
+  { value: "weathertech", label: "WeatherTech" },
   { value: "weathertech_phoenix", label: "WeatherTech Phoenix" },
   { value: "weathertech_tucson", label: "WeatherTech Tucson" },
   { value: "ihc", label: "IHC" },
+  { value: "website", label: "Website" },
+  { value: "yelp", label: "Yelp" },
+  { value: "unassigned", label: "Unassigned" },
 ];
 
 const dashboardPipelineBuckets: {
@@ -3549,6 +3575,99 @@ function getDashboardItemCompanyLabel(
     : "All companies";
 }
 
+function dashboardLocationText(...values: Array<string | null | undefined>) {
+  return values
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function dashboardMatchesLocation(locationText: string, location: "phoenix" | "tucson") {
+  return locationText.includes(location);
+}
+
+function dashboardRecordMatchesFocus({
+  companyId,
+  companyMap,
+  focusFilter,
+  locationText = "",
+}: {
+  companyId: string | null;
+  companyMap: Map<string, CompanyRecord>;
+  focusFilter: DashboardFocusFilter;
+  locationText?: string;
+}) {
+  if (focusFilter === "all") {
+    return true;
+  }
+
+  const company = companyId ? companyMap.get(companyId) : null;
+
+  if (focusFilter === "weathertech") {
+    return Boolean(company && !isPaintingCompany(company));
+  }
+
+  if (focusFilter === "ihc") {
+    return Boolean(company && isPaintingCompany(company));
+  }
+
+  return dashboardMatchesLocation(locationText, focusFilter);
+}
+
+function leadDashboardLocationText(lead: LeadRecord) {
+  return dashboardLocationText(
+    lead.city,
+    lead.property_address,
+    lead.postal_code,
+    lead.source,
+  );
+}
+
+function estimateDashboardLocationText(estimate: EstimateRecord) {
+  return dashboardLocationText(estimate.location, estimate.business, estimate.title);
+}
+
+function jobDashboardLocationText(job: JobRecord) {
+  return dashboardLocationText(
+    job.location,
+    job.address,
+    job.property_address,
+    job.business,
+    job.title,
+  );
+}
+
+function inspectionDashboardLocationText(inspection: InspectionRecord) {
+  return dashboardLocationText(
+    inspection.property_address,
+    inspection.title,
+    inspection.purpose,
+  );
+}
+
+function scheduleDashboardLocationText(event: ScheduleEventRecord) {
+  return dashboardLocationText(event.location, event.title, event.notes);
+}
+
+function customerDashboardLocationText(customer: CustomerRecord) {
+  return dashboardLocationText(
+    customer.city,
+    customer.property_address,
+    customer.postal_code,
+    customer.display_name,
+  );
+}
+
+function communicationDashboardLocationText(item: UnifiedInboxItem) {
+  return dashboardLocationText(
+    item.businessLocation,
+    item.sourceAccount,
+    item.summary,
+    item.notes,
+  );
+}
+
 function leadHasReviewMetadata(lead: LeadRecord) {
   const text = `${lead.source} ${lead.notes ?? ""} ${lead.pipeline_stage}`.toLowerCase();
 
@@ -3570,21 +3689,38 @@ function leadMatchesDashboardPipelineFilter(
   }
 
   const company = companyMap.get(lead.company_id);
-  const locationText = `${lead.city ?? ""} ${lead.property_address} ${lead.source}`.toLowerCase();
+  const locationText = leadDashboardLocationText(lead);
+  const sourceText = lead.source.toLowerCase();
 
   if (filter === "ihc") {
     return Boolean(company && isPaintingCompany(company));
+  }
+
+  if (filter === "website") {
+    return sourceText.includes("website") || sourceText.includes("web");
+  }
+
+  if (filter === "yelp") {
+    return sourceText.includes("yelp");
+  }
+
+  if (filter === "unassigned") {
+    return !lead.created_by;
   }
 
   if (!company || isPaintingCompany(company)) {
     return false;
   }
 
-  if (filter === "weathertech_tucson") {
-    return locationText.includes("tucson");
+  if (filter === "weathertech") {
+    return true;
   }
 
-  return locationText.includes("phoenix");
+  if (filter === "weathertech_tucson") {
+    return dashboardMatchesLocation(locationText, "tucson");
+  }
+
+  return dashboardMatchesLocation(locationText, "phoenix");
 }
 
 function getLeadDashboardPipelineBucket(
@@ -3688,19 +3824,70 @@ function buildDashboardOperationData({
   snapshot,
   companyMap,
   isDemoMode,
+  focusFilter,
   pipelineFilter,
 }: {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   isDemoMode: boolean;
+  focusFilter: DashboardFocusFilter;
   pipelineFilter: DashboardPipelineFilter;
 }) {
   const today = todayIsoDate();
   const tomorrow = addDaysIsoDate(1);
   const inboxItems = buildUnifiedInboxItems(snapshot, companyMap);
   const providerReadiness = buildCommunicationProviderReadiness(snapshot, inboxItems);
+  const matchesFocus = (companyId: string | null, locationText = "") =>
+    dashboardRecordMatchesFocus({
+      companyId,
+      companyMap,
+      focusFilter,
+      locationText,
+    });
+  const focusLeads = snapshot.leads.filter((lead) =>
+    matchesFocus(lead.company_id, leadDashboardLocationText(lead)),
+  );
+  const focusCustomers = snapshot.customers.filter((customer) =>
+    matchesFocus(customer.company_id, customerDashboardLocationText(customer)),
+  );
+  const focusEstimates = snapshot.estimates.filter((estimate) =>
+    matchesFocus(estimate.company_id, estimateDashboardLocationText(estimate)),
+  );
+  const focusJobs = snapshot.jobs.filter((job) =>
+    matchesFocus(job.company_id, jobDashboardLocationText(job)),
+  );
+  const focusInspections = snapshot.inspections.filter((inspection) =>
+    matchesFocus(inspection.company_id, inspectionDashboardLocationText(inspection)),
+  );
+  const focusScheduleEvents = snapshot.scheduleEvents.filter((event) =>
+    matchesFocus(event.company_id, scheduleDashboardLocationText(event)),
+  );
+  const focusInvoices = snapshot.invoices.filter((invoice) =>
+    matchesFocus(invoice.company_id, dashboardLocationText(invoice.invoice_number)),
+  );
+  const focusChangeOrders = snapshot.changeOrders.filter((changeOrder) =>
+    matchesFocus(
+      changeOrder.company_id,
+      dashboardLocationText(changeOrder.title, changeOrder.reason, changeOrder.notes),
+    ),
+  );
+  const focusMaterialOrders = snapshot.materialOrders.filter((order) =>
+    matchesFocus(
+      order.company_id,
+      dashboardLocationText(order.supplier_name, order.delivery_address, order.notes),
+    ),
+  );
+  const focusEmailMessages = snapshot.emailMessages.filter((message) =>
+    matchesFocus(message.company_id, dashboardLocationText(message.subject, message.body)),
+  );
+  const focusSmsMessages = snapshot.smsMessages.filter((message) =>
+    matchesFocus(message.company_id, dashboardLocationText(message.body)),
+  );
+  const focusInboxItems = inboxItems.filter((item) =>
+    matchesFocus(item.companyId, communicationDashboardLocationText(item)),
+  );
   const todaysInspections = sortByDateField(
-    snapshot.inspections.filter(
+    focusInspections.filter(
       (inspection) =>
         inspection.status !== "canceled" &&
         isTodayDate(inspection.scheduled_start, today),
@@ -3708,19 +3895,19 @@ function buildDashboardOperationData({
     (inspection) => inspection.scheduled_start,
   );
   const todaysAppointments = sortByDateField(
-    snapshot.scheduleEvents.filter(
+    focusScheduleEvents.filter(
       (event) => event.status === "scheduled" && isTodayDate(event.start_at, today),
     ),
     (event) => event.start_at,
   );
   const todaysScheduledJobs = sortByDateField(
-    snapshot.jobs.filter(
+    focusJobs.filter(
       (job) => isActiveDashboardJob(job) && isTodayDate(getJobDashboardScheduledDate(job), today),
     ),
     getJobDashboardScheduledDate,
   );
   const todaysEstimates = sortByNewest(
-    snapshot.estimates.filter(
+    focusEstimates.filter(
       (estimate) =>
         estimate.status !== "declined" &&
         estimate.status !== "rejected" &&
@@ -3728,13 +3915,13 @@ function buildDashboardOperationData({
     ),
   );
   const todaysCallbacks = sortByDateField(
-    snapshot.leads.filter((lead) => lead.next_follow_up === today),
+    focusLeads.filter((lead) => lead.next_follow_up === today),
     (lead) => lead.next_follow_up,
   );
-  const todaysFollowUps = inboxItems
+  const todaysFollowUps = focusInboxItems
     .filter((item) => isTodayDate(item.followUpAt, today))
     .slice(0, 6);
-  const pipelineLeads = snapshot.leads.filter((lead) =>
+  const pipelineLeads = focusLeads.filter((lead) =>
     leadMatchesDashboardPipelineFilter(lead, companyMap, pipelineFilter),
   );
   const pipelineGroups = dashboardPipelineBuckets.map((bucket) => {
@@ -3750,16 +3937,16 @@ function buildDashboardOperationData({
       items: leads.slice(0, 3),
     };
   });
-  const recentCustomers = sortByNewest(snapshot.customers).slice(0, 4);
-  const recentCommunications = inboxItems.slice(0, 4);
+  const recentCustomers = sortByNewest(focusCustomers).slice(0, 4);
+  const recentCommunications = focusInboxItems.slice(0, 4);
   const openEstimates = sortByNewest(
-    snapshot.estimates.filter(
+    focusEstimates.filter(
       (estimate) => estimate.status === "draft" || estimate.status === "sent",
     ),
   ).slice(0, 4);
-  const activeJobs = sortByNewest(snapshot.jobs.filter(isActiveDashboardJob));
+  const activeJobs = sortByNewest(focusJobs.filter(isActiveDashboardJob));
   const upcomingInspections = sortByDateField(
-    snapshot.inspections.filter(
+    focusInspections.filter(
       (inspection) =>
         inspection.status !== "canceled" &&
         isUpcomingDate(inspection.scheduled_start, today),
@@ -3767,7 +3954,7 @@ function buildDashboardOperationData({
     (inspection) => inspection.scheduled_start,
   );
   const pendingInvoices = sortByDateField(
-    snapshot.invoices.filter(
+    focusInvoices.filter(
       (invoice) =>
         invoice.balance_due > 0 &&
         invoice.status !== "paid" &&
@@ -3776,13 +3963,13 @@ function buildDashboardOperationData({
     (invoice) => invoice.due_date ?? invoice.issue_date,
   );
   const openChangeOrders = sortByNewest(
-    snapshot.changeOrders.filter(
+    focusChangeOrders.filter(
       (changeOrder) =>
         changeOrder.status === "draft" || changeOrder.status === "sent",
     ),
   );
   const materialRequests = sortByDateField(
-    snapshot.materialOrders.filter(
+    focusMaterialOrders.filter(
       (order) =>
         order.status === "draft" ||
         order.status === "ordered" ||
@@ -4136,16 +4323,16 @@ function buildDashboardOperationData({
       ),
     },
   ];
-  const unreadInboxItems = inboxItems.filter((item) => item.isUnread);
-  const missedCalls = inboxItems.filter((item) => item.isMissedCall);
-  const pendingSms = snapshot.smsMessages.filter(
+  const unreadInboxItems = focusInboxItems.filter((item) => item.isUnread);
+  const missedCalls = focusInboxItems.filter((item) => item.isMissedCall);
+  const pendingSms = focusSmsMessages.filter(
     (message) => message.status === "draft" || message.status === "queued",
   );
-  const pendingEmails = snapshot.emailMessages.filter(
+  const pendingEmails = focusEmailMessages.filter(
     (message) => message.status === "draft" || message.status === "queued",
   );
-  const yelpItems = inboxItems.filter((item) => item.provider === "yelp");
-  const websiteItems = inboxItems.filter((item) => item.provider === "website");
+  const yelpItems = focusInboxItems.filter((item) => item.provider === "yelp");
+  const websiteItems = focusInboxItems.filter((item) => item.provider === "website");
   const goHighLevelReadiness =
     providerReadiness.find((provider) => provider.provider === "gohighlevel") ?? null;
   const communicationsSummaries: OperationsDashboardSummary[] = [
@@ -4327,6 +4514,48 @@ function buildDashboardOperationData({
       };
     }),
   ];
+  const newLeadsNeedingAction = focusLeads.filter(
+    (lead) =>
+      lead.status === "new" ||
+      lead.pipeline_stage === "new_lead" ||
+      lead.priority === "urgent" ||
+      leadHasReviewMetadata(lead),
+  );
+  const overdueFollowUps = focusLeads.filter(
+    (lead) =>
+      lead.status !== "won" &&
+      lead.status !== "lost" &&
+      lead.next_follow_up !== null &&
+      lead.next_follow_up < today,
+  );
+  const duplicateLeadGroups = new Map<string, LeadRecord[]>();
+
+  focusLeads.forEach((lead) => {
+    const keys = [
+      lead.email ? `email:${normalizeCrmLookup(lead.email)}` : null,
+      lead.phone ? `phone:${normalizePhoneDigits(lead.phone)}` : null,
+      lead.property_address ? `address:${normalizeCrmLookup(lead.property_address)}` : null,
+    ].filter((key): key is string => Boolean(key && key.length > key.indexOf(":") + 1));
+
+    keys.forEach((key) => {
+      duplicateLeadGroups.set(key, [...(duplicateLeadGroups.get(key) ?? []), lead]);
+    });
+  });
+
+  const possibleDuplicateLeads = [
+    ...new Map(
+      [...duplicateLeadGroups.values()]
+        .filter((group) => group.length > 1)
+        .flat()
+        .map((lead) => [lead.id, lead]),
+    ).values(),
+  ];
+  const inspectionsAwaitingScheduling = focusInspections.filter(
+    (inspection) =>
+      inspection.status !== "canceled" &&
+      inspection.status !== "completed" &&
+      !inspection.scheduled_start,
+  );
   const jobsMissingSchedule = activeJobs.filter(
     (job) =>
       !hasSavedJobSchedule(job) &&
@@ -4337,7 +4566,7 @@ function buildDashboardOperationData({
           isUpcomingDate(event.start_at, today),
       ),
   );
-  const leadsWaitingTooLong = snapshot.leads.filter((lead) => {
+  const leadsWaitingTooLong = focusLeads.filter((lead) => {
     if (lead.status === "won" || lead.status === "lost") {
       return false;
     }
@@ -4345,16 +4574,16 @@ function buildDashboardOperationData({
     const updated = dateKey(lead.updated_at);
     return Boolean(updated && updated < addDaysIsoDate(-3));
   });
-  const unassignedLeads = snapshot.leads.filter(
+  const unassignedLeads = focusLeads.filter(
     (lead) => lead.status !== "won" && lead.status !== "lost" && !lead.created_by,
   );
-  const estimatesAwaitingFollowUp = snapshot.estimates.filter(
+  const estimatesAwaitingFollowUp = focusEstimates.filter(
     (estimate) =>
       estimate.status === "sent" &&
       dateKey(estimate.updated_at) !== null &&
       dateKey(estimate.updated_at)! < tomorrow,
   );
-  const communicationFailures = inboxItems.filter((item) => item.isFailed);
+  const communicationFailures = focusInboxItems.filter((item) => item.isFailed);
   const integrationWarnings = providerReadiness.filter(
     (provider) =>
       provider.syncHealth === "Needs attention" ||
@@ -4370,6 +4599,102 @@ function buildDashboardOperationData({
     ownerPriorityRecordKeys.add(recordKey);
     ownerPriorities.push(item);
   };
+
+  communicationFailures.slice(0, 2).forEach((item) => {
+    addOwnerPriority(
+      `communication-${item.id}`,
+      buildDashboardRecordItem({
+        id: `communication-failure-${item.id}`,
+        title: item.customerName,
+        detail: "Communication failure",
+        meta: item.failureDetail ?? item.status,
+        companyId: item.companyId,
+        view: "inbox",
+        icon: MessageSquare,
+        tone: "amber",
+      }),
+    );
+  });
+
+  missedCalls.slice(0, 2).forEach((item) => {
+    addOwnerPriority(
+      `missed-call-${item.id}`,
+      buildDashboardRecordItem({
+        id: `missed-call-${item.id}`,
+        title: item.customerName,
+        detail: "Missed call needs review",
+        meta: formatDateTime(item.createdAt),
+        companyId: item.companyId,
+        view: "inbox",
+        icon: Phone,
+        tone: "amber",
+      }),
+    );
+  });
+
+  unreadInboxItems.slice(0, 2).forEach((item) => {
+    addOwnerPriority(
+      `unread-${item.id}`,
+      buildDashboardRecordItem({
+        id: `unread-${item.id}`,
+        title: item.customerName,
+        detail: "Unread communication",
+        meta: item.sourceLabel,
+        companyId: item.companyId,
+        view: "inbox",
+        icon: MessageSquare,
+        tone: "amber",
+      }),
+    );
+  });
+
+  newLeadsNeedingAction.slice(0, 3).forEach((lead) => {
+    addOwnerPriority(
+      `lead-${lead.id}`,
+      buildDashboardRecordItem({
+        id: `new-lead-${lead.id}`,
+        title: lead.contact_name,
+        detail: "New lead needs action",
+        meta: lead.source,
+        companyId: lead.company_id,
+        view: "leads",
+        icon: ClipboardList,
+        tone: "amber",
+      }),
+    );
+  });
+
+  possibleDuplicateLeads.slice(0, 2).forEach((lead) => {
+    addOwnerPriority(
+      `duplicate-lead-${lead.id}`,
+      buildDashboardRecordItem({
+        id: `duplicate-lead-${lead.id}`,
+        title: lead.contact_name,
+        detail: "Possible duplicate lead",
+        meta: lead.phone ?? lead.email ?? "Same contact or property",
+        companyId: lead.company_id,
+        view: "leads",
+        icon: Copy,
+        tone: "amber",
+      }),
+    );
+  });
+
+  overdueFollowUps.slice(0, 2).forEach((lead) => {
+    addOwnerPriority(
+      `overdue-follow-up-${lead.id}`,
+      buildDashboardRecordItem({
+        id: `overdue-follow-up-${lead.id}`,
+        title: lead.contact_name,
+        detail: "Overdue follow-up",
+        meta: lead.next_follow_up ? formatDate(lead.next_follow_up) : "Past due",
+        companyId: lead.company_id,
+        view: "leads",
+        icon: Phone,
+        tone: "amber",
+      }),
+    );
+  });
 
   leadsWaitingTooLong.slice(0, 3).forEach((lead) => {
     addOwnerPriority(
@@ -4398,6 +4723,38 @@ function buildDashboardOperationData({
         companyId: lead.company_id,
         view: "leads",
         icon: UserRound,
+        tone: "amber",
+      }),
+    );
+  });
+
+  inspectionsAwaitingScheduling.slice(0, 2).forEach((inspection) => {
+    addOwnerPriority(
+      `inspection-${inspection.id}`,
+      buildDashboardRecordItem({
+        id: `inspection-schedule-${inspection.id}`,
+        title: inspection.title,
+        detail: "Inspection awaiting scheduling",
+        meta: inspection.assigned_inspector ?? inspectionStatusLabel(inspection.status),
+        companyId: inspection.company_id,
+        view: "inspections",
+        icon: ClipboardList,
+        tone: "amber",
+      }),
+    );
+  });
+
+  calendarConflicts.slice(0, 2).forEach((event) => {
+    addOwnerPriority(
+      `calendar-conflict-${event.id}`,
+      buildDashboardRecordItem({
+        id: `calendar-conflict-${event.id}`,
+        title: event.title,
+        detail: "Calendar conflict",
+        meta: formatDateTime(event.start_at),
+        companyId: event.company_id,
+        view: "calendar",
+        icon: CalendarClock,
         tone: "amber",
       }),
     );
@@ -4435,22 +4792,6 @@ function buildDashboardOperationData({
     );
   });
 
-  communicationFailures.slice(0, 3).forEach((item) => {
-    addOwnerPriority(
-      `communication-${item.id}`,
-      buildDashboardRecordItem({
-        id: `communication-failure-${item.id}`,
-        title: item.customerName,
-        detail: "Communication failure",
-        meta: item.failureDetail ?? item.status,
-        companyId: item.companyId,
-        view: "inbox",
-        icon: MessageSquare,
-        tone: "amber",
-      }),
-    );
-  });
-
   integrationWarnings.slice(0, 3).forEach((provider) => {
     addOwnerPriority(
       `integration-${provider.provider}`,
@@ -4470,6 +4811,27 @@ function buildDashboardOperationData({
   return {
     inboxItems,
     providerReadiness,
+    focusFilter,
+    focusLabel:
+      dashboardFocusFilters.find((filter) => filter.value === focusFilter)?.label ??
+      "All companies",
+    focusDescription:
+      dashboardFocusFilters.find((filter) => filter.value === focusFilter)?.detail ??
+      "Combined owner view",
+    priorityCounts: {
+      newLeads: newLeadsNeedingAction.length,
+      unassignedLeads: unassignedLeads.length,
+      duplicateLeads: possibleDuplicateLeads.length,
+      missedCalls: missedCalls.length,
+      unreadMessages: unreadInboxItems.length,
+      overdueFollowUps: overdueFollowUps.length,
+      overdueEstimates: estimatesAwaitingFollowUp.length,
+      jobsMissingSchedules: jobsMissingSchedule.length,
+      inspectionsAwaitingScheduling: inspectionsAwaitingScheduling.length,
+      calendarConflicts: calendarConflicts.length,
+      communicationFailures: communicationFailures.length,
+      integrationWarnings: integrationWarnings.length,
+    },
     todaySummaries,
     pipelineGroups,
     customerActivitySections,
@@ -4484,6 +4846,8 @@ type DashboardOperationData = ReturnType<typeof buildDashboardOperationData>;
 
 function OperationsCommandCenter({
   data,
+  focusFilter,
+  onFocusFilterChange,
   pipelineFilter,
   onPipelineFilterChange,
   companyMap,
@@ -4492,6 +4856,8 @@ function OperationsCommandCenter({
   onCreateLead,
 }: {
   data: DashboardOperationData;
+  focusFilter: DashboardFocusFilter;
+  onFocusFilterChange: (filter: DashboardFocusFilter) => void;
   pipelineFilter: DashboardPipelineFilter;
   onPipelineFilterChange: (filter: DashboardPipelineFilter) => void;
   companyMap: Map<string, CompanyRecord>;
@@ -4556,6 +4922,24 @@ function OperationsCommandCenter({
       icon: ReceiptText,
       onClick: () => openView("invoices"),
     },
+    {
+      label: "Create Change Order",
+      detail: "Open change-order workflow",
+      icon: ReceiptText,
+      onClick: () => openView("changeOrders"),
+    },
+    {
+      label: "Upload Photos",
+      detail: "Open photo documentation",
+      icon: Camera,
+      onClick: () => openView("photos"),
+    },
+    {
+      label: "Upload Documents",
+      detail: "Open document center",
+      icon: Upload,
+      onClick: () => openView("documents"),
+    },
   ];
   const attentionCount = data.ownerPriorities.length;
 
@@ -4585,20 +4969,82 @@ function OperationsCommandCenter({
             />
           </div>
 
+          <div className="mt-5 rounded-lg border border-white/10 bg-white/10 p-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-orange-200">
+                  Command focus
+                </p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {data.focusLabel} · {data.focusDescription}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2" aria-label="Dashboard command focus filters">
+                {dashboardFocusFilters.map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => onFocusFilterChange(filter.value)}
+                    className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                      focusFilter === filter.value
+                        ? "border-orange-300 bg-orange-500 text-white"
+                        : "border-white/15 bg-white/10 text-slate-100 hover:bg-white/20"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <DashboardPriorityCount
+                label="New or unassigned leads"
+                value={data.priorityCounts.newLeads + data.priorityCounts.unassignedLeads}
+              />
+              <DashboardPriorityCount
+                label="Overdue follow-ups"
+                value={data.priorityCounts.overdueFollowUps + data.priorityCounts.overdueEstimates}
+              />
+              <DashboardPriorityCount
+                label="Schedule gaps"
+                value={
+                  data.priorityCounts.jobsMissingSchedules +
+                  data.priorityCounts.inspectionsAwaitingScheduling +
+                  data.priorityCounts.calendarConflicts
+                }
+              />
+              <DashboardPriorityCount
+                label="Comms and integrations"
+                value={
+                  data.priorityCounts.missedCalls +
+                  data.priorityCounts.unreadMessages +
+                  data.priorityCounts.communicationFailures +
+                  data.priorityCounts.integrationWarnings
+                }
+              />
+            </div>
+          </div>
+
           <div className="mt-5 grid gap-3 lg:grid-cols-3">
-            <OwnerPriorityPanel
-              items={data.ownerPriorities}
-              companyMap={companyMap}
-              onOpen={openView}
-            />
-            <DashboardSummaryColumn
-              title="Today"
-              description="Inspections, callbacks, scheduled work, and follow-ups."
-              summaries={data.todaySummaries}
-              companyMap={companyMap}
-              onOpen={openView}
-            />
-            <QuickActionPanel actions={quickActions} />
+            <div className="order-1">
+              <OwnerPriorityPanel
+                items={data.ownerPriorities}
+                companyMap={companyMap}
+                onOpen={openView}
+              />
+            </div>
+            <div className="order-3 lg:order-2">
+              <DashboardSummaryColumn
+                title="Today"
+                description="Inspections, callbacks, scheduled work, and follow-ups."
+                summaries={data.todaySummaries}
+                companyMap={companyMap}
+                onOpen={openView}
+              />
+            </div>
+            <div className="order-2 lg:order-3">
+              <QuickActionPanel actions={quickActions} />
+            </div>
           </div>
         </div>
 
@@ -4735,6 +5181,21 @@ function OperationsCommandCenter({
   );
 }
 
+function DashboardPriorityCount({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-md border border-white/10 bg-slate-950/40 px-3 py-2">
+      <p className="text-lg font-bold text-white">{value}</p>
+      <p className="mt-0.5 text-xs font-semibold text-slate-300">{label}</p>
+    </div>
+  );
+}
+
 function OwnerPriorityPanel({
   items,
   companyMap,
@@ -4757,15 +5218,23 @@ function OwnerPriorityPanel({
       </div>
       <div className="mt-4 grid gap-2">
         {items.length ? (
-          items.map((item) => (
-            <DashboardListButton
-              key={item.id}
-              item={item}
-              companyMap={companyMap}
-              onOpen={onOpen}
-              dark
-            />
-          ))
+          <>
+            {items.map((item, index) => (
+              <div key={item.id} className={index >= 4 ? "hidden sm:block" : ""}>
+                <DashboardListButton
+                  item={item}
+                  companyMap={companyMap}
+                  onOpen={onOpen}
+                  dark
+                />
+              </div>
+            ))}
+            {items.length > 4 ? (
+              <p className="rounded-md border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-slate-300 sm:hidden">
+                {items.length - 4} more priorities visible on larger screens.
+              </p>
+            ) : null}
+          </>
         ) : (
           <div className="rounded-lg border border-white/10 bg-white/10 p-4 text-sm font-semibold text-slate-200">
             No urgent owner priorities from current CRM records.
@@ -5027,6 +5496,8 @@ function DashboardView({
   onViewChange,
   onCreateLead,
 }: DashboardViewProps) {
+  const [focusFilter, setFocusFilter] =
+    useState<DashboardFocusFilter>("all");
   const [pipelineFilter, setPipelineFilter] =
     useState<DashboardPipelineFilter>("all");
   const today = todayIsoDate();
@@ -5040,9 +5511,10 @@ function DashboardView({
         snapshot,
         companyMap,
         isDemoMode,
+        focusFilter,
         pipelineFilter,
       }),
-    [companyMap, isDemoMode, pipelineFilter, snapshot],
+    [companyMap, focusFilter, isDemoMode, pipelineFilter, snapshot],
   );
   const recentActivity = buildRecentActivity(snapshot, companyMap);
   const isOwnerDashboard = activeCompanyId === "all" && snapshot.companies.length > 1;
@@ -5158,6 +5630,38 @@ function DashboardView({
         .length,
     },
   ];
+  const scheduledPaintingJobs = activePaintingJobs.filter((job) =>
+    hasSavedJobSchedule(job),
+  );
+  const paintingFollowUps = snapshot.leads.filter(
+    (lead) =>
+      paintingCompanyIds.has(lead.company_id) &&
+      lead.status !== "won" &&
+      lead.status !== "lost" &&
+      lead.next_follow_up !== null,
+  );
+  const paintingChangeOrders = snapshot.changeOrders.filter(
+    (changeOrder) =>
+      paintingCompanyIds.has(changeOrder.company_id) &&
+      (changeOrder.status === "draft" || changeOrder.status === "sent"),
+  );
+  const pendingPaintingInvoices = snapshot.invoices.filter(
+    (invoice) =>
+      paintingCompanyIds.has(invoice.company_id) &&
+      invoice.balance_due > 0 &&
+      invoice.status !== "paid" &&
+      invoice.status !== "void",
+  );
+  const paintingMaterialRequests = snapshot.materialOrders.filter(
+    (order) =>
+      paintingCompanyIds.has(order.company_id) &&
+      (order.status === "draft" ||
+        order.status === "ordered" ||
+        order.status === "partial"),
+  );
+  const paintingPreparationEstimates = paintingEstimates.filter(
+    (estimate) => estimate.surface_prep_level !== null,
+  );
   const roofingCompanyIds = new Set(
     snapshot.companies
       .filter(
@@ -5203,11 +5707,50 @@ function DashboardView({
         .length,
     },
   ];
+  const upcomingRoofInspections = sortByDateField(
+    snapshot.inspections.filter(
+      (inspection) =>
+        roofingCompanyIds.has(inspection.company_id) &&
+        inspection.status !== "canceled" &&
+        isUpcomingDate(inspection.scheduled_start, today),
+    ),
+    (inspection) => inspection.scheduled_start,
+  );
+  const roofingJobsMissingSchedule = activeRoofingJobs.filter(
+    (job) => !hasSavedJobSchedule(job),
+  );
+  const roofingEstimatesAwaitingFollowUp = roofingEstimates.filter(
+    (estimate) => estimate.status === "sent",
+  );
+  const roofingProductionToday = activeRoofingJobs.filter((job) =>
+    isTodayDate(getJobDashboardScheduledDate(job), today),
+  );
+  const roofingChangeOrders = snapshot.changeOrders.filter(
+    (changeOrder) =>
+      roofingCompanyIds.has(changeOrder.company_id) &&
+      (changeOrder.status === "draft" || changeOrder.status === "sent"),
+  );
+  const pendingRoofingInvoices = snapshot.invoices.filter(
+    (invoice) =>
+      roofingCompanyIds.has(invoice.company_id) &&
+      invoice.balance_due > 0 &&
+      invoice.status !== "paid" &&
+      invoice.status !== "void",
+  );
+  const roofingMaterialRequests = snapshot.materialOrders.filter(
+    (order) =>
+      roofingCompanyIds.has(order.company_id) &&
+      (order.status === "draft" ||
+        order.status === "ordered" ||
+        order.status === "partial"),
+  );
 
   return (
     <div className="space-y-5">
       <OperationsCommandCenter
         data={operationsDashboard}
+        focusFilter={focusFilter}
+        onFocusFilterChange={setFocusFilter}
         pipelineFilter={pipelineFilter}
         onPipelineFilterChange={setPipelineFilter}
         companyMap={companyMap}
@@ -5363,7 +5906,7 @@ function DashboardView({
               </div>
               <Badge label="Roofing" tone="amber" />
             </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <ActionCenterCard
                 icon={Home}
                 label="Scope mix"
@@ -5381,6 +5924,69 @@ function DashboardView({
                 value={activeRoofingJobs.length}
                 detail="Scheduled or in production"
                 items={activeRoofingJobs.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={ClipboardList}
+                label="Upcoming roof inspections"
+                value={upcomingRoofInspections.length}
+                detail="Scheduled WeatherTech site visits"
+                items={upcomingRoofInspections
+                  .slice(0, 3)
+                  .map((inspection) => inspection.title)}
+              />
+              <ActionCenterCard
+                icon={CalendarClock}
+                label="Roof jobs missing schedule"
+                value={roofingJobsMissingSchedule.length}
+                detail="Active roof jobs without saved dates"
+                items={roofingJobsMissingSchedule.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={CalendarClock}
+                label="Roofing production today"
+                value={roofingProductionToday.length}
+                detail="WeatherTech jobs dated for today"
+                items={roofingProductionToday.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={FileText}
+                label="Roof estimates to follow up"
+                value={roofingEstimatesAwaitingFollowUp.length}
+                detail="Sent WeatherTech estimates"
+                items={roofingEstimatesAwaitingFollowUp
+                  .slice(0, 3)
+                  .map((estimate) => estimate.title)}
+              />
+              <ActionCenterCard
+                icon={ReceiptText}
+                label="Roofing change orders"
+                value={roofingChangeOrders.length}
+                detail={formatMoney(
+                  roofingChangeOrders.reduce(
+                    (total, changeOrder) => total + changeOrder.total,
+                    0,
+                  ),
+                )}
+                items={roofingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
+              />
+              <ActionCenterCard
+                icon={ReceiptText}
+                label="Pending roofing invoices"
+                value={pendingRoofingInvoices.length}
+                detail={formatMoney(
+                  pendingRoofingInvoices.reduce(
+                    (total, invoice) => total + invoice.balance_due,
+                    0,
+                  ),
+                )}
+                items={pendingRoofingInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
+              />
+              <ActionCenterCard
+                icon={Package}
+                label="Roofing material needs"
+                value={roofingMaterialRequests.length}
+                detail="Existing material order records"
+                items={roofingMaterialRequests.slice(0, 3).map((order) => order.supplier_name)}
               />
               <ActionCenterCard
                 icon={FileText}
@@ -5438,7 +6044,7 @@ function DashboardView({
               </div>
               <Badge label="Painting" tone="amber" />
             </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <ActionCenterCard
                 icon={Palette}
                 label="Color selections"
@@ -5463,6 +6069,60 @@ function DashboardView({
                 value={activePaintingJobs.length}
                 detail="Scheduled or in production"
                 items={activePaintingJobs.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={CalendarClock}
+                label="Scheduled painting jobs"
+                value={scheduledPaintingJobs.length}
+                detail="IHC jobs with saved schedule dates"
+                items={scheduledPaintingJobs.slice(0, 3).map((job) => job.title)}
+              />
+              <ActionCenterCard
+                icon={Paintbrush}
+                label="Surface preparation"
+                value={paintingPreparationEstimates.length}
+                detail="Existing estimate prep fields"
+                items={paintingPreparationEstimates
+                  .slice(0, 3)
+                  .map((estimate) => estimate.title)}
+              />
+              <ActionCenterCard
+                icon={Phone}
+                label="Painting follow-ups"
+                value={paintingFollowUps.length}
+                detail="IHC leads with follow-up dates"
+                items={paintingFollowUps.slice(0, 3).map((lead) => lead.contact_name)}
+              />
+              <ActionCenterCard
+                icon={ReceiptText}
+                label="Painting change orders"
+                value={paintingChangeOrders.length}
+                detail={formatMoney(
+                  paintingChangeOrders.reduce(
+                    (total, changeOrder) => total + changeOrder.total,
+                    0,
+                  ),
+                )}
+                items={paintingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
+              />
+              <ActionCenterCard
+                icon={ReceiptText}
+                label="Pending painting invoices"
+                value={pendingPaintingInvoices.length}
+                detail={formatMoney(
+                  pendingPaintingInvoices.reduce(
+                    (total, invoice) => total + invoice.balance_due,
+                    0,
+                  ),
+                )}
+                items={pendingPaintingInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
+              />
+              <ActionCenterCard
+                icon={Package}
+                label="Painting material needs"
+                value={paintingMaterialRequests.length}
+                detail="Existing material order records"
+                items={paintingMaterialRequests.slice(0, 3).map((order) => order.supplier_name)}
               />
             </div>
           </section>
