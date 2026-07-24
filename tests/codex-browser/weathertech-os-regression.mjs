@@ -1034,6 +1034,20 @@ async function clickListRowByParagraph(
   timeoutMs = 30000,
 ) {
   const input = { sectionHeading, paragraphText };
+  const waitForSelection = (selectionLabel, waitMs = 2500) =>
+    waitFor(
+      tab,
+      (input) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const targetText = normalize(input.paragraphText);
+        return [...document.querySelectorAll("aside, aside section")].some((section) =>
+          normalize(section.textContent).includes(targetText),
+        );
+      },
+      selectionLabel,
+      waitMs,
+      input,
+    ).catch(() => false);
   const row = tab.playwright.locator(
     [
       "xpath=//section",
@@ -1047,19 +1061,7 @@ async function clickListRowByParagraph(
 
   try {
     await clickUnique(row, label, { retryTransientClick: true });
-    selected = await waitFor(
-      tab,
-      (input) => {
-        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-        const targetText = normalize(input.paragraphText);
-        return [...document.querySelectorAll("aside, aside section")].some((section) =>
-          normalize(section.textContent).includes(targetText),
-        );
-      },
-      `${label} selected through locator`,
-      1200,
-      input,
-    ).catch(() => false);
+    selected = await waitForSelection(`${label} selected through locator`);
   } catch {
     selected = false;
   }
@@ -1067,19 +1069,7 @@ async function clickListRowByParagraph(
   if (!selected) {
     try {
       await row.press("Enter", { timeoutMs: 10000 });
-      selected = await waitFor(
-        tab,
-        (input) => {
-          const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-          const targetText = normalize(input.paragraphText);
-          return [...document.querySelectorAll("aside, aside section")].some((section) =>
-            normalize(section.textContent).includes(targetText),
-          );
-        },
-        `${label} selected through keyboard`,
-        1200,
-        input,
-      ).catch(() => false);
+      selected = await waitForSelection(`${label} selected through keyboard`);
     } catch {
       selected = false;
     }
@@ -1127,20 +1117,13 @@ async function clickListRowByParagraph(
       input,
     );
     await tab.cua.click(target);
-    selected = await waitFor(
-      tab,
-      (input) => {
-        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-        const targetText = normalize(input.paragraphText);
-        return [...document.querySelectorAll("aside, aside section")].some((section) =>
-          normalize(section.textContent).includes(targetText),
-        );
-      },
-      `${label} selected through fallback click`,
-      2000,
-      input,
-    ).catch(() => false);
+    selected = await waitForSelection(`${label} selected through fallback click`, 4000);
   }
+
+  if (!selected) {
+    throw new Error(`${label} was visible but did not open its detail panel.`);
+  }
+
   await tab.playwright.waitForTimeout(600);
 }
 
@@ -1415,14 +1398,22 @@ async function clickCompanyScope(tab, companyName) {
 async function selectTestJob(tab, jobTitle) {
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await clickNav(tab, "Jobs");
-  await waitFor(
-    tab,
-    () =>
-      Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
-      document.body.innerText.includes("Jobs / Projects"),
-    "jobs screen ready",
-    15000,
-  );
+  const waitForJobsScreen = (label) =>
+    waitFor(
+      tab,
+      () =>
+        Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+        document.body.innerText.includes("Jobs / Projects"),
+      label,
+      15000,
+    );
+
+  try {
+    await waitForJobsScreen("jobs screen ready");
+  } catch {
+    await clickNav(tab, "Jobs");
+    await waitForJobsScreen("jobs screen ready after retry");
+  }
   const clearFilters = tab.playwright.getByRole("button", { name: "Clear filters" });
 
   if ((await clearFilters.count()) === 1) {
@@ -1633,9 +1624,10 @@ async function testDashboardLiveMode(tab) {
         text.includes("Active jobs"),
       hasOperationsDashboard:
         normalizedText.includes("crm operations dashboard") &&
-        normalizedText.includes("morning command center") &&
-        normalizedText.includes("owner priorities"),
+        normalizedText.includes("executive command center") &&
+        normalizedText.includes("today's snapshot"),
       hasOperationsSections:
+        normalizedText.includes("executive summary") &&
         normalizedText.includes("command focus") &&
         normalizedText.includes("all companies") &&
         normalizedText.includes("weathertech roofing") &&
@@ -1646,25 +1638,25 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("overdue follow-ups") &&
         normalizedText.includes("schedule gaps") &&
         normalizedText.includes("comms and integrations") &&
-        normalizedText.includes("today") &&
+        normalizedText.includes("today's operations") &&
+        normalizedText.includes("schedule, field work, and quick moves") &&
         normalizedText.includes("lead pipeline") &&
         normalizedText.includes("website") &&
         normalizedText.includes("yelp") &&
         normalizedText.includes("unassigned") &&
-        normalizedText.includes("customer activity") &&
-        normalizedText.includes("operations") &&
+        normalizedText.includes("customer follow-up") &&
+        normalizedText.includes("production") &&
         normalizedText.includes("communications") &&
         normalizedText.includes("integration health") &&
+        normalizedText.includes("weather / intelligence") &&
+        normalizedText.includes("financial overview") &&
         normalizedText.includes("quick actions") &&
         normalizedText.includes("create change order") &&
         normalizedText.includes("upload photos") &&
         normalizedText.includes("upload documents") &&
         normalizedText.includes("weathertech roofing workflow") &&
-        normalizedText.includes("ihc painting workflow") &&
         normalizedText.includes("upcoming roof inspections") &&
-        normalizedText.includes("roofing production today") &&
-        normalizedText.includes("painting follow-ups") &&
-        normalizedText.includes("surface preparation"),
+        normalizedText.includes("roofing production today"),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -3507,11 +3499,11 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   const mobileLayout = await tab.playwright.evaluate(() => {
     const commandCenter = document.querySelector('[data-testid="crm-operations-dashboard"]');
     const findHeading = (text) =>
-      [...document.querySelectorAll("h3")].find(
+      [...document.querySelectorAll("h2,h3,p")].find(
         (heading) => heading.textContent?.trim() === text,
       );
-    const prioritiesRect = findHeading("Owner priorities")?.getBoundingClientRect() ?? null;
-    const todayRect = findHeading("Today")?.getBoundingClientRect() ?? null;
+    const executiveRect = findHeading("Executive Summary")?.getBoundingClientRect() ?? null;
+    const todayRect = findHeading("Today's Operations")?.getBoundingClientRect() ?? null;
     const quickActionsRect = findHeading("Quick actions")?.getBoundingClientRect() ?? null;
 
     return {
@@ -3519,10 +3511,10 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
       scrollWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
-      ownerPrioritiesBeforeToday:
-        Boolean(prioritiesRect && todayRect) && prioritiesRect.top <= todayRect.top,
-      quickActionsReachable:
-        Boolean(quickActionsRect) && quickActionsRect.top < window.innerHeight * 2.5,
+      executiveSummaryBeforeToday:
+        Boolean(executiveRect && todayRect) && executiveRect.top <= todayRect.top,
+      quickActionsBeforeToday:
+        Boolean(quickActionsRect && todayRect) && quickActionsRect.top <= todayRect.top,
     };
   });
 
@@ -3534,12 +3526,12 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     throw new Error(`Dashboard mobile layout overflows horizontally: ${mobileLayout.scrollWidth} > ${mobileLayout.viewportWidth}.`);
   }
 
-  if (!mobileLayout.ownerPrioritiesBeforeToday) {
-    throw new Error("Owner priorities do not appear before Today on mobile.");
+  if (!mobileLayout.executiveSummaryBeforeToday) {
+    throw new Error("Executive Summary does not appear before Today's Operations on mobile.");
   }
 
-  if (!mobileLayout.quickActionsReachable) {
-    throw new Error("Dashboard quick actions are not reachable near the top on mobile.");
+  if (!mobileLayout.quickActionsBeforeToday) {
+    throw new Error("Dashboard quick actions do not appear before Today's Operations on mobile.");
   }
 
   await viewport.set(LAPTOP_VIEWPORT);
@@ -4354,6 +4346,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "inspection finding rendered",
     15000,
   );
+  await waitForNoSavingState(tab, "inspection finding save complete");
   const inspectionWithFinding = await findInspectionByTitle(env, inspectionTitle);
 
   if (!Array.isArray(inspectionWithFinding.findings) || inspectionWithFinding.findings.length < 1) {
@@ -4837,6 +4830,7 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
 
   progress("job:add-note:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add note"]]//textarea[@name="note"]'), noteText, "job note");
+  await scrollTextIntoView(tab, "Add note");
   results.addNote = await preventTopJumpAround(
     tab,
     async () => {

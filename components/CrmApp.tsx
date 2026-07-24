@@ -6135,8 +6135,42 @@ function buildDashboardOperationData({
 
 type DashboardOperationData = ReturnType<typeof buildDashboardOperationData>;
 
+type DashboardExecutiveKpi = {
+  id: string;
+  label: string;
+  value: string | number;
+  detail: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+  prominent?: boolean;
+};
+
+type DashboardIntelligenceSignal = {
+  id: string;
+  label: string;
+  value: string | number;
+  detail: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+};
+
+type DashboardHeroSnapshotItem = {
+  id: string;
+  label: string;
+  value: string | number;
+  detail: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+};
+
 function OperationsCommandCenter({
   data,
+  executiveKpis,
+  weatherIntelligence,
+  heroSnapshot,
   focusFilter,
   onFocusFilterChange,
   pipelineFilter,
@@ -6147,6 +6181,9 @@ function OperationsCommandCenter({
   onCreateLead,
 }: {
   data: DashboardOperationData;
+  executiveKpis: DashboardExecutiveKpi[];
+  weatherIntelligence: DashboardIntelligenceSignal[];
+  heroSnapshot: DashboardHeroSnapshotItem[];
   focusFilter: DashboardFocusFilter;
   onFocusFilterChange: (filter: DashboardFocusFilter) => void;
   pipelineFilter: DashboardPipelineFilter;
@@ -6233,174 +6270,242 @@ function OperationsCommandCenter({
     },
   ];
   const attentionCount = data.ownerPriorities.length;
+  const hasIntegrationWarnings = data.priorityCounts.integrationWarnings > 0;
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting =
+    hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
+  const currentDateLabel = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(now);
+  const weatherSummary =
+    heroSnapshot.find((item) => item.id === "weather-summary")?.value ??
+    "No weather alerts";
+  const topPriority = data.ownerPriorities[0];
 
   return (
     <section
-      className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 text-white shadow-sm"
+      className="overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-[0_28px_80px_-56px_rgba(15,23,42,0.85)] ring-1 ring-slate-950/5"
       data-testid="crm-operations-dashboard"
     >
-      <div className="grid gap-5 p-4 sm:p-5 2xl:grid-cols-[minmax(0,1.2fr)_420px]">
-        <div>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase text-orange-300">
-                CRM Operations Dashboard
-              </p>
-              <h2 className="mt-1 text-2xl font-bold text-white">
-                Morning command center
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                Live CRM priorities across today&apos;s work, lead intake, jobs,
-                customer activity, communications, and integration readiness.
-              </p>
-            </div>
-            <Badge
-              label={attentionCount ? `${attentionCount} priorities` : "No urgent priorities"}
-              tone={attentionCount ? "amber" : "green"}
-            />
-          </div>
+      <div className="bg-[radial-gradient(circle_at_top_left,rgba(251,146,60,0.18),transparent_30%),linear-gradient(135deg,#111827_0%,#0f172a_56%,#1e293b_100%)] p-4 text-white sm:p-6 lg:p-7">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(300px,400px)]">
+          <div className="space-y-6">
+            <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-slate-950/20 ring-1 ring-white/10 sm:p-5 lg:p-6">
+              <div className="flex flex-col gap-5 2xl:flex-row 2xl:items-start 2xl:justify-between">
+                <div className="max-w-4xl">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">
+                    {greeting}
+                  </p>
+                  <h2 className="mt-2 text-3xl font-bold leading-tight tracking-normal text-white sm:text-4xl lg:text-5xl">
+                    Executive command center
+                  </h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-200 sm:text-base">
+                    Today&apos;s field rhythm, cash movement, customer follow-up,
+                    and operational risk from the loaded CRM snapshot.
+                  </p>
+                </div>
+                <div className="min-w-0 rounded-lg border border-white/10 bg-slate-950/35 p-3 shadow-inner shadow-white/5 2xl:min-w-64">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
+                    Today&apos;s focus
+                  </p>
+                  <p className="mt-2 text-2xl font-bold text-white">
+                    {attentionCount ? `${attentionCount} needs review` : "All clear"}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-slate-300">
+                    {topPriority
+                      ? topPriority.title
+                      : "No urgent blockers in the current CRM snapshot."}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge
+                      label={attentionCount ? `${attentionCount} priorities` : "No urgent priorities"}
+                      tone={attentionCount ? "amber" : "green"}
+                    />
+                    <Badge label="CRM Operations Dashboard" tone="blue" />
+                  </div>
+                </div>
+              </div>
 
-          <div className="mt-5 rounded-lg border border-white/10 bg-white/10 p-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-orange-200">
-                  Command focus
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
+              <div className="mt-6 grid gap-2 sm:grid-cols-3">
+                <DashboardHeroMeta label="Company" value={data.focusLabel} />
+                <DashboardHeroMeta label="Current date" value={currentDateLabel} />
+                <DashboardHeroMeta label="Weather summary" value={String(weatherSummary)} />
+              </div>
+
+              <div className="mt-5 border-t border-white/10 pt-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
+                      Today&apos;s snapshot
+                    </p>
+                    <p className="mt-1 text-sm text-slate-300">
+                      The high-signal numbers for this morning&apos;s contractor workflow.
+                    </p>
+                  </div>
+                  <Badge
+                    label={data.focusLabel}
+                    tone="blue"
+                  />
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+                  {heroSnapshot.map((item) => (
+                    <DashboardHeroSnapshotPill
+                      key={item.id}
+                      item={item}
+                      onOpen={openView}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="xl:hidden">
+              <QuickActionPanel actions={quickActions} />
+            </div>
+
+            <section
+              aria-labelledby="executive-summary-heading"
+              className="rounded-lg border border-white/10 bg-white/[0.055] p-4 ring-1 ring-white/5 sm:p-5"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
+                    Executive Summary
+                  </p>
+                  <h3 id="executive-summary-heading" className="mt-1 text-xl font-bold text-white">
+                    What needs attention today
+                  </h3>
+                </div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   {data.focusLabel} · {data.focusDescription}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2" aria-label="Dashboard command focus filters">
-                {dashboardFocusFilters.map((filter) => (
-                  <button
-                    key={filter.value}
-                    type="button"
-                    onClick={() => onFocusFilterChange(filter.value)}
-                    className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
-                      focusFilter === filter.value
-                        ? "border-orange-300 bg-orange-500 text-white"
-                        : "border-white/15 bg-white/10 text-slate-100 hover:bg-white/20"
-                    }`}
-                  >
-                    {filter.label}
-                  </button>
+              <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
+                {executiveKpis.map((metric) => (
+                  <ExecutiveKpiCard
+                    key={metric.id}
+                    metric={metric}
+                    onOpen={openView}
+                  />
                 ))}
               </div>
+            </section>
+
+            <div className="rounded-lg border border-white/10 bg-slate-950/30 p-3 shadow-inner shadow-white/5 sm:p-4">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
+                    Command focus
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-white">
+                    {data.focusLabel} · {data.focusDescription}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2" aria-label="Dashboard command focus filters">
+                  {dashboardFocusFilters.map((filter) => (
+                    <button
+                      key={filter.value}
+                      type="button"
+                      onClick={() => onFocusFilterChange(filter.value)}
+                      className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                        focusFilter === filter.value
+                          ? "border-orange-300 bg-orange-500 text-white shadow-sm"
+                          : "border-white/15 bg-white/10 text-slate-100 hover:bg-white/20"
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <DashboardPriorityCount
+                  label="New or unassigned leads"
+                  value={data.priorityCounts.newLeads + data.priorityCounts.unassignedLeads}
+                />
+                <DashboardPriorityCount
+                  label="Overdue follow-ups"
+                  value={data.priorityCounts.overdueFollowUps + data.priorityCounts.overdueEstimates}
+                />
+                <DashboardPriorityCount
+                  label="Schedule gaps"
+                  value={
+                    data.priorityCounts.jobsMissingSchedules +
+                    data.priorityCounts.inspectionsAwaitingScheduling +
+                    data.priorityCounts.calendarConflicts
+                  }
+                />
+                <DashboardPriorityCount
+                  label="Comms and integrations"
+                  value={
+                    data.priorityCounts.missedCalls +
+                    data.priorityCounts.unreadMessages +
+                    data.priorityCounts.communicationFailures +
+                    data.priorityCounts.integrationWarnings
+                  }
+                />
+              </div>
             </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              <DashboardPriorityCount
-                label="New or unassigned leads"
-                value={data.priorityCounts.newLeads + data.priorityCounts.unassignedLeads}
-              />
-              <DashboardPriorityCount
-                label="Overdue follow-ups"
-                value={data.priorityCounts.overdueFollowUps + data.priorityCounts.overdueEstimates}
-              />
-              <DashboardPriorityCount
-                label="Schedule gaps"
-                value={
-                  data.priorityCounts.jobsMissingSchedules +
-                  data.priorityCounts.inspectionsAwaitingScheduling +
-                  data.priorityCounts.calendarConflicts
-                }
-              />
-              <DashboardPriorityCount
-                label="Comms and integrations"
-                value={
-                  data.priorityCounts.missedCalls +
-                  data.priorityCounts.unreadMessages +
-                  data.priorityCounts.communicationFailures +
-                  data.priorityCounts.integrationWarnings
-                }
-              />
-            </div>
+
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-3">
-            <div className="order-1">
-              <OwnerPriorityPanel
-                items={data.ownerPriorities}
-                companyMap={companyMap}
-                onOpen={openView}
-              />
-            </div>
-            <div className="order-3 lg:order-2">
+          <OwnerPriorityPanel
+            items={data.ownerPriorities}
+            companyMap={companyMap}
+            onOpen={openView}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-6 bg-[linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-4 text-slate-950 sm:p-6 lg:p-7">
+        <section aria-labelledby="todays-operations-heading">
+          <DashboardSectionHeading
+            eyebrow="Today's Operations"
+            title="Schedule, field work, and quick moves"
+            description="The daily rhythm for inspections, crews, callbacks, and customer-ready actions."
+            accent="orange"
+            id="todays-operations-heading"
+          />
+          <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.55fr)]">
+            <div className="order-2 xl:order-1">
               <DashboardSummaryColumn
                 title="Today"
                 description="Inspections, callbacks, scheduled work, and follow-ups."
                 summaries={data.todaySummaries}
                 companyMap={companyMap}
                 onOpen={openView}
+                light
               />
             </div>
-            <div className="order-2 lg:order-3">
+            <div className="hidden xl:order-2 xl:block">
               <QuickActionPanel actions={quickActions} />
             </div>
           </div>
-        </div>
+        </section>
 
-        <div className="rounded-lg border border-white/10 bg-white/10 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-bold text-white">Integration health</p>
-              <p className="mt-1 text-sm text-slate-300">
-                Compact setup and sync readiness.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => openView("settings")}
-              className="inline-flex min-h-10 items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
-            >
-              Settings
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="mt-4 grid gap-2">
-            {data.integrationHealth.map((provider) => (
-              <button
-                key={provider.id}
-                type="button"
-                onClick={() => openView(provider.view)}
-                className="flex items-center gap-3 rounded-lg border border-white/10 bg-white p-3 text-left text-slate-950 transition hover:border-orange-200 hover:bg-orange-50"
-              >
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
-                  <provider.icon className="h-4 w-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="truncate text-sm font-bold">{provider.label}</p>
-                    <Badge label={provider.value} tone={provider.tone} />
-                  </div>
-                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                    {provider.detail}
-                  </p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-5 border-t border-white/10 bg-white p-4 text-slate-950 sm:p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-lg font-bold">Lead pipeline</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Existing CRM stages grouped for owner review.
-              </p>
-            </div>
+            <DashboardSectionHeading
+              eyebrow="Sales Pipeline"
+              title="Lead pipeline"
+              description="Existing CRM stages grouped for owner review by source and company."
+              accent="blue"
+              compact
+            />
             <div className="flex flex-wrap gap-2" aria-label="Dashboard lead pipeline filters">
               {dashboardPipelineFilters.map((filter) => (
                 <button
                   key={filter.value}
                   type="button"
                   onClick={() => onPipelineFilterChange(filter.value)}
-                  className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
+                  className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
                     pipelineFilter === filter.value
-                      ? "border-slate-950 bg-slate-950 text-white"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                      ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+                      : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
                   }`}
                 >
                   {filter.label}
@@ -6415,7 +6520,7 @@ function OperationsCommandCenter({
                 key={group.key}
                 type="button"
                 onClick={() => openView("leads")}
-                className="rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-sky-200 hover:shadow-sm"
+                className="rounded-lg border border-slate-200/80 bg-slate-50/80 p-4 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -6442,30 +6547,85 @@ function OperationsCommandCenter({
           </div>
         </section>
 
-        <DashboardSummaryColumn
-          title="Communications"
-          description="Inbox, calls, SMS, email, Yelp, GoHighLevel, and website activity."
-          summaries={data.communicationsSummaries}
-          companyMap={companyMap}
-          onOpen={openView}
-          light
-        />
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
+          <DashboardSummaryColumn
+            title="Production"
+            description="Production workload, invoices, calendar conflicts, change orders, and material requests."
+            summaries={data.operationsSummaries}
+            companyMap={companyMap}
+            onOpen={openView}
+            light
+          />
+          <DashboardActivityGrid
+            title="Customer Follow-up"
+            description="Recently created customers, open estimates, jobs, inspections, and linked communications."
+            sections={data.customerActivitySections}
+            companyMap={companyMap}
+            onOpen={openView}
+          />
+        </div>
 
-        <DashboardActivityGrid
-          title="Customer activity"
-          description="Recently created customers, open estimates, jobs, inspections, and linked communications."
-          sections={data.customerActivitySections}
-          companyMap={companyMap}
-          onOpen={openView}
-        />
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.7fr)]">
+          <DashboardSummaryColumn
+            title="Communications"
+            description="Inbox, calls, SMS, email, Yelp, GoHighLevel, and website activity."
+            summaries={data.communicationsSummaries}
+            companyMap={companyMap}
+            onOpen={openView}
+            light
+          />
 
-        <DashboardSummaryColumn
-          title="Operations"
-          description="Production workload, invoices, calendar conflicts, change orders, and material requests."
-          summaries={data.operationsSummaries}
-          companyMap={companyMap}
+          <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
+            <div className="flex items-start justify-between gap-3">
+              <DashboardSectionHeading
+                eyebrow="Integrations"
+                title="Integration health"
+                description="Compact setup and sync readiness."
+                accent="blue"
+                compact
+              />
+              <Badge
+                label={hasIntegrationWarnings ? "Review" : "Ready"}
+                tone={hasIntegrationWarnings ? "amber" : "green"}
+              />
+            </div>
+            <div className="mt-4 grid gap-2">
+              {data.integrationHealth.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  onClick={() => openView(provider.view)}
+                  className="flex items-center gap-3 rounded-lg border border-slate-200/80 bg-slate-50/80 p-3 text-left text-slate-950 transition hover:-translate-y-0.5 hover:border-orange-200 hover:bg-orange-50/80 hover:shadow-[0_14px_34px_-26px_rgba(234,88,12,0.55)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
+                >
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm">
+                    <provider.icon className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="truncate text-sm font-bold">{provider.label}</p>
+                      <Badge label={provider.value} tone={provider.tone} />
+                    </div>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                      {provider.detail}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => openView("settings")}
+              className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            >
+              Open Integration Center
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </section>
+        </div>
+
+        <DashboardIntelligencePanel
+          signals={weatherIntelligence}
           onOpen={openView}
-          light
         />
       </div>
     </section>
@@ -6480,10 +6640,189 @@ function DashboardPriorityCount({
   value: number;
 }) {
   return (
-    <div className="rounded-md border border-white/10 bg-slate-950/40 px-3 py-2">
-      <p className="text-lg font-bold text-white">{value}</p>
-      <p className="mt-0.5 text-xs font-semibold text-slate-300">{label}</p>
+    <div className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2.5 shadow-inner shadow-white/5">
+      <p className="text-xl font-bold leading-none text-white">{value}</p>
+      <p className="mt-1.5 text-xs font-semibold leading-4 text-slate-300">{label}</p>
     </div>
+  );
+}
+
+function DashboardSectionHeading({
+  eyebrow,
+  title,
+  description,
+  accent = "blue",
+  compact = false,
+  id,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  accent?: "blue" | "orange";
+  compact?: boolean;
+  id?: string;
+}) {
+  const accentClass = accent === "orange" ? "text-orange-700" : "text-sky-700";
+
+  return (
+    <div className={compact ? "max-w-2xl" : "max-w-3xl"}>
+      <p className={`text-xs font-bold uppercase tracking-[0.18em] ${accentClass}`}>
+        {eyebrow}
+      </p>
+      <h3
+        id={id}
+        className={`${compact ? "mt-1 text-lg" : "mt-1 text-xl sm:text-2xl"} font-bold leading-tight text-slate-950`}
+      >
+        {title}
+      </h3>
+      <p className="mt-1.5 text-sm leading-6 text-slate-500">{description}</p>
+    </div>
+  );
+}
+
+function DashboardHeroMeta({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.08] p-3 shadow-inner shadow-white/5">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1.5 line-clamp-2 text-sm font-bold leading-5 text-white">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function DashboardHeroSnapshotPill({
+  item,
+  onOpen,
+}: {
+  item: DashboardHeroSnapshotItem;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  const toneClass = {
+    amber: "border-amber-300/30 bg-amber-400/10 text-amber-100 hover:border-amber-200 hover:bg-amber-400/15",
+    blue: "border-sky-300/25 bg-sky-400/10 text-sky-100 hover:border-sky-200 hover:bg-sky-400/15",
+    green: "border-emerald-300/25 bg-emerald-400/10 text-emerald-100 hover:border-emerald-200 hover:bg-emerald-400/15",
+  }[item.tone];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item.view)}
+      className={`flex min-h-20 items-center gap-3 rounded-lg border p-3 text-left shadow-inner shadow-white/5 transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950 ${toneClass}`}
+    >
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white/15 text-white">
+        <item.icon className="h-5 w-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/65">
+            {item.label}
+          </p>
+          <p className="shrink-0 text-lg font-bold leading-none text-white">{item.value}</p>
+        </div>
+        <p className="mt-1 truncate text-xs font-semibold text-white/70">
+          {item.detail}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+function ExecutiveKpiCard({
+  metric,
+  onOpen,
+}: {
+  metric: DashboardExecutiveKpi;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  const toneClass = {
+    amber: "border-amber-300/40 bg-[linear-gradient(135deg,rgba(251,191,36,0.18),rgba(251,146,60,0.08))] text-amber-100",
+    blue: "border-sky-300/30 bg-[linear-gradient(135deg,rgba(56,189,248,0.17),rgba(59,130,246,0.07))] text-sky-100",
+    green: "border-emerald-300/30 bg-[linear-gradient(135deg,rgba(52,211,153,0.16),rgba(16,185,129,0.07))] text-emerald-100",
+  }[metric.tone];
+  const iconClass = {
+    amber: "bg-amber-300 text-amber-950",
+    blue: "bg-sky-300 text-sky-950",
+    green: "bg-emerald-300 text-emerald-950",
+  }[metric.tone];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(metric.view)}
+      className={`group flex min-h-24 flex-col justify-between rounded-lg border p-3 text-left shadow-inner shadow-white/5 transition hover:-translate-y-0.5 hover:border-white/55 hover:bg-white/[0.13] hover:shadow-[0_18px_42px_-30px_rgba(15,23,42,0.9)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950 sm:min-h-36 sm:p-4 ${toneClass} ${
+        metric.prominent ? "sm:col-span-2 xl:col-span-3" : "xl:col-span-2"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/70">
+            {metric.label}
+          </p>
+          <p className="mt-3 text-2xl font-bold leading-none text-white sm:text-3xl">
+            {metric.value}
+          </p>
+        </div>
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-md sm:h-10 sm:w-10 ${iconClass}`}>
+          <metric.icon className="h-4 w-4 sm:h-5 sm:w-5" />
+        </span>
+      </div>
+      <p className="mt-3 hidden line-clamp-2 text-sm font-semibold text-white/75 sm:block">
+        {metric.detail}
+      </p>
+    </button>
+  );
+}
+
+function DashboardIntelligencePanel({
+  signals,
+  onOpen,
+}: {
+  signals: DashboardIntelligenceSignal[];
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <DashboardSectionHeading
+          eyebrow="Weather / Intelligence"
+          title="Weather alerts and operational signals"
+          description="Existing CRM signals only; live weather and AI automations remain clearly separated."
+          accent="orange"
+          compact
+        />
+        <Badge label="Readiness" tone="blue" />
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {signals.map((signal) => (
+          <button
+            key={signal.id}
+            type="button"
+            onClick={() => onOpen(signal.view)}
+            className="flex min-h-28 items-start gap-3 rounded-lg border border-slate-200/80 bg-slate-50/80 p-4 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+          >
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-sky-700 shadow-sm">
+              <signal.icon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-bold text-slate-950">{signal.label}</p>
+                <Badge label={String(signal.value)} tone={signal.tone} />
+              </div>
+              <p className="mt-2 text-sm leading-5 text-slate-500">{signal.detail}</p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -6497,7 +6836,7 @@ function OwnerPriorityPanel({
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
 }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-white/10 p-4">
+    <section className="rounded-lg border border-white/10 bg-white/[0.08] p-4 shadow-inner shadow-white/5 ring-1 ring-white/5 xl:sticky xl:top-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-bold text-white">Owner priorities</h3>
@@ -6527,9 +6866,11 @@ function OwnerPriorityPanel({
             ) : null}
           </>
         ) : (
-          <div className="rounded-lg border border-white/10 bg-white/10 p-4 text-sm font-semibold text-slate-200">
-            No urgent owner priorities from current CRM records.
-          </div>
+          <DashboardInlineEmptyState
+            label="No urgent owner priorities"
+            detail="Current CRM records do not show overdue follow-ups, schedule gaps, or integration issues."
+            dark
+          />
         )}
       </div>
     </section>
@@ -6548,21 +6889,24 @@ function QuickActionPanel({
   }[];
 }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-white/10 p-4">
-      <h3 className="text-lg font-bold text-white">Quick actions</h3>
-      <p className="mt-1 text-sm text-slate-300">
-        Jump into the existing workflow. No outbound messages are sent here.
-      </p>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+    <section className="rounded-lg border border-slate-200/80 bg-white p-4 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
+      <DashboardSectionHeading
+        eyebrow="Quick actions"
+        title="Existing workflows"
+        description="Jump into the existing workflow. No outbound messages are sent here."
+        accent="orange"
+        compact
+      />
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         {actions.map((action) => (
           <button
             key={action.label}
             type="button"
             onClick={action.onClick}
-            className={`flex min-h-14 items-center gap-3 rounded-lg border p-3 text-left transition ${
+            className={`flex min-h-14 items-center gap-3 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
               action.primary
-                ? "border-orange-300 bg-orange-500 text-white hover:bg-orange-400"
-                : "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50"
+                ? "border-orange-300 bg-orange-500 text-white shadow-[0_16px_34px_-24px_rgba(234,88,12,0.75)] hover:bg-orange-400 focus:ring-offset-white"
+                : "border-slate-200/80 bg-slate-50/80 text-slate-950 hover:border-orange-200 hover:bg-white hover:shadow-[0_14px_34px_-26px_rgba(234,88,12,0.5)] focus:ring-offset-white"
             }`}
           >
             <div
@@ -6602,17 +6946,17 @@ function DashboardSummaryColumn({
 }) {
   return (
     <section
-      className={`rounded-lg border p-4 ${
+      className={`rounded-lg border p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ${
         light
-          ? "border-slate-200 bg-slate-50"
-          : "border-white/10 bg-white/10"
+          ? "border-slate-200/80 bg-white ring-slate-950/5"
+          : "border-white/10 bg-white/[0.08] ring-white/5"
       }`}
     >
       <div>
         <h3 className={`text-lg font-bold ${light ? "text-slate-950" : "text-white"}`}>
           {title}
         </h3>
-        <p className={`mt-1 text-sm ${light ? "text-slate-500" : "text-slate-300"}`}>
+        <p className={`mt-1.5 text-sm leading-6 ${light ? "text-slate-500" : "text-slate-300"}`}>
           {description}
         </p>
       </div>
@@ -6643,11 +6987,17 @@ function DashboardSummaryCard({
   light: boolean;
 }) {
   return (
-    <div className={`rounded-lg border p-3 ${light ? "border-slate-200 bg-white" : "border-white/10 bg-white"}`}>
+    <div
+      className={`rounded-lg border p-4 transition hover:-translate-y-0.5 ${
+        light
+          ? "border-slate-200/80 bg-slate-50/80 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)]"
+          : "border-white/10 bg-white hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)]"
+      }`}
+    >
       <button
         type="button"
         onClick={() => onOpen(summary.view)}
-        className="flex w-full items-start justify-between gap-3 text-left"
+        className="flex w-full items-start justify-between gap-3 rounded-md text-left focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
       >
         <div className="min-w-0">
           <p className="text-sm font-bold text-slate-950">{summary.label}</p>
@@ -6669,9 +7019,10 @@ function DashboardSummaryCard({
             />
           ))
         ) : (
-          <p className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
-            No records in this view.
-          </p>
+          <DashboardInlineEmptyState
+            label={`No ${summary.label.toLowerCase()}`}
+            detail="Nothing in the current CRM snapshot needs action here."
+          />
         )}
       </div>
     </div>
@@ -6697,21 +7048,24 @@ function DashboardActivityGrid({
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-bold text-slate-950">{title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{description}</p>
+          <p className="mt-1.5 text-sm leading-6 text-slate-500">{description}</p>
         </div>
         <Badge label="Customer hub" tone="blue" />
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         {sections.map((section) => (
-          <div key={section.id} className="rounded-lg border border-slate-200 bg-white p-3">
+          <div
+            key={section.id}
+            className="rounded-lg border border-slate-200/80 bg-slate-50/80 p-3 transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)]"
+          >
             <button
               type="button"
               onClick={() => onOpen(section.view)}
-              className="flex w-full items-center justify-between gap-3 text-left"
+              className="flex w-full items-center justify-between gap-3 rounded-md text-left focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
             >
               <p className="text-sm font-bold text-slate-950">{section.label}</p>
               <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -6727,9 +7081,10 @@ function DashboardActivityGrid({
                   />
                 ))
               ) : (
-                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
-                  No records yet.
-                </p>
+                <DashboardInlineEmptyState
+                  label={`No ${section.label.toLowerCase()}`}
+                  detail="This area will populate when related CRM records exist."
+                />
               )}
             </div>
           </div>
@@ -6756,10 +7111,10 @@ function DashboardListButton({
     <button
       type="button"
       onClick={() => onOpen(item.view, item.companyId)}
-      className={`flex min-w-0 items-start gap-3 rounded-md border p-3 text-left transition ${
+      className={`flex min-w-0 items-start gap-3 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
         dark
-          ? "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50"
-          : "border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white"
+          ? "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50 hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)] focus:ring-offset-slate-950"
+          : "border-slate-200/80 bg-white hover:border-sky-200 hover:bg-sky-50/40 hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:ring-offset-white"
       }`}
     >
       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
@@ -6774,6 +7129,44 @@ function DashboardListButton({
         <p className="mt-1 truncate text-xs font-semibold text-slate-400">{item.meta}</p>
       </div>
     </button>
+  );
+}
+
+function DashboardInlineEmptyState({
+  label,
+  detail,
+  dark = false,
+}: {
+  label: string;
+  detail: string;
+  dark?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg border border-dashed p-3 ${
+        dark
+          ? "border-white/10 bg-white/[0.08] text-slate-200"
+          : "border-slate-200 bg-white/70 text-slate-600"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${
+            dark ? "bg-white/10 text-orange-200" : "bg-sky-50 text-sky-700"
+          }`}
+        >
+          <Search className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <p className={`text-sm font-bold ${dark ? "text-white" : "text-slate-950"}`}>
+            {label}
+          </p>
+          <p className={`mt-0.5 text-xs font-medium leading-5 ${dark ? "text-slate-300" : "text-slate-500"}`}>
+            {detail}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -7035,11 +7428,231 @@ function DashboardView({
         order.status === "ordered" ||
         order.status === "partial"),
   );
+  const todaysRevenue = snapshot.payments
+    .filter((payment) => payment.status === "posted" && isTodayDate(payment.paid_at, today))
+    .reduce((total, payment) => total + payment.amount, 0);
+  const jobsToday = snapshot.jobs.filter((job) =>
+    isTodayDate(getJobDashboardScheduledDate(job), today),
+  ).length;
+  const inspectionsToday = snapshot.inspections.filter(
+    (inspection) =>
+      inspection.status !== "canceled" &&
+      isTodayDate(inspection.scheduled_start, today),
+  ).length;
+  const pendingEstimates = snapshot.estimates.filter(
+    (estimate) => estimate.status === "draft" || estimate.status === "sent",
+  );
+  const callbacksDue =
+    urgentLeads.length +
+    operationsDashboard.priorityCounts.overdueFollowUps +
+    operationsDashboard.inboxItems.filter(communicationItemIsFollowUpDue).length;
+  const warrantyJobs = snapshot.jobs.filter((job) =>
+    jobHasWarrantySignal(snapshot, job),
+  );
+  const weatherDelayJobs = snapshot.jobs.filter(
+    (job) => getJobWeatherDelayReadiness(job).tone === "amber",
+  );
+  const activeCrewCount = new Set(
+    productionKpis.activeJobs
+      .map((job) => getJobCrewLabel(snapshot, job))
+      .filter((label) => label !== "Crew needed"),
+  ).size;
+  const upcomingInspectionsCount = snapshot.inspections.filter(
+    (inspection) =>
+      inspection.status !== "canceled" &&
+      isUpcomingDate(inspection.scheduled_start, today),
+  ).length;
+  const heroSnapshot: DashboardHeroSnapshotItem[] = [
+    {
+      id: "weather-summary",
+      label: "Weather summary",
+      value: weatherDelayJobs.length ? `${weatherDelayJobs.length} watch` : "Clear",
+      detail: weatherDelayJobs.length
+        ? "Weather delay signals in job notes"
+        : "No CRM weather-delay signals",
+      view: "weather",
+      icon: CloudSun,
+      tone: weatherDelayJobs.length ? "amber" : "green",
+    },
+    {
+      id: "upcoming-inspections",
+      label: "Upcoming inspections",
+      value: upcomingInspectionsCount,
+      detail: `${inspectionsToday} scheduled today`,
+      view: "inspections",
+      icon: ClipboardList,
+      tone: inspectionsToday ? "amber" : "blue",
+    },
+    {
+      id: "crew-count",
+      label: "Crew count",
+      value: activeCrewCount,
+      detail: `${productionKpis.jobsMissingCrew.length} job${productionKpis.jobsMissingCrew.length === 1 ? "" : "s"} need crew`,
+      view: "jobs",
+      icon: Users,
+      tone: productionKpis.jobsMissingCrew.length ? "amber" : "green",
+    },
+    {
+      id: "jobs-production",
+      label: "Jobs in production",
+      value: productionKpis.inProgressJobs.length,
+      detail: `${metrics.activeJobs} active jobs total`,
+      view: "jobs",
+      icon: Activity,
+      tone: productionKpis.atRiskJobs.length ? "amber" : "blue",
+    },
+    {
+      id: "pipeline",
+      label: "Pipeline value",
+      value: formatMoney(metrics.pipelineValue),
+      detail: `${metrics.openLeads} open leads`,
+      view: "leads",
+      icon: DollarSign,
+      tone: metrics.openLeads ? "blue" : "green",
+    },
+    {
+      id: "revenue-today",
+      label: "Today's revenue",
+      value: formatMoney(todaysRevenue),
+      detail: "Posted payments today",
+      view: "invoices",
+      icon: ReceiptText,
+      tone: todaysRevenue ? "green" : "blue",
+    },
+    {
+      id: "follow-ups",
+      label: "Outstanding follow-ups",
+      value: callbacksDue,
+      detail: "Leads and inbox items needing action",
+      view: "inbox",
+      icon: Phone,
+      tone: callbacksDue ? "amber" : "green",
+    },
+  ];
+  const executiveKpis: DashboardExecutiveKpi[] = [
+    {
+      id: "todays-revenue",
+      label: "Today's Revenue",
+      value: formatMoney(todaysRevenue),
+      detail: "Posted payments collected today",
+      view: "invoices",
+      icon: DollarSign,
+      tone: todaysRevenue > 0 ? "green" : "blue",
+      prominent: true,
+    },
+    {
+      id: "jobs-today",
+      label: "Jobs Today",
+      value: jobsToday,
+      detail: "Jobs with a saved schedule date today",
+      view: "jobs",
+      icon: CalendarClock,
+      tone: jobsToday ? "blue" : "green",
+      prominent: true,
+    },
+    {
+      id: "inspections-today",
+      label: "Inspections Today",
+      value: inspectionsToday,
+      detail: "Site inspections scheduled for today",
+      view: "inspections",
+      icon: ClipboardList,
+      tone: inspectionsToday ? "amber" : "green",
+    },
+    {
+      id: "estimates-pending",
+      label: "Estimates Pending",
+      value: pendingEstimates.length,
+      detail: `${formatMoney(pendingEstimates.reduce((total, estimate) => total + estimate.total, 0))} in draft or sent estimates`,
+      view: "estimates",
+      icon: Calculator,
+      tone: pendingEstimates.length ? "amber" : "green",
+    },
+    {
+      id: "production-status",
+      label: "Production Status",
+      value: metrics.activeJobs,
+      detail: `${productionKpis.atRiskJobs.length} active job${productionKpis.atRiskJobs.length === 1 ? "" : "s"} need review`,
+      view: "jobs",
+      icon: Home,
+      tone: productionKpis.atRiskJobs.length ? "amber" : "green",
+    },
+    {
+      id: "crew-utilization",
+      label: "Crew Utilization",
+      value: `${productionKpis.crewUtilization}%`,
+      detail: `${productionKpis.crewCoverage}% crew coverage across active jobs`,
+      view: "jobs",
+      icon: Users,
+      tone: productionKpis.crewCoverage >= 80 ? "green" : "amber",
+    },
+    {
+      id: "pipeline-value",
+      label: "Pipeline Value",
+      value: formatMoney(metrics.pipelineValue),
+      detail: `${metrics.openLeads} open leads in the active pipeline`,
+      view: "leads",
+      icon: DollarSign,
+      tone: metrics.openLeads ? "blue" : "green",
+    },
+    {
+      id: "outstanding-invoices",
+      label: "Outstanding Invoices",
+      value: formatMoney(metrics.unpaidInvoices),
+      detail: `${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? "" : "s"}`,
+      view: "invoices",
+      icon: ReceiptText,
+      tone: metrics.unpaidInvoices > 0 ? "amber" : "green",
+    },
+  ];
+  const weatherIntelligence: DashboardIntelligenceSignal[] = [
+    {
+      id: "weather-alerts",
+      label: "Weather Alerts",
+      value: weatherDelayJobs.length,
+      detail: weatherDelayJobs.length
+        ? "Existing job notes mention weather delays."
+        : "No weather-delay notes found in active job records.",
+      view: "weather",
+      icon: CloudSun,
+      tone: weatherDelayJobs.length ? "amber" : "green",
+    },
+    {
+      id: "callbacks-due",
+      label: "Callbacks Due",
+      value: callbacksDue,
+      detail: "Lead follow-ups and communications that need attention.",
+      view: "inbox",
+      icon: Phone,
+      tone: callbacksDue ? "amber" : "green",
+    },
+    {
+      id: "warranty-jobs",
+      label: "Warranty Jobs",
+      value: warrantyJobs.length,
+      detail: "Jobs with existing warranty or callback signals.",
+      view: "jobs",
+      icon: ShieldCheck,
+      tone: warrantyJobs.length ? "amber" : "green",
+    },
+    {
+      id: "customer-satisfaction",
+      label: "Customer Satisfaction",
+      value: "Not tracked",
+      detail: "Review and CSAT provider integrations are not connected yet.",
+      view: "settings",
+      icon: Star,
+      tone: "blue",
+    },
+  ];
 
   return (
     <div className="space-y-5">
       <OperationsCommandCenter
         data={operationsDashboard}
+        executiveKpis={executiveKpis}
+        weatherIntelligence={weatherIntelligence}
+        heroSnapshot={heroSnapshot}
         focusFilter={focusFilter}
         onFocusFilterChange={setFocusFilter}
         pipelineFilter={pipelineFilter}
@@ -7075,90 +7688,107 @@ function DashboardView({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Open leads" value={metrics.openLeads} icon={ClipboardList} />
-        <MetricCard
-          label="Pipeline value"
-          value={formatMoney(metrics.pipelineValue)}
-          icon={DollarSign}
-        />
-        <MetricCard label="Customers" value={metrics.customers} icon={Users} />
-        <MetricCard
-          label="Open estimates"
-          value={metrics.openEstimates}
-          icon={FileText}
-        />
-        <MetricCard
-          label="Estimate value"
-          value={formatMoney(metrics.estimateValue)}
-          icon={DollarSign}
-        />
-        <MetricCard
-          label="Scopes ready"
-          value={metrics.scopesReady}
-          icon={WandSparkles}
-        />
-        <MetricCard
-          label="Active jobs"
-          value={metrics.activeJobs}
-          icon={CalendarClock}
-        />
-        <MetricCard
-          label="Scheduled"
-          value={metrics.scheduledEvents}
-          icon={CalendarClock}
-        />
-        <MetricCard
-          label="Unpaid invoices"
-          value={formatMoney(metrics.unpaidInvoices)}
-          icon={ReceiptText}
-        />
-        <MetricCard
-          label="Pending orders"
-          value={metrics.materialOrdersPending}
-          icon={Package}
-        />
-        <MetricCard
-          label="Revenue"
-          value={formatMoney(metrics.revenueCollected)}
-          icon={DollarSign}
-        />
-        <MetricCard
-          label="Close rate"
-          value={`${metrics.closeRate}%`}
-          icon={CheckCircle2}
-        />
-        <MetricCard
-          label="Production"
-          value={`${metrics.productionCompletion}%`}
-          icon={CalendarClock}
-        />
-        <MetricCard
-          label="Schedule coverage"
-          value={`${productionKpis.scheduleCoverage}%`}
-          icon={CalendarClock}
-        />
-        <MetricCard
-          label="Crew coverage"
-          value={`${productionKpis.crewCoverage}%`}
-          icon={Users}
-        />
-        <MetricCard
-          label="Production profit"
-          value={formatMoney(productionKpis.productionProfit)}
-          icon={DollarSign}
-        />
-        <MetricCard
-          label="At-risk jobs"
-          value={productionKpis.atRiskJobs.length}
-          icon={ShieldCheck}
-        />
-        <MetricCard
-          label="Reminders"
-          value={metrics.unreadNotifications}
-          icon={Mail}
-        />
-      </div>
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Financial Overview
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              Operating metrics across the CRM
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Revenue, pipeline, estimates, invoices, production coverage, and reminders.
+            </p>
+          </div>
+          <Badge label="Live snapshot" tone="blue" />
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Open leads" value={metrics.openLeads} icon={ClipboardList} />
+          <MetricCard
+            label="Pipeline value"
+            value={formatMoney(metrics.pipelineValue)}
+            icon={DollarSign}
+          />
+          <MetricCard label="Customers" value={metrics.customers} icon={Users} />
+          <MetricCard
+            label="Open estimates"
+            value={metrics.openEstimates}
+            icon={FileText}
+          />
+          <MetricCard
+            label="Estimate value"
+            value={formatMoney(metrics.estimateValue)}
+            icon={DollarSign}
+          />
+          <MetricCard
+            label="Scopes ready"
+            value={metrics.scopesReady}
+            icon={WandSparkles}
+          />
+          <MetricCard
+            label="Active jobs"
+            value={metrics.activeJobs}
+            icon={CalendarClock}
+          />
+          <MetricCard
+            label="Scheduled"
+            value={metrics.scheduledEvents}
+            icon={CalendarClock}
+          />
+          <MetricCard
+            label="Unpaid invoices"
+            value={formatMoney(metrics.unpaidInvoices)}
+            icon={ReceiptText}
+          />
+          <MetricCard
+            label="Pending orders"
+            value={metrics.materialOrdersPending}
+            icon={Package}
+          />
+          <MetricCard
+            label="Revenue"
+            value={formatMoney(metrics.revenueCollected)}
+            icon={DollarSign}
+          />
+          <MetricCard
+            label="Close rate"
+            value={`${metrics.closeRate}%`}
+            icon={CheckCircle2}
+          />
+          <MetricCard
+            label="Production"
+            value={`${metrics.productionCompletion}%`}
+            icon={CalendarClock}
+          />
+          <MetricCard
+            label="Schedule coverage"
+            value={`${productionKpis.scheduleCoverage}%`}
+            icon={CalendarClock}
+          />
+          <MetricCard
+            label="Crew coverage"
+            value={`${productionKpis.crewCoverage}%`}
+            icon={Users}
+          />
+          <MetricCard
+            label="Production profit"
+            value={formatMoney(productionKpis.productionProfit)}
+            icon={DollarSign}
+          />
+          <MetricCard
+            label="At-risk jobs"
+            value={productionKpis.atRiskJobs.length}
+            icon={ShieldCheck}
+          />
+          <MetricCard
+            label="Reminders"
+            value={metrics.unreadNotifications}
+            icon={Mail}
+          />
+        </div>
+      </section>
 
       {roofingCompanyIds.size ? (
         <>
@@ -8013,13 +8643,15 @@ function ActionCenterCard({
   items: string[];
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-200 hover:bg-white hover:shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-slate-600">{label}</p>
           <p className="mt-2 text-3xl font-bold text-slate-950">{value}</p>
         </div>
-        <Icon className="h-5 w-5 text-sky-600" />
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-sky-700 shadow-sm">
+          <Icon className="h-5 w-5" />
+        </div>
       </div>
       <p className="mt-2 text-sm font-semibold text-slate-700">{detail}</p>
       <div className="mt-3 grid gap-1.5">
@@ -9001,12 +9633,14 @@ function JobProductionTimeline({ items }: { items: JobProductionTimelineItem[] }
 
 function MetricCard({ label, value, icon: Icon }: MetricCardProps) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-200 hover:bg-white hover:shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-500">{label}</p>
-        <Icon className="h-5 w-5 text-sky-600" />
+        <div className="grid h-9 w-9 place-items-center rounded-md bg-white text-sky-700 shadow-sm">
+          <Icon className="h-4 w-4" />
+        </div>
       </div>
-      <p className="mt-4 text-3xl font-bold text-slate-950">{value}</p>
+      <p className="mt-4 text-2xl font-bold text-slate-950">{value}</p>
     </div>
   );
 }
@@ -10115,12 +10749,13 @@ function LeadsView({
         return;
       }
 
-      await createLead(client, input);
+      const createdLead = await createLead(client, input);
       setCreatedLeadFingerprints((current) => {
         const next = new Set(current);
         next.add(duplicateFingerprint);
         return next;
       });
+      setSelectedLeadId(createdLead.id);
       form.reset();
       await onReload();
       onNotice("Lead created.");
