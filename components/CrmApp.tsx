@@ -4603,15 +4603,6 @@ type CompanyDashboardSummary = {
   nextScheduledWork: ScheduleEventRecord | null;
 };
 
-type RecentActivityItem = {
-  id: string;
-  companyId: string;
-  title: string;
-  detail: string;
-  timestamp: string;
-  kind: "lead" | "estimate" | "job" | "schedule" | "document" | "invoice";
-};
-
 function buildCompanyDashboardSummary(
   snapshot: CrmSnapshot,
   company: CompanyRecord,
@@ -4676,72 +4667,6 @@ function buildCompanyDashboardSummary(
     ).length,
     nextScheduledWork: upcomingScheduledWork[0] ?? null,
   };
-}
-
-function buildRecentActivity(
-  snapshot: CrmSnapshot,
-  companyMap: Map<string, CompanyRecord>,
-) {
-  const items: RecentActivityItem[] = [
-    ...snapshot.leads.map((lead) => ({
-      id: `lead-${lead.id}`,
-      companyId: lead.company_id,
-      title: lead.contact_name,
-      detail: `Lead ${statusLabel(lead.status)} - ${
-        companyMap.get(lead.company_id)?.short_name ?? "Company"
-      }`,
-      timestamp: lead.updated_at,
-      kind: "lead" as const,
-    })),
-    ...snapshot.estimates.map((estimate) => ({
-      id: `estimate-${estimate.id}`,
-      companyId: estimate.company_id,
-      title: estimate.title,
-      detail: `Estimate ${estimateStatusLabel(estimate.status)} - ${formatMoney(
-        estimate.total,
-      )}`,
-      timestamp: estimate.updated_at,
-      kind: "estimate" as const,
-    })),
-    ...snapshot.jobs.map((job) => ({
-      id: `job-${job.id}`,
-      companyId: job.company_id,
-      title: job.title,
-      detail: `Job ${jobStatusLabel(job.status)} - ${job.property_address}`,
-      timestamp: job.updated_at,
-      kind: "job" as const,
-    })),
-    ...snapshot.scheduleEvents.map((event) => ({
-      id: `schedule-${event.id}`,
-      companyId: event.company_id,
-      title: event.title,
-      detail: `${scheduleEventTypeLabel(event.event_type)} - ${formatDateTime(
-        event.start_at,
-      )}`,
-      timestamp: event.updated_at,
-      kind: "schedule" as const,
-    })),
-    ...snapshot.documents.map((document) => ({
-      id: `document-${document.id}`,
-      companyId: document.company_id,
-      title: document.title,
-      detail: `Document ${document.status} - ${document.category}`,
-      timestamp: document.updated_at,
-      kind: "document" as const,
-    })),
-    ...snapshot.invoices.map((invoice) => ({
-      id: `invoice-${invoice.id}`,
-      companyId: invoice.company_id,
-      title: invoice.invoice_number,
-      detail: `Invoice ${invoice.status} - ${formatMoney(invoice.balance_due)} due`,
-      timestamp: invoice.updated_at,
-      kind: "invoice" as const,
-    })),
-  ];
-
-  return items
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-    .slice(0, 8);
 }
 
 type OperationsDashboardItem = {
@@ -6171,6 +6096,7 @@ function OperationsCommandCenter({
   executiveKpis,
   weatherIntelligence,
   heroSnapshot,
+  companySummaries,
   focusFilter,
   onFocusFilterChange,
   pipelineFilter,
@@ -6184,6 +6110,7 @@ function OperationsCommandCenter({
   executiveKpis: DashboardExecutiveKpi[];
   weatherIntelligence: DashboardIntelligenceSignal[];
   heroSnapshot: DashboardHeroSnapshotItem[];
+  companySummaries: CompanyDashboardSummary[];
   focusFilter: DashboardFocusFilter;
   onFocusFilterChange: (filter: DashboardFocusFilter) => void;
   pipelineFilter: DashboardPipelineFilter;
@@ -6451,6 +6378,11 @@ function OperationsCommandCenter({
               </div>
             </div>
 
+            <CompanyPulsePanel
+              summaries={companySummaries}
+              onOpen={openView}
+            />
+
           </div>
 
           <OwnerPriorityPanel
@@ -6643,6 +6575,120 @@ function DashboardPriorityCount({
     <div className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2.5 shadow-inner shadow-white/5">
       <p className="text-xl font-bold leading-none text-white">{value}</p>
       <p className="mt-1.5 text-xs font-semibold leading-4 text-slate-300">{label}</p>
+    </div>
+  );
+}
+
+function CompanyPulsePanel({
+  summaries,
+  onOpen,
+}: {
+  summaries: CompanyDashboardSummary[];
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  if (!summaries.length) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.06] p-4 shadow-inner shadow-white/5 ring-1 ring-white/5 sm:p-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
+            Company Pulse
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-white">
+            Roofing and painting at a glance
+          </h3>
+        </div>
+        <p className="max-w-md text-sm leading-6 text-slate-300">
+          WeatherTech and IHC stay separated while sharing one daily operating view.
+        </p>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {summaries.map((summary) => {
+          const brandColor = getCompanyBrandColor(summary.company);
+          const isPainting = isPaintingCompany(summary.company);
+          const tradeLabel = isPainting ? "Painting operations" : "Roofing operations";
+          const workflowFocus = isPainting
+            ? `${summary.pendingColorSelections} color approval${summary.pendingColorSelections === 1 ? "" : "s"} · ${summary.paintingScopes} painting scope${summary.paintingScopes === 1 ? "" : "s"}`
+            : `${summary.roofingScopes} roofing scope${summary.roofingScopes === 1 ? "" : "s"} · ${summary.pendingDocuments} document task${summary.pendingDocuments === 1 ? "" : "s"}`;
+
+          return (
+            <article
+              key={summary.company.id}
+              className={`relative overflow-hidden rounded-lg border border-white/10 bg-slate-950/25 p-4 text-white shadow-inner shadow-white/5 transition hover:-translate-y-0.5 hover:border-white/25 hover:bg-white/[0.08] ${
+                isPainting ? "wt-company-painting" : ""
+              }`}
+            >
+              <span
+                className="absolute inset-x-0 top-0 h-1"
+                style={{ backgroundColor: brandColor }}
+              />
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    {tradeLabel}
+                  </p>
+                  <h4 className="mt-1 truncate text-lg font-bold text-white">
+                    {summary.company.name}
+                  </h4>
+                  <p className="mt-1 text-sm font-semibold leading-5 text-slate-300">
+                    {workflowFocus}
+                  </p>
+                </div>
+                <div
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-sm font-bold text-white shadow-lg shadow-slate-950/25"
+                  style={{ backgroundColor: brandColor }}
+                >
+                  {companyInitials(summary.company)}
+                </div>
+              </div>
+
+              <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <CompanyPulseMetric label="Estimates" value={summary.openEstimates} />
+                <CompanyPulseMetric label="Active jobs" value={summary.activeJobs} />
+                <CompanyPulseMetric label="Scheduled" value={summary.scheduledWork} />
+                <CompanyPulseMetric label="Revenue" value={formatMoney(summary.revenue)} />
+              </dl>
+
+              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="min-w-0 text-sm font-semibold text-slate-300">
+                  {summary.nextScheduledWork
+                    ? `Next: ${summary.nextScheduledWork.title} · ${formatDateTime(summary.nextScheduledWork.start_at)}`
+                    : "No upcoming scheduled work in the current snapshot."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onOpen("jobs", summary.company.id)}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:border-orange-200 hover:bg-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950"
+                >
+                  Open work
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CompanyPulseMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-md border border-white/10 bg-white/[0.08] px-3 py-2">
+      <dt className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </dt>
+      <dd className="mt-1 truncate text-lg font-bold leading-none text-white">{value}</dd>
     </div>
   );
 }
@@ -7174,7 +7220,6 @@ function DashboardView({
   metrics,
   snapshot,
   companyMap,
-  activeCompanyId,
   isDemoMode,
   onCompanyScopeChange,
   onViewChange,
@@ -7200,20 +7245,8 @@ function DashboardView({
       }),
     [companyMap, focusFilter, isDemoMode, pipelineFilter, snapshot],
   );
-  const recentActivity = buildRecentActivity(snapshot, companyMap);
-  const isOwnerDashboard = activeCompanyId === "all" && snapshot.companies.length > 1;
   const urgentLeads = snapshot.leads.filter(
     (lead) => lead.priority === "urgent" || lead.next_follow_up === today,
-  );
-  const activeJobIdsWithUpcomingEvents = new Set(
-    snapshot.scheduleEvents
-      .filter(
-        (event) =>
-          event.job_id &&
-          event.status === "scheduled" &&
-          event.start_at.slice(0, 10) >= today,
-      )
-      .map((event) => event.job_id as string),
   );
   const overdueInvoices = snapshot.invoices.filter(
     (invoice) =>
@@ -7222,211 +7255,6 @@ function DashboardView({
       invoice.due_date < today &&
       invoice.status !== "paid" &&
       invoice.status !== "void",
-  );
-  const jobsNeedingSchedule = snapshot.jobs.filter(
-    (job) =>
-      (job.status === "scheduled" || job.status === "in_progress") &&
-      !hasSavedJobSchedule(job) &&
-      !activeJobIdsWithUpcomingEvents.has(job.id),
-  );
-  const estimatesMissingDocuments = snapshot.estimates.filter(
-    (estimate) =>
-      (estimate.status === "sent" || estimate.status === "approved") &&
-      !snapshot.documents.some((document) => document.estimate_id === estimate.id),
-  );
-  const invoicesMissingDocuments = snapshot.invoices.filter(
-    (invoice) =>
-      invoice.status !== "draft" &&
-      !snapshot.documents.some((document) => document.invoice_id === invoice.id),
-  );
-  const scopesMissingDocuments = snapshot.scopes.filter(
-    (scope) =>
-      (scope.status === "ready" || scope.status === "approved") &&
-      !snapshot.documents.some((document) => document.estimate_id === scope.estimate_id),
-  );
-  const blockedJobs = snapshot.jobs.filter((job) => job.status === "blocked");
-  const pendingChangeOrders = snapshot.changeOrders.filter(
-    (changeOrder) =>
-      changeOrder.status === "draft" || changeOrder.status === "sent",
-  );
-  const queuedCommunications =
-    snapshot.emailMessages.filter((message) => message.status === "queued").length +
-    snapshot.smsMessages.filter((message) => message.status === "queued").length;
-  const documentsToGenerate =
-    estimatesMissingDocuments.length +
-    invoicesMissingDocuments.length +
-    scopesMissingDocuments.length;
-  const actionCount =
-    overdueInvoices.length +
-    jobsNeedingSchedule.length +
-    productionKpis.jobsMissingCrew.length +
-    documentsToGenerate +
-    productionKpis.atRiskJobs.length +
-    pendingChangeOrders.length +
-    queuedCommunications;
-  const paintingCompanyIds = new Set(
-    snapshot.companies.filter((company) => isPaintingCompany(company)).map((company) => company.id),
-  );
-  const paintingEstimates = snapshot.estimates.filter(
-    (estimate) =>
-      estimate.service_type === "painting" || paintingCompanyIds.has(estimate.company_id),
-  );
-  const paintingScopes = snapshot.scopes.filter((scope) =>
-    ["exterior_painting", "interior_painting", "cabinet_refinishing"].includes(
-      scope.category,
-    ),
-  );
-  const pendingColorSelections = paintingEstimates.filter(
-    (estimate) =>
-      estimate.status !== "declined" &&
-      estimate.status !== "rejected" &&
-      estimate.color_selection_status !== "approved",
-  );
-  const activePaintingJobs = snapshot.jobs.filter(
-    (job) =>
-      paintingCompanyIds.has(job.company_id) &&
-      job.status !== "completed" &&
-      job.status !== "cancelled" &&
-      job.status !== "canceled" &&
-      job.status !== "closed",
-  );
-  const paintingEstimateValue = paintingEstimates.reduce(
-    (total, estimate) => total + estimate.total,
-    0,
-  );
-  const approvedPaintingValue = paintingEstimates
-    .filter((estimate) => estimate.status === "approved")
-    .reduce((total, estimate) => total + estimate.total, 0);
-  const paintingScopeMix = [
-    {
-      label: "Exterior",
-      value: paintingScopes.filter((scope) => scope.category === "exterior_painting")
-        .length,
-    },
-    {
-      label: "Interior",
-      value: paintingScopes.filter((scope) => scope.category === "interior_painting")
-        .length,
-    },
-    {
-      label: "Cabinets",
-      value: paintingScopes.filter((scope) => scope.category === "cabinet_refinishing")
-        .length,
-    },
-  ];
-  const scheduledPaintingJobs = activePaintingJobs.filter((job) =>
-    hasSavedJobSchedule(job),
-  );
-  const paintingFollowUps = snapshot.leads.filter(
-    (lead) =>
-      paintingCompanyIds.has(lead.company_id) &&
-      lead.status !== "won" &&
-      lead.status !== "lost" &&
-      lead.next_follow_up !== null,
-  );
-  const paintingChangeOrders = snapshot.changeOrders.filter(
-    (changeOrder) =>
-      paintingCompanyIds.has(changeOrder.company_id) &&
-      (changeOrder.status === "draft" || changeOrder.status === "sent"),
-  );
-  const pendingPaintingInvoices = snapshot.invoices.filter(
-    (invoice) =>
-      paintingCompanyIds.has(invoice.company_id) &&
-      invoice.balance_due > 0 &&
-      invoice.status !== "paid" &&
-      invoice.status !== "void",
-  );
-  const paintingMaterialRequests = snapshot.materialOrders.filter(
-    (order) =>
-      paintingCompanyIds.has(order.company_id) &&
-      (order.status === "draft" ||
-        order.status === "ordered" ||
-        order.status === "partial"),
-  );
-  const paintingPreparationEstimates = paintingEstimates.filter(
-    (estimate) => estimate.surface_prep_level !== null,
-  );
-  const roofingCompanyIds = new Set(
-    snapshot.companies
-      .filter(
-        (company) =>
-          company.trade === "roofing" || company.workflow_profile === "roofing",
-      )
-      .map((company) => company.id),
-  );
-  const roofingEstimates = snapshot.estimates.filter(
-    (estimate) =>
-      estimate.service_type === "roofing" || roofingCompanyIds.has(estimate.company_id),
-  );
-  const roofingScopes = snapshot.scopes.filter((scope) =>
-    ["roofing", "roof_repairs", "tile_underlayment"].includes(scope.category),
-  );
-  const activeRoofingJobs = snapshot.jobs.filter(
-    (job) =>
-      roofingCompanyIds.has(job.company_id) &&
-      job.status !== "completed" &&
-      job.status !== "cancelled" &&
-      job.status !== "canceled" &&
-      job.status !== "closed",
-  );
-  const roofingEstimateValue = roofingEstimates.reduce(
-    (total, estimate) => total + estimate.total,
-    0,
-  );
-  const approvedRoofingValue = roofingEstimates
-    .filter((estimate) => estimate.status === "approved")
-    .reduce((total, estimate) => total + estimate.total, 0);
-  const roofingScopeMix = [
-    {
-      label: "Replacement",
-      value: roofingScopes.filter((scope) => scope.category === "roofing").length,
-    },
-    {
-      label: "Repairs",
-      value: roofingScopes.filter((scope) => scope.category === "roof_repairs").length,
-    },
-    {
-      label: "Underlayment",
-      value: roofingScopes.filter((scope) => scope.category === "tile_underlayment")
-        .length,
-    },
-  ];
-  const upcomingRoofInspections = sortByDateField(
-    snapshot.inspections.filter(
-      (inspection) =>
-        roofingCompanyIds.has(inspection.company_id) &&
-        inspection.status !== "canceled" &&
-        isUpcomingDate(inspection.scheduled_start, today),
-    ),
-    (inspection) => inspection.scheduled_start,
-  );
-  const roofingJobsMissingSchedule = activeRoofingJobs.filter(
-    (job) => !hasSavedJobSchedule(job),
-  );
-  const roofingEstimatesAwaitingFollowUp = roofingEstimates.filter(
-    (estimate) => estimate.status === "sent",
-  );
-  const roofingProductionToday = activeRoofingJobs.filter((job) =>
-    isTodayDate(getJobDashboardScheduledDate(job), today),
-  );
-  const roofingChangeOrders = snapshot.changeOrders.filter(
-    (changeOrder) =>
-      roofingCompanyIds.has(changeOrder.company_id) &&
-      (changeOrder.status === "draft" || changeOrder.status === "sent"),
-  );
-  const pendingRoofingInvoices = snapshot.invoices.filter(
-    (invoice) =>
-      roofingCompanyIds.has(invoice.company_id) &&
-      invoice.balance_due > 0 &&
-      invoice.status !== "paid" &&
-      invoice.status !== "void",
-  );
-  const roofingMaterialRequests = snapshot.materialOrders.filter(
-    (order) =>
-      roofingCompanyIds.has(order.company_id) &&
-      (order.status === "draft" ||
-        order.status === "ordered" ||
-        order.status === "partial"),
   );
   const todaysRevenue = snapshot.payments
     .filter((payment) => payment.status === "posted" && isTodayDate(payment.paid_at, today))
@@ -7647,979 +7475,21 @@ function DashboardView({
   ];
 
   return (
-    <div className="space-y-5">
-      <OperationsCommandCenter
-        data={operationsDashboard}
-        executiveKpis={executiveKpis}
-        weatherIntelligence={weatherIntelligence}
-        heroSnapshot={heroSnapshot}
-        focusFilter={focusFilter}
-        onFocusFilterChange={setFocusFilter}
-        pipelineFilter={pipelineFilter}
-        onPipelineFilterChange={setPipelineFilter}
-        companyMap={companyMap}
-        onCompanyScopeChange={onCompanyScopeChange}
-        onViewChange={onViewChange}
-        onCreateLead={onCreateLead}
-      />
-
-      {isOwnerDashboard ? (
-        <OwnerDashboardPanel
-          summaries={companySummaries}
-          recentActivity={recentActivity}
-          companyMap={companyMap}
-          onCompanyScopeChange={onCompanyScopeChange}
-          onViewChange={onViewChange}
-        />
-      ) : null}
-
-      {!isOwnerDashboard && companySummaries[0] ? (
-        <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_420px]">
-          <CompanyDashboardPanel
-            summary={companySummaries[0]}
-            onViewChange={onViewChange}
-          />
-          <RecentActivityFeed
-            items={recentActivity}
-            companyMap={companyMap}
-            onCompanyScopeChange={onCompanyScopeChange}
-            onViewChange={onViewChange}
-          />
-        </div>
-      ) : null}
-
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase text-sky-700">
-              Financial Overview
-            </p>
-            <h2 className="mt-1 text-xl font-bold text-slate-950">
-              Operating metrics across the CRM
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Revenue, pipeline, estimates, invoices, production coverage, and reminders.
-            </p>
-          </div>
-          <Badge label="Live snapshot" tone="blue" />
-        </div>
-
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Open leads" value={metrics.openLeads} icon={ClipboardList} />
-          <MetricCard
-            label="Pipeline value"
-            value={formatMoney(metrics.pipelineValue)}
-            icon={DollarSign}
-          />
-          <MetricCard label="Customers" value={metrics.customers} icon={Users} />
-          <MetricCard
-            label="Open estimates"
-            value={metrics.openEstimates}
-            icon={FileText}
-          />
-          <MetricCard
-            label="Estimate value"
-            value={formatMoney(metrics.estimateValue)}
-            icon={DollarSign}
-          />
-          <MetricCard
-            label="Scopes ready"
-            value={metrics.scopesReady}
-            icon={WandSparkles}
-          />
-          <MetricCard
-            label="Active jobs"
-            value={metrics.activeJobs}
-            icon={CalendarClock}
-          />
-          <MetricCard
-            label="Scheduled"
-            value={metrics.scheduledEvents}
-            icon={CalendarClock}
-          />
-          <MetricCard
-            label="Unpaid invoices"
-            value={formatMoney(metrics.unpaidInvoices)}
-            icon={ReceiptText}
-          />
-          <MetricCard
-            label="Pending orders"
-            value={metrics.materialOrdersPending}
-            icon={Package}
-          />
-          <MetricCard
-            label="Revenue"
-            value={formatMoney(metrics.revenueCollected)}
-            icon={DollarSign}
-          />
-          <MetricCard
-            label="Close rate"
-            value={`${metrics.closeRate}%`}
-            icon={CheckCircle2}
-          />
-          <MetricCard
-            label="Production"
-            value={`${metrics.productionCompletion}%`}
-            icon={CalendarClock}
-          />
-          <MetricCard
-            label="Schedule coverage"
-            value={`${productionKpis.scheduleCoverage}%`}
-            icon={CalendarClock}
-          />
-          <MetricCard
-            label="Crew coverage"
-            value={`${productionKpis.crewCoverage}%`}
-            icon={Users}
-          />
-          <MetricCard
-            label="Production profit"
-            value={formatMoney(productionKpis.productionProfit)}
-            icon={DollarSign}
-          />
-          <MetricCard
-            label="At-risk jobs"
-            value={productionKpis.atRiskJobs.length}
-            icon={ShieldCheck}
-          />
-          <MetricCard
-            label="Reminders"
-            value={metrics.unreadNotifications}
-            icon={Mail}
-          />
-        </div>
-      </section>
-
-      {roofingCompanyIds.size ? (
-        <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="Roofing estimate value"
-              value={formatMoney(roofingEstimateValue)}
-              icon={Home}
-            />
-            <MetricCard
-              label="Approved roofing"
-              value={formatMoney(approvedRoofingValue)}
-              icon={DollarSign}
-            />
-            <MetricCard
-              label="Roofing scopes"
-              value={roofingScopes.length}
-              icon={WandSparkles}
-            />
-            <MetricCard
-              label="Active roof jobs"
-              value={activeRoofingJobs.length}
-              icon={CalendarClock}
-            />
-          </div>
-
-          <section className="rounded-lg border border-sky-100 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">
-                  WeatherTech Roofing workflow
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Roof replacement, repair, underlayment, and production readiness.
-                </p>
-              </div>
-              <Badge label="Roofing" tone="amber" />
-            </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ActionCenterCard
-                icon={Home}
-                label="Scope mix"
-                value={roofingScopes.length}
-                detail={roofingScopeMix
-                  .map((scope) => `${scope.label}: ${scope.value}`)
-                  .join(" / ")}
-                items={roofingScopeMix.map(
-                  (scope) => `${scope.label} scopes: ${scope.value}`,
-                )}
-              />
-              <ActionCenterCard
-                icon={CalendarClock}
-                label="Roofing jobs"
-                value={activeRoofingJobs.length}
-                detail="Scheduled or in production"
-                items={activeRoofingJobs.slice(0, 3).map((job) => job.title)}
-              />
-              <ActionCenterCard
-                icon={ClipboardList}
-                label="Upcoming roof inspections"
-                value={upcomingRoofInspections.length}
-                detail="Scheduled WeatherTech site visits"
-                items={upcomingRoofInspections
-                  .slice(0, 3)
-                  .map((inspection) => inspection.title)}
-              />
-              <ActionCenterCard
-                icon={CalendarClock}
-                label="Roof jobs missing schedule"
-                value={roofingJobsMissingSchedule.length}
-                detail="Active roof jobs without saved dates"
-                items={roofingJobsMissingSchedule.slice(0, 3).map((job) => job.title)}
-              />
-              <ActionCenterCard
-                icon={CalendarClock}
-                label="Roofing production today"
-                value={roofingProductionToday.length}
-                detail="WeatherTech jobs dated for today"
-                items={roofingProductionToday.slice(0, 3).map((job) => job.title)}
-              />
-              <ActionCenterCard
-                icon={FileText}
-                label="Roof estimates to follow up"
-                value={roofingEstimatesAwaitingFollowUp.length}
-                detail="Sent WeatherTech estimates"
-                items={roofingEstimatesAwaitingFollowUp
-                  .slice(0, 3)
-                  .map((estimate) => estimate.title)}
-              />
-              <ActionCenterCard
-                icon={ReceiptText}
-                label="Roofing change orders"
-                value={roofingChangeOrders.length}
-                detail={formatMoney(
-                  roofingChangeOrders.reduce(
-                    (total, changeOrder) => total + changeOrder.total,
-                    0,
-                  ),
-                )}
-                items={roofingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
-              />
-              <ActionCenterCard
-                icon={ReceiptText}
-                label="Pending roofing invoices"
-                value={pendingRoofingInvoices.length}
-                detail={formatMoney(
-                  pendingRoofingInvoices.reduce(
-                    (total, invoice) => total + invoice.balance_due,
-                    0,
-                  ),
-                )}
-                items={pendingRoofingInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
-              />
-              <ActionCenterCard
-                icon={Package}
-                label="Roofing material needs"
-                value={roofingMaterialRequests.length}
-                detail="Existing material order records"
-                items={roofingMaterialRequests.slice(0, 3).map((order) => order.supplier_name)}
-              />
-              <ActionCenterCard
-                icon={FileText}
-                label="Roofing documents"
-                value={
-                  estimatesMissingDocuments.filter((estimate) =>
-                    roofingCompanyIds.has(estimate.company_id),
-                  ).length
-                }
-                detail="Approved or sent estimates needing packets"
-                items={estimatesMissingDocuments
-                  .filter((estimate) => roofingCompanyIds.has(estimate.company_id))
-                  .slice(0, 3)
-                  .map((estimate) => estimate.title)}
-              />
-            </div>
-          </section>
-        </>
-      ) : null}
-
-      {paintingCompanyIds.size ? (
-        <div className="space-y-5 wt-company-painting">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="IHC estimate value"
-              value={formatMoney(paintingEstimateValue)}
-              icon={Paintbrush}
-            />
-            <MetricCard
-              label="Approved painting"
-              value={formatMoney(approvedPaintingValue)}
-              icon={DollarSign}
-            />
-            <MetricCard
-              label="Color approvals"
-              value={pendingColorSelections.length}
-              icon={Palette}
-            />
-            <MetricCard
-              label="Active IHC jobs"
-              value={activePaintingJobs.length}
-              icon={CalendarClock}
-            />
-          </div>
-
-          <section className="rounded-lg border border-sky-100 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">
-                  IHC Painting workflow
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Color approvals, coating scopes, and painting production readiness.
-                </p>
-              </div>
-              <Badge label="Painting" tone="amber" />
-            </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ActionCenterCard
-                icon={Palette}
-                label="Color selections"
-                value={pendingColorSelections.length}
-                detail="Not approved yet"
-                items={pendingColorSelections.slice(0, 3).map((estimate) => estimate.title)}
-              />
-              <ActionCenterCard
-                icon={Paintbrush}
-                label="Scope mix"
-                value={paintingScopes.length}
-                detail={paintingScopeMix
-                  .map((scope) => `${scope.label}: ${scope.value}`)
-                  .join(" / ")}
-                items={paintingScopeMix.map(
-                  (scope) => `${scope.label} scopes: ${scope.value}`,
-                )}
-              />
-              <ActionCenterCard
-                icon={CalendarClock}
-                label="Painting jobs"
-                value={activePaintingJobs.length}
-                detail="Scheduled or in production"
-                items={activePaintingJobs.slice(0, 3).map((job) => job.title)}
-              />
-              <ActionCenterCard
-                icon={CalendarClock}
-                label="Scheduled painting jobs"
-                value={scheduledPaintingJobs.length}
-                detail="IHC jobs with saved schedule dates"
-                items={scheduledPaintingJobs.slice(0, 3).map((job) => job.title)}
-              />
-              <ActionCenterCard
-                icon={Paintbrush}
-                label="Surface preparation"
-                value={paintingPreparationEstimates.length}
-                detail="Existing estimate prep fields"
-                items={paintingPreparationEstimates
-                  .slice(0, 3)
-                  .map((estimate) => estimate.title)}
-              />
-              <ActionCenterCard
-                icon={Phone}
-                label="Painting follow-ups"
-                value={paintingFollowUps.length}
-                detail="IHC leads with follow-up dates"
-                items={paintingFollowUps.slice(0, 3).map((lead) => lead.contact_name)}
-              />
-              <ActionCenterCard
-                icon={ReceiptText}
-                label="Painting change orders"
-                value={paintingChangeOrders.length}
-                detail={formatMoney(
-                  paintingChangeOrders.reduce(
-                    (total, changeOrder) => total + changeOrder.total,
-                    0,
-                  ),
-                )}
-                items={paintingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
-              />
-              <ActionCenterCard
-                icon={ReceiptText}
-                label="Pending painting invoices"
-                value={pendingPaintingInvoices.length}
-                detail={formatMoney(
-                  pendingPaintingInvoices.reduce(
-                    (total, invoice) => total + invoice.balance_due,
-                    0,
-                  ),
-                )}
-                items={pendingPaintingInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
-              />
-              <ActionCenterCard
-                icon={Package}
-                label="Painting material needs"
-                value={paintingMaterialRequests.length}
-                detail="Existing material order records"
-                items={paintingMaterialRequests.slice(0, 3).map((order) => order.supplier_name)}
-              />
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
-        <ChartPanel
-          title="Revenue movement"
-          rows={[
-            { label: "Pipeline", value: metrics.pipelineValue, valueLabel: formatMoney(metrics.pipelineValue) },
-            { label: "Estimates", value: metrics.estimateValue, valueLabel: formatMoney(metrics.estimateValue) },
-            {
-              label: "Invoiced",
-              value: snapshot.invoices.reduce((total, invoice) => total + invoice.total, 0),
-              valueLabel: formatMoney(snapshot.invoices.reduce((total, invoice) => total + invoice.total, 0)),
-            },
-            { label: "Collected", value: metrics.revenueCollected, valueLabel: formatMoney(metrics.revenueCollected) },
-          ]}
-        />
-        <ChartPanel
-          title="Operations health"
-          rows={[
-            { label: "Close rate", value: metrics.closeRate, valueLabel: `${metrics.closeRate}%` },
-            { label: "Production", value: metrics.productionCompletion, valueLabel: `${metrics.productionCompletion}%` },
-            { label: "Open jobs", value: metrics.activeJobs, valueLabel: String(metrics.activeJobs) },
-            { label: "Reminders", value: metrics.unreadNotifications, valueLabel: String(metrics.unreadNotifications) },
-          ]}
-        />
-        <ChartPanel
-          title="Production readiness"
-          rows={[
-            {
-              label: "Schedule coverage",
-              value: productionKpis.scheduleCoverage,
-              valueLabel: `${productionKpis.scheduleCoverage}%`,
-            },
-            {
-              label: "Crew coverage",
-              value: productionKpis.crewCoverage,
-              valueLabel: `${productionKpis.crewCoverage}%`,
-            },
-            {
-              label: "Crew utilization",
-              value: productionKpis.crewUtilization,
-              valueLabel: `${productionKpis.crewUtilization}%`,
-            },
-            {
-              label: "Assignment completion",
-              value: productionKpis.assignmentCompletion,
-              valueLabel: `${productionKpis.assignmentCompletion}%`,
-            },
-          ]}
-        />
-      </div>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-slate-950">
-              Operations action center
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Daily priorities across money, schedule, documents, production, and communications.
-            </p>
-          </div>
-          <Badge
-            label={`${actionCount} active`}
-            tone="amber"
-          />
-        </div>
-        <div className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-          <ActionCenterCard
-            icon={ReceiptText}
-            label="Overdue balances"
-            value={overdueInvoices.length}
-            detail={formatMoney(
-              overdueInvoices.reduce((total, invoice) => total + invoice.balance_due, 0),
-            )}
-            items={overdueInvoices.slice(0, 3).map((invoice) => invoice.invoice_number)}
-          />
-          <ActionCenterCard
-            icon={CalendarClock}
-            label="Jobs needing schedule"
-            value={jobsNeedingSchedule.length}
-            detail="No upcoming scheduled event"
-            items={jobsNeedingSchedule.slice(0, 3).map((job) => job.title)}
-          />
-          <ActionCenterCard
-            icon={Users}
-            label="Crew gaps"
-            value={productionKpis.jobsMissingCrew.length}
-            detail="Active jobs without crew coverage"
-            items={productionKpis.jobsMissingCrew.slice(0, 3).map((job) => job.title)}
-          />
-          <ActionCenterCard
-            icon={FileText}
-            label="Documents to generate"
-            value={documentsToGenerate}
-            detail="Estimate, invoice, or scope packets"
-            items={[
-              ...estimatesMissingDocuments.map((estimate) => estimate.title),
-              ...invoicesMissingDocuments.map((invoice) => invoice.invoice_number),
-              ...scopesMissingDocuments.map((scope) => scope.title),
-            ].slice(0, 3)}
-          />
-          <ActionCenterCard
-            icon={ShieldCheck}
-            label="Blocked production"
-            value={blockedJobs.length}
-            detail="Needs operational review"
-            items={blockedJobs.slice(0, 3).map((job) => job.title)}
-          />
-          <ActionCenterCard
-            icon={ShieldCheck}
-            label="At-risk jobs"
-            value={productionKpis.atRiskJobs.length}
-            detail="Blocked, unscheduled, or unassigned"
-            items={productionKpis.atRiskJobs.slice(0, 3).map((job) => job.title)}
-          />
-          <ActionCenterCard
-            icon={ReceiptText}
-            label="Pending change orders"
-            value={pendingChangeOrders.length}
-            detail={formatMoney(
-              pendingChangeOrders.reduce(
-                (total, changeOrder) => total + changeOrder.total,
-                0,
-              ),
-            )}
-            items={pendingChangeOrders.slice(0, 3).map((changeOrder) => changeOrder.title)}
-          />
-          <ActionCenterCard
-            icon={MessageSquare}
-            label="Queued communications"
-            value={queuedCommunications}
-            detail="Email and SMS waiting to send"
-            items={[
-              ...snapshot.emailMessages
-                .filter((message) => message.status === "queued")
-                .map((message) => message.subject),
-              ...snapshot.smsMessages
-                .filter((message) => message.status === "queued")
-                .map((message) => message.body),
-            ].slice(0, 3)}
-          />
-        </div>
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-950">Lead pipeline</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Active opportunities by pipeline stage.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onCreateLead}
-              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
-            >
-              <Plus className="h-4 w-4" />
-              New lead
-            </button>
-          </div>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            {pipelineStages.map((stage) => {
-              const leads = snapshot.leads.filter(
-                (lead) => lead.pipeline_stage === stage.value,
-              );
-              const value = leads.reduce((total, lead) => total + lead.estimated_value, 0);
-
-              return (
-                <div
-                  key={stage.value}
-                  className="rounded-lg border border-slate-200 bg-slate-50 p-4"
-                >
-                  <p className="text-sm font-semibold text-slate-600">{stage.label}</p>
-                  <div className="mt-3 flex items-end justify-between">
-                    <p className="text-3xl font-bold text-slate-950">{leads.length}</p>
-                    <p className="text-sm font-semibold text-slate-700">
-                      {formatMoney(value)}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-950">Priority queue</h2>
-          <div className="mt-4 space-y-3">
-            {urgentLeads.length ? (
-              urgentLeads.map((lead) => (
-                <LeadMiniCard
-                  key={lead.id}
-                  lead={lead}
-                  company={companyMap.get(lead.company_id)}
-                />
-              ))
-            ) : (
-              <EmptyState label="No urgent follow-ups." />
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function OwnerDashboardPanel({
-  summaries,
-  recentActivity,
-  companyMap,
-  onCompanyScopeChange,
-  onViewChange,
-}: {
-  summaries: CompanyDashboardSummary[];
-  recentActivity: RecentActivityItem[];
-  companyMap: Map<string, CompanyRecord>;
-  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
-  onViewChange: (view: WorkspaceView) => void;
-}) {
-  const revenue = summaries.reduce((total, summary) => total + summary.revenue, 0);
-  const openEstimates = summaries.reduce(
-    (total, summary) => total + summary.openEstimates,
-    0,
-  );
-  const activeJobs = summaries.reduce((total, summary) => total + summary.activeJobs, 0);
-  const scheduledWork = summaries.reduce(
-    (total, summary) => total + summary.scheduledWork,
-    0,
-  );
-  const pendingDocuments = summaries.reduce(
-    (total, summary) => total + summary.pendingDocuments,
-    0,
-  );
-
-  return (
-    <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_420px]">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase text-sky-700">
-              Combined owner dashboard
-            </p>
-            <h2 className="mt-1 text-xl font-bold text-slate-950">
-              WeatherTech Roofing and IHC Painting
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              One operating view for pipeline, production, documents, and cash flow.
-            </p>
-          </div>
-          <Badge label="Owner view" tone="blue" />
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <ProfileStat label="Revenue" value={formatMoney(revenue)} />
-          <ProfileStat label="Open estimates" value={openEstimates} />
-          <ProfileStat label="Active jobs" value={activeJobs} />
-          <ProfileStat label="Scheduled work" value={scheduledWork} />
-          <ProfileStat label="Pending docs" value={pendingDocuments} />
-        </div>
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          {summaries.map((summary) => (
-            <CompanyPerformanceCard
-              key={summary.company.id}
-              summary={summary}
-              onCompanyScopeChange={onCompanyScopeChange}
-              onViewChange={onViewChange}
-            />
-          ))}
-        </div>
-      </div>
-
-      <RecentActivityFeed
-        items={recentActivity}
-        companyMap={companyMap}
-        onCompanyScopeChange={onCompanyScopeChange}
-        onViewChange={onViewChange}
-      />
-    </section>
-  );
-}
-
-function CompanyDashboardPanel({
-  summary,
-  onViewChange,
-}: {
-  summary: CompanyDashboardSummary;
-  onViewChange: (view: WorkspaceView) => void;
-}) {
-  const isPainting = isPaintingCompany(summary.company);
-  const brandColor = getCompanyBrandColor(summary.company);
-
-  return (
-    <section
-      className={`relative overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm ${
-        isPainting ? "wt-company-painting" : ""
-      }`}
-    >
-      <span
-        className="absolute inset-x-0 top-0 h-1"
-        style={{ backgroundColor: brandColor }}
-      />
-      <div className="flex flex-col gap-4">
-        <div className="flex items-start gap-3">
-          <div
-            className="grid h-12 w-12 place-items-center rounded-md text-base font-bold text-white"
-            style={{ backgroundColor: brandColor }}
-          >
-            {companyInitials(summary.company)}
-          </div>
-          <div>
-            <p className="text-sm font-semibold uppercase text-slate-500">
-              {isPainting ? "IHC Painting dashboard" : "WeatherTech Roofing dashboard"}
-            </p>
-            <h2 className="mt-1 text-xl font-bold text-slate-950">
-              {summary.company.name}
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              {isPainting
-                ? "Color approvals, coating scopes, scheduled crews, and painting revenue."
-                : "Roofing scopes, production schedule, documents, and revenue health."}
-            </p>
-          </div>
-        </div>
-        <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
-          <CompanyQuickAction
-            label="Leads"
-            icon={ClipboardList}
-            onClick={() => onViewChange("leads")}
-          />
-          <CompanyQuickAction
-            label="Estimates"
-            icon={FileText}
-            onClick={() => onViewChange("estimates")}
-          />
-          <CompanyQuickAction
-            label="Calendar"
-            icon={CalendarClock}
-            onClick={() => onViewChange("calendar")}
-          />
-          <CompanyQuickAction
-            label="Documents"
-            icon={FileText}
-            onClick={() => onViewChange("documents")}
-          />
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <ProfileStat label="Open estimates" value={summary.openEstimates} />
-        <ProfileStat label="Active jobs" value={summary.activeJobs} />
-        <ProfileStat label="Scheduled work" value={summary.scheduledWork} />
-        <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
-      </div>
-
-      <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-bold text-slate-950">
-              {isPainting ? "Painting workflow focus" : "Roofing workflow focus"}
-            </p>
-            <p className="mt-1 text-sm text-slate-500">
-              {isPainting
-                ? `${summary.pendingColorSelections} color approvals, ${summary.paintingScopes} painting scopes, ${summary.pendingDocuments} document tasks.`
-                : `${summary.roofingScopes} roofing scopes, ${summary.pendingDocuments} document tasks, ${summary.scheduledWork} scheduled events.`}
-            </p>
-          </div>
-          <Badge
-            label={summary.nextScheduledWork ? "Work scheduled" : "Needs schedule"}
-            tone={summary.nextScheduledWork ? "green" : "amber"}
-          />
-        </div>
-        {summary.nextScheduledWork ? (
-          <p className="mt-3 text-sm font-semibold text-slate-700">
-            Next: {summary.nextScheduledWork.title} on{" "}
-            {formatDateTime(summary.nextScheduledWork.start_at)}
-          </p>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function CompanyPerformanceCard({
-  summary,
-  onCompanyScopeChange,
-  onViewChange,
-}: {
-  summary: CompanyDashboardSummary;
-  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
-  onViewChange: (view: WorkspaceView) => void;
-}) {
-  const brandColor = getCompanyBrandColor(summary.company);
-  const isPainting = isPaintingCompany(summary.company);
-  const goTo = (view: WorkspaceView) => {
-    onCompanyScopeChange(summary.company.id);
-    onViewChange(view);
-  };
-
-  return (
-    <div
-      className={`relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4 ${
-        isPainting ? "wt-company-painting" : ""
-      }`}
-    >
-      <span
-        className="absolute inset-x-0 top-0 h-1"
-        style={{ backgroundColor: brandColor }}
-      />
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-bold uppercase text-slate-500">
-            {isPainting ? "Painting operations" : "Roofing operations"}
-          </p>
-          <h3 className="mt-1 text-lg font-bold text-slate-950">
-            {summary.company.name}
-          </h3>
-        </div>
-        {isPainting ? (
-          <Paintbrush className="h-5 w-5 text-sky-700" />
-        ) : (
-          <Home className="h-5 w-5 text-amber-700" />
-        )}
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <ProfileStat label="Open estimates" value={summary.openEstimates} />
-        <ProfileStat label="Active jobs" value={summary.activeJobs} />
-        <ProfileStat label="Revenue" value={formatMoney(summary.revenue)} />
-        <ProfileStat label="Pending docs" value={summary.pendingDocuments} />
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <CompanyQuickAction
-          label="Leads"
-          icon={ClipboardList}
-          onClick={() => goTo("leads")}
-        />
-        <CompanyQuickAction
-          label="Estimates"
-          icon={FileText}
-          onClick={() => goTo("estimates")}
-        />
-        <CompanyQuickAction
-          label="Calendar"
-          icon={CalendarClock}
-          onClick={() => goTo("calendar")}
-        />
-        <CompanyQuickAction
-          label="Documents"
-          icon={FileText}
-          onClick={() => goTo("documents")}
-        />
-      </div>
-    </div>
-  );
-}
-
-function CompanyQuickAction({
-  label,
-  icon: Icon,
-  onClick,
-}: {
-  label: string;
-  icon: typeof Home;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex w-full min-w-0 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span className="truncate">{label}</span>
-    </button>
-  );
-}
-
-function RecentActivityFeed({
-  items,
-  companyMap,
-  onCompanyScopeChange,
-  onViewChange,
-}: {
-  items: RecentActivityItem[];
-  companyMap: Map<string, CompanyRecord>;
-  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
-  onViewChange: (view: WorkspaceView) => void;
-}) {
-  const goToActivity = (item: RecentActivityItem) => {
-    onCompanyScopeChange(item.companyId);
-    onViewChange(
-      item.kind === "lead"
-        ? "leads"
-        : item.kind === "estimate"
-          ? "estimates"
-          : item.kind === "job"
-            ? "jobs"
-            : item.kind === "schedule"
-              ? "calendar"
-              : item.kind === "invoice"
-                ? "invoices"
-                : "documents",
-    );
-  };
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-slate-950">Recent activity</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Live CRM movement across companies.
-          </p>
-        </div>
-        <Badge label={`${items.length} latest`} tone="blue" />
-      </div>
-      <div className="mt-4 grid gap-2">
-        {items.length ? (
-          items.map((item) => {
-            const company = companyMap.get(item.companyId);
-            const Icon =
-              item.kind === "lead"
-                ? ClipboardList
-                : item.kind === "estimate"
-                  ? FileText
-                  : item.kind === "job"
-                    ? CalendarClock
-                    : item.kind === "schedule"
-                      ? CalendarClock
-                      : item.kind === "invoice"
-                        ? ReceiptText
-                        : FileText;
-
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => goToActivity(item)}
-                className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white"
-              >
-                <div
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-white"
-                  style={{ backgroundColor: getCompanyBrandColor(company) }}
-                >
-                  <Icon className="h-4 w-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="truncate text-sm font-bold text-slate-950">
-                      {item.title}
-                    </p>
-                    <p className="shrink-0 text-xs font-semibold text-slate-400">
-                      {formatDate(item.timestamp)}
-                    </p>
-                  </div>
-                  <p className="mt-1 truncate text-sm text-slate-500">{item.detail}</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-400">
-                    {company?.short_name ?? company?.name ?? "Company"}
-                  </p>
-                </div>
-              </button>
-            );
-          })
-        ) : (
-          <EmptyState label="No recent CRM activity yet." />
-        )}
-      </div>
-    </section>
+    <OperationsCommandCenter
+      data={operationsDashboard}
+      executiveKpis={executiveKpis}
+      weatherIntelligence={weatherIntelligence}
+      heroSnapshot={heroSnapshot}
+      companySummaries={companySummaries}
+      focusFilter={focusFilter}
+      onFocusFilterChange={setFocusFilter}
+      pipelineFilter={pipelineFilter}
+      onPipelineFilterChange={setPipelineFilter}
+      companyMap={companyMap}
+      onCompanyScopeChange={onCompanyScopeChange}
+      onViewChange={onViewChange}
+      onCreateLead={onCreateLead}
+    />
   );
 }
 

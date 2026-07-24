@@ -1619,9 +1619,9 @@ async function testDashboardLiveMode(tab) {
       hasDemoBanner: text.includes("Using local demo CRM data"),
       hasLiveDataError: text.includes("LIVE DATA ERROR"),
       hasDashboardMetrics:
-        text.includes("Open leads") &&
-        text.includes("Open estimates") &&
-        text.includes("Active jobs"),
+        normalizedText.includes("today's revenue") &&
+        normalizedText.includes("jobs today") &&
+        normalizedText.includes("pipeline value"),
       hasOperationsDashboard:
         normalizedText.includes("crm operations dashboard") &&
         normalizedText.includes("executive command center") &&
@@ -1632,6 +1632,9 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("all companies") &&
         normalizedText.includes("weathertech roofing") &&
         normalizedText.includes("ihc painting") &&
+        normalizedText.includes("company pulse") &&
+        normalizedText.includes("roofing and painting at a glance") &&
+        normalizedText.includes("open work") &&
         normalizedText.includes("phoenix") &&
         normalizedText.includes("tucson") &&
         normalizedText.includes("new or unassigned leads") &&
@@ -1649,14 +1652,10 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("communications") &&
         normalizedText.includes("integration health") &&
         normalizedText.includes("weather / intelligence") &&
-        normalizedText.includes("financial overview") &&
         normalizedText.includes("quick actions") &&
         normalizedText.includes("create change order") &&
         normalizedText.includes("upload photos") &&
-        normalizedText.includes("upload documents") &&
-        normalizedText.includes("weathertech roofing workflow") &&
-        normalizedText.includes("upcoming roof inspections") &&
-        normalizedText.includes("roofing production today"),
+        normalizedText.includes("upload documents"),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -3389,13 +3388,34 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
 
   const overlaps = await tab.playwright.evaluate(() => {
+    const quickActionLabels = [
+      "New Lead",
+      "New Customer",
+      "New Estimate",
+      "Schedule Inspection",
+      "Schedule Job",
+      "Compose Email",
+      "Send SMS",
+      "Create Invoice",
+      "Create Change Order",
+      "Upload Photos",
+      "Upload Documents",
+    ];
+    const matchesQuickAction = (text) =>
+      quickActionLabels.some((label) =>
+        text.toLowerCase().includes(label.toLowerCase()),
+      );
     const buttons = [...document.querySelectorAll("main button")]
       .filter((button) => !button.closest("nav"))
-      .filter((button) => ["Leads", "Estimates", "Calendar", "Documents"].includes(button.innerText.trim()))
+      .filter((button) => matchesQuickAction(button.innerText))
       .map((button) => {
         const rect = button.getBoundingClientRect();
+        const label =
+          quickActionLabels.find((candidate) =>
+            button.innerText.toLowerCase().includes(candidate.toLowerCase()),
+          ) ?? button.innerText.trim();
         return {
-          label: button.innerText.trim(),
+          label,
           top: rect.top,
           left: rect.left,
           right: rect.right,
@@ -3440,11 +3460,18 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
       "Upload Photos",
       "Upload Documents",
     ];
+    const matchesQuickAction = (text) =>
+      quickActionLabels.some((label) =>
+        text.toLowerCase().includes(label.toLowerCase()),
+      );
     const buttons = [...document.querySelectorAll('[data-testid="crm-operations-dashboard"] button')]
-      .filter((button) => quickActionLabels.some((label) => button.innerText.includes(label)))
+      .filter((button) => matchesQuickAction(button.innerText))
       .map((button) => {
         const rect = button.getBoundingClientRect();
-        const label = quickActionLabels.find((candidate) => button.innerText.includes(candidate)) ?? button.innerText.trim();
+        const label =
+          quickActionLabels.find((candidate) =>
+            button.innerText.toLowerCase().includes(candidate.toLowerCase()),
+          ) ?? button.innerText.trim();
 
         return {
           label,
@@ -3478,8 +3505,8 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     return { checked: buttons.length, collisions };
   });
 
-  if (overlaps.checked < 4) {
-    throw new Error(`Expected at least 4 dashboard quick-action buttons, checked ${overlaps.checked}.`);
+  if (overlaps.checked < 11) {
+    throw new Error(`Expected 11 dashboard quick-action buttons, checked ${overlaps.checked}.`);
   }
 
   if (overlaps.collisions.length) {
