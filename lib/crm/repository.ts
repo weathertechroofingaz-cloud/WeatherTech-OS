@@ -27,6 +27,7 @@ import type {
   EstimateLineItemInput,
   EstimateLineItemRecord,
   EstimateRecord,
+  EstimateStatus,
   InspectionInput,
   InspectionRecord,
   IntegrationConnectionInput,
@@ -953,6 +954,25 @@ export async function updateEstimate(
   }
 
   return estimate;
+}
+
+export async function updateEstimateStatus(
+  client: CrmClient,
+  id: string,
+  status: EstimateStatus,
+) {
+  const { data, error } = await client
+    .from("estimates")
+    .update({ status })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
 }
 
 export async function createScope(client: CrmClient, input: ScopeInput) {

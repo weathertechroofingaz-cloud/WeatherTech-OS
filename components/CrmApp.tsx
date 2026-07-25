@@ -94,6 +94,7 @@ import {
   updateChangeOrder,
   updateInvoice,
   updateEstimate,
+  updateEstimateStatus,
   updateCustomer,
   updateEmailMessage,
   updateJob,
@@ -1060,6 +1061,156 @@ function customerTypeLabel(type: CustomerType) {
 
 function estimateStatusLabel(status: EstimateStatus) {
   return estimateStatuses.find((item) => item.value === status)?.label ?? status;
+}
+
+function getEstimateTimelineUpdateLabel(status: EstimateStatus) {
+  if (status === "sent") {
+    return "Estimate sent";
+  }
+
+  if (status === "approved") {
+    return "Estimate approved";
+  }
+
+  if (status === "declined" || status === "rejected") {
+    return "Estimate rejected";
+  }
+
+  if (status === "expired") {
+    return "Estimate expired";
+  }
+
+  return "Estimate revised";
+}
+
+function getEstimateTimelineTone(status: EstimateStatus): CustomerTimelineItem["tone"] {
+  if (status === "approved") {
+    return "green";
+  }
+
+  if (status === "declined" || status === "rejected" || status === "expired") {
+    return "amber";
+  }
+
+  return "blue";
+}
+
+function getEstimateHandoffAddress(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+) {
+  const customer = estimate.customer_id
+    ? snapshot.customers.find((item) => item.id === estimate.customer_id)
+    : null;
+  const lead = estimate.lead_id
+    ? snapshot.leads.find((item) => item.id === estimate.lead_id)
+    : null;
+
+  return (
+    estimate.location?.trim() ||
+    customer?.property_address ||
+    lead?.property_address ||
+    null
+  );
+}
+
+function findPotentialEstimateJob(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+) {
+  const estimateAddress = getEstimateHandoffAddress(snapshot, estimate);
+  const estimateTitle = normalizeCrmLookup(estimate.title);
+
+  return (
+    snapshot.jobs.find((job) => {
+      if (job.company_id !== estimate.company_id || job.estimate_id !== null) {
+        return false;
+      }
+
+      const sameCustomer = Boolean(
+        estimate.customer_id && job.customer_id === estimate.customer_id,
+      );
+      const sameLead = Boolean(estimate.lead_id && job.lead_id === estimate.lead_id);
+      const sameTitle =
+        estimateTitle !== "" && normalizeCrmLookup(job.title) === estimateTitle;
+      const sameAddress =
+        crmAddressesLikelyMatch(estimateAddress, job.property_address) ||
+        crmAddressesLikelyMatch(estimateAddress, job.address) ||
+        crmAddressesLikelyMatch(estimateAddress, job.location);
+
+      return (sameCustomer || sameLead || sameAddress) && (sameTitle || sameAddress);
+    }) ?? null
+  );
+}
+
+function buildJobEstimateLinkInput(
+  estimate: EstimateRecord,
+  job: JobRecord,
+  linkedScope: ScopeRecord | null,
+): Partial<JobInput> {
+  return {
+    estimate_id: estimate.id,
+    scope_id: job.scope_id ?? linkedScope?.id ?? null,
+    customer_id: job.customer_id ?? estimate.customer_id,
+    lead_id: job.lead_id ?? estimate.lead_id,
+    business: job.business ?? estimate.business,
+    location: job.location ?? estimate.location,
+    service_type: job.service_type ?? estimate.service_type,
+    property_address:
+      job.property_address ?? estimate.location ?? job.address ?? "Address to confirm",
+    scope_of_work:
+      job.scope_of_work ??
+      estimate.scope_of_work ??
+      linkedScope?.scope_body ??
+      null,
+    total: job.total > 0 ? job.total : estimate.total,
+  };
+}
+
+function getEstimateRelatedInspection(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+  linkedJob: JobRecord | null,
+) {
+  return (
+    snapshot.inspections.find((inspection) => inspection.estimate_id === estimate.id) ??
+    snapshot.inspections.find(
+      (inspection) => linkedJob && inspection.job_id === linkedJob.id,
+    ) ??
+    snapshot.inspections.find(
+      (inspection) =>
+        inspection.company_id === estimate.company_id &&
+        ((estimate.customer_id !== null &&
+          inspection.customer_id === estimate.customer_id) ||
+          (estimate.lead_id !== null && inspection.lead_id === estimate.lead_id)),
+    ) ??
+    null
+  );
+}
+
+function getEstimateRelatedPhotos(
+  snapshot: CrmSnapshot,
+  estimate: EstimateRecord,
+  linkedJob: JobRecord | null,
+  linkedInspection: InspectionRecord | null,
+) {
+  const exactPhotos = snapshot.jobPhotos.filter(
+    (photo) =>
+      photo.estimate_id === estimate.id ||
+      (linkedJob !== null && photo.job_id === linkedJob.id) ||
+      (linkedInspection !== null && photo.inspection_id === linkedInspection.id),
+  );
+
+  if (exactPhotos.length > 0) {
+    return exactPhotos;
+  }
+
+  return snapshot.jobPhotos.filter(
+    (photo) =>
+      estimate.customer_id !== null &&
+      photo.customer_id === estimate.customer_id &&
+      photo.company_id === estimate.company_id,
+  );
 }
 
 function serviceLabel(service: ServiceType) {
@@ -11092,14 +11243,14 @@ function buildCustomerTimelineItems(
     if (estimate.updated_at !== estimate.created_at) {
       items.push({
         id: `estimate-revised-${estimate.id}`,
-        label: "Estimate revised",
+        label: getEstimateTimelineUpdateLabel(estimate.status),
         description: `${estimateStatusLabel(estimate.status)} - ${formatMoney(
           estimate.total,
         )}`,
         occurredAt: estimate.updated_at,
         user: "Estimating",
         icon: Pencil,
-        tone: estimate.status === "approved" ? "green" : "blue",
+        tone: getEstimateTimelineTone(estimate.status),
         kind: "estimate",
       });
     }
@@ -11162,8 +11313,10 @@ function buildCustomerTimelineItems(
   related.jobs.forEach((job) => {
     items.push({
       id: `job-created-${job.id}`,
-      label: "Job created",
-      description: `${job.title} - ${jobStatusLabel(job.status)}`,
+      label: job.estimate_id ? "Estimate converted to job" : "Job created",
+      description: job.estimate_id
+        ? `${job.title} - linked estimate handoff - ${jobStatusLabel(job.status)}`
+        : `${job.title} - ${jobStatusLabel(job.status)}`,
       occurredAt: job.created_at,
       user: job.project_manager ?? job.crew_name ?? "Production",
       icon: Building2,
@@ -13407,9 +13560,15 @@ function EstimatesView({
   const [estimateDraftVersion, setEstimateDraftVersion] = useState(0);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | "all">("all");
+  const [isApprovingEstimate, setIsApprovingEstimate] = useState(false);
+  const [isConvertingEstimate, setIsConvertingEstimate] = useState(false);
 
   const selectedEstimate =
     snapshot.estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
+  const unifiedInboxItems = useMemo(
+    () => buildUnifiedInboxItems(snapshot, companyMap),
+    [snapshot, companyMap],
+  );
   const selectedLineItems = selectedEstimate
     ? getEstimateLineItems(snapshot, selectedEstimate.id)
     : [];
@@ -13436,9 +13595,34 @@ function EstimatesView({
   const selectedEstimateJob = selectedEstimate
     ? snapshot.jobs.find((job) => job.estimate_id === selectedEstimate.id) ?? null
     : null;
+  const selectedEstimatePotentialJob =
+    selectedEstimate && selectedEstimateJob === null
+      ? findPotentialEstimateJob(snapshot, selectedEstimate)
+      : null;
   const selectedEstimateScope = selectedEstimate
     ? snapshot.scopes.find((scope) => scope.estimate_id === selectedEstimate.id) ?? null
     : null;
+  const selectedEstimateInspection = selectedEstimate
+    ? getEstimateRelatedInspection(snapshot, selectedEstimate, selectedEstimateJob)
+    : null;
+  const selectedEstimatePhotos = selectedEstimate
+    ? getEstimateRelatedPhotos(
+        snapshot,
+        selectedEstimate,
+        selectedEstimateJob,
+        selectedEstimateInspection,
+      )
+    : [];
+  const selectedEstimateCommunications = selectedEstimate
+    ? unifiedInboxItems.filter(
+        (item) =>
+          item.companyId === selectedEstimate.company_id &&
+          ((selectedEstimate.customer_id !== null &&
+            item.customerId === selectedEstimate.customer_id) ||
+            (selectedEstimate.lead_id !== null &&
+              item.leadId === selectedEstimate.lead_id)),
+      )
+    : [];
   const selectedEstimateDocuments = selectedEstimate
     ? snapshot.documents.filter((document) => document.estimate_id === selectedEstimate.id)
     : [];
@@ -13487,25 +13671,95 @@ function EstimatesView({
     }
   };
 
-  const handleCreateJobFromEstimate = async (estimate: EstimateRecord) => {
+  const handleApproveEstimate = async (estimate: EstimateRecord) => {
+    if (isApprovingEstimate) {
+      return;
+    }
+
+    if (estimate.status === "approved") {
+      onNotice("Estimate is already approved.");
+      return;
+    }
+
+    if (estimate.status === "expired") {
+      onError("Expired estimates should be revised before approval.");
+      return;
+    }
+
+    const approved = window.confirm(
+      "Approve this estimate and mark it ready for production handoff?",
+    );
+
+    if (!approved) {
+      return;
+    }
+
+    onError("");
+    setIsApprovingEstimate(true);
+
+    try {
+      await updateEstimateStatus(client, estimate.id, "approved");
+      await onReload();
+      onNotice("Estimate approved.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to approve estimate."));
+    } finally {
+      setIsApprovingEstimate(false);
+    }
+  };
+
+  const handleConvertEstimateToJob = async (estimate: EstimateRecord) => {
+    if (isConvertingEstimate) {
+      return;
+    }
+
+    if (estimate.status !== "approved") {
+      onError("Approve the estimate before creating the job handoff.");
+      return;
+    }
+
     if (selectedEstimateJob) {
       onNotice("This estimate already has a linked job.");
       return;
     }
 
+    const potentialJob = findPotentialEstimateJob(snapshot, estimate);
+    const confirmed = window.confirm(
+      potentialJob
+        ? `Link this estimate to the matching job "${potentialJob.title}"?`
+        : "Create a draft job from this approved estimate?",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    onError("");
+    setIsConvertingEstimate(true);
+
     try {
-      const job = await createJob(
-        client,
-        buildJobInputFromEstimate(
-          snapshot,
-          estimate,
-          selectedEstimateScope?.id ?? null,
-        ),
-      );
+      const job = potentialJob
+        ? await updateJob(
+            client,
+            potentialJob.id,
+            buildJobEstimateLinkInput(estimate, potentialJob, selectedEstimateScope),
+          )
+        : await createJob(
+            client,
+            buildJobInputFromEstimate(
+              snapshot,
+              estimate,
+              selectedEstimateScope?.id ?? null,
+            ),
+          );
       await onReload();
-      onNotice(`Job created: ${job.title}`);
+      onNotice(
+        potentialJob ? `Matching job linked: ${job.title}` : `Draft job created: ${job.title}`,
+      );
     } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to create job from estimate."));
+      onError(getCaughtErrorMessage(currentError, "Unable to convert estimate to job."));
+    } finally {
+      setIsConvertingEstimate(false);
     }
   };
 
@@ -13789,10 +14043,17 @@ function EstimatesView({
             snapshot={snapshot}
             estimate={selectedEstimate}
             linkedJob={selectedEstimateJob}
+            potentialJob={selectedEstimatePotentialJob}
             linkedScope={selectedEstimateScope}
+            linkedInspection={selectedEstimateInspection}
+            photos={selectedEstimatePhotos}
+            communications={selectedEstimateCommunications}
             documents={selectedEstimateDocuments}
             signatures={selectedEstimateSignatures}
-            onCreateJob={handleCreateJobFromEstimate}
+            isApproving={isApprovingEstimate}
+            isConverting={isConvertingEstimate}
+            onApproveEstimate={handleApproveEstimate}
+            onConvertEstimateToJob={handleConvertEstimateToJob}
             onSaveDocument={handleSaveEstimateDocument}
             onGenerateScope={handleGenerateScopeFromEstimate}
             onRequestSignature={handleRequestEstimateSignature}
@@ -15143,10 +15404,17 @@ function EstimateWorkflowPanel({
   snapshot,
   estimate,
   linkedJob,
+  potentialJob,
   linkedScope,
+  linkedInspection,
+  photos,
+  communications,
   documents,
   signatures,
-  onCreateJob,
+  isApproving,
+  isConverting,
+  onApproveEstimate,
+  onConvertEstimateToJob,
   onSaveDocument,
   onGenerateScope,
   onRequestSignature,
@@ -15154,10 +15422,17 @@ function EstimateWorkflowPanel({
   snapshot: CrmSnapshot;
   estimate: EstimateRecord | null;
   linkedJob: JobRecord | null;
+  potentialJob: JobRecord | null;
   linkedScope: ScopeRecord | null;
+  linkedInspection: InspectionRecord | null;
+  photos: JobPhotoRecord[];
+  communications: UnifiedInboxItem[];
   documents: DocumentRecord[];
   signatures: SignatureRecord[];
-  onCreateJob: (estimate: EstimateRecord) => Promise<void>;
+  isApproving: boolean;
+  isConverting: boolean;
+  onApproveEstimate: (estimate: EstimateRecord) => Promise<void>;
+  onConvertEstimateToJob: (estimate: EstimateRecord) => Promise<void>;
   onSaveDocument: (estimate: EstimateRecord) => Promise<void>;
   onGenerateScope: (estimate: EstimateRecord) => Promise<void>;
   onRequestSignature: (estimate: EstimateRecord) => Promise<void>;
@@ -15171,7 +15446,6 @@ function EstimateWorkflowPanel({
     );
   }
 
-  const canCreateJob = estimate.status === "approved" && linkedJob === null;
   const association = getAssociationSummary(snapshot, {
     customerId: estimate.customer_id,
     leadId: estimate.lead_id,
@@ -15184,40 +15458,157 @@ function EstimateWorkflowPanel({
     (document) => document.category === "estimate",
   );
   const activeSignature = signatures.find((signature) => signature.status !== "declined");
+  const isTerminalEstimate =
+    estimate.status === "declined" ||
+    estimate.status === "rejected" ||
+    estimate.status === "expired";
+  const canApprove =
+    estimate.status !== "approved" && !isTerminalEstimate && linkedJob === null;
+  const canConvert = estimate.status === "approved" && linkedJob === null;
+  const approvalLabel =
+    estimate.status === "approved"
+      ? "Approved"
+      : isTerminalEstimate
+        ? estimateStatusLabel(estimate.status)
+        : estimate.status === "sent"
+          ? "Awaiting customer approval"
+          : "Draft approval pending";
+  const approvalTone =
+    estimate.status === "approved" ? "green" : isTerminalEstimate ? "amber" : "blue";
+  const conversionLabel = linkedJob
+    ? "Job linked"
+    : potentialJob
+      ? "Matching job found"
+      : estimate.status === "approved"
+        ? "Ready for draft job"
+        : "Waiting on approval";
+  const conversionTone = linkedJob
+    ? "green"
+    : potentialJob
+      ? "amber"
+      : estimate.status === "approved"
+        ? "blue"
+        : "amber";
+  const lifecycleItems = [
+    {
+      label: "Draft",
+      detail: "Estimate exists with line items and total",
+      state: "complete",
+    },
+    {
+      label: "Sent",
+      detail:
+        estimate.status === "draft"
+          ? "Send or request signature when ready"
+          : "Customer-facing packet can be reviewed",
+      state: estimate.status === "draft" ? "pending" : "complete",
+    },
+    {
+      label: "Viewed",
+      detail: activeSignature
+        ? "Signature request is available for customer review"
+        : "View tracking is not connected yet",
+      state: activeSignature ? "complete" : "pending",
+    },
+    {
+      label: "Approved",
+      detail:
+        estimate.status === "approved"
+          ? `Approved ${formatDateTime(estimate.updated_at)}`
+          : isTerminalEstimate
+            ? approvalLabel
+            : "Needs explicit approval before handoff",
+      state:
+        estimate.status === "approved"
+          ? "complete"
+          : isTerminalEstimate
+            ? "blocked"
+            : "pending",
+    },
+    {
+      label: "Converted",
+      detail: linkedJob
+        ? `${linkedJob.title} - ${jobStatusLabel(linkedJob.status)}`
+        : potentialJob
+          ? `Review matching job: ${potentialJob.title}`
+          : "No job handoff yet",
+      state: linkedJob ? "complete" : potentialJob ? "blocked" : "pending",
+    },
+  ];
   const readinessItems = [
     {
       label: "Customer",
+      value: association.name,
       ready: estimate.customer_id !== null || estimate.lead_id !== null,
     },
     {
       label: "Line items",
+      value: `${snapshot.estimateLineItems.filter((item) => item.estimate_id === estimate.id).length} priced items`,
       ready: snapshot.estimateLineItems.some((item) => item.estimate_id === estimate.id),
     },
-    { label: "Scope", ready: linkedScope !== null },
-    { label: "PDF packet", ready: hasEstimateDocument },
-    { label: "Signature", ready: activeSignature?.status === "signed" },
-    { label: "Job", ready: linkedJob !== null },
+    {
+      label: "Scope",
+      value: linkedScope ? scopeStatusLabel(linkedScope.status) : "Not linked",
+      ready: linkedScope !== null,
+    },
+    {
+      label: "PDF packet",
+      value: hasEstimateDocument ? "Saved to Documents" : "Not saved",
+      ready: hasEstimateDocument,
+    },
+    {
+      label: "Signature",
+      value: activeSignature
+        ? `${activeSignature.signer_name} - ${activeSignature.status}`
+        : "No active request",
+      ready: activeSignature?.status === "signed",
+    },
+    {
+      label: "Inspection",
+      value: linkedInspection
+        ? `${linkedInspection.title} - ${inspectionStatusLabel(linkedInspection.status)}`
+        : "Not linked",
+      ready: linkedInspection !== null,
+    },
+    {
+      label: "Photos",
+      value: photos.length ? `${photos.length} linked` : "None linked",
+      ready: photos.length > 0,
+    },
+    {
+      label: "Communications",
+      value: communications.length ? `${communications.length} related` : "No related thread",
+      ready: communications.length > 0,
+    },
+    {
+      label: "Job",
+      value: linkedJob
+        ? jobStatusLabel(linkedJob.status)
+        : potentialJob
+          ? "Possible duplicate"
+          : "Not created",
+      ready: linkedJob !== null,
+    },
   ];
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section
+      data-testid="estimate-approval-workspace"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-bold text-slate-950">Production handoff</h3>
+          <h3 className="text-lg font-bold text-slate-950">
+            Approval & production handoff
+          </h3>
           <p className="mt-1 text-sm text-slate-500">
-            Move approved work into jobs with linked records intact.
+            Approve estimates, prevent duplicate jobs, and move work into production.
           </p>
         </div>
-        <Badge
-          label={
-            linkedJob
-              ? "Job linked"
-              : estimate.status === "approved"
-                ? "Ready"
-                : "Needs approval"
-          }
-          tone={linkedJob ? "green" : estimate.status === "approved" ? "blue" : "amber"}
-        />
+        <div className="flex flex-col items-end gap-2">
+          <Badge label={approvalLabel} tone={approvalTone} />
+          <Badge label={conversionLabel} tone={conversionTone} />
+        </div>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <ProfileStat label="Customer" value={association.name} />
@@ -15233,8 +15624,82 @@ function EstimateWorkflowPanel({
           value={linkedJob ? jobStatusLabel(linkedJob.status) : "Not created"}
         />
       </div>
+      <div
+        data-testid="estimate-approval-status"
+        className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-950">Customer approval</p>
+            <p className="mt-1 text-sm text-slate-600">
+              {estimate.status === "approved"
+                ? `Approved on ${formatDateTime(estimate.updated_at)}.`
+                : isTerminalEstimate
+                  ? `${approvalLabel} estimates should be revised before handoff.`
+                  : "Approval is explicit. Drafts and sent estimates are not production-ready until approved."}
+            </p>
+          </div>
+          <button
+            data-testid="estimate-approve-button"
+            type="button"
+            onClick={() => void onApproveEstimate(estimate)}
+            disabled={!canApprove || isApproving}
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {estimate.status === "approved"
+              ? "Approved"
+              : isApproving
+                ? "Approving..."
+                : "Approve estimate"}
+          </button>
+        </div>
+        <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <p className="font-semibold text-slate-800">Approval notes</p>
+            <p className="mt-1 text-slate-500">
+              Dedicated approval-note storage is not configured yet.
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-800">Internal estimate notes</p>
+            <p className="mt-1 text-slate-500">
+              {estimate.notes ? truncateTimelineText(estimate.notes, 120) : "No internal notes."}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <p className="text-sm font-bold text-slate-950">Lifecycle</p>
+        <div className="mt-3 space-y-2">
+          {lifecycleItems.map((item) => (
+            <div
+              key={item.label}
+              className={`rounded-md border px-3 py-2 ${
+                item.state === "complete"
+                  ? "border-emerald-200 bg-emerald-50"
+                  : item.state === "blocked"
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-slate-200 bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-slate-900">{item.label}</p>
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  {item.state === "complete"
+                    ? "Complete"
+                    : item.state === "blocked"
+                      ? "Needs review"
+                      : "Pending"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-600">{item.detail}</p>
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <p className="text-sm font-bold text-slate-950">Estimate workflow readiness</p>
+        <p className="text-sm font-bold text-slate-950">Handoff readiness</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           {readinessItems.map((item) => (
             <div
@@ -15245,13 +15710,19 @@ function EstimateWorkflowPanel({
                   : "border-amber-200 bg-amber-50 text-amber-800"
               }`}
             >
-              {item.label}: {item.ready ? "Ready" : "Needed"}
+              <span className="block text-xs uppercase tracking-wide opacity-80">
+                {item.label}
+              </span>
+              <span className="mt-1 block">{item.value}</span>
             </div>
           ))}
         </div>
         {activeSignature ? (
           <p className="mt-3 text-sm font-semibold text-slate-700">
             Signature: {activeSignature.signer_name} · {activeSignature.status}
+            {activeSignature.signed_at
+              ? ` · signed ${formatDateTime(activeSignature.signed_at)}`
+              : ""}
           </p>
         ) : null}
       </div>
@@ -15296,11 +15767,40 @@ function EstimateWorkflowPanel({
         </div>
       ) : null}
       {linkedJob ? (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+        <div
+          data-testid="estimate-job-handoff-summary"
+          className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4"
+        >
           <p className="text-sm font-bold text-emerald-900">{linkedJob.title}</p>
           <p className="mt-1 text-sm text-emerald-700">
             {getJobDisplayAddress(linkedJob)} -{" "}
             {formatDate(linkedJob.start_date)}
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <ProfileStat
+              label="Crew"
+              value={linkedJob.crew_name ?? "Unassigned"}
+            />
+            <ProfileStat
+              label="Schedule"
+              value={formatJobSchedule(linkedJob)}
+            />
+            <ProfileStat
+              label="Documents"
+              value={getJobDocuments(snapshot, linkedJob).length}
+            />
+            <ProfileStat
+              label="Invoices"
+              value={getJobInvoices(snapshot, linkedJob.id).length}
+            />
+          </div>
+        </div>
+      ) : potentialJob ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-bold text-amber-900">Possible matching job</p>
+          <p className="mt-1 text-sm text-amber-800">
+            {potentialJob.title} exists for this customer or property. Link it instead of
+            creating a duplicate.
           </p>
         </div>
       ) : null}
@@ -15333,15 +15833,20 @@ function EstimateWorkflowPanel({
         </button>
         <button
           type="button"
-          onClick={() => void onCreateJob(estimate)}
-          disabled={!canCreateJob}
+          data-testid="estimate-convert-job-button"
+          onClick={() => void onConvertEstimateToJob(estimate)}
+          disabled={!canConvert || isConverting}
           className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           <CalendarClock className="h-4 w-4" />
           {linkedJob
-            ? "Job exists"
+            ? "Job linked"
+            : isConverting
+              ? "Converting..."
+              : potentialJob
+                ? "Link matching job"
             : estimate.status === "approved"
-              ? "Create job"
+              ? "Convert to draft job"
               : "Needs approval"}
         </button>
       </div>

@@ -783,6 +783,41 @@ async function clickUnique(locator, label, options = {}) {
   throw new Error(`${label} could not be clicked.${details}`);
 }
 
+async function withAcceptedConfirm(tab, action) {
+  let actionError = null;
+  const actionPromise = action().catch((error) => {
+    actionError = error;
+    return null;
+  });
+
+  await waitForAsync(async () => {
+    if (actionError) {
+      throw actionError;
+    }
+
+    const dialog = await tab.getJsDialog();
+
+    if (!dialog) {
+      return false;
+    }
+
+    if (dialog.type !== "confirm") {
+      throw new Error(`Expected a confirm dialog, received ${dialog.type}.`);
+    }
+
+    await dialog.accept();
+    return true;
+  }, "confirmation dialog", 10000);
+
+  const result = await actionPromise;
+
+  if (actionError) {
+    throw actionError;
+  }
+
+  return result;
+}
+
 async function clickVisibleButtonByText(
   tab,
   selector,
@@ -3367,12 +3402,98 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     throw new Error(`Expected at least 2 estimate line items, found ${lineItemCount}.`);
   }
 
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
+      const approveButton = document.querySelector('[data-testid="estimate-approve-button"]');
+
+      return Boolean(
+        workspace?.textContent?.includes("Draft approval pending") &&
+          approveButton &&
+          approveButton.disabled === false,
+      );
+    },
+    "estimate approval workspace ready",
+    15000,
+  );
+  await withAcceptedConfirm(tab, async () => {
+    await clickUnique(
+      tab.playwright.locator('[data-testid="estimate-approve-button"]'),
+      "Approve estimate",
+      { retryTransientClick: true },
+    );
+  });
+
+  const approvedEstimate = await waitForAsync(async () => {
+    const currentEstimate = await findEstimateByTitle(env, estimateTitle);
+
+    return currentEstimate?.status === "approved" ? currentEstimate : null;
+  }, "approved estimate persistence", 15000);
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
+      const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
+
+      return Boolean(
+        workspace?.textContent?.includes("Approved") &&
+          workspace?.textContent?.includes("Ready for draft job") &&
+          convertButton &&
+          convertButton.disabled === false,
+      );
+    },
+    "approved estimate UI state",
+    15000,
+  );
+
+  await withAcceptedConfirm(tab, async () => {
+    await clickUnique(
+      tab.playwright.locator('[data-testid="estimate-convert-job-button"]'),
+      "Convert estimate to draft job",
+      { retryTransientClick: true },
+    );
+  });
+
+  const linkedJob = await waitForAsync(async () => {
+    const job = await findJobByTitle(env, estimateTitle);
+
+    return job?.estimate_id === approvedEstimate.id ? job : null;
+  }, "estimate-linked draft job persistence", 15000);
+
+  if (linkedJob.status !== "draft") {
+    throw new Error(`Converted job status was ${linkedJob.status}, expected draft.`);
+  }
+
+  if (linkedJob.scheduled_start !== null || linkedJob.scheduled_end !== null) {
+    throw new Error("Converted draft job unexpectedly received a schedule.");
+  }
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
+      const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
+
+      return Boolean(
+        workspace?.textContent?.includes("Job linked") &&
+          workspace?.textContent?.includes("Handoff readiness") &&
+          convertButton?.disabled === true,
+      );
+    },
+    "linked job handoff UI state",
+    15000,
+  );
+
   return {
-    estimateId: savedEstimate.id,
+    estimateId: approvedEstimate.id,
     estimateTitle,
-    status: savedEstimate.status,
+    status: approvedEstimate.status,
     lineItemCount,
-    total: savedEstimate.total,
+    total: approvedEstimate.total,
+    linkedJobId: linkedJob.id,
+    linkedJobStatus: linkedJob.status,
   };
 }
 
@@ -5224,7 +5345,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (shouldRunEstimatesWorkflow) {
-      await record("Estimates screen opens and isolated draft estimate can be created", async () => {
+      await record("Estimates approve and convert an isolated estimate into one draft job", async () => {
         if (!leadWorkflow) {
           throw new Error("Lead workflow did not produce a test lead.");
         }
