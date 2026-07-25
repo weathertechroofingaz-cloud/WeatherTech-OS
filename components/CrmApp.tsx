@@ -4,6 +4,7 @@ import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Image from "next/image";
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Building2,
@@ -4069,15 +4070,15 @@ function CrmWorkspace({
 
   return (
     <main
-      className={`min-h-screen bg-slate-50 p-3 text-slate-950 sm:p-6 ${
+      className={`wt-app-shell min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.10),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-3 text-slate-950 sm:p-5 ${
         activeCompany && isPaintingCompany(activeCompany)
           ? "wt-company-painting"
           : ""
       }`}
     >
       <ToastViewport notice={notice} error={error} />
-      <div className="grid min-w-0 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="max-h-[54vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm xl:max-h-none xl:min-h-[calc(100vh-48px)]">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="wt-app-sidebar max-h-[54vh] overflow-y-auto rounded-2xl border border-slate-900/90 bg-[linear-gradient(180deg,#070b18_0%,#0f172a_58%,#111827_100%)] p-4 text-white shadow-[0_28px_70px_-42px_rgba(15,23,42,0.95)] xl:max-h-none xl:min-h-[calc(100vh-40px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
             <div
               className="grid h-11 w-11 place-items-center rounded-md font-bold text-white"
@@ -4117,7 +4118,7 @@ function CrmWorkspace({
             ))}
           </nav>
 
-          <div className="mt-6 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
+          <div className="wt-sidebar-account mt-6 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
               <p className="font-semibold text-white">
               Shared platform
             </p>
@@ -4130,8 +4131,8 @@ function CrmWorkspace({
           </div>
         </aside>
 
-        <section className="min-w-0 max-w-full space-y-5 overflow-hidden">
-          <header className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="min-w-0 max-w-full space-y-4 overflow-hidden">
+          <header className="wt-workspace-header rounded-2xl border border-white/80 bg-white/85 p-4 shadow-[0_18px_50px_-42px_rgba(15,23,42,0.65)] ring-1 ring-slate-950/5 backdrop-blur">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div>
                 <p className="text-sm font-semibold uppercase text-sky-700">
@@ -4178,12 +4179,14 @@ function CrmWorkspace({
                 </button>
               </div>
             </div>
-            <CompanyScopeSwitcher
-              summaries={companySummaries}
-              activeCompanyId={selectedCompanyId}
-              onChange={setSelectedCompanyId}
-              totalMetrics={totalMetrics}
-            />
+            {view !== "dashboard" ? (
+              <CompanyScopeSwitcher
+                summaries={companySummaries}
+                activeCompanyId={selectedCompanyId}
+                onChange={setSelectedCompanyId}
+                totalMetrics={totalMetrics}
+              />
+            ) : null}
           </header>
 
           {notice ? <Message tone="success" message={notice} /> : null}
@@ -4460,11 +4463,13 @@ function CompanyScopeSwitcher({
   activeCompanyId,
   onChange,
   totalMetrics,
+  compact = false,
 }: {
   summaries: CompanyDashboardSummary[];
   activeCompanyId: CompanyScopeId;
   onChange: (companyId: CompanyScopeId) => void;
   totalMetrics: ReturnType<typeof calculateDashboardMetrics>;
+  compact?: boolean;
 }) {
   const totalActiveJobs = summaries.reduce(
     (total, summary) => total + summary.activeJobs,
@@ -4474,6 +4479,52 @@ function CompanyScopeSwitcher({
     (total, summary) => total + summary.pendingDocuments,
     0,
   );
+
+  if (compact) {
+    return (
+      <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+        <button
+          type="button"
+          onClick={() => onChange("all")}
+          aria-pressed={activeCompanyId === "all"}
+          className={`inline-flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+            activeCompanyId === "all"
+              ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
+          }`}
+        >
+          <Building2 className="h-4 w-4" />
+          All companies
+        </button>
+
+        {summaries.map((summary) => {
+          const isActive = activeCompanyId === summary.company.id;
+          const brandColor = getCompanyBrandColor(summary.company);
+
+          return (
+            <button
+              key={summary.company.id}
+              type="button"
+              onClick={() => onChange(summary.company.id)}
+              aria-pressed={isActive}
+              className={`inline-flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+                isActive
+                  ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+                  : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
+              }`}
+            >
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: brandColor }}
+                aria-hidden="true"
+              />
+              {summary.company.name}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-[minmax(220px,0.8fr)_repeat(2,minmax(220px,1fr))]">
@@ -6060,7 +6111,7 @@ function buildDashboardOperationData({
 
 type DashboardOperationData = ReturnType<typeof buildDashboardOperationData>;
 
-type DashboardExecutiveKpi = {
+type DashboardOperatingMetric = {
   id: string;
   label: string;
   value: string | number;
@@ -6068,20 +6119,10 @@ type DashboardExecutiveKpi = {
   view: WorkspaceView;
   icon: typeof Home;
   tone: "blue" | "green" | "amber";
-  prominent?: boolean;
+  emphasis?: boolean;
 };
 
-type DashboardIntelligenceSignal = {
-  id: string;
-  label: string;
-  value: string | number;
-  detail: string;
-  view: WorkspaceView;
-  icon: typeof Home;
-  tone: "blue" | "green" | "amber";
-};
-
-type DashboardHeroSnapshotItem = {
+type DashboardPipelineStage = {
   id: string;
   label: string;
   value: string | number;
@@ -6093,28 +6134,32 @@ type DashboardHeroSnapshotItem = {
 
 function OperationsCommandCenter({
   data,
-  executiveKpis,
-  weatherIntelligence,
-  heroSnapshot,
-  companySummaries,
-  focusFilter,
-  onFocusFilterChange,
+  revenueSnapshot,
+  crewStatus,
+  leadEstimateSnapshot,
+  productionSnapshot,
+  tradeHighlights,
+  pipelineStages,
   pipelineFilter,
   onPipelineFilterChange,
+  activeCompanyId,
+  companies,
   companyMap,
   onCompanyScopeChange,
   onViewChange,
   onCreateLead,
 }: {
   data: DashboardOperationData;
-  executiveKpis: DashboardExecutiveKpi[];
-  weatherIntelligence: DashboardIntelligenceSignal[];
-  heroSnapshot: DashboardHeroSnapshotItem[];
-  companySummaries: CompanyDashboardSummary[];
-  focusFilter: DashboardFocusFilter;
-  onFocusFilterChange: (filter: DashboardFocusFilter) => void;
+  revenueSnapshot: DashboardOperatingMetric[];
+  crewStatus: DashboardOperatingMetric[];
+  leadEstimateSnapshot: DashboardOperatingMetric[];
+  productionSnapshot: DashboardOperatingMetric[];
+  tradeHighlights: DashboardOperatingMetric[];
+  pipelineStages: DashboardPipelineStage[];
   pipelineFilter: DashboardPipelineFilter;
   onPipelineFilterChange: (filter: DashboardPipelineFilter) => void;
+  activeCompanyId: CompanyScopeId;
+  companies: CompanyRecord[];
   companyMap: Map<string, CompanyRecord>;
   onCompanyScopeChange: (companyId: CompanyScopeId) => void;
   onViewChange: (view: WorkspaceView) => void;
@@ -6125,438 +6170,155 @@ function OperationsCommandCenter({
       onCompanyScopeChange(companyId);
     }
 
-    onViewChange(view);
+      onViewChange(view);
   };
   const quickActions = [
     {
-      label: "New Lead",
-      detail: "Open the lead workspace",
+      label: "Create Lead",
+      detail: "Capture a new opportunity",
       icon: Plus,
       onClick: onCreateLead,
       primary: true,
     },
     {
-      label: "New Customer",
-      detail: "Create or find a customer",
-      icon: Users,
-      onClick: () => openView("customers"),
-    },
-    {
-      label: "New Estimate",
-      detail: "Build a draft estimate",
+      label: "Create Estimate",
+      detail: "Start a draft packet",
       icon: Calculator,
       onClick: () => openView("estimates"),
     },
     {
       label: "Schedule Inspection",
-      detail: "Queue a site visit",
+      detail: "Book a roof or paint visit",
       icon: ClipboardList,
       onClick: () => openView("inspections"),
     },
     {
       label: "Schedule Job",
-      detail: "Open the calendar",
+      detail: "Put production on the calendar",
       icon: CalendarClock,
       onClick: () => openView("calendar"),
     },
     {
-      label: "Compose Email",
-      detail: "Review email workflow",
-      icon: Mail,
-      onClick: () => openView("inbox"),
+      label: "Create Work Order",
+      detail: "Open job production",
+      icon: Home,
+      onClick: () => openView("jobs"),
     },
     {
-      label: "Send SMS",
-      detail: "Review SMS workflow",
-      icon: MessageSquare,
-      onClick: () => openView("inbox"),
-    },
-    {
-      label: "Create Invoice",
-      detail: "Open invoice workspace",
-      icon: ReceiptText,
-      onClick: () => openView("invoices"),
-    },
-    {
-      label: "Create Change Order",
-      detail: "Open change-order workflow",
-      icon: ReceiptText,
-      onClick: () => openView("changeOrders"),
-    },
-    {
-      label: "Upload Photos",
-      detail: "Open photo documentation",
+      label: "Upload Roof Photos",
+      detail: "Document the jobsite",
       icon: Camera,
       onClick: () => openView("photos"),
     },
     {
-      label: "Upload Documents",
-      detail: "Open document center",
-      icon: Upload,
-      onClick: () => openView("documents"),
+      label: "Customer Search",
+      detail: "Open Customer 360",
+      icon: Search,
+      onClick: () => openView("customers"),
+    },
+    {
+      label: "Open Calendar",
+      detail: "Review dispatch and schedule",
+      icon: CalendarClock,
+      onClick: () => openView("calendar"),
     },
   ];
   const attentionCount = data.ownerPriorities.length;
-  const hasIntegrationWarnings = data.priorityCounts.integrationWarnings > 0;
   const now = new Date();
-  const hour = now.getHours();
-  const greeting =
-    hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
   const currentDateLabel = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
   }).format(now);
-  const weatherSummary =
-    heroSnapshot.find((item) => item.id === "weather-summary")?.value ??
-    "No weather alerts";
-  const topPriority = data.ownerPriorities[0];
+  const urgentItems = data.ownerPriorities.slice(0, 4);
+  const todayPrimarySummaries = data.todaySummaries.slice(0, 4);
+  const revenueActionMetrics = [
+    ...revenueSnapshot.filter((metric) =>
+      metric.id === "outstanding-invoices" ||
+      metric.id === "scheduled-revenue" ||
+      metric.id === "pipeline-value",
+    ),
+    ...leadEstimateSnapshot.filter((metric) => metric.id === "sent-estimates"),
+  ].slice(0, 4);
+  const lowerPrioritySummaries = [
+    ...data.operationsSummaries.filter((summary) =>
+      summary.id === "operations-inspections" ||
+      summary.id === "operations-materials" ||
+      summary.id === "operations-conflicts",
+    ),
+    ...data.todaySummaries.filter((summary) =>
+      summary.id === "today-callbacks" || summary.id === "today-follow-ups",
+    ),
+  ].slice(0, 5);
+  const warrantyHighlight = tradeHighlights.find((metric) => metric.id === "warranty-callbacks");
 
   return (
     <section
-      className="overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-[0_28px_80px_-56px_rgba(15,23,42,0.85)] ring-1 ring-slate-950/5"
+      className="wt-dashboard space-y-4"
       data-testid="crm-operations-dashboard"
     >
-      <div className="bg-[radial-gradient(circle_at_top_left,rgba(251,146,60,0.18),transparent_30%),linear-gradient(135deg,#111827_0%,#0f172a_56%,#1e293b_100%)] p-4 text-white sm:p-6 lg:p-7">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(300px,400px)]">
-          <div className="space-y-6">
-            <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-slate-950/20 ring-1 ring-white/10 sm:p-5 lg:p-6">
-              <div className="flex flex-col gap-5 2xl:flex-row 2xl:items-start 2xl:justify-between">
-                <div className="max-w-4xl">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">
-                    {greeting}
-                  </p>
-                  <h2 className="mt-2 text-3xl font-bold leading-tight tracking-normal text-white sm:text-4xl lg:text-5xl">
-                    Executive command center
-                  </h2>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-200 sm:text-base">
-                    Today&apos;s field rhythm, cash movement, customer follow-up,
-                    and operational risk from the loaded CRM snapshot.
-                  </p>
-                </div>
-                <div className="min-w-0 rounded-lg border border-white/10 bg-slate-950/35 p-3 shadow-inner shadow-white/5 2xl:min-w-64">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
-                    Today&apos;s focus
-                  </p>
-                  <p className="mt-2 text-2xl font-bold text-white">
-                    {attentionCount ? `${attentionCount} needs review` : "All clear"}
-                  </p>
-                  <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-slate-300">
-                    {topPriority
-                      ? topPriority.title
-                      : "No urgent blockers in the current CRM snapshot."}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge
-                      label={attentionCount ? `${attentionCount} priorities` : "No urgent priorities"}
-                      tone={attentionCount ? "amber" : "green"}
-                    />
-                    <Badge label="CRM Operations Dashboard" tone="blue" />
-                  </div>
-                </div>
-              </div>
+      <DashboardCommandBar
+        currentDateLabel={currentDateLabel}
+        attentionCount={attentionCount}
+        activeCompanyId={activeCompanyId}
+        companies={companies}
+        onCompanyScopeChange={onCompanyScopeChange}
+        onSearch={() => openView("customers")}
+        onNotifications={() => openView("inbox")}
+        onCreate={onCreateLead}
+      />
 
-              <div className="mt-6 grid gap-2 sm:grid-cols-3">
-                <DashboardHeroMeta label="Company" value={data.focusLabel} />
-                <DashboardHeroMeta label="Current date" value={currentDateLabel} />
-                <DashboardHeroMeta label="Weather summary" value={String(weatherSummary)} />
-              </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.2fr)_minmax(0,0.85fr)_minmax(0,0.85fr)]">
+        <DashboardPriorityList
+          title="Urgent attention"
+          detail="Only items that should change the owner’s day."
+          items={urgentItems}
+          companyMap={companyMap}
+          onOpen={openView}
+        />
 
-              <div className="mt-5 border-t border-white/10 pt-5">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
-                      Today&apos;s snapshot
-                    </p>
-                    <p className="mt-1 text-sm text-slate-300">
-                      The high-signal numbers for this morning&apos;s contractor workflow.
-                    </p>
-                  </div>
-                  <Badge
-                    label={data.focusLabel}
-                    tone="blue"
-                  />
-                </div>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-                  {heroSnapshot.map((item) => (
-                    <DashboardHeroSnapshotPill
-                      key={item.id}
-                      item={item}
-                      onOpen={openView}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
+        <DashboardTodayPanel
+          summaries={todayPrimarySummaries}
+          companyMap={companyMap}
+          onOpen={openView}
+        />
 
-            <div className="xl:hidden">
-              <QuickActionPanel actions={quickActions} />
-            </div>
-
-            <section
-              aria-labelledby="executive-summary-heading"
-              className="rounded-lg border border-white/10 bg-white/[0.055] p-4 ring-1 ring-white/5 sm:p-5"
-            >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
-                    Executive Summary
-                  </p>
-                  <h3 id="executive-summary-heading" className="mt-1 text-xl font-bold text-white">
-                    What needs attention today
-                  </h3>
-                </div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {data.focusLabel} · {data.focusDescription}
-                </p>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
-                {executiveKpis.map((metric) => (
-                  <ExecutiveKpiCard
-                    key={metric.id}
-                    metric={metric}
-                    onOpen={openView}
-                  />
-                ))}
-              </div>
-            </section>
-
-            <div className="rounded-lg border border-white/10 bg-slate-950/30 p-3 shadow-inner shadow-white/5 sm:p-4">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
-                    Command focus
-                  </p>
-                  <p className="mt-1 text-sm font-semibold text-white">
-                    {data.focusLabel} · {data.focusDescription}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2" aria-label="Dashboard command focus filters">
-                  {dashboardFocusFilters.map((filter) => (
-                    <button
-                      key={filter.value}
-                      type="button"
-                      onClick={() => onFocusFilterChange(filter.value)}
-                      className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition ${
-                        focusFilter === filter.value
-                          ? "border-orange-300 bg-orange-500 text-white shadow-sm"
-                          : "border-white/15 bg-white/10 text-slate-100 hover:bg-white/20"
-                      }`}
-                    >
-                      {filter.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <DashboardPriorityCount
-                  label="New or unassigned leads"
-                  value={data.priorityCounts.newLeads + data.priorityCounts.unassignedLeads}
-                />
-                <DashboardPriorityCount
-                  label="Overdue follow-ups"
-                  value={data.priorityCounts.overdueFollowUps + data.priorityCounts.overdueEstimates}
-                />
-                <DashboardPriorityCount
-                  label="Schedule gaps"
-                  value={
-                    data.priorityCounts.jobsMissingSchedules +
-                    data.priorityCounts.inspectionsAwaitingScheduling +
-                    data.priorityCounts.calendarConflicts
-                  }
-                />
-                <DashboardPriorityCount
-                  label="Comms and integrations"
-                  value={
-                    data.priorityCounts.missedCalls +
-                    data.priorityCounts.unreadMessages +
-                    data.priorityCounts.communicationFailures +
-                    data.priorityCounts.integrationWarnings
-                  }
-                />
-              </div>
-            </div>
-
-            <CompanyPulsePanel
-              summaries={companySummaries}
-              onOpen={openView}
-            />
-
-          </div>
-
-          <OwnerPriorityPanel
-            items={data.ownerPriorities}
-            companyMap={companyMap}
-            onOpen={openView}
-          />
-        </div>
+        <DashboardMetricCluster
+          title="Crew activity"
+          detail="Coverage and production readiness."
+          metrics={crewStatus.slice(0, 4)}
+          onOpen={openView}
+        />
+        <DashboardMetricCluster
+          title="Revenue requiring action"
+          detail="Cash, estimates, and unpaid work."
+          metrics={revenueActionMetrics}
+          onOpen={openView}
+          accent="orange"
+        />
       </div>
 
-      <div className="space-y-6 bg-[linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-4 text-slate-950 sm:p-6 lg:p-7">
-        <section aria-labelledby="todays-operations-heading">
-          <DashboardSectionHeading
-            eyebrow="Today's Operations"
-            title="Schedule, field work, and quick moves"
-            description="The daily rhythm for inspections, crews, callbacks, and customer-ready actions."
-            accent="orange"
-            id="todays-operations-heading"
-          />
-          <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.55fr)]">
-            <div className="order-2 xl:order-1">
-              <DashboardSummaryColumn
-                title="Today"
-                description="Inspections, callbacks, scheduled work, and follow-ups."
-                summaries={data.todaySummaries}
-                companyMap={companyMap}
-                onOpen={openView}
-                light
-              />
-            </div>
-            <div className="hidden xl:order-2 xl:block">
-              <QuickActionPanel actions={quickActions} />
-            </div>
-          </div>
-        </section>
+      <DashboardPipeline
+        stages={pipelineStages}
+        pipelineGroups={data.pipelineGroups}
+        pipelineFilter={pipelineFilter}
+        onPipelineFilterChange={onPipelineFilterChange}
+        onOpen={openView}
+      />
 
-        <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <DashboardSectionHeading
-              eyebrow="Sales Pipeline"
-              title="Lead pipeline"
-              description="Existing CRM stages grouped for owner review by source and company."
-              accent="blue"
-              compact
-            />
-            <div className="flex flex-wrap gap-2" aria-label="Dashboard lead pipeline filters">
-              {dashboardPipelineFilters.map((filter) => (
-                <button
-                  key={filter.value}
-                  type="button"
-                  onClick={() => onPipelineFilterChange(filter.value)}
-                  className={`inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
-                    pipelineFilter === filter.value
-                      ? "border-slate-950 bg-slate-950 text-white shadow-sm"
-                      : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
-                  }`}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-          </div>
+      <QuickActionPanel actions={quickActions} />
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {data.pipelineGroups.map((group) => (
-              <button
-                key={group.key}
-                type="button"
-                onClick={() => openView("leads")}
-                className="rounded-lg border border-slate-200/80 bg-slate-50/80 p-4 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-bold text-slate-950">{group.label}</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">
-                      {formatMoney(group.value)}
-                    </p>
-                  </div>
-                  <Badge label={String(group.count)} tone={group.tone} />
-                </div>
-                <div className="mt-3 grid gap-1.5">
-                  {group.items.length ? (
-                    group.items.map((lead) => (
-                      <p key={lead.id} className="truncate text-sm text-slate-500">
-                        {lead.contact_name}
-                      </p>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500">No leads in this stage.</p>
-                  )}
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
-          <DashboardSummaryColumn
-            title="Production"
-            description="Production workload, invoices, calendar conflicts, change orders, and material requests."
-            summaries={data.operationsSummaries}
-            companyMap={companyMap}
-            onOpen={openView}
-            light
-          />
-          <DashboardActivityGrid
-            title="Customer Follow-up"
-            description="Recently created customers, open estimates, jobs, inspections, and linked communications."
-            sections={data.customerActivitySections}
-            companyMap={companyMap}
-            onOpen={openView}
-          />
-        </div>
-
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.7fr)]">
-          <DashboardSummaryColumn
-            title="Communications"
-            description="Inbox, calls, SMS, email, Yelp, GoHighLevel, and website activity."
-            summaries={data.communicationsSummaries}
-            companyMap={companyMap}
-            onOpen={openView}
-            light
-          />
-
-          <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
-            <div className="flex items-start justify-between gap-3">
-              <DashboardSectionHeading
-                eyebrow="Integrations"
-                title="Integration health"
-                description="Compact setup and sync readiness."
-                accent="blue"
-                compact
-              />
-              <Badge
-                label={hasIntegrationWarnings ? "Review" : "Ready"}
-                tone={hasIntegrationWarnings ? "amber" : "green"}
-              />
-            </div>
-            <div className="mt-4 grid gap-2">
-              {data.integrationHealth.map((provider) => (
-                <button
-                  key={provider.id}
-                  type="button"
-                  onClick={() => openView(provider.view)}
-                  className="flex items-center gap-3 rounded-lg border border-slate-200/80 bg-slate-50/80 p-3 text-left text-slate-950 transition hover:-translate-y-0.5 hover:border-orange-200 hover:bg-orange-50/80 hover:shadow-[0_14px_34px_-26px_rgba(234,88,12,0.55)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
-                >
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm">
-                    <provider.icon className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="truncate text-sm font-bold">{provider.label}</p>
-                      <Badge label={provider.value} tone={provider.tone} />
-                    </div>
-                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                      {provider.detail}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => openView("settings")}
-              className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
-            >
-              Open Integration Center
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </section>
-        </div>
-
-        <DashboardIntelligencePanel
-          signals={weatherIntelligence}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
+        <DashboardLowerPriorityPanel
+          summaries={lowerPrioritySummaries}
+          companyMap={companyMap}
+          onOpen={openView}
+        />
+        <ProductionSnapshotPanel
+          productionMetrics={productionSnapshot}
+          tradeHighlights={tradeHighlights}
+          warrantyHighlight={warrantyHighlight}
           onOpen={openView}
         />
       </div>
@@ -6564,307 +6326,225 @@ function OperationsCommandCenter({
   );
 }
 
-function DashboardPriorityCount({
-  label,
-  value,
+function DashboardCommandBar({
+  currentDateLabel,
+  attentionCount,
+  activeCompanyId,
+  companies,
+  onCompanyScopeChange,
+  onSearch,
+  onNotifications,
+  onCreate,
 }: {
-  label: string;
-  value: number;
+  currentDateLabel: string;
+  attentionCount: number;
+  activeCompanyId: CompanyScopeId;
+  companies: CompanyRecord[];
+  onCompanyScopeChange: (companyId: CompanyScopeId) => void;
+  onSearch: () => void;
+  onNotifications: () => void;
+  onCreate: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2.5 shadow-inner shadow-white/5">
-      <p className="text-xl font-bold leading-none text-white">{value}</p>
-      <p className="mt-1.5 text-xs font-semibold leading-4 text-slate-300">{label}</p>
-    </div>
-  );
-}
-
-function CompanyPulsePanel({
-  summaries,
-  onOpen,
-}: {
-  summaries: CompanyDashboardSummary[];
-  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-}) {
-  if (!summaries.length) {
-    return null;
-  }
-
-  return (
-    <section className="rounded-lg border border-white/10 bg-white/[0.06] p-4 shadow-inner shadow-white/5 ring-1 ring-white/5 sm:p-5">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">
-            Company Pulse
+    <section className="wt-dashboard-command rounded-2xl border border-white/80 bg-white/90 p-3 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5 backdrop-blur sm:p-4">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)] xl:items-center">
+        <div className="min-w-0 space-y-3">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+            Executive Command Center
           </p>
-          <h3 className="mt-1 text-xl font-bold text-white">
-            Roofing and painting at a glance
-          </h3>
-        </div>
-        <p className="max-w-md text-sm leading-6 text-slate-300">
-          WeatherTech and IHC stay separated while sharing one daily operating view.
-        </p>
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {summaries.map((summary) => {
-          const brandColor = getCompanyBrandColor(summary.company);
-          const isPainting = isPaintingCompany(summary.company);
-          const tradeLabel = isPainting ? "Painting operations" : "Roofing operations";
-          const workflowFocus = isPainting
-            ? `${summary.pendingColorSelections} color approval${summary.pendingColorSelections === 1 ? "" : "s"} · ${summary.paintingScopes} painting scope${summary.paintingScopes === 1 ? "" : "s"}`
-            : `${summary.roofingScopes} roofing scope${summary.roofingScopes === 1 ? "" : "s"} · ${summary.pendingDocuments} document task${summary.pendingDocuments === 1 ? "" : "s"}`;
-
-          return (
-            <article
-              key={summary.company.id}
-              className={`relative overflow-hidden rounded-lg border border-white/10 bg-slate-950/25 p-4 text-white shadow-inner shadow-white/5 transition hover:-translate-y-0.5 hover:border-white/25 hover:bg-white/[0.08] ${
-                isPainting ? "wt-company-painting" : ""
-              }`}
-            >
-              <span
-                className="absolute inset-x-0 top-0 h-1"
-                style={{ backgroundColor: brandColor }}
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h2 className="text-xl font-bold leading-tight text-slate-950 sm:text-2xl">
+              Today’s operating cockpit
+            </h2>
+            <span className="text-sm font-semibold text-slate-500">{currentDateLabel}</span>
+          </div>
+          <div className="flex flex-wrap gap-2" aria-label="Dashboard company scope">
+            <DashboardScopeChip
+              label="All companies"
+              active={activeCompanyId === "all"}
+              tone="all"
+              onClick={() => onCompanyScopeChange("all")}
+            />
+            {companies.map((company) => (
+              <DashboardScopeChip
+                key={company.id}
+                label={company.name}
+                active={activeCompanyId === company.id}
+                tone={isPaintingCompany(company) ? "painting" : "roofing"}
+                onClick={() => onCompanyScopeChange(company.id)}
               />
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    {tradeLabel}
-                  </p>
-                  <h4 className="mt-1 truncate text-lg font-bold text-white">
-                    {summary.company.name}
-                  </h4>
-                  <p className="mt-1 text-sm font-semibold leading-5 text-slate-300">
-                    {workflowFocus}
-                  </p>
-                </div>
-                <div
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-sm font-bold text-white shadow-lg shadow-slate-950/25"
-                  style={{ backgroundColor: brandColor }}
-                >
-                  {companyInitials(summary.company)}
-                </div>
-              </div>
+            ))}
+          </div>
+        </div>
 
-              <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <CompanyPulseMetric label="Estimates" value={summary.openEstimates} />
-                <CompanyPulseMetric label="Active jobs" value={summary.activeJobs} />
-                <CompanyPulseMetric label="Scheduled" value={summary.scheduledWork} />
-                <CompanyPulseMetric label="Revenue" value={formatMoney(summary.revenue)} />
-              </dl>
-
-              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <p className="min-w-0 text-sm font-semibold text-slate-300">
-                  {summary.nextScheduledWork
-                    ? `Next: ${summary.nextScheduledWork.title} · ${formatDateTime(summary.nextScheduledWork.start_at)}`
-                    : "No upcoming scheduled work in the current snapshot."}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onOpen("jobs", summary.company.id)}
-                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:border-orange-200 hover:bg-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950"
-                >
-                  Open work
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </article>
-          );
-        })}
+        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
+          <button
+            type="button"
+            onClick={onSearch}
+            className="wt-dashboard-search inline-flex min-h-11 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-slate-500 transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            aria-label="Open customer search"
+          >
+            <Search className="h-4 w-4 shrink-0 text-sky-700" />
+            <span className="min-w-0 break-words">Search customers, jobs, estimates</span>
+          </button>
+          <button
+            type="button"
+            onClick={onNotifications}
+            className={`wt-dashboard-notification inline-flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+              attentionCount
+                ? "border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100"
+                : "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+            }`}
+            aria-label="Open notifications and communications"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            {attentionCount}
+          </button>
+          <button
+            type="button"
+            onClick={onCreate}
+            className="wt-dashboard-create inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
+          >
+            <Plus className="h-4 w-4" />
+            Create
+          </button>
+        </div>
       </div>
     </section>
   );
 }
 
-function CompanyPulseMetric({
+function DashboardScopeChip({
   label,
-  value,
+  active,
+  tone,
+  onClick,
 }: {
   label: string;
-  value: string | number;
+  active: boolean;
+  tone: "all" | "roofing" | "painting";
+  onClick: () => void;
 }) {
-  return (
-    <div className="rounded-md border border-white/10 bg-white/[0.08] px-3 py-2">
-      <dt className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-        {label}
-      </dt>
-      <dd className="mt-1 truncate text-lg font-bold leading-none text-white">{value}</dd>
-    </div>
-  );
-}
-
-function DashboardSectionHeading({
-  eyebrow,
-  title,
-  description,
-  accent = "blue",
-  compact = false,
-  id,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-  accent?: "blue" | "orange";
-  compact?: boolean;
-  id?: string;
-}) {
-  const accentClass = accent === "orange" ? "text-orange-700" : "text-sky-700";
-
-  return (
-    <div className={compact ? "max-w-2xl" : "max-w-3xl"}>
-      <p className={`text-xs font-bold uppercase tracking-[0.18em] ${accentClass}`}>
-        {eyebrow}
-      </p>
-      <h3
-        id={id}
-        className={`${compact ? "mt-1 text-lg" : "mt-1 text-xl sm:text-2xl"} font-bold leading-tight text-slate-950`}
-      >
-        {title}
-      </h3>
-      <p className="mt-1.5 text-sm leading-6 text-slate-500">{description}</p>
-    </div>
-  );
-}
-
-function DashboardHeroMeta({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.08] p-3 shadow-inner shadow-white/5">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-        {label}
-      </p>
-      <p className="mt-1.5 line-clamp-2 text-sm font-bold leading-5 text-white">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function DashboardHeroSnapshotPill({
-  item,
-  onOpen,
-}: {
-  item: DashboardHeroSnapshotItem;
-  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-}) {
-  const toneClass = {
-    amber: "border-amber-300/30 bg-amber-400/10 text-amber-100 hover:border-amber-200 hover:bg-amber-400/15",
-    blue: "border-sky-300/25 bg-sky-400/10 text-sky-100 hover:border-sky-200 hover:bg-sky-400/15",
-    green: "border-emerald-300/25 bg-emerald-400/10 text-emerald-100 hover:border-emerald-200 hover:bg-emerald-400/15",
-  }[item.tone];
+  const dotClass =
+    tone === "painting"
+      ? "bg-orange-500"
+      : tone === "roofing"
+        ? "bg-violet-600"
+        : "bg-slate-400";
 
   return (
     <button
       type="button"
-      onClick={() => onOpen(item.view)}
-      className={`flex min-h-20 items-center gap-3 rounded-lg border p-3 text-left shadow-inner shadow-white/5 transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950 ${toneClass}`}
-    >
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white/15 text-white">
-        <item.icon className="h-5 w-5" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/65">
-            {item.label}
-          </p>
-          <p className="shrink-0 text-lg font-bold leading-none text-white">{item.value}</p>
-        </div>
-        <p className="mt-1 truncate text-xs font-semibold text-white/70">
-          {item.detail}
-        </p>
-      </div>
-    </button>
-  );
-}
-
-function ExecutiveKpiCard({
-  metric,
-  onOpen,
-}: {
-  metric: DashboardExecutiveKpi;
-  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-}) {
-  const toneClass = {
-    amber: "border-amber-300/40 bg-[linear-gradient(135deg,rgba(251,191,36,0.18),rgba(251,146,60,0.08))] text-amber-100",
-    blue: "border-sky-300/30 bg-[linear-gradient(135deg,rgba(56,189,248,0.17),rgba(59,130,246,0.07))] text-sky-100",
-    green: "border-emerald-300/30 bg-[linear-gradient(135deg,rgba(52,211,153,0.16),rgba(16,185,129,0.07))] text-emerald-100",
-  }[metric.tone];
-  const iconClass = {
-    amber: "bg-amber-300 text-amber-950",
-    blue: "bg-sky-300 text-sky-950",
-    green: "bg-emerald-300 text-emerald-950",
-  }[metric.tone];
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(metric.view)}
-      className={`group flex min-h-24 flex-col justify-between rounded-lg border p-3 text-left shadow-inner shadow-white/5 transition hover:-translate-y-0.5 hover:border-white/55 hover:bg-white/[0.13] hover:shadow-[0_18px_42px_-30px_rgba(15,23,42,0.9)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 focus:ring-offset-slate-950 sm:min-h-36 sm:p-4 ${toneClass} ${
-        metric.prominent ? "sm:col-span-2 xl:col-span-3" : "xl:col-span-2"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`wt-dashboard-scope-chip inline-flex min-h-10 max-w-full items-center gap-2 rounded-full border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+        active
+          ? "border-slate-950 bg-slate-950 text-white shadow-[0_12px_28px_-20px_rgba(15,23,42,0.75)]"
+          : "border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:bg-white"
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/70">
-            {metric.label}
-          </p>
-          <p className="mt-3 text-2xl font-bold leading-none text-white sm:text-3xl">
-            {metric.value}
-          </p>
-        </div>
-        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-md sm:h-10 sm:w-10 ${iconClass}`}>
-          <metric.icon className="h-4 w-4 sm:h-5 sm:w-5" />
-        </span>
-      </div>
-      <p className="mt-3 hidden line-clamp-2 text-sm font-semibold text-white/75 sm:block">
-        {metric.detail}
-      </p>
+      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} />
+      <span className="break-words text-left leading-4">{label}</span>
     </button>
   );
 }
 
-function DashboardIntelligencePanel({
-  signals,
+function DashboardPriorityList({
+  title,
+  detail,
+  items,
+  companyMap,
   onOpen,
 }: {
-  signals: DashboardIntelligenceSignal[];
+  title: string;
+  detail: string;
+  items: OperationsDashboardItem[];
+  companyMap: Map<string, CompanyRecord>;
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <DashboardSectionHeading
-          eyebrow="Weather / Intelligence"
-          title="Weather alerts and operational signals"
-          description="Existing CRM signals only; live weather and AI automations remain clearly separated."
-          accent="orange"
-          compact
-        />
-        <Badge label="Readiness" tone="blue" />
+    <section className="wt-dashboard-panel wt-dashboard-panel-urgent rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <DashboardCompactHeader
+        eyebrow="Owner priority"
+        title={title}
+        detail={detail}
+        badge={String(items.length)}
+        tone={items.length ? "amber" : "green"}
+      />
+      <div className="wt-dashboard-list-surface mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/60">
+        {items.length ? (
+          items.map((item) => (
+            <DashboardListButton
+              key={item.id}
+              item={item}
+              companyMap={companyMap}
+              onOpen={onOpen}
+              compact
+            />
+          ))
+        ) : (
+          <DashboardInlineEmptyState
+            label="No urgent owner work"
+            detail="No overdue follow-ups, failed communications, duplicate leads, or schedule gaps are showing."
+          />
+        )}
       </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {signals.map((signal) => (
+    </section>
+  );
+}
+
+function DashboardTodayPanel({
+  summaries,
+  companyMap,
+  onOpen,
+}: {
+  summaries: OperationsDashboardSummary[];
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  return (
+    <section className="wt-dashboard-panel wt-dashboard-panel-schedule rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <DashboardCompactHeader
+        eyebrow="Today’s schedule"
+        title="Field work and sales visits"
+        detail="Inspections, appointments, scheduled jobs, and estimates."
+        badge={String(summaries.reduce((total, summary) => total + Number(summary.value || 0), 0))}
+        tone="blue"
+      />
+      <div className="wt-dashboard-list-surface mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-white/80">
+        {summaries.map((summary, index) => (
           <button
-            key={signal.id}
+            key={summary.id}
             type="button"
-            onClick={() => onOpen(signal.view)}
-            className="flex min-h-28 items-start gap-3 rounded-lg border border-slate-200/80 bg-slate-50/80 p-4 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            onClick={() => onOpen(summary.view)}
+            className={`wt-dashboard-table-row grid w-full gap-3 px-3 py-2.5 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-inset sm:grid-cols-[minmax(150px,0.7fr)_minmax(0,1fr)_auto] ${
+              index === 0 ? "" : "border-t border-slate-200"
+            }`}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-sky-700 shadow-sm">
-              <signal.icon className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-bold text-slate-950">{signal.label}</p>
-                <Badge label={String(signal.value)} tone={signal.tone} />
+            <div className="flex items-center gap-2">
+              <span className="wt-dashboard-icon grid h-7 w-7 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+                <summary.icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="break-words text-sm font-bold text-slate-950">{summary.label}</p>
+                <p className="text-xs font-semibold text-slate-500">{summary.detail}</p>
               </div>
-              <p className="mt-2 text-sm leading-5 text-slate-500">{signal.detail}</p>
             </div>
+            <div className="min-w-0">
+              {summary.items[0] ? (
+                <>
+                  <p className="break-words text-sm font-semibold text-slate-800">
+                    {summary.items[0].title}
+                  </p>
+                  <p className="break-words text-xs font-medium text-slate-500">
+                    {summary.items[0].meta} · {getDashboardItemCompanyLabel(companyMap, summary.items[0].companyId)}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm font-medium text-slate-500">No items currently scheduled.</p>
+              )}
+            </div>
+            <Badge label={String(summary.value)} tone={summary.tone} />
           </button>
         ))}
       </div>
@@ -6872,54 +6552,257 @@ function DashboardIntelligencePanel({
   );
 }
 
-function OwnerPriorityPanel({
-  items,
+function DashboardMetricCluster({
+  title,
+  detail,
+  metrics,
+  onOpen,
+  accent = "blue",
+}: {
+  title: string;
+  detail: string;
+  metrics: DashboardOperatingMetric[];
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+  accent?: "blue" | "orange";
+}) {
+  return (
+    <section className={`wt-dashboard-panel wt-dashboard-panel-metrics ${accent === "orange" ? "wt-dashboard-panel-financial" : "wt-dashboard-panel-production"} rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5`}>
+      <DashboardCompactHeader
+        eyebrow={accent === "orange" ? "Financial" : "Production"}
+        title={title}
+        detail={detail}
+        tone={accent === "orange" ? "amber" : "blue"}
+      />
+      <div className="mt-3 grid gap-2">
+        {metrics.map((metric) => (
+          <DashboardDenseMetricButton
+            key={metric.id}
+            metric={metric}
+            onOpen={onOpen}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardPipeline({
+  stages,
+  pipelineGroups,
+  pipelineFilter,
+  onPipelineFilterChange,
+  onOpen,
+}: {
+  stages: DashboardPipelineStage[];
+  pipelineGroups: DashboardOperationData["pipelineGroups"];
+  pipelineFilter: DashboardPipelineFilter;
+  onPipelineFilterChange: (filter: DashboardPipelineFilter) => void;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  return (
+    <section className="wt-dashboard-panel wt-dashboard-panel-pipeline rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <DashboardCompactHeader
+          eyebrow="Operational pipeline"
+          title="Leads → Estimates → Scheduled → In Production → Completed → Unpaid"
+          detail="A single flow for today’s operating state. Stage cards open the existing workspace."
+          tone="blue"
+        />
+        <div className="flex flex-wrap gap-2" aria-label="Dashboard lead pipeline filters">
+          {dashboardPipelineFilters.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              onClick={() => onPipelineFilterChange(filter.value)}
+              className={`wt-dashboard-filter inline-flex min-h-9 items-center rounded-md border px-3 py-1.5 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+                pipelineFilter === filter.value
+                  ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+                  : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 md:grid-cols-3 2xl:grid-cols-6">
+        {stages.map((stage) => (
+          <button
+            key={stage.id}
+            type="button"
+            onClick={() => onOpen(stage.view)}
+            className="wt-dashboard-stage-card group min-h-28 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_16px_36px_-28px_rgba(15,23,42,0.5)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="wt-dashboard-icon grid h-8 w-8 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm">
+                <stage.icon className="h-4 w-4" />
+              </span>
+              <Badge label={String(stage.value)} tone={stage.tone} />
+            </div>
+            <p className="mt-3 break-words text-sm font-bold text-slate-950">{stage.label}</p>
+            <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+              {stage.detail}
+            </p>
+          </button>
+        ))}
+      </div>
+      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        {pipelineGroups.map((group) => (
+          <button
+            key={group.key}
+            type="button"
+            onClick={() => onOpen("leads")}
+            className="wt-dashboard-pipeline-card rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-sky-200 hover:bg-sky-50/40 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <p className="break-words text-sm font-bold text-slate-950">{group.label}</p>
+              <Badge label={String(group.count)} tone={group.tone} />
+            </div>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{formatMoney(group.value)}</p>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardLowerPriorityPanel({
+  summaries,
   companyMap,
   onOpen,
 }: {
-  items: OperationsDashboardItem[];
+  summaries: OperationsDashboardSummary[];
   companyMap: Map<string, CompanyRecord>;
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
 }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-white/[0.08] p-4 shadow-inner shadow-white/5 ring-1 ring-white/5 xl:sticky xl:top-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-bold text-white">Owner priorities</h3>
-          <p className="mt-1 text-sm text-slate-300">
-            The first things to check this morning.
-          </p>
-        </div>
-        <Badge label={String(items.length)} tone={items.length ? "amber" : "green"} />
-      </div>
-      <div className="mt-4 grid gap-2">
-        {items.length ? (
-          <>
-            {items.map((item, index) => (
-              <div key={item.id} className={index >= 4 ? "hidden sm:block" : ""}>
-                <DashboardListButton
-                  item={item}
-                  companyMap={companyMap}
-                  onOpen={onOpen}
-                  dark
-                />
-              </div>
-            ))}
-            {items.length > 4 ? (
-              <p className="rounded-md border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-slate-300 sm:hidden">
-                {items.length - 4} more priorities visible on larger screens.
-              </p>
-            ) : null}
-          </>
-        ) : (
-          <DashboardInlineEmptyState
-            label="No urgent owner priorities"
-            detail="Current CRM records do not show overdue follow-ups, schedule gaps, or integration issues."
-            dark
+    <section className="wt-dashboard-panel wt-dashboard-panel-secondary rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <DashboardCompactHeader
+        eyebrow="Below the fold"
+        title="Upcoming work and quieter risks"
+        detail="Inspections, callbacks, material needs, warranty callbacks, and calendar conflicts."
+        tone="blue"
+      />
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {summaries.map((summary) => (
+          <DashboardMiniSummary
+            key={summary.id}
+            summary={summary}
+            companyMap={companyMap}
+            onOpen={onOpen}
           />
-        )}
+        ))}
       </div>
     </section>
+  );
+}
+
+function DashboardMiniSummary({
+  summary,
+  companyMap,
+  onOpen,
+}: {
+  summary: OperationsDashboardSummary;
+  companyMap: Map<string, CompanyRecord>;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  const firstItem = summary.items[0];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(summary.view)}
+      className="wt-dashboard-mini-card rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="wt-dashboard-icon grid h-8 w-8 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm">
+            <summary.icon className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="break-words text-sm font-bold text-slate-950">{summary.label}</p>
+            <p className="break-words text-xs font-semibold leading-5 text-slate-500">
+              {firstItem
+                ? `${firstItem.title} · ${getDashboardItemCompanyLabel(companyMap, firstItem.companyId)}`
+                : summary.detail}
+            </p>
+          </div>
+        </div>
+        <Badge label={String(summary.value)} tone={summary.tone} />
+      </div>
+    </button>
+  );
+}
+
+function DashboardCompactHeader({
+  eyebrow,
+  title,
+  detail,
+  badge,
+  tone = "blue",
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  badge?: string;
+  tone?: "blue" | "green" | "amber";
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p
+          className={`wt-dashboard-eyebrow text-[0.68rem] font-bold uppercase tracking-[0.16em] ${
+            tone === "amber"
+              ? "text-orange-700"
+              : tone === "green"
+                ? "text-emerald-700"
+                : "text-sky-700"
+          }`}
+        >
+          {eyebrow}
+        </p>
+        <h3 className="wt-dashboard-title mt-1 break-words text-base font-bold leading-tight text-slate-950">
+          {title}
+        </h3>
+        <p className="wt-dashboard-detail mt-1 break-words text-sm leading-5 text-slate-500">{detail}</p>
+      </div>
+      {badge ? <Badge label={badge} tone={tone} /> : null}
+    </div>
+  );
+}
+
+function DashboardDenseMetricButton({
+  metric,
+  onOpen,
+}: {
+  metric: DashboardOperatingMetric;
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+}) {
+  const toneClass = {
+    amber: "border-orange-200 bg-orange-50 text-orange-950 hover:border-orange-300",
+    blue: "border-sky-200 bg-sky-50 text-sky-950 hover:border-sky-300",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-950 hover:border-emerald-300",
+  }[metric.tone];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(metric.view)}
+      className={`wt-dashboard-metric-card wt-dashboard-metric-${metric.tone} grid min-h-16 grid-cols-[auto_minmax(0,1fr)] gap-2.5 rounded-lg border p-2.5 text-left transition hover:-translate-y-0.5 hover:bg-white focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${toneClass}`}
+    >
+      <span className="wt-dashboard-icon grid h-8 w-8 place-items-center rounded-md bg-white/80 text-slate-700 shadow-sm">
+        <metric.icon className="h-4 w-4" />
+      </span>
+      <span className="min-w-0">
+        <span className="flex flex-wrap items-baseline justify-between gap-2">
+          <span className="break-words text-sm font-bold text-slate-950">{metric.label}</span>
+          <span className="text-lg font-bold leading-none text-slate-950">{metric.value}</span>
+        </span>
+        <span className="mt-1 block break-words text-xs font-semibold leading-5 text-slate-600">
+          {metric.detail}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -6935,36 +6818,38 @@ function QuickActionPanel({
   }[];
 }) {
   return (
-    <section className="rounded-lg border border-slate-200/80 bg-white p-4 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
-      <DashboardSectionHeading
-        eyebrow="Quick actions"
-        title="Existing workflows"
-        description="Jump into the existing workflow. No outbound messages are sent here."
-        accent="orange"
-        compact
-      />
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+    <section className="wt-dashboard-panel wt-dashboard-panel-actions rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <DashboardCompactHeader
+          eyebrow="Quick Actions"
+          title="Existing workflows only"
+          detail="Shortcuts open current modules without creating fake workflow states."
+          tone="amber"
+        />
+        <Badge label="No outbound messages" tone="blue" />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {actions.map((action) => (
           <button
             key={action.label}
             type="button"
             onClick={action.onClick}
-            className={`flex min-h-14 items-center gap-3 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+            className={`wt-dashboard-action-card ${action.primary ? "wt-dashboard-action-primary" : ""} flex min-h-14 items-center gap-2 rounded-lg border px-3 py-2 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
               action.primary
-                ? "border-orange-300 bg-orange-500 text-white shadow-[0_16px_34px_-24px_rgba(234,88,12,0.75)] hover:bg-orange-400 focus:ring-offset-white"
-                : "border-slate-200/80 bg-slate-50/80 text-slate-950 hover:border-orange-200 hover:bg-white hover:shadow-[0_14px_34px_-26px_rgba(234,88,12,0.5)] focus:ring-offset-white"
+                ? "border-orange-300 bg-[linear-gradient(135deg,#f97316,#ea580c)] text-white shadow-[0_20px_44px_-28px_rgba(234,88,12,0.9)] hover:bg-orange-400 focus:ring-offset-white"
+                : "border-slate-200/80 bg-slate-50/80 text-slate-950 hover:border-orange-200 hover:bg-white hover:shadow-[0_18px_42px_-28px_rgba(234,88,12,0.45)] focus:ring-offset-white"
             }`}
           >
             <div
-              className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ${
-                action.primary ? "bg-white/20 text-white" : "bg-slate-100 text-slate-700"
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-md ${
+                action.primary ? "bg-white/20 text-white" : "wt-dashboard-icon bg-slate-100 text-slate-700"
               }`}
             >
               <action.icon className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold">{action.label}</p>
-              <p className={`mt-1 truncate text-xs font-semibold ${action.primary ? "text-orange-50" : "text-slate-500"}`}>
+              <p className="break-words text-sm font-bold">{action.label}</p>
+              <p className={`mt-0.5 break-words text-xs font-semibold leading-4 ${action.primary ? "text-orange-50" : "text-slate-500"}`}>
                 {action.detail}
               </p>
             </div>
@@ -6975,165 +6860,43 @@ function QuickActionPanel({
   );
 }
 
-function DashboardSummaryColumn({
-  title,
-  description,
-  summaries,
-  companyMap,
+function ProductionSnapshotPanel({
+  productionMetrics,
+  tradeHighlights,
+  warrantyHighlight,
   onOpen,
-  light = false,
 }: {
-  title: string;
-  description: string;
-  summaries: OperationsDashboardSummary[];
-  companyMap: Map<string, CompanyRecord>;
+  productionMetrics: DashboardOperatingMetric[];
+  tradeHighlights: DashboardOperatingMetric[];
+  warrantyHighlight?: DashboardOperatingMetric;
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-  light?: boolean;
 }) {
   return (
-    <section
-      className={`rounded-lg border p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ${
-        light
-          ? "border-slate-200/80 bg-white ring-slate-950/5"
-          : "border-white/10 bg-white/[0.08] ring-white/5"
-      }`}
-    >
-      <div>
-        <h3 className={`text-lg font-bold ${light ? "text-slate-950" : "text-white"}`}>
-          {title}
-        </h3>
-        <p className={`mt-1.5 text-sm leading-6 ${light ? "text-slate-500" : "text-slate-300"}`}>
-          {description}
-        </p>
-      </div>
-      <div className="mt-4 grid gap-3">
-        {summaries.map((summary) => (
-          <DashboardSummaryCard
-            key={summary.id}
-            summary={summary}
-            companyMap={companyMap}
+    <section className="wt-dashboard-panel wt-dashboard-panel-secondary rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+      <DashboardCompactHeader
+        eyebrow="Production Snapshot"
+        title="Roofing and painting production health"
+        detail="Only the highest-signal production categories stay on the dashboard."
+        tone="amber"
+      />
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {productionMetrics.map((metric) => (
+          <DashboardDenseMetricButton
+            key={metric.id}
+            metric={metric}
             onOpen={onOpen}
-            light={light}
           />
         ))}
       </div>
-    </section>
-  );
-}
 
-function DashboardSummaryCard({
-  summary,
-  companyMap,
-  onOpen,
-  light,
-}: {
-  summary: OperationsDashboardSummary;
-  companyMap: Map<string, CompanyRecord>;
-  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-  light: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-lg border p-4 transition hover:-translate-y-0.5 ${
-        light
-          ? "border-slate-200/80 bg-slate-50/80 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)]"
-          : "border-white/10 bg-white hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)]"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={() => onOpen(summary.view)}
-        className="flex w-full items-start justify-between gap-3 rounded-md text-left focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
-      >
-        <div className="min-w-0">
-          <p className="text-sm font-bold text-slate-950">{summary.label}</p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">{summary.detail}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <summary.icon className="h-4 w-4 text-sky-700" />
-          <Badge label={String(summary.value)} tone={summary.tone} />
-        </div>
-      </button>
-      <div className="mt-3 grid gap-2">
-        {summary.items.length ? (
-          summary.items.map((item) => (
-            <DashboardListButton
-              key={item.id}
-              item={item}
-              companyMap={companyMap}
-              onOpen={onOpen}
-            />
-          ))
-        ) : (
-          <DashboardInlineEmptyState
-            label={`No ${summary.label.toLowerCase()}`}
-            detail="Nothing in the current CRM snapshot needs action here."
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {[...tradeHighlights.slice(0, 3), ...(warrantyHighlight ? [warrantyHighlight] : [])].map((metric) => (
+          <DashboardDenseMetricButton
+            key={metric.id}
+            metric={metric}
+            onOpen={onOpen}
           />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DashboardActivityGrid({
-  title,
-  description,
-  sections,
-  companyMap,
-  onOpen,
-}: {
-  title: string;
-  description: string;
-  sections: {
-    id: string;
-    label: string;
-    view: WorkspaceView;
-    items: OperationsDashboardItem[];
-  }[];
-  companyMap: Map<string, CompanyRecord>;
-  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
-}) {
-  return (
-    <section className="rounded-lg border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-bold text-slate-950">{title}</h3>
-          <p className="mt-1.5 text-sm leading-6 text-slate-500">{description}</p>
-        </div>
-        <Badge label="Customer hub" tone="blue" />
-      </div>
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {sections.map((section) => (
-          <div
-            key={section.id}
-            className="rounded-lg border border-slate-200/80 bg-slate-50/80 p-3 transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)]"
-          >
-            <button
-              type="button"
-              onClick={() => onOpen(section.view)}
-              className="flex w-full items-center justify-between gap-3 rounded-md text-left focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
-            >
-              <p className="text-sm font-bold text-slate-950">{section.label}</p>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-            <div className="mt-3 grid gap-2">
-              {section.items.length ? (
-                section.items.map((item) => (
-                  <DashboardListButton
-                    key={item.id}
-                    item={item}
-                    companyMap={companyMap}
-                    onOpen={onOpen}
-                  />
-                ))
-              ) : (
-                <DashboardInlineEmptyState
-                  label={`No ${section.label.toLowerCase()}`}
-                  detail="This area will populate when related CRM records exist."
-                />
-              )}
-            </div>
-          </div>
         ))}
       </div>
     </section>
@@ -7145,11 +6908,13 @@ function DashboardListButton({
   companyMap,
   onOpen,
   dark = false,
+  compact = false,
 }: {
   item: OperationsDashboardItem;
   companyMap: Map<string, CompanyRecord>;
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
   dark?: boolean;
+  compact?: boolean;
 }) {
   const companyLabel = getDashboardItemCompanyLabel(companyMap, item.companyId);
 
@@ -7157,22 +6922,24 @@ function DashboardListButton({
     <button
       type="button"
       onClick={() => onOpen(item.view, item.companyId)}
-      className={`flex min-w-0 items-start gap-3 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
-        dark
-          ? "border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50 hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)] focus:ring-offset-slate-950"
-          : "border-slate-200/80 bg-white hover:border-sky-200 hover:bg-sky-50/40 hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:ring-offset-white"
-      }`}
+      className={`flex min-w-0 items-start gap-3 rounded-lg border text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+        compact
+          ? "wt-dashboard-row border-transparent bg-transparent hover:bg-white/80 focus:ring-offset-white"
+          : dark
+          ? "wt-dashboard-row border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50 hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)] focus:ring-offset-slate-950"
+          : "wt-dashboard-row border-slate-200/80 bg-white hover:border-sky-200 hover:bg-sky-50/40 hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:ring-offset-white"
+      } ${compact ? "p-2.5" : "p-3"}`}
     >
-      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+      <div className="wt-dashboard-icon grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
         <item.icon className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="truncate text-sm font-bold text-slate-950">{item.title}</p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <p className="min-w-0 break-words text-sm font-bold text-slate-950">{item.title}</p>
           <Badge label={companyLabel} tone={item.tone} />
         </div>
-        <p className="mt-1 truncate text-sm text-slate-600">{item.detail}</p>
-        <p className="mt-1 truncate text-xs font-semibold text-slate-400">{item.meta}</p>
+        <p className="mt-1 break-words text-sm text-slate-600">{item.detail}</p>
+        <p className="mt-1 break-words text-xs font-semibold text-slate-400">{item.meta}</p>
       </div>
     </button>
   );
@@ -7189,7 +6956,7 @@ function DashboardInlineEmptyState({
 }) {
   return (
     <div
-      className={`rounded-lg border border-dashed p-3 ${
+      className={`wt-dashboard-empty rounded-lg border border-dashed p-3 ${
         dark
           ? "border-white/10 bg-white/[0.08] text-slate-200"
           : "border-slate-200 bg-white/70 text-slate-600"
@@ -7198,7 +6965,7 @@ function DashboardInlineEmptyState({
       <div className="flex items-start gap-3">
         <div
           className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${
-            dark ? "bg-white/10 text-orange-200" : "bg-sky-50 text-sky-700"
+            dark ? "bg-white/10 text-orange-200" : "wt-dashboard-icon bg-sky-50 text-sky-700"
           }`}
         >
           <Search className="h-4 w-4" />
@@ -7220,20 +6987,17 @@ function DashboardView({
   metrics,
   snapshot,
   companyMap,
+  activeCompanyId,
   isDemoMode,
   onCompanyScopeChange,
   onViewChange,
   onCreateLead,
 }: DashboardViewProps) {
-  const [focusFilter, setFocusFilter] =
-    useState<DashboardFocusFilter>("all");
   const [pipelineFilter, setPipelineFilter] =
     useState<DashboardPipelineFilter>("all");
+  const focusFilter: DashboardFocusFilter = "all";
   const today = todayIsoDate();
   const productionKpis = calculateProductionKpis(snapshot);
-  const companySummaries = snapshot.companies.map((company) =>
-    buildCompanyDashboardSummary(snapshot, company),
-  );
   const operationsDashboard = useMemo(
     () =>
       buildDashboardOperationData({
@@ -7244,9 +7008,6 @@ function DashboardView({
         pipelineFilter,
       }),
     [companyMap, focusFilter, isDemoMode, pipelineFilter, snapshot],
-  );
-  const urgentLeads = snapshot.leads.filter(
-    (lead) => lead.priority === "urgent" || lead.next_follow_up === today,
   );
   const overdueInvoices = snapshot.invoices.filter(
     (invoice) =>
@@ -7270,10 +7031,6 @@ function DashboardView({
   const pendingEstimates = snapshot.estimates.filter(
     (estimate) => estimate.status === "draft" || estimate.status === "sent",
   );
-  const callbacksDue =
-    urgentLeads.length +
-    operationsDashboard.priorityCounts.overdueFollowUps +
-    operationsDashboard.inboxItems.filter(communicationItemIsFollowUpDue).length;
   const warrantyJobs = snapshot.jobs.filter((job) =>
     jobHasWarrantySignal(snapshot, job),
   );
@@ -7290,135 +7047,72 @@ function DashboardView({
       inspection.status !== "canceled" &&
       isUpcomingDate(inspection.scheduled_start, today),
   ).length;
-  const heroSnapshot: DashboardHeroSnapshotItem[] = [
+  const estimateById = new Map(snapshot.estimates.map((estimate) => [estimate.id, estimate]));
+  const jobsScheduledToday = snapshot.jobs.filter((job) =>
+    isTodayDate(getJobDashboardScheduledDate(job), today),
+  );
+  const scheduledRevenueToday = jobsScheduledToday.reduce((total, job) => {
+    const estimateTotal = job.estimate_id
+      ? estimateById.get(job.estimate_id)?.total ?? 0
+      : 0;
+
+    return total + estimateTotal;
+  }, 0);
+  const scheduledJobCount = snapshot.jobs.filter((job) => hasSavedJobSchedule(job)).length;
+  const completedJobCount = snapshot.jobs.filter((job) => job.status === "completed").length;
+  const leadsArrivedToday = snapshot.leads.filter((lead) =>
+    isTodayDate(lead.created_at, today),
+  );
+  const estimatesNeedingFollowUp = snapshot.estimates.filter(
+    (estimate) => estimate.status === "sent",
+  );
+  const paintingCompanyIds = new Set(
+    snapshot.companies.filter((company) => isPaintingCompany(company)).map((company) => company.id),
+  );
+  const activePaintingProjects = snapshot.jobs.filter(
+    (job) => paintingCompanyIds.has(job.company_id) && isProductionActiveJob(job),
+  );
+  const roofingCards = buildRoofingProductionCards(snapshot);
+  const paintingCards = buildPaintingProductionCards(snapshot);
+  const findTradeCard = (id: string) =>
+    [...roofingCards, ...paintingCards].find((card) => card.id === id);
+  const roofReplacementCard = findTradeCard("roof-replacements");
+  const roofRepairCard = findTradeCard("roof-repairs");
+  const foamRoofingCard = findTradeCard("foam-roofing");
+  const emergencyLeakCard = findTradeCard("emergency-leaks");
+  const exteriorPaintingCard = findTradeCard("exterior-painting");
+  const warrantyCallCard = findTradeCard("warranty-calls");
+  const pendingMaterialDeliveries = snapshot.materialOrders.filter(
+    (order) =>
+      order.status === "draft" ||
+      order.status === "ordered" ||
+      order.status === "partial",
+  );
+  const revenueSnapshot: DashboardOperatingMetric[] = [
     {
-      id: "weather-summary",
-      label: "Weather summary",
-      value: weatherDelayJobs.length ? `${weatherDelayJobs.length} watch` : "Clear",
-      detail: weatherDelayJobs.length
-        ? "Weather delay signals in job notes"
-        : "No CRM weather-delay signals",
-      view: "weather",
-      icon: CloudSun,
-      tone: weatherDelayJobs.length ? "amber" : "green",
-    },
-    {
-      id: "upcoming-inspections",
-      label: "Upcoming inspections",
-      value: upcomingInspectionsCount,
-      detail: `${inspectionsToday} scheduled today`,
-      view: "inspections",
-      icon: ClipboardList,
-      tone: inspectionsToday ? "amber" : "blue",
-    },
-    {
-      id: "crew-count",
-      label: "Crew count",
-      value: activeCrewCount,
-      detail: `${productionKpis.jobsMissingCrew.length} job${productionKpis.jobsMissingCrew.length === 1 ? "" : "s"} need crew`,
-      view: "jobs",
-      icon: Users,
-      tone: productionKpis.jobsMissingCrew.length ? "amber" : "green",
-    },
-    {
-      id: "jobs-production",
-      label: "Jobs in production",
-      value: productionKpis.inProgressJobs.length,
-      detail: `${metrics.activeJobs} active jobs total`,
-      view: "jobs",
-      icon: Activity,
-      tone: productionKpis.atRiskJobs.length ? "amber" : "blue",
-    },
-    {
-      id: "pipeline",
-      label: "Pipeline value",
-      value: formatMoney(metrics.pipelineValue),
-      detail: `${metrics.openLeads} open leads`,
-      view: "leads",
+      id: "scheduled-revenue",
+      label: "Scheduled Today",
+      value: formatMoney(scheduledRevenueToday),
+      detail: `${jobsScheduledToday.length} job${jobsScheduledToday.length === 1 ? "" : "s"} dated today with linked estimate value`,
+      view: "calendar",
       icon: DollarSign,
-      tone: metrics.openLeads ? "blue" : "green",
+      tone: scheduledRevenueToday ? "green" : "blue",
+      emphasis: true,
     },
     {
-      id: "revenue-today",
-      label: "Today's revenue",
+      id: "collected-today",
+      label: "Collected Today",
       value: formatMoney(todaysRevenue),
-      detail: "Posted payments today",
+      detail: "Posted payments recorded today",
       view: "invoices",
       icon: ReceiptText,
       tone: todaysRevenue ? "green" : "blue",
     },
     {
-      id: "follow-ups",
-      label: "Outstanding follow-ups",
-      value: callbacksDue,
-      detail: "Leads and inbox items needing action",
-      view: "inbox",
-      icon: Phone,
-      tone: callbacksDue ? "amber" : "green",
-    },
-  ];
-  const executiveKpis: DashboardExecutiveKpi[] = [
-    {
-      id: "todays-revenue",
-      label: "Today's Revenue",
-      value: formatMoney(todaysRevenue),
-      detail: "Posted payments collected today",
-      view: "invoices",
-      icon: DollarSign,
-      tone: todaysRevenue > 0 ? "green" : "blue",
-      prominent: true,
-    },
-    {
-      id: "jobs-today",
-      label: "Jobs Today",
-      value: jobsToday,
-      detail: "Jobs with a saved schedule date today",
-      view: "jobs",
-      icon: CalendarClock,
-      tone: jobsToday ? "blue" : "green",
-      prominent: true,
-    },
-    {
-      id: "inspections-today",
-      label: "Inspections Today",
-      value: inspectionsToday,
-      detail: "Site inspections scheduled for today",
-      view: "inspections",
-      icon: ClipboardList,
-      tone: inspectionsToday ? "amber" : "green",
-    },
-    {
-      id: "estimates-pending",
-      label: "Estimates Pending",
-      value: pendingEstimates.length,
-      detail: `${formatMoney(pendingEstimates.reduce((total, estimate) => total + estimate.total, 0))} in draft or sent estimates`,
-      view: "estimates",
-      icon: Calculator,
-      tone: pendingEstimates.length ? "amber" : "green",
-    },
-    {
-      id: "production-status",
-      label: "Production Status",
-      value: metrics.activeJobs,
-      detail: `${productionKpis.atRiskJobs.length} active job${productionKpis.atRiskJobs.length === 1 ? "" : "s"} need review`,
-      view: "jobs",
-      icon: Home,
-      tone: productionKpis.atRiskJobs.length ? "amber" : "green",
-    },
-    {
-      id: "crew-utilization",
-      label: "Crew Utilization",
-      value: `${productionKpis.crewUtilization}%`,
-      detail: `${productionKpis.crewCoverage}% crew coverage across active jobs`,
-      view: "jobs",
-      icon: Users,
-      tone: productionKpis.crewCoverage >= 80 ? "green" : "amber",
-    },
-    {
       id: "pipeline-value",
       label: "Pipeline Value",
       value: formatMoney(metrics.pipelineValue),
-      detail: `${metrics.openLeads} open leads in the active pipeline`,
+      detail: `${metrics.openLeads} active lead${metrics.openLeads === 1 ? "" : "s"}`,
       view: "leads",
       icon: DollarSign,
       tone: metrics.openLeads ? "blue" : "green",
@@ -7433,58 +7127,251 @@ function DashboardView({
       tone: metrics.unpaidInvoices > 0 ? "amber" : "green",
     },
   ];
-  const weatherIntelligence: DashboardIntelligenceSignal[] = [
+  const crewStatus: DashboardOperatingMetric[] = [
     {
-      id: "weather-alerts",
-      label: "Weather Alerts",
+      id: "crews-on-site",
+      label: "Crews on Site",
+      value: activeCrewCount,
+      detail: `${jobsToday} scheduled job${jobsToday === 1 ? "" : "s"} today`,
+      view: "jobs",
+      icon: Users,
+      tone: activeCrewCount ? "blue" : "green",
+      emphasis: true,
+    },
+    {
+      id: "crew-coverage",
+      label: "Crew Coverage",
+      value: `${productionKpis.crewCoverage}%`,
+      detail: `${productionKpis.crewUtilization}% utilization across active jobs`,
+      view: "jobs",
+      icon: Users,
+      tone: productionKpis.crewCoverage >= 80 ? "green" : "amber",
+    },
+    {
+      id: "crew-gaps",
+      label: "Crew Gaps",
+      value: productionKpis.jobsMissingCrew.length,
+      detail: "Active jobs missing assigned crew coverage",
+      view: "jobs",
+      icon: UserRound,
+      tone: productionKpis.jobsMissingCrew.length ? "amber" : "green",
+    },
+    {
+      id: "inspections-today",
+      label: "Roof Inspections Today",
+      value: inspectionsToday,
+      detail: `${upcomingInspectionsCount} upcoming inspection${upcomingInspectionsCount === 1 ? "" : "s"}`,
+      view: "inspections",
+      icon: ClipboardList,
+      tone: inspectionsToday ? "amber" : "green",
+    },
+  ];
+  const leadEstimateSnapshot: DashboardOperatingMetric[] = [
+    {
+      id: "leads-today",
+      label: "Leads Today",
+      value: leadsArrivedToday.length,
+      detail: "New website, Yelp, phone, or manually entered opportunities",
+      view: "leads",
+      icon: ClipboardList,
+      tone: leadsArrivedToday.length ? "amber" : "green",
+      emphasis: true,
+    },
+    {
+      id: "sent-estimates",
+      label: "Estimate Follow-up",
+      value: estimatesNeedingFollowUp.length,
+      detail: `${formatMoney(estimatesNeedingFollowUp.reduce((total, estimate) => total + estimate.total, 0))} sent and waiting`,
+      view: "estimates",
+      icon: Calculator,
+      tone: estimatesNeedingFollowUp.length ? "amber" : "green",
+    },
+    {
+      id: "pending-estimates",
+      label: "Open Estimate Value",
+      value: formatMoney(pendingEstimates.reduce((total, estimate) => total + estimate.total, 0)),
+      detail: `${pendingEstimates.length} draft or sent estimate${pendingEstimates.length === 1 ? "" : "s"}`,
+      view: "estimates",
+      icon: FileText,
+      tone: pendingEstimates.length ? "blue" : "green",
+    },
+    {
+      id: "missed-calls",
+      label: "Missed Calls",
+      value: operationsDashboard.priorityCounts.missedCalls,
+      detail: "Customer calls that need review in communications",
+      view: "inbox",
+      icon: Phone,
+      tone: operationsDashboard.priorityCounts.missedCalls ? "amber" : "green",
+    },
+  ];
+  const productionSnapshot: DashboardOperatingMetric[] = [
+    {
+      id: "jobs-needing-attention",
+      label: "Behind / At Risk",
+      value: productionKpis.atRiskJobs.length,
+      detail: "Blocked, unscheduled, or unassigned production work",
+      view: "jobs",
+      icon: AlertTriangle,
+      tone: productionKpis.atRiskJobs.length ? "amber" : "green",
+      emphasis: true,
+    },
+    {
+      id: "active-roof-replacements",
+      label: "Active Roof Replacements",
+      value: roofReplacementCard?.value ?? 0,
+      detail: "Replacement or re-roof production signals",
+      view: "jobs",
+      icon: Home,
+      tone: roofReplacementCard?.value ? "blue" : "green",
+    },
+    {
+      id: "weather-delays",
+      label: "Weather Delays",
       value: weatherDelayJobs.length,
       detail: weatherDelayJobs.length
-        ? "Existing job notes mention weather delays."
-        : "No weather-delay notes found in active job records.",
+        ? "Existing job notes mention weather delay risk."
+        : "No weather-delay notes found in active jobs.",
       view: "weather",
       icon: CloudSun,
       tone: weatherDelayJobs.length ? "amber" : "green",
     },
     {
-      id: "callbacks-due",
-      label: "Callbacks Due",
-      value: callbacksDue,
-      detail: "Lead follow-ups and communications that need attention.",
-      view: "inbox",
-      icon: Phone,
-      tone: callbacksDue ? "amber" : "green",
+      id: "active-painting-projects",
+      label: "Painting Projects",
+      value: activePaintingProjects.length,
+      detail: "IHC painting jobs still in production flow",
+      view: "jobs",
+      icon: Paintbrush,
+      tone: activePaintingProjects.length ? "blue" : "green",
     },
+  ];
+  const tradeHighlights: DashboardOperatingMetric[] = [
     {
-      id: "warranty-jobs",
-      label: "Warranty Jobs",
-      value: warrantyJobs.length,
-      detail: "Jobs with existing warranty or callback signals.",
+      id: "emergency-leak-repairs",
+      label: "Emergency Leak Repairs",
+      value: emergencyLeakCard?.value ?? 0,
+      detail: "Leak or urgent roof repair signals",
       view: "jobs",
       icon: ShieldCheck,
-      tone: warrantyJobs.length ? "amber" : "green",
+      tone: emergencyLeakCard?.value ? "amber" : "green",
     },
     {
-      id: "customer-satisfaction",
-      label: "Customer Satisfaction",
-      value: "Not tracked",
-      detail: "Review and CSAT provider integrations are not connected yet.",
-      view: "settings",
-      icon: Star,
-      tone: "blue",
+      id: "tile-roof-repairs",
+      label: "Tile Roof Repairs",
+      value: roofRepairCard?.value ?? 0,
+      detail: "Repair-scoped roof work",
+      view: "jobs",
+      icon: Home,
+      tone: roofRepairCard?.value ? "amber" : "green",
+    },
+    {
+      id: "foam-roofing-projects",
+      label: "Foam Roofing Projects",
+      value: foamRoofingCard?.value ?? 0,
+      detail: "Foam roofing signals in jobs or scopes",
+      view: "jobs",
+      icon: Home,
+      tone: foamRoofingCard?.value ? "blue" : "green",
+    },
+    {
+      id: "coating-painting-projects",
+      label: "Coating / Painting Projects",
+      value: activePaintingProjects.length || exteriorPaintingCard?.value || 0,
+      detail: "Exterior painting and coating production",
+      view: "jobs",
+      icon: Paintbrush,
+      tone: activePaintingProjects.length || exteriorPaintingCard?.value ? "blue" : "green",
+    },
+    {
+      id: "warranty-callbacks",
+      label: "Warranty Callbacks",
+      value: warrantyJobs.length || warrantyCallCard?.value || 0,
+      detail: "Warranty jobs or linked warranty documents",
+      view: "jobs",
+      icon: ShieldCheck,
+      tone: warrantyJobs.length || warrantyCallCard?.value ? "amber" : "green",
+    },
+    {
+      id: "material-deliveries",
+      label: "Material Deliveries",
+      value: pendingMaterialDeliveries.length,
+      detail: "Draft, ordered, or partially received material orders",
+      view: "orders",
+      icon: Package,
+      tone: pendingMaterialDeliveries.length ? "amber" : "green",
+    },
+  ];
+  const pipelineStages: DashboardPipelineStage[] = [
+    {
+      id: "pipeline-leads",
+      label: "Leads",
+      value: metrics.openLeads,
+      detail: `${leadsArrivedToday.length} arrived today`,
+      view: "leads",
+      icon: ClipboardList,
+      tone: metrics.openLeads ? "amber" : "green",
+    },
+    {
+      id: "pipeline-estimates",
+      label: "Estimates",
+      value: pendingEstimates.length,
+      detail: formatMoney(pendingEstimates.reduce((total, estimate) => total + estimate.total, 0)),
+      view: "estimates",
+      icon: Calculator,
+      tone: pendingEstimates.length ? "blue" : "green",
+    },
+    {
+      id: "pipeline-scheduled",
+      label: "Scheduled",
+      value: scheduledJobCount,
+      detail: `${jobsScheduledToday.length} dated today`,
+      view: "calendar",
+      icon: CalendarClock,
+      tone: scheduledJobCount ? "blue" : "green",
+    },
+    {
+      id: "pipeline-production",
+      label: "In Production",
+      value: productionKpis.activeJobs.length,
+      detail: `${productionKpis.atRiskJobs.length} at risk`,
+      view: "jobs",
+      icon: Home,
+      tone: productionKpis.atRiskJobs.length ? "amber" : "blue",
+    },
+    {
+      id: "pipeline-completed",
+      label: "Completed",
+      value: completedJobCount,
+      detail: "Finished job records",
+      view: "jobs",
+      icon: CheckCircle2,
+      tone: "green",
+    },
+    {
+      id: "pipeline-unpaid",
+      label: "Unpaid",
+      value: formatMoney(metrics.unpaidInvoices),
+      detail: `${overdueInvoices.length} overdue`,
+      view: "invoices",
+      icon: ReceiptText,
+      tone: metrics.unpaidInvoices > 0 ? "amber" : "green",
     },
   ];
 
   return (
     <OperationsCommandCenter
       data={operationsDashboard}
-      executiveKpis={executiveKpis}
-      weatherIntelligence={weatherIntelligence}
-      heroSnapshot={heroSnapshot}
-      companySummaries={companySummaries}
-      focusFilter={focusFilter}
-      onFocusFilterChange={setFocusFilter}
+      revenueSnapshot={revenueSnapshot}
+      crewStatus={crewStatus}
+      leadEstimateSnapshot={leadEstimateSnapshot}
+      productionSnapshot={productionSnapshot}
+      tradeHighlights={tradeHighlights}
+      pipelineStages={pipelineStages}
       pipelineFilter={pipelineFilter}
       onPipelineFilterChange={setPipelineFilter}
+      activeCompanyId={activeCompanyId}
+      companies={Array.from(companyMap.values())}
       companyMap={companyMap}
       onCompanyScopeChange={onCompanyScopeChange}
       onViewChange={onViewChange}
@@ -30844,7 +30731,7 @@ function Badge({ label, tone }: { label: string; tone: "blue" | "green" | "amber
 
   return (
     <span
-      className={`inline-flex w-fit rounded-md px-2.5 py-1 text-xs font-semibold capitalize ${toneClass}`}
+      className={`wt-status-badge wt-status-badge-${tone} inline-flex w-fit rounded-md px-2.5 py-1 text-xs font-semibold capitalize ${toneClass}`}
     >
       {label.replace("_", " ")}
     </span>

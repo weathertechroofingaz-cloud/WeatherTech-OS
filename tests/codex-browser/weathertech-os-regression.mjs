@@ -1618,44 +1618,49 @@ async function testDashboardLiveMode(tab) {
     return {
       hasDemoBanner: text.includes("Using local demo CRM data"),
       hasLiveDataError: text.includes("LIVE DATA ERROR"),
-      hasDashboardMetrics:
-        normalizedText.includes("today's revenue") &&
-        normalizedText.includes("jobs today") &&
-        normalizedText.includes("pipeline value"),
       hasOperationsDashboard:
-        normalizedText.includes("crm operations dashboard") &&
         normalizedText.includes("executive command center") &&
-        normalizedText.includes("today's snapshot"),
+        normalizedText.includes("today’s operating cockpit") &&
+        normalizedText.includes("search customers, jobs, estimates") &&
+        normalizedText.includes("create"),
       hasOperationsSections:
-        normalizedText.includes("executive summary") &&
-        normalizedText.includes("command focus") &&
+        normalizedText.includes("urgent attention") &&
+        normalizedText.includes("today’s schedule") &&
+        normalizedText.includes("crew activity") &&
+        normalizedText.includes("revenue requiring action") &&
+        normalizedText.includes("operational pipeline") &&
+        normalizedText.includes("leads → estimates → scheduled → in production → completed → unpaid") &&
         normalizedText.includes("all companies") &&
         normalizedText.includes("weathertech roofing") &&
         normalizedText.includes("ihc painting") &&
-        normalizedText.includes("company pulse") &&
-        normalizedText.includes("roofing and painting at a glance") &&
-        normalizedText.includes("open work") &&
-        normalizedText.includes("phoenix") &&
-        normalizedText.includes("tucson") &&
-        normalizedText.includes("new or unassigned leads") &&
-        normalizedText.includes("overdue follow-ups") &&
-        normalizedText.includes("schedule gaps") &&
-        normalizedText.includes("comms and integrations") &&
-        normalizedText.includes("today's operations") &&
-        normalizedText.includes("schedule, field work, and quick moves") &&
-        normalizedText.includes("lead pipeline") &&
+        normalizedText.includes("leads") &&
+        normalizedText.includes("estimates") &&
+        normalizedText.includes("scheduled") &&
+        normalizedText.includes("in production") &&
+        normalizedText.includes("completed") &&
+        normalizedText.includes("unpaid") &&
+        normalizedText.includes("crews on site") &&
+        normalizedText.includes("outstanding invoices") &&
+        normalizedText.includes("estimate follow-up") &&
+        normalizedText.includes("quick actions") &&
+        normalizedText.includes("create lead") &&
+        normalizedText.includes("create estimate") &&
+        normalizedText.includes("schedule inspection") &&
+        normalizedText.includes("schedule job") &&
+        normalizedText.includes("create work order") &&
+        normalizedText.includes("upload roof photos") &&
+        normalizedText.includes("customer search") &&
+        normalizedText.includes("open calendar") &&
+        normalizedText.includes("upcoming work and quieter risks") &&
+        normalizedText.includes("upcoming inspections") &&
+        normalizedText.includes("calendar conflicts") &&
+        normalizedText.includes("material requests") &&
         normalizedText.includes("website") &&
         normalizedText.includes("yelp") &&
         normalizedText.includes("unassigned") &&
-        normalizedText.includes("customer follow-up") &&
-        normalizedText.includes("production") &&
-        normalizedText.includes("communications") &&
-        normalizedText.includes("integration health") &&
-        normalizedText.includes("weather / intelligence") &&
-        normalizedText.includes("quick actions") &&
-        normalizedText.includes("create change order") &&
-        normalizedText.includes("upload photos") &&
-        normalizedText.includes("upload documents"),
+        normalizedText.includes("production snapshot") &&
+        normalizedText.includes("weather delays") &&
+        normalizedText.includes("warranty callbacks"),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -1673,40 +1678,30 @@ async function testDashboardLiveMode(tab) {
     throw new Error("No signed-in account email is visible.");
   }
 
-  if (!state.hasDashboardMetrics) {
-    throw new Error("Dashboard metrics are not visible.");
-  }
-
   if (!state.hasOperationsDashboard || !state.hasOperationsSections) {
     throw new Error("CRM operations dashboard sections are not visible.");
   }
 
-  for (const filter of [
-    ["Phoenix", "Phoenix · Phoenix-area records"],
-    ["Tucson", "Tucson · Tucson-area records"],
-    ["IHC Painting", "IHC Painting · Painting workstream"],
-    ["WeatherTech Roofing", "WeatherTech Roofing · Roofing workstream"],
-    ["All companies", "All companies · Combined owner view"],
-  ]) {
-    await clickUnique(
-      tab.playwright.locator(
-        `xpath=//*[@data-testid="crm-operations-dashboard"]//button[normalize-space(.)=${xpathString(filter[0])}]`,
-      ),
-      `dashboard focus ${filter[0]}`,
-    );
-    await waitFor(
-      tab,
-      (expected) => document.body.innerText.includes(expected),
-      `dashboard focus result ${filter[0]}`,
-      8000,
-      filter[1],
-    );
-  }
+  await clickCompanyScope(tab, "IHC Painting");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("IHC Painting"),
+    "dashboard IHC scope",
+    8000,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("WeatherTech Roofing LLC"),
+    "dashboard WeatherTech scope",
+    8000,
+  );
+  await clickCompanyScope(tab, "All companies");
 
   for (const filter of ["Website", "Yelp", "Unassigned", "WeatherTech"]) {
     await clickUnique(
       tab.playwright.locator(
-        `xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//h3[normalize-space(.)="Lead pipeline"]]//button[normalize-space(.)=${xpathString(filter)}]`,
+        `xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//*[normalize-space(.)="Operational pipeline"]]//button[normalize-space(.)=${xpathString(filter)}]`,
       ),
       `dashboard pipeline ${filter}`,
     );
@@ -1714,7 +1709,7 @@ async function testDashboardLiveMode(tab) {
 
   await clickUnique(
     tab.playwright.locator(
-      'xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//h3[normalize-space(.)="Lead pipeline"]]//button[normalize-space(.)="All"]',
+      'xpath=//*[@data-testid="crm-operations-dashboard"]//section[.//*[normalize-space(.)="Operational pipeline"]]//button[normalize-space(.)="All"]',
     ),
     "dashboard pipeline all",
   );
@@ -3389,17 +3384,14 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
 
   const overlaps = await tab.playwright.evaluate(() => {
     const quickActionLabels = [
-      "New Lead",
-      "New Customer",
-      "New Estimate",
+      "Create Lead",
+      "Create Estimate",
       "Schedule Inspection",
       "Schedule Job",
-      "Compose Email",
-      "Send SMS",
-      "Create Invoice",
-      "Create Change Order",
-      "Upload Photos",
-      "Upload Documents",
+      "Create Work Order",
+      "Upload Roof Photos",
+      "Customer Search",
+      "Open Calendar",
     ];
     const matchesQuickAction = (text) =>
       quickActionLabels.some((label) =>
@@ -3448,17 +3440,14 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   });
   const commandCenterOverlaps = await tab.playwright.evaluate(() => {
     const quickActionLabels = [
-      "New Lead",
-      "New Customer",
-      "New Estimate",
+      "Create Lead",
+      "Create Estimate",
       "Schedule Inspection",
       "Schedule Job",
-      "Compose Email",
-      "Send SMS",
-      "Create Invoice",
-      "Create Change Order",
-      "Upload Photos",
-      "Upload Documents",
+      "Create Work Order",
+      "Upload Roof Photos",
+      "Customer Search",
+      "Open Calendar",
     ];
     const matchesQuickAction = (text) =>
       quickActionLabels.some((label) =>
@@ -3505,16 +3494,16 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     return { checked: buttons.length, collisions };
   });
 
-  if (overlaps.checked < 11) {
-    throw new Error(`Expected 11 dashboard quick-action buttons, checked ${overlaps.checked}.`);
+  if (overlaps.checked < 8) {
+    throw new Error(`Expected 8 dashboard quick-action buttons, checked ${overlaps.checked}.`);
   }
 
   if (overlaps.collisions.length) {
     throw new Error(`Found ${overlaps.collisions.length} overlapping quick-action button pairs.`);
   }
 
-  if (commandCenterOverlaps.checked < 11) {
-    throw new Error(`Expected 11 CRM operations quick-action buttons, checked ${commandCenterOverlaps.checked}.`);
+  if (commandCenterOverlaps.checked < 8) {
+    throw new Error(`Expected 8 CRM operations quick-action buttons, checked ${commandCenterOverlaps.checked}.`);
   }
 
   if (commandCenterOverlaps.collisions.length) {
@@ -3529,19 +3518,22 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
       [...document.querySelectorAll("h2,h3,p")].find(
         (heading) => heading.textContent?.trim() === text,
       );
-    const executiveRect = findHeading("Executive Summary")?.getBoundingClientRect() ?? null;
-    const todayRect = findHeading("Today's Operations")?.getBoundingClientRect() ?? null;
-    const quickActionsRect = findHeading("Quick actions")?.getBoundingClientRect() ?? null;
+    const commandRect = findHeading("Today’s operating cockpit")?.getBoundingClientRect() ?? null;
+    const urgentRect = findHeading("Urgent attention")?.getBoundingClientRect() ?? null;
+    const todayRect = findHeading("Today’s schedule")?.getBoundingClientRect() ?? null;
+    const quickActionsRect = findHeading("Quick Actions")?.getBoundingClientRect() ?? null;
 
     return {
       visible: Boolean(commandCenter),
       scrollWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
-      executiveSummaryBeforeToday:
-        Boolean(executiveRect && todayRect) && executiveRect.top <= todayRect.top,
-      quickActionsBeforeToday:
-        Boolean(quickActionsRect && todayRect) && quickActionsRect.top <= todayRect.top,
+      commandBeforeUrgent:
+        Boolean(commandRect && urgentRect) && commandRect.top <= urgentRect.top,
+      urgentBeforeToday:
+        Boolean(urgentRect && todayRect) && urgentRect.top <= todayRect.top,
+      todayBeforeQuickActions:
+        Boolean(todayRect && quickActionsRect) && todayRect.top <= quickActionsRect.top,
     };
   });
 
@@ -3553,12 +3545,16 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
     throw new Error(`Dashboard mobile layout overflows horizontally: ${mobileLayout.scrollWidth} > ${mobileLayout.viewportWidth}.`);
   }
 
-  if (!mobileLayout.executiveSummaryBeforeToday) {
-    throw new Error("Executive Summary does not appear before Today's Operations on mobile.");
+  if (!mobileLayout.commandBeforeUrgent) {
+    throw new Error("Dashboard command bar does not appear before urgent attention on mobile.");
   }
 
-  if (!mobileLayout.quickActionsBeforeToday) {
-    throw new Error("Dashboard quick actions do not appear before Today's Operations on mobile.");
+  if (!mobileLayout.urgentBeforeToday) {
+    throw new Error("Urgent attention does not appear before Today's Schedule on mobile.");
+  }
+
+  if (!mobileLayout.todayBeforeQuickActions) {
+    throw new Error("Dashboard quick actions appear before the primary schedule area on mobile.");
   }
 
   await viewport.set(LAPTOP_VIEWPORT);
