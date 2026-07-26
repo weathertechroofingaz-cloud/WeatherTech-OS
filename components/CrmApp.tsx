@@ -365,6 +365,7 @@ type CrmClient = SupabaseClient<Database>;
 type ThemeMode = "light" | "dark";
 type WorkspaceView =
   | "dashboard"
+  | "operations"
   | "inbox"
   | "leads"
   | "customers"
@@ -402,7 +403,10 @@ type NavigationGroup = {
 const workspaceNavigationGroups: NavigationGroup[] = [
   {
     label: "Overview",
-    items: [{ view: "dashboard", label: "Dashboard", icon: Home }],
+    items: [
+      { view: "dashboard", label: "Dashboard", icon: Home },
+      { view: "operations", label: "Operations", icon: Activity },
+    ],
   },
   {
     label: "CRM",
@@ -557,6 +561,15 @@ type ProductionInspectionFilter =
   | "complete"
   | "not_recorded";
 type CrewSchedulerView = "day" | "week";
+type DispatchView = "day" | "week";
+type DispatchStatusFilter =
+  | "all"
+  | "scheduled"
+  | "unscheduled"
+  | "in_progress"
+  | "blocked"
+  | "completed";
+type DispatchItemKind = "job" | "inspection";
 type JobWorkspaceTab =
   | "overview"
   | "checklist"
@@ -598,6 +611,15 @@ const jobWorkspaceTabs: { value: JobWorkspaceTab; label: string }[] = [
   { value: "materials", label: "Materials" },
   { value: "financial", label: "Financial" },
   { value: "files", label: "Files" },
+];
+
+const dispatchStatusFilters: { value: DispatchStatusFilter; label: string }[] = [
+  { value: "all", label: "All work" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "unscheduled", label: "Needs schedule" },
+  { value: "in_progress", label: "In production" },
+  { value: "blocked", label: "Blocked" },
+  { value: "completed", label: "Completed" },
 ];
 
 const scheduleEventTypes: { value: ScheduleEventType; label: string }[] = [
@@ -2113,6 +2135,28 @@ type CrewScheduleGroup = {
   conflicts: ScheduleConflict[];
 };
 
+type DispatchItem = {
+  id: string;
+  kind: DispatchItemKind;
+  companyId: string;
+  company: CompanyRecord | null;
+  title: string;
+  target: string;
+  address: string;
+  status: string;
+  statusLabel: string;
+  serviceLabel: string;
+  start: string | null;
+  end: string | null;
+  crew: string;
+  foreman: string;
+  priority: LeadPriority | "normal";
+  job: JobRecord | null;
+  inspection: InspectionRecord | null;
+  materialReadiness: ProductionReadiness | null;
+  inspectionReadiness: ProductionReadiness | null;
+};
+
 type ProductionLogItem = {
   id: string;
   label: string;
@@ -2937,6 +2981,177 @@ function buildScheduleConflicts(snapshot: CrmSnapshot): ScheduleConflict[] {
   });
 
   return conflicts;
+}
+
+function getDispatchWindowRange(date: string, view: DispatchView) {
+  return {
+    startDate: date,
+    endDate: view === "week" ? addDaysToIsoDate(date, 6) : date,
+  };
+}
+
+function dispatchItemMatchesDateRange(item: DispatchItem, startDate: string, endDate: string) {
+  if (!item.start && !item.end) {
+    return true;
+  }
+
+  const itemStart = (item.start ?? item.end)?.slice(0, 10);
+  const itemEnd = (item.end ?? item.start)?.slice(0, 10);
+
+  if (!itemStart || !itemEnd) {
+    return true;
+  }
+
+  return itemStart <= endDate && itemEnd >= startDate;
+}
+
+function getDispatchStatusBucket(item: DispatchItem): DispatchStatusFilter {
+  if (!item.start && !item.end) {
+    return "unscheduled";
+  }
+
+  if (item.status === "in_progress") {
+    return "in_progress";
+  }
+
+  if (item.status === "blocked" || item.status === "follow_up_required" || item.status === "needs_review") {
+    return "blocked";
+  }
+
+  if (
+    item.status === "completed" ||
+    item.status === "closed" ||
+    item.status === "passed" ||
+    item.status === "no_work_needed"
+  ) {
+    return "completed";
+  }
+
+  return "scheduled";
+}
+
+function buildDispatchItems(snapshot: CrmSnapshot): DispatchItem[] {
+  const jobItems: DispatchItem[] = snapshot.jobs.map((job) => {
+    const company = snapshot.companies.find((item) => item.id === job.company_id) ?? null;
+    const window = getJobProductionScheduleWindow(snapshot, job);
+
+    return {
+      id: `job:${job.id}`,
+      kind: "job",
+      companyId: job.company_id,
+      company,
+      title: job.title,
+      target: getJobTargetName(snapshot, job),
+      address: getJobDisplayAddress(job),
+      status: job.status,
+      statusLabel: jobStatusLabel(job.status),
+      serviceLabel: serviceLabel(job.service_type),
+      start: window?.start ?? getJobScheduledStart(job),
+      end: window?.end ?? getJobScheduledEnd(job),
+      crew: getJobCrewLabel(snapshot, job),
+      foreman: getJobForemanLabel(snapshot, job),
+      priority: getJobPriorityLabel(snapshot, job),
+      job,
+      inspection: null,
+      materialReadiness: getJobMaterialReadiness(snapshot, job),
+      inspectionReadiness: getJobInspectionReadiness(snapshot, job),
+    };
+  });
+  const inspectionItems: DispatchItem[] = snapshot.inspections
+    .filter((inspection) => inspection.status !== "canceled")
+    .map((inspection) => {
+      const linkedJob = inspection.job_id
+        ? snapshot.jobs.find((job) => job.id === inspection.job_id) ?? null
+        : null;
+      const company =
+        snapshot.companies.find((item) => item.id === inspection.company_id) ??
+        (linkedJob
+          ? snapshot.companies.find((item) => item.id === linkedJob.company_id) ?? null
+          : null);
+      const inspectorLabel = inspection.assigned_inspector?.trim() || null;
+
+      return {
+        id: `inspection:${inspection.id}`,
+        kind: "inspection",
+        companyId: inspection.company_id,
+        company,
+        title: inspection.title,
+        target: getInspectionTargetName(snapshot, inspection),
+        address: getInspectionPropertyAddress(snapshot, inspection),
+        status: inspection.status,
+        statusLabel: inspectionStatusLabel(inspection.status),
+        serviceLabel: serviceLabel(getInspectionServiceType(inspection)),
+        start: inspection.scheduled_start,
+        end: inspection.scheduled_end,
+        crew: linkedJob
+          ? getJobCrewLabel(snapshot, linkedJob)
+          : inspectorLabel ?? "Inspector unassigned",
+        foreman:
+          inspectorLabel ??
+          (linkedJob ? getJobForemanLabel(snapshot, linkedJob) : "Inspector unassigned"),
+        priority: inspection.priority ?? "normal",
+        job: linkedJob,
+        inspection,
+        materialReadiness: linkedJob ? getJobMaterialReadiness(snapshot, linkedJob) : null,
+        inspectionReadiness: null,
+      };
+    });
+
+  return [...jobItems, ...inspectionItems].sort((a, b) => {
+    const left = a.start ?? a.end ?? "9999-12-31T00:00:00.000Z";
+    const right = b.start ?? b.end ?? "9999-12-31T00:00:00.000Z";
+
+    return left.localeCompare(right);
+  });
+}
+
+function filterDispatchItems(
+  items: DispatchItem[],
+  filters: {
+    view: DispatchView;
+    date: string;
+    company: string;
+    crew: string;
+    foreman: string;
+    status: DispatchStatusFilter;
+    search: string;
+  },
+) {
+  const { startDate, endDate } = getDispatchWindowRange(filters.date, filters.view);
+  const query = filters.search.trim().toLowerCase();
+
+  return items.filter((item) => {
+    const searchableText = [
+      item.title,
+      item.target,
+      item.address,
+      item.company?.name,
+      item.crew,
+      item.foreman,
+      item.serviceLabel,
+      item.statusLabel,
+      item.materialReadiness?.label,
+      item.inspectionReadiness?.label,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return (
+      dispatchItemMatchesDateRange(item, startDate, endDate) &&
+      (filters.company === "all" || item.companyId === filters.company) &&
+      (filters.crew === "all" ||
+        (filters.crew === "unassigned" && item.crew.includes("unassigned")) ||
+        (filters.crew === "unassigned" && item.crew === "Crew needed") ||
+        item.crew === filters.crew) &&
+      (filters.foreman === "all" ||
+        (filters.foreman === "unassigned" &&
+          (item.foreman.includes("unassigned") || item.foreman === "Foreman unassigned")) ||
+        item.foreman === filters.foreman) &&
+      (filters.status === "all" || getDispatchStatusBucket(item) === filters.status) &&
+      (!query || searchableText.includes(query))
+    );
+  });
 }
 
 function buildCrewScheduleGroups(snapshot: CrmSnapshot, jobs: JobRecord[]): CrewScheduleGroup[] {
@@ -4673,21 +4888,30 @@ function CrmWorkspace({
           {notice ? <Message tone="success" message={notice} /> : null}
           {error ? <Message tone="error" message={error} /> : null}
 
-          {view === "dashboard" ? (
-            <DashboardView
-              metrics={metrics}
-              snapshot={scopedSnapshot}
+	          {view === "dashboard" ? (
+	            <DashboardView
+	              metrics={metrics}
+	              snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
               isDemoMode={isDemoMode}
               onCompanyScopeChange={setSelectedCompanyId}
               onViewChange={onViewChange}
-              onCreateLead={() => onViewChange("leads")}
-            />
-          ) : null}
+	              onCreateLead={() => onViewChange("leads")}
+	            />
+	          ) : null}
 
-          {view === "inbox" ? (
-            <UnifiedInboxView
+	          {view === "operations" ? (
+	            <OfficeOperationsView
+	              snapshot={scopedSnapshot}
+	              companyMap={companyMap}
+	              activeCompanyId={selectedCompanyId}
+	              onViewChange={onViewChange}
+	            />
+	          ) : null}
+
+	          {view === "inbox" ? (
+	            <UnifiedInboxView
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onViewChange={onViewChange}
@@ -6592,6 +6816,537 @@ function buildDashboardOperationData({
 
 type DashboardOperationData = ReturnType<typeof buildDashboardOperationData>;
 
+type OfficeOperationsSection = {
+  id: string;
+  title: string;
+  detail: string;
+  queues: OperationsDashboardSummary[];
+};
+
+function buildOfficeOperationsData(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+) {
+  const today = todayIsoDate();
+  const tomorrow = addDaysIsoDate(1);
+  const openJobs = snapshot.jobs.filter(
+    (job) => job.status !== "completed" && job.status !== "closed",
+  );
+  const activeJobs = snapshot.jobs.filter(isProductionActiveJob);
+  const inboxItems = buildUnifiedInboxItems(snapshot, companyMap);
+  const dispatchConflicts = buildScheduleConflicts(snapshot).filter(
+    (conflict) =>
+      !conflict.id.startsWith("missing-schedule") && !conflict.id.startsWith("missing-crew"),
+  );
+  const jobsStartingToday = sortByDateField(
+    snapshot.jobs.filter((job) =>
+      getJobScheduleDateParts(snapshot, job).some((date) => date === today),
+    ),
+    (job) => getJobProductionScheduleWindow(snapshot, job)?.start ?? getJobScheduledStart(job),
+  );
+  const jobsAwaitingScheduling = sortByNewest(
+    openJobs.filter(
+      (job) =>
+        !hasSavedJobSchedule(job) &&
+        !hasUpcomingScheduledEvent(getJobScheduleEvents(snapshot, job.id)),
+    ),
+  );
+  const jobsMissingCrews = sortByDateField(
+    openJobs.filter((job) => (isProductionActiveJob(job) || hasSavedJobSchedule(job)) && !jobHasCrew(snapshot, job)),
+    (job) => getJobProductionScheduleWindow(snapshot, job)?.start ?? job.updated_at,
+  );
+  const sentEstimates = sortByNewest(
+    snapshot.estimates.filter((estimate) => estimate.status === "sent"),
+  );
+  const pendingSignatures = sortByNewest(
+    snapshot.signatures.filter((signature) => signature.status === "pending"),
+  );
+  const inspectionsToday = sortByDateField(
+    snapshot.inspections.filter(
+      (inspection) =>
+        inspection.status !== "canceled" &&
+        isTodayDate(inspection.scheduled_start, today),
+    ),
+    (inspection) => inspection.scheduled_start,
+  );
+  const warrantyJobs = sortByNewest(snapshot.jobs.filter((job) => jobHasWarrantySignal(snapshot, job)));
+  const emergencyLeakJobs = sortByNewest(
+    openJobs.filter((job) => jobMatchesProductionKeywords(job, ["emergency", "leak"])),
+  );
+  const materialWarnings = sortByNewest(
+    activeJobs.filter((job) => getJobMaterialReadiness(snapshot, job).tone === "amber"),
+  );
+  const productionBlockers = sortByNewest(
+    activeJobs.filter((job) => getJobOutstandingIssue(snapshot, job) !== "No outstanding issue recorded"),
+  );
+  const customerFollowUps = sortByDateField(
+    snapshot.leads.filter(
+      (lead) =>
+        lead.status !== "won" &&
+        lead.status !== "lost" &&
+        lead.next_follow_up !== null &&
+        lead.next_follow_up <= today,
+    ),
+    (lead) => lead.next_follow_up,
+  );
+  const communicationFollowUps = inboxItems.filter(
+    (item) => item.followUpAt && item.followUpAt.slice(0, 10) <= today,
+  );
+  const recentCommunications = inboxItems.slice(0, 8);
+  const signedEstimateItems = sortByNewest(snapshot.signatures)
+    .filter((signature) => signature.status === "signed")
+    .map((signature) => {
+      const document = signature.document_id
+        ? snapshot.documents.find((item) => item.id === signature.document_id) ?? null
+        : null;
+      const estimate = document?.estimate_id
+        ? snapshot.estimates.find((item) => item.id === document.estimate_id) ?? null
+        : null;
+
+      return { signature, document, estimate };
+    })
+    .filter((item) => item.document?.category === "estimate" && item.estimate !== null);
+  const recentlyCompletedJobs = sortByNewest(
+    snapshot.jobs.filter((job) => job.status === "completed" || job.status === "closed"),
+  );
+  const recentlyApprovedEstimates = sortByNewest(
+    snapshot.estimates.filter((estimate) => estimate.status === "approved"),
+  );
+
+  const jobItem = (
+    job: JobRecord,
+    detail: string,
+    meta: string,
+    tone: OperationsDashboardItem["tone"] = "blue",
+  ) =>
+    buildDashboardRecordItem({
+      id: job.id,
+      title: job.title,
+      detail,
+      meta,
+      companyId: job.company_id,
+      view: "jobs",
+      icon: Home,
+      tone,
+    });
+  const estimateItem = (
+    estimate: EstimateRecord,
+    detail: string,
+    tone: OperationsDashboardItem["tone"] = "blue",
+  ) =>
+    buildDashboardRecordItem({
+      id: estimate.id,
+      title: estimate.title,
+      detail,
+      meta: `${estimateStatusLabel(estimate.status)} · ${formatMoney(estimate.total)}`,
+      companyId: estimate.company_id,
+      view: "estimates",
+      icon: Calculator,
+      tone,
+    });
+  const queue = ({
+    id,
+    label,
+    detail,
+    view,
+    icon,
+    tone,
+    items,
+    value,
+  }: {
+    id: string;
+    label: string;
+    detail: string;
+    view: WorkspaceView;
+    icon: typeof Home;
+    tone: OperationsDashboardSummary["tone"];
+    items: OperationsDashboardItem[];
+    value?: OperationsDashboardSummary["value"];
+  }): OperationsDashboardSummary => ({
+    id,
+    label,
+    detail,
+    value: value ?? items.length,
+    view,
+    icon,
+    tone,
+    items: items.slice(0, 5),
+  });
+
+  const todayQueues: OperationsDashboardSummary[] = [
+    queue({
+      id: "jobs-starting-today",
+      label: "Jobs starting today",
+      detail: "Production work with saved dates or job schedule events today",
+      view: "jobs",
+      icon: CalendarClock,
+      tone: jobsStartingToday.length ? "blue" : "green",
+      items: jobsStartingToday.map((job) =>
+        jobItem(
+          job,
+          `${jobStatusLabel(job.status)} · ${getJobCrewLabel(snapshot, job)}`,
+          getJobScheduleSummary(snapshot, job),
+          "blue",
+        ),
+      ),
+    }),
+    queue({
+      id: "inspections-today",
+      label: "Inspections scheduled today",
+      detail: "Inspection visits the office needs to keep visible today",
+      view: "inspections",
+      icon: ClipboardList,
+      tone: inspectionsToday.length ? "amber" : "green",
+      items: inspectionsToday.map((inspection) =>
+        buildDashboardRecordItem({
+          id: inspection.id,
+          title: inspection.title,
+          detail: inspection.assigned_inspector ?? inspectionStatusLabel(inspection.status),
+          meta: inspection.scheduled_start ? formatDateTime(inspection.scheduled_start) : "No time",
+          companyId: inspection.company_id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: "amber",
+        }),
+      ),
+    }),
+    queue({
+      id: "recent-customer-communication",
+      label: "Recent customer communication",
+      detail: "Latest inbox, lead-intake, email, SMS, and call activity",
+      view: "inbox",
+      icon: MessageSquare,
+      tone: recentCommunications.length ? "blue" : "green",
+      items: recentCommunications.map((item) =>
+        buildDashboardRecordItem({
+          id: item.id,
+          title: item.customerName,
+          detail: `${item.sourceLabel} · ${item.kind}`,
+          meta: formatDateTime(item.createdAt),
+          companyId: item.companyId,
+          view: "inbox",
+          icon: MessageSquare,
+          tone: item.isFailed ? "amber" : "blue",
+        }),
+      ),
+    }),
+  ];
+
+  const handoffQueues: OperationsDashboardSummary[] = [
+    queue({
+      id: "awaiting-estimate-approval",
+      label: "Jobs awaiting estimate approval",
+      detail: "Sent estimates that have not been approved yet",
+      view: "estimates",
+      icon: Calculator,
+      tone: sentEstimates.length ? "amber" : "green",
+      items: sentEstimates.map((estimate) =>
+        estimateItem(estimate, getEstimateTargetName(snapshot, estimate), "amber"),
+      ),
+    }),
+    queue({
+      id: "awaiting-customer-signature",
+      label: "Jobs awaiting customer signature",
+      detail: "Active signature requests tied to estimate packets or change orders",
+      view: "documents",
+      icon: Pencil,
+      tone: pendingSignatures.length ? "amber" : "green",
+      items: pendingSignatures.map((signature) =>
+        buildDashboardRecordItem({
+          id: signature.id,
+          title: getSignatureTargetName(snapshot, signature),
+          detail: signatureStatusLabel(signature.status),
+          meta: signature.signer_email ?? signature.signer_name,
+          companyId: signature.company_id,
+          view: signature.change_order_id ? "changeOrders" : "estimates",
+          icon: Pencil,
+          tone: "amber",
+        }),
+      ),
+    }),
+    queue({
+      id: "customer-follow-ups-due",
+      label: "Customer follow-ups due",
+      detail: "Leads and communication reminders due today or overdue",
+      view: "inbox",
+      icon: Phone,
+      tone: customerFollowUps.length || communicationFollowUps.length ? "amber" : "green",
+      value: customerFollowUps.length + communicationFollowUps.length,
+      items: [
+        ...customerFollowUps.map((lead) =>
+          buildDashboardRecordItem({
+            id: lead.id,
+            title: lead.contact_name,
+            detail: `${statusLabel(lead.status)} · ${lead.source}`,
+            meta: lead.next_follow_up ? formatDate(lead.next_follow_up) : "Follow-up due",
+            companyId: lead.company_id,
+            view: "leads",
+            icon: Phone,
+            tone: "amber",
+          }),
+        ),
+        ...communicationFollowUps.map((item) =>
+          buildDashboardRecordItem({
+            id: item.id,
+            title: item.customerName,
+            detail: `${item.sourceLabel} · follow-up`,
+            meta: item.followUpAt ? formatDateTime(item.followUpAt) : "Follow-up due",
+            companyId: item.companyId,
+            view: "inbox",
+            icon: MessageSquare,
+            tone: "amber",
+          }),
+        ),
+      ],
+    }),
+  ];
+
+  const dispatchQueues: OperationsDashboardSummary[] = [
+    queue({
+      id: "jobs-awaiting-scheduling",
+      label: "Jobs awaiting scheduling",
+      detail: "Open jobs with no saved schedule or future job event",
+      view: "jobs",
+      icon: CalendarClock,
+      tone: jobsAwaitingScheduling.length ? "amber" : "green",
+      items: jobsAwaitingScheduling.map((job) =>
+        jobItem(job, jobStatusLabel(job.status), "No production date recorded", "amber"),
+      ),
+    }),
+    queue({
+      id: "jobs-missing-crews",
+      label: "Jobs missing assigned crews",
+      detail: "Open scheduled or active jobs with no crew assignment",
+      view: "jobs",
+      icon: Users,
+      tone: jobsMissingCrews.length ? "amber" : "green",
+      items: jobsMissingCrews.map((job) =>
+        jobItem(job, getJobScheduleSummary(snapshot, job), "Crew assignment needed", "amber"),
+      ),
+    }),
+    queue({
+      id: "dispatch-conflicts",
+      label: "Jobs with dispatch conflicts",
+      detail: "Overlapping crews, foremen, jobs, or inspections",
+      view: "calendar",
+      icon: AlertTriangle,
+      tone: dispatchConflicts.length ? "amber" : "green",
+      items: dispatchConflicts.map((conflict) =>
+        buildDashboardRecordItem({
+          id: conflict.id,
+          title: conflict.label,
+          detail: conflict.detail,
+          meta: conflict.job ? getJobScheduleSummary(snapshot, conflict.job) : "Review schedule",
+          companyId: conflict.job?.company_id ?? null,
+          view: "jobs",
+          icon: AlertTriangle,
+          tone: "amber",
+        }),
+      ),
+    }),
+  ];
+
+  const productionQueues: OperationsDashboardSummary[] = [
+    queue({
+      id: "jobs-in-progress",
+      label: "Jobs in progress",
+      detail: "Production jobs currently marked in progress",
+      view: "jobs",
+      icon: Activity,
+      tone: activeJobs.length ? "blue" : "green",
+      items: snapshot.jobs
+        .filter((job) => job.status === "in_progress")
+        .map((job) =>
+          jobItem(
+            job,
+            `${getJobCrewLabel(snapshot, job)} · ${getJobForemanLabel(snapshot, job)}`,
+            `${getJobProductionProgressPercent(snapshot, job)}% complete`,
+            "blue",
+          ),
+        ),
+    }),
+    queue({
+      id: "material-readiness-warnings",
+      label: "Material readiness warnings",
+      detail: "Active production work where material readiness is not clear",
+      view: "orders",
+      icon: Package,
+      tone: materialWarnings.length ? "amber" : "green",
+      items: materialWarnings.map((job) => {
+        const readiness = getJobMaterialReadiness(snapshot, job);
+
+        return jobItem(job, readiness.label, readiness.detail, "amber");
+      }),
+    }),
+    queue({
+      id: "production-blockers",
+      label: "Production blockers",
+      detail: "Open production items that need office intervention",
+      view: "jobs",
+      icon: AlertTriangle,
+      tone: productionBlockers.length ? "amber" : "green",
+      items: productionBlockers.map((job) =>
+        jobItem(job, getJobOutstandingIssue(snapshot, job), getJobScheduleSummary(snapshot, job), "amber"),
+      ),
+    }),
+    queue({
+      id: "emergency-leak-repairs",
+      label: "Emergency leak repairs",
+      detail: "Open jobs with emergency or leak repair signals",
+      view: "jobs",
+      icon: ShieldCheck,
+      tone: emergencyLeakJobs.length ? "amber" : "green",
+      items: emergencyLeakJobs.map((job) =>
+        jobItem(job, serviceLabel(job.service_type), getJobDisplayAddress(job), "amber"),
+      ),
+    }),
+    queue({
+      id: "warranty-callbacks",
+      label: "Warranty callbacks",
+      detail: "Jobs or documents with warranty signals",
+      view: "jobs",
+      icon: ShieldCheck,
+      tone: warrantyJobs.length ? "amber" : "green",
+      items: warrantyJobs.map((job) =>
+        jobItem(job, jobStatusLabel(job.status), getJobDisplayAddress(job), "amber"),
+      ),
+    }),
+  ];
+
+  const recentQueues: OperationsDashboardSummary[] = [
+    queue({
+      id: "recent-signed-estimates",
+      label: "Recent signed estimates",
+      detail: "Signed estimate packet signatures only",
+      view: "estimates",
+      icon: Pencil,
+      tone: signedEstimateItems.length ? "green" : "blue",
+      items: signedEstimateItems.map(({ signature, estimate }) =>
+        buildDashboardRecordItem({
+          id: signature.id,
+          title: estimate?.title ?? getSignatureTargetName(snapshot, signature),
+          detail: signature.signer_name,
+          meta: signature.signed_at ? formatDateTime(signature.signed_at) : formatDate(signature.updated_at),
+          companyId: signature.company_id,
+          view: "estimates",
+          icon: Pencil,
+          tone: "green",
+        }),
+      ),
+    }),
+    queue({
+      id: "recent-approved-estimates",
+      label: "Recent approved estimates",
+      detail: "Approved estimates ready for job handoff review",
+      view: "estimates",
+      icon: Calculator,
+      tone: recentlyApprovedEstimates.length ? "green" : "blue",
+      items: recentlyApprovedEstimates.map((estimate) =>
+        estimateItem(estimate, getEstimateTargetName(snapshot, estimate), "green"),
+      ),
+    }),
+    queue({
+      id: "recently-completed-jobs",
+      label: "Recently completed jobs",
+      detail: "Jobs marked completed or closed",
+      view: "jobs",
+      icon: CheckCircle2,
+      tone: recentlyCompletedJobs.length ? "green" : "blue",
+      items: recentlyCompletedJobs.map((job) =>
+        jobItem(job, getJobTargetName(snapshot, job), formatDate(job.updated_at), "green"),
+      ),
+    }),
+  ];
+
+  const priorityQueues = [
+    ...handoffQueues,
+    ...dispatchQueues,
+    ...productionQueues,
+  ].filter((summary) => Number(summary.value) > 0);
+
+  const summaryMetrics: DashboardOperatingMetric[] = [
+    {
+      id: "office-priorities",
+      label: "Priority queues",
+      value: priorityQueues.length,
+      detail: "Operational categories currently requiring office review",
+      view: "operations",
+      icon: AlertTriangle,
+      tone: priorityQueues.length ? "amber" : "green",
+    },
+    {
+      id: "office-today",
+      label: "Today",
+      value: jobsStartingToday.length + inspectionsToday.length,
+      detail: "Jobs and inspections scheduled today",
+      view: "calendar",
+      icon: CalendarClock,
+      tone: jobsStartingToday.length || inspectionsToday.length ? "blue" : "green",
+    },
+    {
+      id: "office-handoff",
+      label: "Approvals",
+      value: sentEstimates.length + pendingSignatures.length,
+      detail: "Estimate approvals and active signature requests",
+      view: "estimates",
+      icon: Pencil,
+      tone: sentEstimates.length || pendingSignatures.length ? "amber" : "green",
+    },
+    {
+      id: "office-production",
+      label: "Production issues",
+      value: materialWarnings.length + productionBlockers.length + dispatchConflicts.length,
+      detail: "Material, dispatch, or active job blockers",
+      view: "jobs",
+      icon: Package,
+      tone: materialWarnings.length || productionBlockers.length || dispatchConflicts.length ? "amber" : "green",
+    },
+  ];
+
+  const sections: OfficeOperationsSection[] = [
+    {
+      id: "today",
+      title: "Today in the office",
+      detail: "What the office team needs to coordinate before the day gets away.",
+      queues: todayQueues,
+    },
+    {
+      id: "sales-handoff",
+      title: "Estimate and customer handoff",
+      detail: "Approvals, signatures, and follow-ups that keep work moving into production.",
+      queues: handoffQueues,
+    },
+    {
+      id: "dispatch",
+      title: "Dispatch and scheduling",
+      detail: "Schedules, crews, and dispatch conflicts that need office attention.",
+      queues: dispatchQueues,
+    },
+    {
+      id: "production",
+      title: "Production readiness",
+      detail: "Materials, blockers, emergency leaks, warranty callbacks, and jobs in motion.",
+      queues: productionQueues,
+    },
+    {
+      id: "recent",
+      title: "Recent wins and closeout",
+      detail: "Recently signed estimates, approved handoffs, and completed jobs.",
+      queues: recentQueues,
+    },
+  ];
+
+  return {
+    scopeLabel:
+      snapshot.companies.length === 1
+        ? snapshot.companies[0].name
+        : "All companies",
+    summaryMetrics,
+    priorityQueues,
+    sections,
+  };
+}
+
 type DashboardOperatingMetric = {
   id: string;
   label: string;
@@ -7461,6 +8216,309 @@ function DashboardInlineEmptyState({
         </div>
       </div>
     </div>
+  );
+}
+
+type OfficeOperationsViewProps = {
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  activeCompanyId: CompanyScopeId;
+  onViewChange: (view: WorkspaceView) => void;
+};
+
+function OfficeOperationsView({
+  snapshot,
+  companyMap,
+  activeCompanyId,
+  onViewChange,
+}: OfficeOperationsViewProps) {
+  const data = useMemo(
+    () => buildOfficeOperationsData(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const visibleScope =
+    activeCompanyId === "all"
+      ? "All companies"
+      : companyMap.get(activeCompanyId)?.name ?? data.scopeLabel;
+  const priorityCount = data.priorityQueues.reduce(
+    (total, queue) => total + Number(queue.value),
+    0,
+  );
+  const quickActions: {
+    label: string;
+    detail: string;
+    view: WorkspaceView;
+    icon: typeof Home;
+  }[] = [
+    {
+      label: "Open Customer",
+      detail: "Customer 360 and account context",
+      view: "customers",
+      icon: Users,
+    },
+    {
+      label: "Open Estimate",
+      detail: "Estimate builder and approvals",
+      view: "estimates",
+      icon: Calculator,
+    },
+    {
+      label: "Open Dispatch",
+      detail: "Crew scheduling inside Jobs",
+      view: "jobs",
+      icon: CalendarClock,
+    },
+    {
+      label: "Open Calendar",
+      detail: "Inspections, jobs, and follow-ups",
+      view: "calendar",
+      icon: CalendarClock,
+    },
+    {
+      label: "Open Production",
+      detail: "Job workflow and field status",
+      view: "jobs",
+      icon: Home,
+    },
+    {
+      label: "Open Communications",
+      detail: "Inbox, Yelp, website, SMS, email",
+      view: "inbox",
+      icon: MessageSquare,
+    },
+    {
+      label: "Open Inspection",
+      detail: "Inspection list and roof reports",
+      view: "inspections",
+      icon: ClipboardList,
+    },
+  ];
+
+  return (
+    <div
+      className="space-y-4"
+      data-testid="office-operations-command-center"
+    >
+      <section className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-700">
+              Office Operations
+            </p>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">
+              Daily operations command center
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              Live queues for scheduling, dispatch, estimates, signatures,
+              production blockers, customer follow-up, and recent closeout work.
+            </p>
+          </div>
+          <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="font-bold text-slate-950">{visibleScope}</p>
+            <p className="text-slate-500">{formatDate(todayIsoDate())}</p>
+            <Badge
+              label={priorityCount ? `${priorityCount} needs review` : "Clear"}
+              tone={priorityCount ? "amber" : "green"}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {data.summaryMetrics.map((metric) => (
+            <DashboardDenseMetricButton
+              key={metric.id}
+              metric={metric}
+              onOpen={onViewChange}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white shadow-[0_22px_60px_-46px_rgba(15,23,42,0.9)]">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-orange-200">
+              Urgent attention
+            </p>
+            <h3 className="mt-1 text-lg font-bold">Office queues requiring action</h3>
+          </div>
+          <Badge
+            label={data.priorityQueues.length ? `${data.priorityQueues.length} active queues` : "No urgent queues"}
+            tone={data.priorityQueues.length ? "amber" : "green"}
+          />
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+          {data.priorityQueues.length ? (
+            data.priorityQueues.slice(0, 4).map((queue) => (
+              <OfficeOperationsQueueCard
+                key={queue.id}
+                queue={queue}
+                companyMap={companyMap}
+                onViewChange={onViewChange}
+                dark
+                compact
+              />
+            ))
+          ) : (
+            <DashboardInlineEmptyState
+              label="No urgent office queues."
+              detail="No blocked production, signature, scheduling, or dispatch risks are visible for this scope."
+              dark
+            />
+          )}
+        </div>
+      </section>
+
+      <section
+        className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5"
+        data-testid="operations-quick-actions"
+      >
+        <DashboardCompactHeader
+          eyebrow="Quick Actions"
+          title="Open existing workflows"
+          detail="Office shortcuts route into the current modules without creating duplicate workflows."
+          tone="amber"
+        />
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {quickActions.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              onClick={() => onViewChange(action.view)}
+              className="group flex min-h-16 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:-translate-y-0.5 hover:border-orange-200 hover:bg-white hover:shadow-[0_18px_42px_-30px_rgba(234,88,12,0.55)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
+            >
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm transition group-hover:text-orange-700">
+                <action.icon className="h-4 w-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-slate-950">{action.label}</span>
+                <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
+                  {action.detail}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {data.sections.map((section) => (
+        <OfficeOperationsSectionView
+          key={section.id}
+          section={section}
+          companyMap={companyMap}
+          onViewChange={onViewChange}
+        />
+      ))}
+    </div>
+  );
+}
+
+function OfficeOperationsSectionView({
+  section,
+  companyMap,
+  onViewChange,
+}: {
+  section: OfficeOperationsSection;
+  companyMap: Map<string, CompanyRecord>;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  return (
+    <section
+      className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5"
+      data-testid={`office-operations-section-${section.id}`}
+    >
+      <DashboardCompactHeader
+        eyebrow="Operations"
+        title={section.title}
+        detail={section.detail}
+        tone="blue"
+      />
+      <div className="mt-3 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+        {section.queues.map((queue) => (
+          <OfficeOperationsQueueCard
+            key={queue.id}
+            queue={queue}
+            companyMap={companyMap}
+            onViewChange={onViewChange}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OfficeOperationsQueueCard({
+  queue,
+  companyMap,
+  onViewChange,
+  dark = false,
+  compact = false,
+}: {
+  queue: OperationsDashboardSummary;
+  companyMap: Map<string, CompanyRecord>;
+  onViewChange: (view: WorkspaceView) => void;
+  dark?: boolean;
+  compact?: boolean;
+}) {
+  const CardIcon = queue.icon;
+  const count = typeof queue.value === "number" ? queue.value : queue.value;
+  const surfaceClass = dark
+    ? "border-white/10 bg-white/10 text-white"
+    : "border-slate-200 bg-slate-50 text-slate-950";
+
+  return (
+    <article
+      className={`rounded-xl border p-3 ${surfaceClass}`}
+      data-testid={`operations-queue-${queue.id}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => onViewChange(queue.view)}
+          className={`group flex min-w-0 flex-1 items-start gap-3 rounded-lg text-left transition focus:outline-none focus:ring-2 focus:ring-orange-300 ${
+            dark ? "focus:ring-offset-slate-950" : "focus:ring-offset-white"
+          } ${compact ? "p-1" : "p-2 -m-2 hover:bg-white/70"}`}
+        >
+          <span
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ${
+              dark ? "bg-white/10 text-orange-200" : "bg-white text-slate-700 shadow-sm"
+            }`}
+          >
+            <CardIcon className="h-4 w-4" />
+          </span>
+          <span className="min-w-0">
+            <span className={`block text-sm font-bold ${dark ? "text-white" : "text-slate-950"}`}>
+              {queue.label}
+            </span>
+            <span className={`mt-1 block text-xs font-semibold leading-5 ${dark ? "text-slate-300" : "text-slate-500"}`}>
+              {queue.detail}
+            </span>
+          </span>
+        </button>
+        <Badge label={String(count)} tone={queue.tone} />
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {queue.items.length ? (
+          queue.items.map((item) => (
+            <DashboardListButton
+              key={`${queue.id}-${item.id}`}
+              item={item}
+              companyMap={companyMap}
+              onOpen={onViewChange}
+              dark={dark}
+              compact
+            />
+          ))
+        ) : (
+          <DashboardInlineEmptyState
+            label="Nothing in this queue."
+            detail="No live records currently match this operational priority."
+            dark={dark}
+          />
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -8416,6 +9474,451 @@ function ScheduleConflictPanel({
           </button>
         ))}
         {!conflicts.length ? <EmptyState label="No data-supported conflicts detected." /> : null}
+      </div>
+    </section>
+  );
+}
+
+function DispatchWorkspacePanel({
+  snapshot,
+  items,
+  conflicts,
+  filters,
+  options,
+  selectedJob,
+  isSaving,
+  onDateChange,
+  onViewChange,
+  onFilterChange,
+  onSaveDispatch,
+  onSelectJob,
+  onOpenJobTab,
+  onOpenCalendar,
+  onOpenInspections,
+}: {
+  snapshot: CrmSnapshot;
+  items: DispatchItem[];
+  conflicts: ScheduleConflict[];
+  filters: {
+    view: DispatchView;
+    date: string;
+    company: string;
+    crew: string;
+    foreman: string;
+    status: DispatchStatusFilter;
+    search: string;
+  };
+  options: {
+    crews: string[];
+    foremen: string[];
+  };
+  selectedJob: JobRecord | null;
+  isSaving: boolean;
+  onDateChange: (date: string) => void;
+  onViewChange: (view: DispatchView) => void;
+  onFilterChange: (
+    key: "company" | "crew" | "foreman" | "status" | "search",
+    value: string,
+  ) => void;
+  onSaveDispatch: (event: FormEvent<HTMLFormElement>) => void;
+  onSelectJob: (job: JobRecord) => void;
+  onOpenJobTab: (job: JobRecord, tab: JobWorkspaceTab) => void;
+  onOpenCalendar: () => void;
+  onOpenInspections: () => void;
+}) {
+  const dispatchJobs = items.filter((item) => item.kind === "job");
+  const dispatchInspections = items.filter((item) => item.kind === "inspection");
+  const unscheduledCount = items.filter((item) => getDispatchStatusBucket(item) === "unscheduled").length;
+  const dispatchFormJob =
+    selectedJob ??
+    items.find((item) => item.kind === "job" && item.job !== null)?.job ??
+    snapshot.jobs[0] ??
+    null;
+  const defaultStart = new Date();
+  defaultStart.setDate(defaultStart.getDate() + 1);
+  defaultStart.setHours(8, 0, 0, 0);
+  const defaultEnd = new Date(defaultStart.getTime() + 4 * 60 * 60 * 1000);
+
+  return (
+    <section
+      className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      data-testid="dispatch-workspace"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-purple-700">Dispatch</p>
+          <h3 className="mt-1 text-lg font-bold text-slate-950">
+            Dispatch and crew scheduling
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">
+            Day and week dispatch from existing jobs, inspections, job dates, schedule events,
+            crew labels, foremen, and assignment records.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge label={`${dispatchJobs.length} jobs`} tone={dispatchJobs.length ? "blue" : "green"} />
+          <Badge label={`${dispatchInspections.length} inspections`} tone={dispatchInspections.length ? "blue" : "green"} />
+          <Badge label={`${conflicts.length} alerts`} tone={conflicts.length ? "amber" : "green"} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="relative md:col-span-2 xl:col-span-1">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              aria-label="Search dispatch"
+              data-testid="dispatch-search"
+              value={filters.search}
+              onChange={(event) => onFilterChange("search", event.target.value)}
+              className="w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              placeholder="Search jobs, inspections, crews"
+            />
+          </div>
+          <select
+            aria-label="Filter dispatch by company"
+            data-testid="dispatch-company-filter"
+            value={filters.company}
+            onChange={(event) => onFilterChange("company", event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All companies</option>
+            {snapshot.companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter dispatch by crew"
+            data-testid="dispatch-crew-filter"
+            value={filters.crew}
+            onChange={(event) => onFilterChange("crew", event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All crews</option>
+            <option value="unassigned">Needs crew</option>
+            {options.crews.map((crew) => (
+              <option key={crew} value={crew}>
+                {crew}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter dispatch by foreman"
+            data-testid="dispatch-foreman-filter"
+            value={filters.foreman}
+            onChange={(event) => onFilterChange("foreman", event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All foremen</option>
+            <option value="unassigned">Needs foreman</option>
+            {options.foremen.map((foreman) => (
+              <option key={foreman} value={foreman}>
+                {foreman}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter dispatch by status"
+            data-testid="dispatch-status-filter"
+            value={filters.status}
+            onChange={(event) =>
+              onFilterChange("status", event.target.value as DispatchStatusFilter)
+            }
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {dispatchStatusFilters.map((status) => (
+              <option key={status.value} value={status.value}>
+                {status.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] lg:grid-cols-1 xl:grid-cols-[auto_1fr_auto]">
+          <div className="grid grid-cols-2 gap-2">
+            {(["day", "week"] as DispatchView[]).map((view) => (
+              <button
+                key={view}
+                type="button"
+                data-testid={`dispatch-${view}-view`}
+                onClick={() => onViewChange(view)}
+                className={`min-h-10 rounded-md border px-3 py-2 text-sm font-semibold capitalize ${
+                  filters.view === view
+                    ? "border-purple-300 bg-purple-50 text-purple-800"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {view}
+              </button>
+            ))}
+          </div>
+          <input
+            aria-label="Dispatch date"
+            data-testid="dispatch-date"
+            type="date"
+            value={filters.date}
+            onChange={(event) => onDateChange(event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          />
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => onDateChange(addDaysToIsoDate(filters.date, filters.view === "week" ? -7 : -1))}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => onDateChange(todayIsoDate())}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => onDateChange(addDaysToIsoDate(filters.date, filters.view === "week" ? 7 : 1))}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid gap-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ProfileStat label="Scheduled work" value={items.filter((item) => item.start).length} />
+            <ProfileStat label="Needs schedule" value={unscheduledCount} />
+            <ProfileStat label="Dispatch warnings" value={conflicts.length} />
+          </div>
+          <div className="grid gap-3" data-testid="dispatch-list">
+            {items.map((item) => (
+              <article
+                key={item.id}
+                className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                data-testid="dispatch-item"
+                data-dispatch-kind={item.kind}
+                data-record-id={item.job?.id ?? item.inspection?.id ?? item.id}
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge label={item.kind === "job" ? "Job" : "Inspection"} tone={item.kind === "job" ? "blue" : "amber"} />
+                      <Badge
+                        label={item.statusLabel}
+                        tone={
+                          getDispatchStatusBucket(item) === "completed"
+                            ? "green"
+                            : getDispatchStatusBucket(item) === "blocked" ||
+                                getDispatchStatusBucket(item) === "unscheduled"
+                              ? "amber"
+                              : "blue"
+                        }
+                      />
+                      <Badge label={item.company?.name ?? "Company"} tone={item.company?.name.includes("IHC") ? "amber" : "blue"} />
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-slate-950">{item.title}</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {item.target} · {item.serviceLabel}
+                    </p>
+                    <div className="mt-3 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                      <ContactLine icon={CalendarClock} value={item.start ? formatDateTime(item.start) : "Schedule needed"} />
+                      <ContactLine icon={MapPin} value={item.address} />
+                      <ContactLine icon={Users} value={`${item.crew} · ${item.foreman}`} />
+                      <ContactLine icon={AlertTriangle} value={`Priority ${item.priority}`} />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {item.materialReadiness ? (
+                        <Badge label={`Materials: ${item.materialReadiness.label}`} tone={item.materialReadiness.tone} />
+                      ) : null}
+                      {item.inspectionReadiness ? (
+                        <Badge label={`Inspection: ${item.inspectionReadiness.label}`} tone={item.inspectionReadiness.tone} />
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="grid shrink-0 gap-2 sm:grid-cols-3 lg:w-44 lg:grid-cols-1">
+                    {item.job ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onSelectJob(item.job as JobRecord)}
+                          className="min-h-10 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                        >
+                          Open Job
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenJobTab(item.job as JobRecord, "schedule")}
+                          className="min-h-10 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Schedule
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenJobTab(item.job as JobRecord, "crew")}
+                          className="min-h-10 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Crew
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={onOpenInspections}
+                        className="min-h-10 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                      >
+                        Open Inspections
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </article>
+            ))}
+            {!items.length ? (
+              <EmptyState label="No jobs or inspections match this dispatch view." />
+            ) : null}
+          </div>
+        </div>
+
+        <aside className="grid gap-4">
+          <form
+            key={dispatchFormJob?.id ?? "dispatch-form"}
+            onSubmit={onSaveDispatch}
+            className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+            data-testid="dispatch-schedule-form"
+          >
+            <div>
+              <p className="text-sm font-bold text-slate-950">Schedule and assign job</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Updates the existing job and its current job schedule event when one exists.
+              </p>
+            </div>
+            <div className="mt-3 grid gap-3">
+              <select
+                name="job_id"
+                data-testid="dispatch-job-select"
+                defaultValue={dispatchFormJob?.id ?? ""}
+                required
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                <option value="" disabled>
+                  Choose job
+                </option>
+                {snapshot.jobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.title}
+                  </option>
+                ))}
+              </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input
+                  required
+                  name="scheduled_start"
+                  data-testid="dispatch-scheduled-start"
+                  type="datetime-local"
+                  defaultValue={
+                    dispatchFormJob?.scheduled_start
+                      ? toDateTimeInputValue(dispatchFormJob.scheduled_start)
+                      : toDateTimeInputValue(defaultStart.toISOString())
+                  }
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  required
+                  name="scheduled_end"
+                  data-testid="dispatch-scheduled-end"
+                  type="datetime-local"
+                  defaultValue={
+                    dispatchFormJob?.scheduled_end
+                      ? toDateTimeInputValue(dispatchFormJob.scheduled_end)
+                      : toDateTimeInputValue(defaultEnd.toISOString())
+                  }
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <input
+                name="crew_name"
+                data-testid="dispatch-crew-name"
+                defaultValue={dispatchFormJob?.crew_name ?? ""}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Crew label"
+              />
+              <input
+                name="project_manager"
+                data-testid="dispatch-foreman-name"
+                defaultValue={dispatchFormJob?.project_manager ?? ""}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Foreman or project manager"
+              />
+              <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-600">
+                <p className="font-semibold text-slate-800">Current assignment</p>
+                <p className="mt-1">
+                  {dispatchFormJob
+                    ? `${getJobScheduleSummary(snapshot, dispatchFormJob)} · ${getJobCrewLabel(snapshot, dispatchFormJob)} · ${getJobForemanLabel(snapshot, dispatchFormJob)}`
+                    : "Choose a job to view current dispatch details."}
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={isSaving || !dispatchFormJob}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-purple-700 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <CalendarClock className="h-4 w-4" />
+                {isSaving ? "Saving dispatch" : "Save dispatch changes"}
+              </button>
+            </div>
+          </form>
+
+          <section
+            className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+            data-testid="dispatch-conflicts"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">Dispatch warnings</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Read-only conflict detection based on current job and inspection data.
+                </p>
+              </div>
+              <Badge label={conflicts.length ? `${conflicts.length}` : "Clear"} tone={conflicts.length ? "amber" : "green"} />
+            </div>
+            <div className="mt-3 grid gap-2">
+              {conflicts.slice(0, 5).map((conflict) => (
+                <button
+                  key={conflict.id}
+                  type="button"
+                  onClick={() => conflict.job && onSelectJob(conflict.job)}
+                  disabled={!conflict.job}
+                  className="rounded-md border border-slate-200 bg-white p-3 text-left hover:border-amber-200 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <p className="text-sm font-bold text-slate-950">{conflict.label}</p>
+                  <p className="mt-1 text-sm text-slate-600">{conflict.detail}</p>
+                </button>
+              ))}
+              {!conflicts.length ? <EmptyState label="No dispatch conflicts detected." /> : null}
+            </div>
+          </section>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onOpenCalendar}
+              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Open Calendar
+            </button>
+            <button
+              type="button"
+              onClick={onOpenInspections}
+              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Open Inspections
+            </button>
+          </div>
+        </aside>
       </div>
     </section>
   );
@@ -17560,6 +19063,14 @@ function JobsView({
     useState<ProductionInspectionFilter>("all");
   const [crewSchedulerView, setCrewSchedulerView] = useState<CrewSchedulerView>("day");
   const [crewSchedulerDate, setCrewSchedulerDate] = useState(todayIsoDate());
+  const [dispatchView, setDispatchView] = useState<DispatchView>("day");
+  const [dispatchDate, setDispatchDate] = useState(todayIsoDate());
+  const [dispatchCompanyFilter, setDispatchCompanyFilter] = useState("all");
+  const [dispatchCrewFilter, setDispatchCrewFilter] = useState("all");
+  const [dispatchForemanFilter, setDispatchForemanFilter] = useState("all");
+  const [dispatchStatusFilter, setDispatchStatusFilter] =
+    useState<DispatchStatusFilter>("all");
+  const [dispatchSearch, setDispatchSearch] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [productionAction, setProductionAction] = useState<string | null>(null);
@@ -17976,6 +19487,65 @@ function JobsView({
           : job,
       ),
     }));
+  };
+
+  const upsertDemoDispatchSchedule = (
+    job: JobRecord,
+    input: ScheduleEventInput,
+    scheduledStartDate: string,
+    scheduledEndDate: string,
+    crewName: string | null,
+    projectManager: string | null,
+  ) => {
+    const now = new Date().toISOString();
+
+    onDemoSnapshotChange((currentSnapshot) => {
+      const existingEvent = currentSnapshot.scheduleEvents.find(
+        (event) =>
+          event.job_id === job.id &&
+          event.event_type === "job" &&
+          event.status !== "canceled",
+      );
+      const scheduleEvent: ScheduleEventRecord = {
+        id: existingEvent?.id ?? `demo-event-${Date.now()}`,
+        company_id: input.company_id,
+        customer_id: input.customer_id ?? null,
+        lead_id: input.lead_id ?? null,
+        job_id: input.job_id ?? null,
+        title: input.title,
+        event_type: input.event_type,
+        status: input.status ?? "scheduled",
+        start_at: input.start_at,
+        end_at: input.end_at,
+        location: input.location ?? null,
+        notes: input.notes ?? null,
+        created_at: existingEvent?.created_at ?? now,
+        updated_at: now,
+      };
+
+      return {
+        ...currentSnapshot,
+        scheduleEvents: existingEvent
+          ? currentSnapshot.scheduleEvents.map((event) =>
+              event.id === existingEvent.id ? scheduleEvent : event,
+            )
+          : [...currentSnapshot.scheduleEvents, scheduleEvent],
+        jobs: currentSnapshot.jobs.map((currentJob) =>
+          currentJob.id === job.id
+            ? {
+                ...currentJob,
+                scheduled_start: input.start_at,
+                scheduled_end: input.end_at,
+                start_date: scheduledStartDate,
+                end_date: scheduledEndDate,
+                crew_name: crewName,
+                project_manager: projectManager,
+                updated_at: now,
+              }
+            : currentJob,
+        ),
+      };
+    });
   };
 
   const saveDemoJobStatus = (status: JobStatus) => {
@@ -18824,6 +20394,140 @@ function JobsView({
     }
   };
 
+  const handleSaveDispatchSchedule = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (productionAction !== null) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const jobId = getFormString(formData, "job_id");
+    const job = snapshot.jobs.find((item) => item.id === jobId) ?? null;
+
+    if (!job) {
+      onError("Choose a job before saving dispatch changes.");
+      return;
+    }
+
+    const scheduledStartInput = getFormString(formData, "scheduled_start");
+    const scheduledEndInput = getFormString(formData, "scheduled_end");
+
+    if (!scheduledStartInput || !scheduledEndInput) {
+      onError("Choose both dispatch start and end times.");
+      return;
+    }
+
+    const scheduledStart = fromDateTimeInputValue(scheduledStartInput);
+    const scheduledEnd = fromDateTimeInputValue(scheduledEndInput);
+
+    if (scheduledEnd <= scheduledStart) {
+      onError("Dispatch end must be after dispatch start.");
+      return;
+    }
+
+    const crewName = getOptionalFormString(formData, "crew_name");
+    const projectManager = getOptionalFormString(formData, "project_manager");
+    const existingJobEvent =
+      getJobScheduleEvents(snapshot, job.id).find(
+        (item) => item.event_type === "job" && item.status !== "canceled",
+      ) ?? null;
+    const scheduleChanged =
+      job.scheduled_start !== scheduledStart ||
+      job.scheduled_end !== scheduledEnd ||
+      (existingJobEvent !== null &&
+        (existingJobEvent.start_at !== scheduledStart || existingJobEvent.end_at !== scheduledEnd));
+    const crewChanged =
+      (job.crew_name ?? null) !== crewName || (job.project_manager ?? null) !== projectManager;
+
+    if ((scheduleChanged || crewChanged) && (hasSavedJobSchedule(job) || jobHasCrew(snapshot, job))) {
+      const confirmed = window.confirm(
+        "Replace the current crew, foreman, or schedule for this job?",
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const input: ScheduleEventInput = {
+      company_id: job.company_id,
+      customer_id: job.customer_id,
+      lead_id: job.lead_id,
+      job_id: job.id,
+      title: job.title,
+      event_type: "job",
+      status: "scheduled",
+      start_at: scheduledStart,
+      end_at: scheduledEnd,
+      location: getJobDisplayAddress(job),
+      notes: "Scheduled from dispatch workspace.",
+    };
+
+    try {
+      setProductionAction("dispatch-save");
+      let currentJobEvent = existingJobEvent;
+
+      if (isDemoMode) {
+        upsertDemoDispatchSchedule(
+          job,
+          input,
+          scheduledStartInput.slice(0, 10),
+          scheduledEndInput.slice(0, 10),
+          crewName,
+          projectManager,
+        );
+      } else {
+        const { data: liveJobEvents, error: liveJobEventsError } = await client
+          .from("schedule_events")
+          .select("*")
+          .eq("job_id", job.id)
+          .eq("event_type", "job")
+          .neq("status", "canceled")
+          .order("start_at", { ascending: true })
+          .limit(1);
+
+        if (liveJobEventsError) {
+          throw liveJobEventsError;
+        }
+
+        currentJobEvent =
+          (liveJobEvents as ScheduleEventRecord[] | null)?.[0] ?? existingJobEvent;
+
+        await updateJob(client, job.id, {
+          scheduled_start: scheduledStart,
+          scheduled_end: scheduledEnd,
+          start_date: scheduledStartInput.slice(0, 10),
+          end_date: scheduledEndInput.slice(0, 10),
+          crew_name: crewName,
+          project_manager: projectManager,
+        });
+
+        if (currentJobEvent) {
+          await updateScheduleEvent(client, currentJobEvent.id, input);
+        } else {
+          await createScheduleEvent(client, input);
+        }
+      }
+
+      setSelectedJobId(job.id);
+      setJobFormCompanyId(job.company_id);
+      setJobFormServiceType(job.service_type);
+      setWorkspaceTab("schedule");
+
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
+
+      onNotice(currentJobEvent ? "Dispatch schedule updated." : "Job dispatched.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save dispatch changes."));
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
   const handleOpenJobWorkspaceTab = (tab: JobWorkspaceTab) => {
     setWorkspaceTab(tab);
 
@@ -18875,6 +20579,22 @@ function JobsView({
       setProductionBoardMaterialFilter(value as ProductionMaterialFilter);
     } else {
       setProductionBoardInspectionFilter(value as ProductionInspectionFilter);
+    }
+  };
+  const handleDispatchFilterChange = (
+    key: "company" | "crew" | "foreman" | "status" | "search",
+    value: string,
+  ) => {
+    if (key === "company") {
+      setDispatchCompanyFilter(value);
+    } else if (key === "crew") {
+      setDispatchCrewFilter(value);
+    } else if (key === "foreman") {
+      setDispatchForemanFilter(value);
+    } else if (key === "status") {
+      setDispatchStatusFilter(value as DispatchStatusFilter);
+    } else {
+      setDispatchSearch(value);
     }
   };
   const jobInboxItems = useMemo(
@@ -19010,6 +20730,47 @@ function JobsView({
       (conflict) => conflict.job === null || boardJobIds.has(conflict.job.id),
     );
   }, [productionBoardJobs, snapshot]);
+  const dispatchItems = useMemo(() => buildDispatchItems(snapshot), [snapshot]);
+  const dispatchFilters = useMemo(
+    () => ({
+      view: dispatchView,
+      date: dispatchDate,
+      company: dispatchCompanyFilter,
+      crew: dispatchCrewFilter,
+      foreman: dispatchForemanFilter,
+      status: dispatchStatusFilter,
+      search: dispatchSearch,
+    }),
+    [
+      dispatchCompanyFilter,
+      dispatchCrewFilter,
+      dispatchDate,
+      dispatchForemanFilter,
+      dispatchSearch,
+      dispatchStatusFilter,
+      dispatchView,
+    ],
+  );
+  const filteredDispatchItems = useMemo(
+    () => filterDispatchItems(dispatchItems, dispatchFilters),
+    [dispatchFilters, dispatchItems],
+  );
+  const filteredDispatchJobIds = useMemo(
+    () =>
+      new Set(
+        filteredDispatchItems
+          .map((item) => item.job?.id ?? null)
+          .filter((jobId): jobId is string => Boolean(jobId)),
+      ),
+    [filteredDispatchItems],
+  );
+  const dispatchConflicts = useMemo(
+    () =>
+      buildScheduleConflicts(snapshot).filter(
+        (conflict) => conflict.job === null || filteredDispatchJobIds.has(conflict.job.id),
+      ),
+    [filteredDispatchJobIds, snapshot],
+  );
   const crewSchedulerJobs = useMemo(() => {
     const startDate = crewSchedulerDate;
     const endDate = crewSchedulerView === "week" ? addDaysToIsoDate(startDate, 6) : startDate;
@@ -19216,6 +20977,23 @@ function JobsView({
             description="Painting operations from existing IHC jobs, estimates, scopes, and material records."
             cards={paintingProductionCards}
             painting
+          />
+          <DispatchWorkspacePanel
+            snapshot={snapshot}
+            items={filteredDispatchItems}
+            conflicts={dispatchConflicts}
+            filters={dispatchFilters}
+            options={productionBoardFilterOptions}
+            selectedJob={selectedJob}
+            isSaving={productionAction === "dispatch-save"}
+            onDateChange={setDispatchDate}
+            onViewChange={setDispatchView}
+            onFilterChange={handleDispatchFilterChange}
+            onSaveDispatch={handleSaveDispatchSchedule}
+            onSelectJob={handleSelectJob}
+            onOpenJobTab={handleSelectJobAndOpenTab}
+            onOpenCalendar={() => onViewChange("calendar")}
+            onOpenInspections={() => onViewChange("inspections")}
           />
           <ProductionBoardPanel
             columns={productionBoardColumns}

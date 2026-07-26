@@ -13,12 +13,14 @@ const TEST_PREFIX = "TEST WTOS REGRESSION";
 const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
 const DEFAULT_GROUPS = [
   "dashboard",
+  "operations",
   "crm",
   "lead-intake",
   "themes",
   "layout",
   "settings",
   "calendar",
+  "dispatch",
   "inspections",
   "jobs-workspace",
   "job-builder",
@@ -605,6 +607,44 @@ async function findJobByTitle(env, title) {
   );
 
   return rows[0] ?? null;
+}
+
+async function findJobScheduleEvents(env, jobId) {
+  return restRequest(
+    env,
+    `schedule_events?select=*&job_id=eq.${encodeURIComponent(jobId)}&event_type=eq.job&status=neq.canceled&order=start_at.asc`,
+  );
+}
+
+async function seedDispatchInspection(env, companyId, jobId, runId, start, end) {
+  const title = `${TEST_PREFIX} ${runId} DISPATCH INSPECTION`;
+  const [inspection] = await restRequest(env, "inspections", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companyId,
+      job_id: jobId,
+      title,
+      status: "scheduled",
+      inspection_type: "roof_inspection",
+      service_category: "roofing",
+      checklist: "Dispatch regression inspection",
+      scheduled_start: start.toISOString(),
+      scheduled_end: end.toISOString(),
+      assigned_inspector: `${TEST_PREFIX} ${runId} DISPATCH INSPECTOR`,
+      property_address: "123 TEST Regression Way, Phoenix, AZ",
+      priority: "normal",
+      purpose: "TEST dispatch inspection visibility.",
+      notes: `${TEST_PREFIX} ${runId} dispatch inspection note`,
+      internal_notes: `${TEST_PREFIX} ${runId} dispatch inspection internal note`,
+      findings: [],
+      measurements: [],
+      photo_ids: [],
+      activity: [],
+    }),
+  });
+
+  return inspection;
 }
 
 async function findCustomerByDisplayName(env, displayName) {
@@ -1506,6 +1546,39 @@ async function selectTestJob(tab, jobTitle) {
   );
 }
 
+function daysBetweenIsoDates(startDate, endDate) {
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  return Math.round(
+    (new Date(`${endDate}T00:00:00`).getTime() - new Date(`${startDate}T00:00:00`).getTime()) /
+      dayMs,
+  );
+}
+
+async function moveDispatchDateTo(tab, targetDate) {
+  const currentDate = await tab.playwright.evaluate(
+    () => document.querySelector('[data-testid="dispatch-date"]')?.value ?? "",
+  );
+  const distance = daysBetweenIsoDates(currentDate, targetDate);
+  const buttonName = distance >= 0 ? "Next" : "Prev";
+  const button = tab.playwright.locator(
+    `xpath=//*[@data-testid="dispatch-workspace"]//button[normalize-space(.)="${buttonName}"]`,
+  );
+
+  for (let index = 0; index < Math.abs(distance); index += 1) {
+    await clickUnique(button, `dispatch ${buttonName.toLowerCase()} date`);
+    await tab.playwright.waitForTimeout(80);
+  }
+
+  await waitFor(
+    tab,
+    (targetDate) => document.querySelector('[data-testid="dispatch-date"]')?.value === targetDate,
+    `dispatch date ${targetDate}`,
+    5000,
+    targetDate,
+  );
+}
+
 async function getScrollY(tab) {
   return tab.playwright.evaluate(() => window.scrollY);
 }
@@ -1788,6 +1861,173 @@ async function testDashboardLiveMode(tab) {
   );
 
   return state;
+}
+
+async function testOfficeOperationsWorkspace(browser, tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Operations");
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
+      const text = workspace?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("daily operations command center") &&
+        text.includes("jobs starting today") &&
+        text.includes("jobs in progress") &&
+        text.includes("jobs awaiting scheduling") &&
+        text.includes("jobs awaiting estimate approval") &&
+        text.includes("jobs awaiting customer signature") &&
+        text.includes("jobs missing assigned crews") &&
+        text.includes("inspections scheduled today") &&
+        text.includes("jobs with dispatch conflicts") &&
+        text.includes("warranty callbacks") &&
+        text.includes("emergency leak repairs") &&
+        text.includes("material readiness warnings") &&
+        text.includes("production blockers") &&
+        text.includes("customer follow-ups due") &&
+        text.includes("recent customer communication") &&
+        text.includes("recent signed estimates") &&
+        text.includes("recently completed jobs") &&
+        text.includes("open customer") &&
+        text.includes("open estimate") &&
+        text.includes("open dispatch") &&
+        text.includes("open calendar") &&
+        text.includes("open production") &&
+        text.includes("open communications") &&
+        text.includes("open inspection")
+      );
+    },
+    "office operations command center",
+    15000,
+  );
+
+  const desktopLayout = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
+    const requiredQueues = [
+      "jobs-starting-today",
+      "awaiting-estimate-approval",
+      "awaiting-customer-signature",
+      "jobs-awaiting-scheduling",
+      "jobs-missing-crews",
+      "dispatch-conflicts",
+      "jobs-in-progress",
+      "material-readiness-warnings",
+      "production-blockers",
+      "customer-follow-ups-due",
+      "recent-signed-estimates",
+      "recently-completed-jobs",
+    ];
+
+    return {
+      visible: Boolean(workspace),
+      queueCount: workspace?.querySelectorAll('[data-testid^="operations-queue-"]').length ?? 0,
+      missingQueues: requiredQueues.filter(
+        (queue) => !document.querySelector(`[data-testid="operations-queue-${queue}"]`),
+      ),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+      emptyStates: workspace?.textContent?.includes("No live records currently match this operational priority.") ?? false,
+    };
+  });
+
+  if (!desktopLayout.visible) {
+    throw new Error("Office Operations workspace is not visible.");
+  }
+
+  if (desktopLayout.missingQueues.length) {
+    throw new Error(`Office Operations missing queues: ${desktopLayout.missingQueues.join(", ")}`);
+  }
+
+  if (desktopLayout.queueCount < 14) {
+    throw new Error(`Office Operations rendered only ${desktopLayout.queueCount} queue cards.`);
+  }
+
+  if (desktopLayout.hasHorizontalOverflow) {
+    throw new Error("Office Operations desktop layout overflows horizontally.");
+  }
+
+  if (!desktopLayout.emptyStates) {
+    throw new Error("Office Operations did not render truthful empty states.");
+  }
+
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="operations-quick-actions"]//button[contains(normalize-space(.), "Open Calendar")]',
+    ),
+    "operations open calendar",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Schedule inspections, estimates, jobs, follow-ups, and deliveries."),
+    "operations quick action calendar",
+    10000,
+  );
+
+  await clickNav(tab, "Operations");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="operations-quick-actions"]//button[contains(normalize-space(.), "Open Communications")]',
+    ),
+    "operations open communications",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Unified Communications Center"),
+    "operations quick action communications",
+    10000,
+  );
+
+  await clickNav(tab, "Operations");
+  await clickCompanyScope(tab, "IHC Painting");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="office-operations-command-center"]')?.textContent ?? "";
+      return text.includes("IHC Painting");
+    },
+    "operations IHC scope",
+    10000,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="office-operations-command-center"]')?.textContent ?? "";
+      return text.includes("WeatherTech Roofing LLC");
+    },
+    "operations WeatherTech scope",
+    10000,
+  );
+  await clickCompanyScope(tab, "All companies");
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await clickNav(tab, "Operations");
+  const mobileLayout = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
+
+    return {
+      visible: Boolean(workspace),
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      quickActionsVisible: Boolean(document.querySelector('[data-testid="operations-quick-actions"]')),
+    };
+  });
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (!mobileLayout.visible || !mobileLayout.quickActionsVisible) {
+    throw new Error("Office Operations workspace did not render at mobile width.");
+  }
+
+  if (mobileLayout.scrollWidth > mobileLayout.viewportWidth + 8) {
+    throw new Error(
+      `Office Operations mobile layout overflows horizontally: ${mobileLayout.scrollWidth}px > ${mobileLayout.viewportWidth}px.`,
+    );
+  }
+
+  return { desktopLayout, mobileLayout };
 }
 
 async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
@@ -3809,14 +4049,15 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   await tab.playwright.waitForTimeout(500);
   const mobileLayout = await tab.playwright.evaluate(() => {
     const commandCenter = document.querySelector('[data-testid="crm-operations-dashboard"]');
-    const findHeading = (text) =>
-      [...document.querySelectorAll("h2,h3,p")].find(
-        (heading) => heading.textContent?.trim() === text,
-      );
-    const commandRect = findHeading("Today’s operating cockpit")?.getBoundingClientRect() ?? null;
-    const urgentRect = findHeading("Urgent attention")?.getBoundingClientRect() ?? null;
-    const todayRect = findHeading("Today’s schedule")?.getBoundingClientRect() ?? null;
-    const quickActionsRect = findHeading("Quick Actions")?.getBoundingClientRect() ?? null;
+    commandCenter?.scrollIntoView({ block: "start", behavior: "auto" });
+    const commandBar = commandCenter?.querySelector(".wt-dashboard-command");
+    const urgentPanel = commandCenter?.querySelector(".wt-dashboard-panel-urgent");
+    const schedulePanel = commandCenter?.querySelector(".wt-dashboard-panel-schedule");
+    const quickActionsPanel = commandCenter?.querySelector(".wt-dashboard-panel-actions");
+    const commandRect = commandBar?.getBoundingClientRect() ?? null;
+    const urgentRect = urgentPanel?.getBoundingClientRect() ?? null;
+    const todayRect = schedulePanel?.getBoundingClientRect() ?? null;
+    const quickActionsRect = quickActionsPanel?.getBoundingClientRect() ?? null;
 
     return {
       visible: Boolean(commandCenter),
@@ -4038,6 +4279,272 @@ async function testCalendarScreen(tab) {
   );
 
   return { opened: true };
+}
+
+async function testDispatchWorkspace(browser, tab, env, company, testJob, runId, progress) {
+  const migrationReady = await detectInspectionFoundationSupport(env);
+  const dispatchStart = new Date();
+  dispatchStart.setDate(dispatchStart.getDate() + 5);
+  dispatchStart.setHours(8, 30, 0, 0);
+  const dispatchEnd = new Date(dispatchStart.getTime() + 5 * 60 * 60 * 1000);
+  const rescheduledStart = new Date(dispatchStart.getTime() + 24 * 60 * 60 * 1000);
+  rescheduledStart.setHours(7, 45, 0, 0);
+  const rescheduledEnd = new Date(rescheduledStart.getTime() + 4 * 60 * 60 * 1000);
+  const dispatchStartInput = toDateTimeLocalValue(dispatchStart);
+  const dispatchEndInput = toDateTimeLocalValue(dispatchEnd);
+  const rescheduledStartInput = toDateTimeLocalValue(rescheduledStart);
+  const rescheduledEndInput = toDateTimeLocalValue(rescheduledEnd);
+  const crewName = `${TEST_PREFIX} ${runId} DISPATCH CREW`;
+  const foremanName = `${TEST_PREFIX} ${runId} DISPATCH FOREMAN`;
+  let inspection = null;
+
+  if (migrationReady) {
+    progress("dispatch:inspection-seed:start");
+    const inspectionStart = new Date(dispatchStart.getTime() + 2 * 60 * 60 * 1000);
+    const inspectionEnd = new Date(inspectionStart.getTime() + 60 * 60 * 1000);
+    inspection = await seedDispatchInspection(
+      env,
+      company.id,
+      testJob.id,
+      runId,
+      inspectionStart,
+      inspectionEnd,
+    );
+    progress("dispatch:inspection-seed:done");
+  }
+
+  progress("dispatch:open:start");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await selectTestJob(tab, testJob.title);
+  await tab.playwright.evaluate(() => {
+    document.querySelector('[data-testid="dispatch-workspace"]')?.scrollIntoView({ block: "center" });
+  });
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="dispatch-workspace"]')?.textContent ?? "";
+
+      return (
+        text.includes("Dispatch and crew scheduling") &&
+        text.includes("Day and week dispatch") &&
+        text.includes("Save dispatch changes") &&
+        text.includes("Dispatch warnings")
+      );
+    },
+    "dispatch workspace",
+    15000,
+  );
+  progress("dispatch:open:done");
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="dispatch-company-filter"]'),
+    company.id,
+    "dispatch company filter",
+  );
+  await moveDispatchDateTo(tab, dispatchStartInput.slice(0, 10));
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-search"]'),
+    testJob.title,
+    "dispatch search",
+  );
+  await waitFor(
+    tab,
+    (title) => document.querySelector('[data-testid="dispatch-list"]')?.textContent?.includes(title),
+    "dispatch searched test job",
+    15000,
+    testJob.title,
+  );
+
+  if (inspection) {
+    await waitFor(
+      tab,
+      (title) => document.querySelector('[data-testid="dispatch-list"]')?.textContent?.includes(title),
+      "dispatch linked inspection",
+      15000,
+      inspection.title,
+    );
+  }
+
+  progress("dispatch:save:start");
+  await selectUnique(
+    tab.playwright.locator('[data-testid="dispatch-job-select"]'),
+    testJob.id,
+    "dispatch job select",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-scheduled-start"]'),
+    dispatchStartInput,
+    "dispatch scheduled start",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-scheduled-end"]'),
+    dispatchEndInput,
+    "dispatch scheduled end",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-crew-name"]'),
+    crewName,
+    "dispatch crew",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-foreman-name"]'),
+    foremanName,
+    "dispatch foreman",
+  );
+  await withAcceptedConfirm(tab, () =>
+    clickUnique(
+      tab.playwright.locator('xpath=//*[@data-testid="dispatch-schedule-form"]//button[@type="submit"]'),
+      "Save dispatch changes",
+    ),
+  );
+  const dispatchedJob = await waitForAsync(
+    async () => {
+      const job = await findJobByTitle(env, testJob.title);
+
+      return job?.crew_name === crewName &&
+        job?.project_manager === foremanName &&
+        job?.scheduled_start
+        ? job
+        : null;
+    },
+    "dispatch job persistence",
+    15000,
+  );
+  const firstDispatchEvents = await waitForAsync(
+    async () => {
+      const events = await findJobScheduleEvents(env, testJob.id);
+      return events.length === 1 ? events : null;
+    },
+    "one dispatch schedule event",
+    15000,
+  );
+  await waitFor(
+    tab,
+    ({ crewName, foremanName, dispatchStartInput }) => {
+      const workspace = document.querySelector('[data-testid="dispatch-workspace"]');
+      const startInput = document.querySelector('[data-testid="dispatch-scheduled-start"]');
+      const text = workspace?.textContent ?? "";
+
+      return (
+        text.includes(crewName) &&
+        text.includes(foremanName) &&
+        startInput?.value === dispatchStartInput &&
+        !text.includes("Saving dispatch")
+      );
+    },
+    "dispatch first save UI settled",
+    15000,
+    { crewName, foremanName, dispatchStartInput },
+  );
+  progress("dispatch:save:done");
+
+  progress("dispatch:reschedule:start");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-scheduled-start"]'),
+    rescheduledStartInput,
+    "dispatch rescheduled start",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-scheduled-end"]'),
+    rescheduledEndInput,
+    "dispatch rescheduled end",
+  );
+  await withAcceptedConfirm(tab, () =>
+    clickUnique(
+      tab.playwright.locator('xpath=//*[@data-testid="dispatch-schedule-form"]//button[@type="submit"]'),
+      "Save dispatch reschedule",
+    ),
+  );
+  let rescheduleObservation = null;
+  let rescheduledEvents = null;
+
+  try {
+    rescheduledEvents = await waitForAsync(
+      async () => {
+        const events = await findJobScheduleEvents(env, testJob.id);
+        const job = await findJobByTitle(env, testJob.title);
+        rescheduleObservation = {
+          eventCount: events.length,
+          eventIds: events.map((event) => event.id),
+          eventStarts: events.map((event) => event.start_at),
+          eventEnds: events.map((event) => event.end_at),
+          jobScheduledStart: job?.scheduled_start ?? null,
+          jobScheduledEnd: job?.scheduled_end ?? null,
+          expectedStart: new Date(rescheduledStartInput).toISOString(),
+          expectedEnd: new Date(rescheduledEndInput).toISOString(),
+        };
+
+        return events.length === 1 &&
+          events[0].id === firstDispatchEvents[0].id &&
+          Date.parse(events[0].start_at) === Date.parse(rescheduledStartInput) &&
+          Date.parse(job?.scheduled_start ?? "") === Date.parse(rescheduledStartInput)
+          ? events
+          : null;
+      },
+      "dispatch reschedule update without duplicate event",
+      15000,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message} Last observed: ${JSON.stringify(rescheduleObservation)}`);
+  }
+  progress("dispatch:reschedule:done");
+
+  progress("dispatch:refresh:start");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await selectTestJob(tab, testJob.title);
+  await tab.playwright.evaluate(() => {
+    document.querySelector('[data-testid="dispatch-workspace"]')?.scrollIntoView({ block: "center" });
+  });
+  await moveDispatchDateTo(tab, rescheduledStartInput.slice(0, 10));
+  await fillUnique(
+    tab.playwright.locator('[data-testid="dispatch-search"]'),
+    testJob.title,
+    "dispatch persisted search",
+  );
+  await waitFor(
+    tab,
+    ({ title, crewName, foremanName }) => {
+      const text = document.querySelector('[data-testid="dispatch-workspace"]')?.textContent ?? "";
+
+      return (
+        text.includes(title) &&
+        text.includes(crewName) &&
+        text.includes(foremanName) &&
+        text.includes("Dispatch warnings")
+      );
+    },
+    "dispatch refresh persistence",
+    15000,
+    { title: testJob.title, crewName, foremanName },
+  );
+  progress("dispatch:refresh:done");
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await tab.playwright.waitForTimeout(500);
+  const mobileOverflow = await tab.playwright.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (mobileOverflow.scrollWidth > mobileOverflow.clientWidth + 8) {
+    throw new Error(
+      `Dispatch workspace overflowed on mobile: ${mobileOverflow.scrollWidth}px > ${mobileOverflow.clientWidth}px.`,
+    );
+  }
+
+  return {
+    migrationReady,
+    inspectionVisible: Boolean(inspection),
+    dispatchedJobId: dispatchedJob.id,
+    scheduleEventId: rescheduledEvents[0].id,
+    scheduleEventCount: rescheduledEvents.length,
+    mobileOverflow,
+  };
 }
 
 async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJob) {
@@ -5735,9 +6242,10 @@ export async function runWeatherTechOsRegression({
     const shouldReloadFreshSnapshot =
       shouldRunLeadWorkflow ||
       shouldRunEstimatesWorkflow ||
-      shouldRunCustomersWorkflow ||
-      shouldRunInboxWorkflow ||
-      enabledGroups.has("lead-intake");
+	      shouldRunCustomersWorkflow ||
+	      shouldRunInboxWorkflow ||
+	      enabledGroups.has("operations") ||
+	      enabledGroups.has("lead-intake");
 
     if (shouldReloadFreshSnapshot) {
       progress("fresh-snapshot:reload:start");
@@ -5749,6 +6257,7 @@ export async function runWeatherTechOsRegression({
 
     if (
       enabledGroups.has("inspections") ||
+      enabledGroups.has("dispatch") ||
       enabledGroups.has("jobs-workspace") ||
       enabledGroups.has("job-builder") ||
       enabledGroups.has("job-production")
@@ -5760,13 +6269,19 @@ export async function runWeatherTechOsRegression({
       progress("seeded-job:reload:done");
     }
 
-    if (enabledGroups.has("dashboard")) {
-      await record("Dashboard loads in live Supabase mode", () =>
-        testDashboardLiveMode(tab),
-      );
-    }
+	    if (enabledGroups.has("dashboard")) {
+	      await record("Dashboard loads in live Supabase mode", () =>
+	        testDashboardLiveMode(tab),
+	      );
+	    }
 
-    if (enabledGroups.has("settings")) {
+	    if (enabledGroups.has("operations")) {
+	      await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
+	        testOfficeOperationsWorkspace(browser, tab),
+	      );
+	    }
+
+	    if (enabledGroups.has("settings")) {
       await record("Settings Integration Center displays provider readiness", () =>
         testSettingsIntegrationCenter(tab),
       );
@@ -5854,6 +6369,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("inspections")) {
       await record("Inspections module opens, validates, and runs live workflow when migration is available", () =>
         testInspectionsWorkflow(tab, env, weatherTech, seededJob, runId, progress),
+      );
+    }
+
+    if (enabledGroups.has("dispatch")) {
+      await record("Dispatch workspace schedules jobs, shows inspections, and avoids duplicate job events", () =>
+        testDispatchWorkspace(browser, tab, env, weatherTech, seededJob, runId, progress),
       );
     }
 
