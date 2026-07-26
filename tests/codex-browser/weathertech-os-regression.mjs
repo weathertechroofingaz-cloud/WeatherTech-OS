@@ -272,6 +272,10 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     env,
     `inspections?select=id,title&title=like.${prefixFilter}`,
   );
+  const documents = await restRequest(
+    env,
+    `documents?select=id,title&title=like.${prefixFilter}`,
+  );
   const leads = await restRequest(
     env,
     `leads?select=id,${resolvedLeadNameColumn}&${resolvedLeadNameColumn}=like.${prefixFilter}`,
@@ -289,6 +293,9 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const scopedInspections = runId
     ? inspections.filter((inspection) => inspection.title.includes(runId))
     : inspections;
+  const scopedDocuments = runId
+    ? documents.filter((document) => document.title.includes(runId))
+    : documents;
   const scopedLeads = runId
     ? leads.filter((lead) => String(lead[resolvedLeadNameColumn] ?? "").includes(runId))
     : leads;
@@ -298,6 +305,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const jobIds = scopedJobs.map((job) => job.id);
   const estimateIds = scopedEstimates.map((estimate) => estimate.id);
   const inspectionIds = scopedInspections.map((inspection) => inspection.id);
+  const documentIds = scopedDocuments.map((document) => document.id);
   const leadIds = scopedLeads.map((lead) => lead.id);
   const customerIds = scopedCustomers.map((customer) => customer.id);
 
@@ -307,6 +315,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     !jobIds.length &&
     !estimateIds.length &&
     !inspectionIds.length &&
+    !documentIds.length &&
     !leadIds.length &&
     !customerIds.length
   ) {
@@ -314,6 +323,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
       jobsDeleted: 0,
       estimatesDeleted: 0,
       inspectionsDeleted: 0,
+      documentsDeleted: 0,
       leadsDeleted: 0,
       customersDeleted: 0,
       integrationLogsDeleted: "requested",
@@ -321,16 +331,18 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   }
 
   await deleteByLike(env, "schedule_events", "title");
-  await deleteByLike(env, "documents", "title");
   await deleteByLike(env, "scopes", "title");
+  await deleteByIds(env, "signatures", "document_id", documentIds);
   await deleteByIds(env, "inspections", "id", inspectionIds);
   await deleteByIds(env, "schedule_events", "job_id", jobIds);
   await deleteByIds(env, "schedule_events", "lead_id", leadIds);
+  await deleteByIds(env, "daily_logs", "job_id", jobIds);
   await deleteByIds(env, "job_tasks", "job_id", jobIds);
   await deleteByIds(env, "job_notes", "job_id", jobIds);
   await deleteByIds(env, "job_materials", "job_id", jobIds);
   await deleteByIds(env, "jobs", "id", jobIds);
   await deleteByIds(env, "estimate_line_items", "estimate_id", estimateIds);
+  await deleteByIds(env, "documents", "id", documentIds);
   await deleteByIds(env, "estimates", "id", estimateIds);
   await deleteByIds(env, "leads", "id", leadIds);
   await deleteByIds(env, "customers", "id", customerIds);
@@ -339,6 +351,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     jobsDeleted: jobIds.length,
     estimatesDeleted: estimateIds.length,
     inspectionsDeleted: inspectionIds.length,
+    documentsDeleted: documentIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
     integrationLogsDeleted: "requested",
@@ -393,6 +406,31 @@ async function findJobTaskByTitle(env, jobId, title) {
   );
 
   return rows[0] ?? null;
+}
+
+async function findJobTasksByTitle(env, jobId, title) {
+  return restRequest(
+    env,
+    `job_tasks?select=id,title,status,description&job_id=eq.${jobId}&title=eq.${encodeURIComponent(title)}`,
+  );
+}
+
+async function findDailyLogByWorkCompleted(env, jobId, workCompleted) {
+  const rows = await restRequest(
+    env,
+    `daily_logs?select=id,job_id,work_completed,blockers,tomorrow_plan,weather_summary&job_id=eq.${jobId}&work_completed=eq.${encodeURIComponent(workCompleted)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
+}
+
+async function findJobNoteContaining(env, jobId, text) {
+  const rows = await restRequest(
+    env,
+    `job_notes?select=id,job_id,note&job_id=eq.${jobId}`,
+  );
+
+  return rows.find((row) => String(row.note ?? "").includes(text)) ?? null;
 }
 
 async function seedTestLead(env, companyId, runId, leadNameColumn) {
@@ -3246,7 +3284,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   };
 }
 
-async function testEstimatesWorkflow(tab, env, company, lead, runId) {
+async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   const estimateTitle = `${TEST_PREFIX} ${runId} ESTIMATE`;
   const scopeText = `${TEST_PREFIX} ${runId} estimate scope`;
 
@@ -3406,6 +3444,123 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     tab,
     () => {
       const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
+      const requestButton = document.querySelector(
+        '[data-testid="estimate-request-signature-button"]',
+      );
+
+      return Boolean(
+        workspace?.textContent?.includes("Draft approval pending") &&
+          requestButton?.textContent?.includes("Request signature"),
+      );
+    },
+    "estimate signature request workspace ready",
+    15000,
+  );
+
+  progress("estimates:signature-toast:start");
+  const signatureButton = tab.playwright.locator(
+    '[data-testid="estimate-request-signature-button"]',
+  );
+  await waitForUniqueLocator(signatureButton, "estimate request signature button");
+  await signatureButton.evaluate((element) =>
+    element.scrollIntoView({ block: "center", behavior: "auto" }),
+  );
+  await tab.playwright.waitForTimeout(200);
+  await clickUnique(signatureButton, "request estimate signature", {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    () => {
+      const toasts = [...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
+        .filter((toast) => {
+          const style = window.getComputedStyle(toast);
+          const rect = toast.getBoundingClientRect();
+
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number(style.opacity) !== 0 &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        });
+
+      return (
+        toasts.length === 1 &&
+        toasts[0].textContent.includes("Customer signature requested for the estimate packet.") &&
+        Boolean(toasts[0].querySelector('button[aria-label="Dismiss success notification"]'))
+      );
+    },
+    "single dismissible signature request toast",
+    20000,
+  );
+  const toastOverlayAllowsNavigation = await tab.playwright.evaluate(() => {
+    const overlay = document.querySelector('[aria-live="polite"]');
+
+    return Boolean(
+      overlay &&
+        window.getComputedStyle(overlay).pointerEvents === "none",
+    );
+  });
+
+  if (!toastOverlayAllowsNavigation) {
+    throw new Error("Toast overlay can intercept unrelated navigation clicks.");
+  }
+
+  await waitFor(
+    tab,
+    () =>
+      ![...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
+        .some((toast) =>
+          toast.textContent.includes("Customer signature requested for the estimate packet."),
+        ),
+    "signature request toast auto-dismiss",
+    10000,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Signature requested"),
+    "active signature UI state",
+    15000,
+  );
+  await signatureButton.evaluate((element) =>
+    element.scrollIntoView({ block: "center", behavior: "auto" }),
+  );
+  await tab.playwright.waitForTimeout(200);
+  await clickUnique(signatureButton, "duplicate signature request guard", {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    () => {
+      const toasts = [...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
+        .filter((toast) => toast.textContent.includes("active signature request"));
+
+      return toasts.length === 1;
+    },
+    "single active signature request toast",
+    15000,
+  );
+  await clickUnique(
+    tab.playwright.locator('button[aria-label="Dismiss success notification"]'),
+    "dismiss success notification",
+    { retryTransientClick: true },
+  );
+  await waitFor(
+    tab,
+    () =>
+      ![...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
+        .some((toast) => toast.textContent.includes("active signature request")),
+    "signature duplicate toast dismissed",
+    5000,
+  );
+  progress("estimates:signature-toast:done");
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
       const approveButton = document.querySelector('[data-testid="estimate-approve-button"]');
 
       return Boolean(
@@ -3484,6 +3639,25 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId) {
     },
     "linked job handoff UI state",
     15000,
+  );
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText;
+
+      return (
+        text.includes("Dashboard") &&
+        text.includes("Leads") &&
+        text.includes("Estimates") &&
+        !text.includes("Customer signature requested for the estimate packet.") &&
+        !text.includes("This estimate packet already has an active signature request.")
+      );
+    },
+    "signature toast remains cleared after refresh",
+    45000,
   );
 
   return {
@@ -3973,6 +4147,12 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
       const textFor = (id) => byTestId(id)?.textContent ?? "";
       const panelIds = [
         "job-production-command-center",
+        "field-production-mobile-workspace",
+        "field-my-work",
+        "field-production-checklist",
+        "field-daily-progress",
+        "field-materials-issues",
+        "field-final-walkthrough-readiness",
         "crew-assignment-panel",
         "weathertech-roofing-production-cards",
         "ihc-painting-production-cards",
@@ -4015,6 +4195,22 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
         missingQuickActions: quickActionLabels.filter(
           (label) => !textFor("job-production-quick-actions").includes(label),
         ),
+        missingFieldWorkspaceLabels: [
+          "Field mobile workspace",
+          "Field home / My work",
+          "Job essentials",
+          "Production checklist",
+          "Daily progress",
+          "Material readiness",
+          "Photos and documents",
+          "Issue or blocker",
+          "Final walkthrough readiness",
+          "Tear-off",
+          "Underlayment",
+          "Final roof walkthrough",
+          "Open photo upload",
+          "Open change orders",
+        ].filter((label) => !textFor("field-production-mobile-workspace").includes(label)),
         missingTimelineLabels: timelineLabels.filter(
           (label) => !textFor("job-production-timeline").includes(label),
         ),
@@ -4180,18 +4376,23 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
       ...(await tab.playwright.evaluate(() => {
         const commandCenter = document.querySelector('[data-testid="job-production-command-center"]');
         const quickActions = document.querySelector('[data-testid="job-production-quick-actions"]');
+        const fieldWorkspace = document.querySelector('[data-testid="field-production-mobile-workspace"]');
         const productionBoard = document.querySelector('[data-testid="production-board"]');
         const crewScheduler = document.querySelector('[data-testid="crew-scheduler"]');
 
         return {
           commandCenterVisible: Boolean(commandCenter),
           quickActionsVisible: Boolean(quickActions),
+          fieldWorkspaceVisible: Boolean(fieldWorkspace),
           productionBoardVisible: Boolean(productionBoard),
           crewSchedulerVisible: Boolean(crewScheduler),
           scrollWidth: document.documentElement.scrollWidth,
           viewportWidth: window.innerWidth,
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
-          touchTargets: [...(quickActions?.querySelectorAll("button") ?? [])].map((button) => {
+          touchTargets: [
+            ...(quickActions?.querySelectorAll("button") ?? []),
+            ...(fieldWorkspace?.querySelectorAll("button") ?? []),
+          ].map((button) => {
             const rect = button.getBoundingClientRect();
 
             return { width: rect.width, height: rect.height };
@@ -4205,6 +4406,7 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
     if (
       !check.commandCenterVisible ||
       !check.quickActionsVisible ||
+      !check.fieldWorkspaceVisible ||
       !check.productionBoardVisible ||
       !check.crewSchedulerVisible
     ) {
@@ -4480,10 +4682,8 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
       `inspection finding ${name}`,
     );
   }
-  await clickUnique(
-    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add finding"]]//button[@type="submit"]'),
-    "Add finding",
-  );
+  await scrollTextIntoView(tab, "Add finding");
+  await clickVisibleDomSubmitByText(tab, "Add finding", "Add finding");
   await waitFor(
     tab,
     () => document.body.innerText.includes("TEST cracked tile observed by inspector."),
@@ -4521,10 +4721,8 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "23",
     "inspection measurement value",
   );
-  await clickUnique(
-    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Add measurement"]]//button[@type="submit"]'),
-    "Add measurement",
-  );
+  await scrollTextIntoView(tab, "Add measurement");
+  await clickVisibleDomSubmitByText(tab, "Add measurement", "Add measurement");
   await waitForNoSavingState(tab, "inspection measurement save complete");
   const inspectionWithMeasurement = await waitForAsync(
     async () => {
@@ -4812,7 +5010,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
 async function runUiMutationTests(tab, env, testJob, runId, progress) {
   const addedTaskTitle = `${TEST_PREFIX} ${runId} ADDED TASK`;
   const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;
+  const fieldTaskTitle = `${TEST_PREFIX} ${runId} FIELD TASK`;
   const noteText = `${TEST_PREFIX} ${runId} NOTE`;
+  const progressText = `${TEST_PREFIX} ${runId} DAILY PROGRESS`;
+  const issueText = `${TEST_PREFIX} ${runId} HIDDEN DAMAGE ISSUE`;
   const materialName = `${TEST_PREFIX} ${runId} MATERIAL`;
   const scheduleTitle = `${TEST_PREFIX} ${runId} SCHEDULE`;
   const results = {};
@@ -4872,6 +5073,71 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
     testJob.title,
   );
 
+  progress("job:field-workspace:start");
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="field-production-mobile-workspace"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+  const fieldWorkspace = await tab.playwright.evaluate((title) => {
+    const text = document.querySelector('[data-testid="field-production-mobile-workspace"]')?.textContent ?? "";
+
+    return {
+      hasWorkspace: text.includes("Field mobile workspace"),
+      hasJob: text.includes(title),
+      hasCustomer: text.includes("TEST Regression"),
+      hasAddress: text.includes("123 TEST Regression Way"),
+      hasCompany: text.includes("WeatherTech Roofing LLC"),
+      hasTrade: text.includes("Roofing"),
+      hasStatus: text.includes("Draft") || text.includes("In progress"),
+      hasRoofingTerms:
+        text.includes("Tear-off") &&
+        text.includes("Underlayment") &&
+        text.includes("Final roof walkthrough"),
+      hasPaintingTerms:
+        text.includes("Masking") ||
+        text.includes("Surface preparation") ||
+        text.includes("Final paint walkthrough"),
+      hasMaterialReadiness: text.includes("Material readiness"),
+      hasChangeOrderHandoff: text.includes("Open change orders"),
+      hasFinalWalkthrough: text.includes("Final walkthrough readiness"),
+    };
+  }, testJob.title);
+
+  if (
+    !fieldWorkspace.hasWorkspace ||
+    !fieldWorkspace.hasJob ||
+    !fieldWorkspace.hasCustomer ||
+    !fieldWorkspace.hasAddress ||
+    !fieldWorkspace.hasCompany ||
+    !fieldWorkspace.hasTrade ||
+    !fieldWorkspace.hasStatus ||
+    !fieldWorkspace.hasRoofingTerms ||
+    fieldWorkspace.hasPaintingTerms ||
+    !fieldWorkspace.hasMaterialReadiness ||
+    !fieldWorkspace.hasChangeOrderHandoff ||
+    !fieldWorkspace.hasFinalWalkthrough
+  ) {
+    throw new Error(`Field production workspace did not render expected roofing-only job details: ${JSON.stringify(fieldWorkspace)}`);
+  }
+
+  await withAcceptedConfirm(tab, async () => {
+    await clickUnique(
+      tab.playwright.locator('xpath=//*[@data-testid="field-production-mobile-workspace"]//button[normalize-space(.)="Start job"]'),
+      "field Start job",
+    );
+  });
+  await waitForAsync(
+    async () => {
+      const updatedJob = await findJobByTitle(env, testJob.title);
+
+      return updatedJob?.status === "in_progress" ? updatedJob : null;
+    },
+    "field status transition persistence",
+    15000,
+  );
+  progress("job:field-workspace:done");
+
   progress("job:add-task:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add checklist task"]]//input[@name="title"]'), addedTaskTitle, "add task title");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add checklist task"]]//textarea[@name="description"]'), "Regression task details.", "add task details");
@@ -4890,6 +5156,60 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
     "adding task",
   );
   progress("job:add-task:done");
+
+  progress("job:field-task:start");
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="field-production-checklist"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-add-task-form"] input[name="title"]'),
+    fieldTaskTitle,
+    "field task title",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-add-task-form"] textarea[name="description"]'),
+    "Field regression task detail.",
+    "field task description",
+  );
+  results.addFieldTask = await preventTopJumpAround(
+    tab,
+    async () => {
+      await clickVisibleDomSubmitByText(tab, "Add field task", "Add field task");
+      await waitForAsync(
+        () => findJobTaskByTitle(env, testJob.id, fieldTaskTitle),
+        `field task persistence ${fieldTaskTitle}`,
+        15000,
+      );
+      await waitFor(
+        tab,
+        (title) => document.body.innerText.includes(title),
+        `field task ${fieldTaskTitle}`,
+        10000,
+        fieldTaskTitle,
+      );
+    },
+    "adding field task",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-add-task-form"] input[name="title"]'),
+    fieldTaskTitle,
+    "duplicate field task title",
+  );
+  await clickVisibleDomSubmitByText(tab, "Add field task", "Duplicate field task");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("That checklist task already exists for this job."),
+    "duplicate field task error",
+    10000,
+  );
+  const duplicateFieldTasks = await findJobTasksByTitle(env, testJob.id, fieldTaskTitle);
+
+  if (duplicateFieldTasks.length !== 1) {
+    throw new Error(`Expected one field task after duplicate prevention, found ${duplicateFieldTasks.length}.`);
+  }
+  progress("job:field-task:done");
 
   await scrollChecklistTaskIntoView(tab, addedTaskTitle);
   progress("job:status:start");
@@ -5013,6 +5333,126 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   );
   progress("job:add-material:done");
 
+  progress("job:field-progress:start");
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="field-daily-progress-form"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-daily-progress-form"] textarea[name="work_completed"]'),
+    progressText,
+    "field daily progress work completed",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-daily-progress-form"] textarea[name="tomorrow_plan"]'),
+    `${TEST_PREFIX} ${runId} WORK REMAINING`,
+    "field daily progress work remaining",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-daily-progress-form"] textarea[name="blockers"]'),
+    `${TEST_PREFIX} ${runId} CUSTOMER COMMUNICATION AND MATERIAL NOTE`,
+    "field daily progress blockers",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-daily-progress-form"] input[name="weather_summary"]'),
+    `${TEST_PREFIX} ${runId} WEATHER NOTE`,
+    "field daily progress weather",
+  );
+  results.addDailyProgress = await preventTopJumpAround(
+    tab,
+    async () => {
+      await clickVisibleDomSubmitByText(tab, "Save progress log", "Save progress log");
+      await waitForAsync(
+        () => findDailyLogByWorkCompleted(env, testJob.id, progressText),
+        `daily progress persistence ${progressText}`,
+        15000,
+      );
+      await waitFor(
+        tab,
+        (text) => document.body.innerText.includes(text),
+        `daily progress ${progressText}`,
+        10000,
+        progressText,
+      );
+    },
+    "adding daily progress",
+  );
+  progress("job:field-progress:done");
+
+  progress("job:field-issue:start");
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="field-issue-form"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+  await selectUnique(
+    tab.playwright.locator('[data-testid="field-issue-form"] select[name="issue_type"]'),
+    "Hidden damage",
+    "field issue type",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-issue-form"] textarea[name="details"]'),
+    issueText,
+    "field issue details",
+  );
+  await checkUnique(
+    tab.playwright.locator('[data-testid="field-issue-form"] input[name="change_order_needed"]'),
+    "field issue change order checkbox",
+  );
+  results.addFieldIssue = await preventTopJumpAround(
+    tab,
+    async () => {
+      await clickVisibleDomSubmitByText(tab, "Record issue", "Record issue");
+      await waitForAsync(
+        () => findJobNoteContaining(env, testJob.id, issueText),
+        `field issue note persistence ${issueText}`,
+        15000,
+      );
+      await waitFor(
+        tab,
+        (text) => document.body.innerText.includes(text),
+        `field issue ${issueText}`,
+        10000,
+        issueText,
+      );
+    },
+    "recording field issue",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="field-issue-form"] button').filter({ hasText: "Open change orders" }),
+    "Open change orders from field issue",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Change Orders"),
+    "change orders opened from field issue handoff",
+    15000,
+  );
+  await selectTestJob(tab, testJob.title);
+  progress("job:field-issue:done");
+
+  progress("job:field-photos:start");
+  await tab.playwright.evaluate(() => {
+    document
+      .querySelector('[data-testid="field-materials-issues"]')
+      ?.scrollIntoView({ block: "center" });
+  });
+  await clickUnique(
+    tab.playwright.locator('xpath=//*[@data-testid="field-materials-issues"]//button[normalize-space(.)="Open photo upload"]'),
+    "Open photo upload from field workspace",
+  );
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Photos") &&
+      document.body.innerText.includes("Upload, search, and organize job"),
+    "Photos opened from field workspace",
+    15000,
+  );
+  await selectTestJob(tab, testJob.title);
+  progress("job:field-photos:done");
+
   progress("job:add-schedule:start");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add schedule"]]//input[@name="title"]'), scheduleTitle, "schedule title");
   await fillUnique(tab.playwright.locator('xpath=//form[.//button[normalize-space(.)="Add schedule"]]//textarea[@name="notes"]'), `${TEST_PREFIX} ${runId} schedule notes`, "schedule notes");
@@ -5041,7 +5481,10 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   const textAfterRefresh = await pageText(tab);
   const missingAfterRefresh = [
     editedTaskTitle,
+    fieldTaskTitle,
     noteText,
+    progressText,
+    issueText,
     materialName,
     scheduleTitle,
   ].filter((value) => !textAfterRefresh.includes(value));
@@ -5052,7 +5495,15 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   progress("job:refresh:done");
 
   results.refreshPersistence = {
-    checked: [editedTaskTitle, noteText, materialName, scheduleTitle],
+    checked: [
+      editedTaskTitle,
+      fieldTaskTitle,
+      noteText,
+      progressText,
+      issueText,
+      materialName,
+      scheduleTitle,
+    ],
   };
 
   return results;
@@ -5350,7 +5801,7 @@ export async function runWeatherTechOsRegression({
           throw new Error("Lead workflow did not produce a test lead.");
         }
 
-        return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId);
+        return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId, progress);
       });
     }
 

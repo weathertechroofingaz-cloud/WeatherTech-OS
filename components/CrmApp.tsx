@@ -277,6 +277,7 @@ import type {
   CustomerStatus,
   CustomerType,
   DailyLogInput,
+  DailyLogRecord,
   Database,
   DocumentCategory,
   DocumentInput,
@@ -310,12 +311,15 @@ import type {
   JobAssignmentRecord,
   AssignmentStatus,
   JobInput,
+  JobMaterialRecord,
   JobMaterialInput,
   JobNoteInput,
+  JobNoteRecord,
   JobPhotoRecord,
   JobRecord,
   JobStatus,
   JobTaskInput,
+  JobTaskRecord,
   JobTaskStatus,
   LeadPriority,
   LeadInput,
@@ -2068,6 +2072,30 @@ type ProductionReadiness = {
   tone: "blue" | "green" | "amber";
 };
 
+type FieldReadinessState =
+  | "Ready"
+  | "Needs Review"
+  | "Incomplete"
+  | "Not Tracked"
+  | "Blocked";
+
+type FieldWalkthroughReadinessItem = {
+  id: string;
+  label: string;
+  state: FieldReadinessState;
+  detail: string;
+  icon: typeof Home;
+};
+
+type FieldWorkBucket = {
+  id: string;
+  label: string;
+  detail: string;
+  jobs: JobRecord[];
+  tone: "blue" | "green" | "amber";
+  icon: typeof Home;
+};
+
 type ScheduleConflict = {
   id: string;
   label: string;
@@ -2099,6 +2127,266 @@ type PhotoProgressGroup = {
   label: string;
   photos: JobPhotoRecord[];
 };
+
+const fieldIssueTypes = [
+  "Customer unavailable",
+  "Access issue",
+  "Hidden damage",
+  "Additional work discovered",
+  "Material shortage",
+  "Weather delay",
+  "Safety concern",
+  "Inspection required",
+  "Change order needed",
+];
+
+function fieldReadinessTone(state: FieldReadinessState): "blue" | "green" | "amber" {
+  if (state === "Ready") {
+    return "green";
+  }
+
+  if (state === "Not Tracked") {
+    return "blue";
+  }
+
+  return "amber";
+}
+
+function getFieldTradeTerms(job: JobRecord, company: CompanyRecord | null) {
+  const isPaintingJob =
+    job.service_type === "painting" || Boolean(company && isPaintingCompany(company));
+
+  return isPaintingJob
+    ? [
+        "Power washing",
+        "Masking",
+        "Surface preparation",
+        "Stucco repair",
+        "Color approval",
+        "Painting progress",
+        "Cleanup",
+        "Final paint walkthrough",
+      ]
+    : [
+        "Tear-off",
+        "Tile reset",
+        "Underlayment",
+        "Flashing",
+        "Dry-in",
+        "Foam or coating",
+        "Leak repair",
+        "Final roof walkthrough",
+      ];
+}
+
+function buildFieldWorkBuckets(snapshot: CrmSnapshot): FieldWorkBucket[] {
+  const today = todayIsoDate();
+  const upcomingEnd = addDaysToIsoDate(today, 7);
+  const activeJobs = snapshot.jobs.filter(isProductionActiveJob);
+  const scheduledToday = activeJobs.filter((job) =>
+    getJobScheduleDateParts(snapshot, job).some((date) => date === today),
+  );
+  const upcomingAssigned = activeJobs.filter((job) => {
+    const dates = getJobScheduleDateParts(snapshot, job);
+
+    return (
+      jobHasCrew(snapshot, job) &&
+      dates.some((date) => date > today && date <= upcomingEnd)
+    );
+  });
+  const waitingOnCustomer = activeJobs.filter((job) => {
+    const text = jobProductionText(job);
+
+    return (
+      job.status === "blocked" &&
+      (text.includes("customer") ||
+        text.includes("approval") ||
+        text.includes("hoa") ||
+        getJobChangeOrders(snapshot, job.id).some(
+          (changeOrder) => changeOrder.status === "sent",
+        ))
+    );
+  });
+  const waitingOnMaterials = activeJobs.filter((job) => {
+    const readiness = getJobMaterialReadiness(snapshot, job);
+
+    return ["Request Needed", "Requested", "Ordered", "Partial", "Delayed"].includes(
+      readiness.label,
+    );
+  });
+  const finalWalkthrough = activeJobs.filter((job) => jobNeedsFinalWalkthrough(snapshot, job));
+  const warranty = snapshot.jobs.filter((job) => jobHasWarrantySignal(snapshot, job));
+
+  return [
+    {
+      id: "assigned-today",
+      label: "Assigned today",
+      detail: "Scheduled jobs with current production dates",
+      jobs: scheduledToday,
+      tone: scheduledToday.length ? "blue" : "green",
+      icon: CalendarClock,
+    },
+    {
+      id: "upcoming-assigned",
+      label: "Upcoming assigned",
+      detail: "Crew-tracked jobs in the next seven days",
+      jobs: upcomingAssigned,
+      tone: upcomingAssigned.length ? "blue" : "green",
+      icon: Users,
+    },
+    {
+      id: "in-progress",
+      label: "In progress",
+      detail: "Jobs currently marked in production",
+      jobs: snapshot.jobs.filter((job) => job.status === "in_progress"),
+      tone: "blue",
+      icon: Activity,
+    },
+    {
+      id: "waiting-customer",
+      label: "Waiting on customer",
+      detail: "Blocked by customer, HOA, or approval signals",
+      jobs: waitingOnCustomer,
+      tone: waitingOnCustomer.length ? "amber" : "green",
+      icon: UserRound,
+    },
+    {
+      id: "waiting-materials",
+      label: "Waiting on materials",
+      detail: "Material readiness needs office review",
+      jobs: waitingOnMaterials,
+      tone: waitingOnMaterials.length ? "amber" : "green",
+      icon: Package,
+    },
+    {
+      id: "final-walkthrough",
+      label: "Needs final walkthrough",
+      detail: "Checklist complete while the job is still open",
+      jobs: finalWalkthrough,
+      tone: finalWalkthrough.length ? "amber" : "green",
+      icon: CheckCircle2,
+    },
+    {
+      id: "warranty-callbacks",
+      label: "Warranty or callback",
+      detail: "Warranty keywords or warranty documents",
+      jobs: warranty,
+      tone: warranty.length ? "amber" : "green",
+      icon: ShieldCheck,
+    },
+  ];
+}
+
+function buildFieldWalkthroughReadiness({
+  snapshot,
+  job,
+  tasks,
+  photos,
+  materialReadiness,
+  documents,
+  changeOrders,
+  invoices,
+}: {
+  snapshot: CrmSnapshot;
+  job: JobRecord;
+  tasks: JobTaskRecord[];
+  photos: JobPhotoRecord[];
+  materialReadiness: ProductionReadiness;
+  documents: DocumentRecord[];
+  changeOrders: ChangeOrderRecord[];
+  invoices: InvoiceRecord[];
+}): FieldWalkthroughReadinessItem[] {
+  const doneTasks = tasks.filter((task) => task.status === "done").length;
+  const openChangeOrders = changeOrders.filter(
+    (changeOrder) => changeOrder.status === "draft" || changeOrder.status === "sent",
+  );
+  const inspectionReadiness = getJobInspectionReadiness(snapshot, job);
+  const outstandingIssue = getJobOutstandingIssue(snapshot, job);
+  const invoiceReady = invoices.some(
+    (invoice) => invoice.status === "sent" || invoice.status === "paid",
+  );
+
+  return [
+    {
+      id: "checklist",
+      label: "Checklist complete",
+      state: tasks.length
+        ? doneTasks === tasks.length
+          ? "Ready"
+          : "Incomplete"
+        : "Not Tracked",
+      detail: tasks.length
+        ? `${doneTasks} of ${tasks.length} checklist tasks complete`
+        : "No production checklist tasks recorded",
+      icon: ClipboardList,
+    },
+    {
+      id: "photos",
+      label: "Required photos present",
+      state: photos.length ? "Needs Review" : "Not Tracked",
+      detail: photos.length
+        ? `${photos.length} linked job photo${photos.length === 1 ? "" : "s"} available for review`
+        : "No linked job photos yet",
+      icon: Camera,
+    },
+    {
+      id: "issues",
+      label: "Issues resolved",
+      state: job.status === "blocked" ? "Blocked" : outstandingIssue === "No outstanding issue recorded" ? "Ready" : "Needs Review",
+      detail: outstandingIssue,
+      icon: AlertTriangle,
+    },
+    {
+      id: "materials",
+      label: "Materials complete",
+      state: materialReadiness.label === "Ready"
+        ? "Ready"
+        : materialReadiness.label === "Not Recorded"
+          ? "Not Tracked"
+          : "Needs Review",
+      detail: materialReadiness.detail,
+      icon: Package,
+    },
+    {
+      id: "change-orders",
+      label: "Change orders reviewed",
+      state: openChangeOrders.length ? "Needs Review" : "Ready",
+      detail: openChangeOrders.length
+        ? `${openChangeOrders.length} open change order${openChangeOrders.length === 1 ? "" : "s"}`
+        : "No open change orders require field action",
+      icon: ReceiptText,
+    },
+    {
+      id: "customer-walkthrough",
+      label: "Customer walkthrough needed",
+      state: inspectionReadiness.label === "Final Complete"
+        ? "Ready"
+        : jobNeedsFinalWalkthrough(snapshot, job)
+          ? "Needs Review"
+          : "Not Tracked",
+      detail: inspectionReadiness.detail,
+      icon: UserRound,
+    },
+    {
+      id: "documents",
+      label: "Documents ready",
+      state: documents.length ? "Needs Review" : "Not Tracked",
+      detail: documents.length
+        ? `${documents.length} linked document${documents.length === 1 ? "" : "s"}`
+        : "No linked production documents yet",
+      icon: FileText,
+    },
+    {
+      id: "invoice",
+      label: "Invoice readiness",
+      state: invoiceReady ? "Ready" : invoices.length ? "Needs Review" : "Not Tracked",
+      detail: invoices.length
+        ? `${invoices.length} linked invoice${invoices.length === 1 ? "" : "s"}`
+        : "No invoice linked; field users cannot mark jobs paid",
+      icon: ReceiptText,
+    },
+  ];
+}
 
 function jobProductionText(job: JobRecord) {
   return [
@@ -3729,6 +4017,22 @@ export function CrmApp() {
     setError("");
   };
 
+  const handleWorkspaceNotice = useCallback((message: string) => {
+    setNotice((currentNotice) => (currentNotice === message ? currentNotice : message));
+    setError("");
+  }, []);
+
+  const handleWorkspaceError = useCallback((message: string) => {
+    setError((currentError) => (currentError === message ? currentError : message));
+    setNotice("");
+  }, []);
+
+  const handleWorkspaceViewChange = useCallback((nextView: WorkspaceView) => {
+    setView(nextView);
+    setNotice("");
+    setError("");
+  }, []);
+
   const handleSignOut = async () => {
     if (!client) {
       return;
@@ -3798,7 +4102,7 @@ export function CrmApp() {
       user={user}
       view={view}
       theme={theme}
-      onViewChange={setView}
+      onViewChange={handleWorkspaceViewChange}
       onThemeChange={handleThemeChange}
       onReload={async () => {
         if (client && !isDemoWorkspace) {
@@ -3823,8 +4127,8 @@ export function CrmApp() {
       }}
       onDemoSnapshotChange={handleDemoSnapshotChange}
       onSignOut={handleSignOut}
-      onNotice={setNotice}
-      onError={setError}
+      onNotice={handleWorkspaceNotice}
+      onError={handleWorkspaceError}
     />
   );
 }
@@ -4219,6 +4523,27 @@ function CrmWorkspace({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onViewChange, shortcuts]);
 
+  useEffect(() => {
+    if (!notice && !error) {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => {
+        if (notice) {
+          onNotice("");
+        }
+
+        if (error) {
+          onError("");
+        }
+      },
+      error ? 9000 : 6000,
+    );
+
+    return () => window.clearTimeout(timeout);
+  }, [error, notice, onError, onNotice]);
+
   return (
     <main
       className={`wt-app-shell min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.10),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-3 text-slate-950 sm:p-5 ${
@@ -4227,7 +4552,12 @@ function CrmWorkspace({
           : ""
       }`}
     >
-      <ToastViewport notice={notice} error={error} />
+      <ToastViewport
+        notice={notice}
+        error={error}
+        onDismissNotice={() => onNotice("")}
+        onDismissError={() => onError("")}
+      />
       <div className="grid min-w-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="wt-app-sidebar max-h-[54vh] overflow-y-auto rounded-2xl border border-slate-900/90 bg-[linear-gradient(180deg,#070b18_0%,#0f172a_58%,#111827_100%)] p-4 text-white shadow-[0_28px_70px_-42px_rgba(15,23,42,0.95)] xl:max-h-none xl:min-h-[calc(100vh-40px)]">
           <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
@@ -8170,6 +8500,541 @@ function PhotoProgressPanel({
       >
         Open Photos
       </button>
+    </section>
+  );
+}
+
+function FieldProductionMobileWorkspace({
+  snapshot,
+  job,
+  company,
+  customer,
+  lead,
+  estimate,
+  scope,
+  tasks,
+  materials,
+  materialOrders,
+  photos,
+  documents,
+  changeOrders,
+  invoices,
+  dailyLogs,
+  fieldWorkBuckets,
+  finalReadiness,
+  progressPercent,
+  crewLabel,
+  foremanLabel,
+  materialReadiness,
+  productionAction,
+  onCreateTask,
+  onUpdateTaskStatus,
+  onSaveDailyProgress,
+  onRecordIssue,
+  onStatusTransition,
+  onOpenPhotos,
+  onOpenMaterials,
+  onOpenChangeOrders,
+  onOpenChecklist,
+}: {
+  snapshot: CrmSnapshot;
+  job: JobRecord;
+  company: CompanyRecord | null;
+  customer: CustomerRecord | null;
+  lead: LeadRecord | null;
+  estimate: EstimateRecord | null;
+  scope: ScopeRecord | null;
+  tasks: JobTaskRecord[];
+  materials: JobMaterialRecord[];
+  materialOrders: MaterialOrderRecord[];
+  photos: JobPhotoRecord[];
+  documents: DocumentRecord[];
+  changeOrders: ChangeOrderRecord[];
+  invoices: InvoiceRecord[];
+  dailyLogs: DailyLogRecord[];
+  fieldWorkBuckets: FieldWorkBucket[];
+  finalReadiness: FieldWalkthroughReadinessItem[];
+  progressPercent: number;
+  crewLabel: string;
+  foremanLabel: string;
+  materialReadiness: ProductionReadiness;
+  productionAction: string | null;
+  onCreateTask: (event: FormEvent<HTMLFormElement>) => void;
+  onUpdateTaskStatus: (taskId: string, status: JobTaskStatus) => void;
+  onSaveDailyProgress: (event: FormEvent<HTMLFormElement>) => void;
+  onRecordIssue: (event: FormEvent<HTMLFormElement>) => void;
+  onStatusTransition: (status: JobStatus) => void;
+  onOpenPhotos: () => void;
+  onOpenMaterials: () => void;
+  onOpenChangeOrders: () => void;
+  onOpenChecklist: () => void;
+}) {
+  const tradeTerms = getFieldTradeTerms(job, company);
+  const nextDailyLog = dailyLogs[0] ?? null;
+  const isPaintingJob =
+    job.service_type === "painting" || Boolean(company && isPaintingCompany(company));
+  const activeIssueCount = finalReadiness.filter(
+    (item) =>
+      item.state === "Blocked" ||
+      item.state === "Needs Review" ||
+      item.state === "Incomplete",
+  ).length;
+  const customerName =
+    customer?.display_name ?? lead?.contact_name ?? getJobTargetName(snapshot, job);
+  const scopeSummary =
+    job.scope_of_work ?? scope?.scope_body ?? estimate?.scope_of_work ?? "No scope summary recorded.";
+
+  return (
+    <section
+      className="rounded-2xl border border-slate-200 bg-slate-950 p-3 text-white shadow-sm sm:p-4"
+      data-testid="field-production-mobile-workspace"
+    >
+      <div className="grid gap-3">
+        <div className="rounded-xl border border-white/10 bg-white/10 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-orange-200">
+                Field mobile workspace
+              </p>
+              <h3 className="mt-1 break-words text-xl font-bold leading-tight">
+                {job.title}
+              </h3>
+              <p className="mt-1 break-words text-sm font-semibold text-slate-200">
+                {customerName}
+              </p>
+            </div>
+            <Badge
+              label={jobStatusLabel(job.status)}
+              tone={
+                job.status === "completed" || job.status === "closed"
+                  ? "green"
+                  : job.status === "blocked" ||
+                      job.status === "cancelled" ||
+                      job.status === "canceled"
+                    ? "amber"
+                    : "blue"
+              }
+            />
+          </div>
+          <div className="mt-3 grid gap-2 text-sm text-slate-200">
+            <ContactLine icon={MapPin} value={getJobDisplayAddress(job)} />
+            <ContactLine icon={Building2} value={company?.name ?? "Company not linked"} />
+            <ContactLine icon={CalendarClock} value={getJobScheduleSummary(snapshot, job)} />
+            <ContactLine icon={Users} value={`${crewLabel} · ${foremanLabel}`} />
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-white/10 bg-white/10 p-3">
+              <p className="text-xs font-bold uppercase text-slate-300">Trade</p>
+              <p className="mt-1 text-base font-bold">{serviceLabel(job.service_type)}</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/10 p-3">
+              <p className="text-xs font-bold uppercase text-slate-300">Checklist</p>
+              <p className="mt-1 text-base font-bold">{progressPercent}% complete</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/10 p-3">
+              <p className="text-xs font-bold uppercase text-slate-300">Readiness</p>
+              <p className="mt-1 text-base font-bold">
+                {activeIssueCount ? `${activeIssueCount} to review` : "Ready to review"}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+            <button
+              type="button"
+              onClick={() => onStatusTransition("in_progress")}
+              disabled={job.status === "in_progress" || productionAction !== null}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-bold text-white transition hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-200 disabled:cursor-not-allowed disabled:bg-slate-500"
+            >
+              <Activity className="h-4 w-4" />
+              Start job
+            </button>
+            <button
+              type="button"
+              onClick={onOpenChecklist}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white px-3 py-2 text-sm font-bold text-slate-950 transition hover:bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-200"
+            >
+              <ClipboardList className="h-4 w-4" />
+              Checklist
+            </button>
+            <button
+              type="button"
+              onClick={onOpenPhotos}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white px-3 py-2 text-sm font-bold text-slate-950 transition hover:bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-200"
+            >
+              <Camera className="h-4 w-4" />
+              Photos
+            </button>
+            <button
+              type="button"
+              onClick={() => onStatusTransition("completed")}
+              disabled={
+                job.status === "completed" ||
+                job.status === "closed" ||
+                productionAction !== null
+              }
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-emerald-300/40 bg-emerald-500 px-3 py-2 text-sm font-bold text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200 disabled:cursor-not-allowed disabled:bg-slate-500"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Complete
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <section
+            className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+            data-testid="field-my-work"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold">Field home / My work</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Crew and assignment states from existing job records.
+                </p>
+              </div>
+              <Badge label="Live job data" tone="blue" />
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {fieldWorkBuckets.map((bucket) => (
+                <div key={bucket.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-950">{bucket.label}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">{bucket.detail}</p>
+                    </div>
+                    <Badge label={String(bucket.jobs.length)} tone={bucket.tone} />
+                  </div>
+                  <div className="mt-2 grid gap-1">
+                    {bucket.jobs.slice(0, 2).map((bucketJob) => (
+                      <p key={bucketJob.id} className="truncate text-xs font-semibold text-slate-600">
+                        {bucketJob.title} · {getJobCrewLabel(snapshot, bucketJob)}
+                      </p>
+                    ))}
+                    {!bucket.jobs.length ? (
+                      <p className="text-xs font-semibold text-slate-500">
+                        No matching work in this queue.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section
+            className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+            data-testid="field-job-essentials"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold">Job essentials</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  First-screen context for roof and paint crews.
+                </p>
+              </div>
+              <Badge label={isPaintingJob ? "Painting" : "Roofing"} tone="amber" />
+            </div>
+            <p className="mt-3 max-h-28 overflow-auto whitespace-pre-line rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+              {scopeSummary}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {tradeTerms.map((term) => (
+                <span
+                  key={term}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700"
+                >
+                  {term}
+                </span>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <section
+          className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+          data-testid="field-production-checklist"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-bold">Production checklist</p>
+              <p className="mt-1 text-sm text-slate-500">
+                {tasks.filter((task) => task.status === "done").length} of {tasks.length} complete. Completing tasks does not complete the job.
+              </p>
+            </div>
+            <Badge label={`${progressPercent}%`} tone={progressPercent === 100 ? "green" : "blue"} />
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full wt-progress-fill" style={{ width: `${progressPercent}%` }} />
+          </div>
+          <div className="mt-3 grid gap-2">
+            {tasks.map((task) => (
+              <div key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-bold text-slate-950">{task.title}</p>
+                    {task.description ? (
+                      <p className="mt-1 break-words text-sm text-slate-500">{task.description}</p>
+                    ) : null}
+                  </div>
+                  <Badge
+                    label={jobTaskStatusLabel(task.status)}
+                    tone={
+                      task.status === "done"
+                        ? "green"
+                        : task.status === "in_progress"
+                          ? "blue"
+                          : "amber"
+                    }
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {jobTaskStatuses.map((status) => (
+                    <button
+                      key={status.value}
+                      type="button"
+                      onClick={() => onUpdateTaskStatus(task.id, status.value)}
+                      disabled={task.status === status.value || productionAction !== null}
+                      className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {productionAction === `status:${task.id}` && status.value !== task.status
+                        ? "Saving"
+                        : status.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!tasks.length ? <EmptyState label="No checklist tasks recorded for this job." /> : null}
+          </div>
+          <form
+            key={`field-task-${job.id}`}
+            onSubmit={onCreateTask}
+            className="mt-3 grid gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3"
+            data-testid="field-add-task-form"
+          >
+            <input
+              required
+              name="title"
+              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              placeholder="Add field checklist item"
+            />
+            <input type="hidden" name="status" value="todo" />
+            <textarea
+              name="description"
+              className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              placeholder="Task detail or section"
+            />
+            <button
+              type="submit"
+              disabled={productionAction !== null}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <Plus className="h-4 w-4" />
+              {productionAction === "create-task" ? "Adding" : "Add field task"}
+            </button>
+          </form>
+        </section>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <section
+            className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+            data-testid="field-daily-progress"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold">Daily progress</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Saved to the existing daily log records without creating a fake employee.
+                </p>
+              </div>
+              <Badge label={`${dailyLogs.length} logs`} tone={dailyLogs.length ? "blue" : "green"} />
+            </div>
+            {nextDailyLog ? (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-950">{nextDailyLog.work_completed}</p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                  {formatDateTime(nextDailyLog.log_date)}
+                </p>
+                {nextDailyLog.blockers ? (
+                  <p className="mt-2 text-sm text-amber-700">{nextDailyLog.blockers}</p>
+                ) : null}
+              </div>
+            ) : (
+              <EmptyState label="No daily progress logs yet." />
+            )}
+            <form
+              key={`field-progress-${job.id}`}
+              onSubmit={onSaveDailyProgress}
+              className="mt-3 grid gap-2"
+              data-testid="field-daily-progress-form"
+            >
+              <textarea
+                required
+                name="work_completed"
+                className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Work completed today"
+              />
+              <textarea
+                name="tomorrow_plan"
+                className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Work remaining or tomorrow plan"
+              />
+              <textarea
+                name="blockers"
+                className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Issues, delays, customer communication, or material notes"
+              />
+              <input
+                name="weather_summary"
+                className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                placeholder="Weather note"
+              />
+              <button
+                type="submit"
+                disabled={productionAction !== null}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <Save className="h-4 w-4" />
+                {productionAction === "field-progress" ? "Saving" : "Save progress log"}
+              </button>
+            </form>
+          </section>
+
+          <section
+            className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+            data-testid="field-materials-issues"
+          >
+            <div className="grid gap-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold">Material readiness</p>
+                    <p className="mt-1 text-sm text-slate-500">{materialReadiness.detail}</p>
+                  </div>
+                  <Badge label={materialReadiness.label} tone={materialReadiness.tone} />
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                  <p>{materialOrders.length} material order{materialOrders.length === 1 ? "" : "s"}</p>
+                  <p>{materials.length} job material item{materials.length === 1 ? "" : "s"}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenMaterials}
+                  className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <Package className="h-4 w-4" />
+                  Open materials
+                </button>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold">Photos and documents</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Uses existing job photo and document workflows.
+                    </p>
+                  </div>
+                  <Badge label={`${photos.length} photos`} tone={photos.length ? "blue" : "green"} />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={onOpenPhotos}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-bold text-white hover:bg-sky-700"
+                  >
+                    <Camera className="h-4 w-4" />
+                    Open photo upload
+                  </button>
+                  <div className="rounded-md border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-600">
+                    {documents.length} document{documents.length === 1 ? "" : "s"} linked
+                  </div>
+                </div>
+              </div>
+              <form
+                key={`field-issue-${job.id}`}
+                onSubmit={onRecordIssue}
+                className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                data-testid="field-issue-form"
+              >
+                <div>
+                  <p className="text-sm font-bold">Issue or blocker</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Records a production note and hands change orders to the existing workspace.
+                  </p>
+                </div>
+                <select
+                  name="issue_type"
+                  defaultValue="Additional work discovered"
+                  className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {fieldIssueTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <textarea
+                  required
+                  name="details"
+                  className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="What happened and what does the office need to know?"
+                />
+                <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                  <input type="checkbox" name="change_order_needed" className="h-4 w-4 rounded border-slate-300" />
+                  Change order review may be needed
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="submit"
+                    disabled={productionAction !== null}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-orange-500 px-4 py-2 text-sm font-bold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                    {productionAction === "field-issue" ? "Saving" : "Record issue"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenChangeOrders}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                  >
+                    <ReceiptText className="h-4 w-4" />
+                    Open change orders
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+
+        <section
+          className="rounded-xl border border-white/10 bg-white p-3 text-slate-950"
+          data-testid="field-final-walkthrough-readiness"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-bold">Final walkthrough readiness</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Truthful readiness signals only. Field users cannot close invoices or mark paid.
+              </p>
+            </div>
+            <Badge label={`${activeIssueCount} review`} tone={activeIssueCount ? "amber" : "green"} />
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {finalReadiness.map((item) => (
+              <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-slate-700">
+                    <item.icon className="h-4 w-4" />
+                  </div>
+                  <Badge label={item.state} tone={fieldReadinessTone(item.state)} />
+                </div>
+                <p className="mt-3 text-sm font-bold text-slate-950">{item.label}</p>
+                <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
     </section>
   );
 }
@@ -15823,6 +16688,7 @@ function EstimateWorkflowPanel({
           Save PDF-ready packet
         </button>
         <button
+          data-testid="estimate-request-signature-button"
           type="button"
           onClick={() => void onRequestSignature(estimate)}
           disabled={activeSignature?.status === "signed"}
@@ -16806,6 +17672,11 @@ function JobsView({
     ? getJobChangeOrders(snapshot, selectedJob.id)
     : [];
   const selectedJobPhotos = selectedJob ? getJobPhotos(snapshot, selectedJob.id) : [];
+  const selectedJobDailyLogs = selectedJob
+    ? snapshot.dailyLogs
+        .filter((log) => log.job_id === selectedJob.id)
+        .sort((a, b) => b.log_date.localeCompare(a.log_date))
+    : [];
   const selectedJobActivityItems = selectedJob
     ? buildJobActivityItems(snapshot, selectedJob)
     : [];
@@ -16921,6 +17792,26 @@ function JobsView({
         (selectedJobTaskCompletion.done / selectedJobTaskCompletion.total) * 100,
       )
     : 0;
+  const selectedJobMaterialReadiness = selectedJob
+    ? getJobMaterialReadiness(snapshot, selectedJob)
+    : null;
+  const selectedJobFieldWorkBuckets = useMemo(
+    () => buildFieldWorkBuckets(snapshot),
+    [snapshot],
+  );
+  const selectedJobFinalWalkthroughReadiness =
+    selectedJob && selectedJobMaterialReadiness
+      ? buildFieldWalkthroughReadiness({
+          snapshot,
+          job: selectedJob,
+          tasks: selectedJobTasks,
+          photos: selectedJobPhotos,
+          materialReadiness: selectedJobMaterialReadiness,
+          documents: selectedJobDocuments,
+          changeOrders: selectedJobChangeOrders,
+          invoices: selectedJobInvoices,
+        })
+      : [];
   const selectedJobProductionTotal =
     selectedJob?.total || selectedJobEstimate?.total || selectedJobFinancials.invoiced;
   const defaultJobEventStart = new Date();
@@ -17084,6 +17975,109 @@ function JobsView({
             }
           : job,
       ),
+    }));
+  };
+
+  const saveDemoJobStatus = (status: JobStatus) => {
+    if (!selectedJob) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobs: currentSnapshot.jobs.map((job) =>
+        job.id === selectedJob.id ? { ...job, status, updated_at: now } : job,
+      ),
+    }));
+  };
+
+  const saveDemoJobTask = (input: JobTaskInput) => {
+    const now = new Date().toISOString();
+    const task: JobTaskRecord = {
+      id: `demo-task-${Date.now()}`,
+      job_id: input.job_id,
+      title: input.title,
+      description: input.description ?? null,
+      status: input.status ?? "todo",
+      sort_order: input.sort_order ?? 0,
+      created_at: now,
+      updated_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobTasks: [...currentSnapshot.jobTasks, task],
+    }));
+  };
+
+  const updateDemoJobTask = (
+    taskId: string,
+    input: Partial<Omit<JobTaskInput, "job_id">>,
+  ) => {
+    const now = new Date().toISOString();
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobTasks: currentSnapshot.jobTasks.map((task) =>
+        task.id === taskId ? { ...task, ...input, updated_at: now } : task,
+      ),
+    }));
+  };
+
+  const addDemoJobNote = (input: JobNoteInput) => {
+    const now = new Date().toISOString();
+    const note: JobNoteRecord = {
+      id: `demo-note-${Date.now()}`,
+      job_id: input.job_id,
+      note: input.note,
+      created_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobNotes: [note, ...currentSnapshot.jobNotes],
+    }));
+  };
+
+  const addDemoJobMaterial = (input: JobMaterialInput) => {
+    const now = new Date().toISOString();
+    const material: JobMaterialRecord = {
+      id: `demo-material-${Date.now()}`,
+      job_id: input.job_id,
+      name: input.name,
+      quantity: input.quantity,
+      unit: input.unit ?? "each",
+      notes: input.notes ?? null,
+      created_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      jobMaterials: [material, ...currentSnapshot.jobMaterials],
+    }));
+  };
+
+  const saveDemoDailyLog = (input: DailyLogInput) => {
+    const now = new Date().toISOString();
+    const dailyLog: DailyLogRecord = {
+      id: `demo-daily-log-${Date.now()}`,
+      company_id: input.company_id,
+      employee_id: input.employee_id ?? null,
+      job_id: input.job_id,
+      log_date: input.log_date,
+      weather_summary: input.weather_summary ?? null,
+      work_completed: input.work_completed,
+      blockers: input.blockers ?? null,
+      tomorrow_plan: input.tomorrow_plan ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      dailyLogs: [dailyLog, ...currentSnapshot.dailyLogs],
     }));
   };
 
@@ -17255,12 +18249,32 @@ function JobsView({
     }
 
     try {
-      await updateJob(client, selectedJob.id, { status });
-      await onReload();
+      if (isDemoMode) {
+        saveDemoJobStatus(status);
+      } else {
+        await updateJob(client, selectedJob.id, { status });
+        await onReload();
+      }
       onNotice(`Job moved to ${jobStatusLabel(status)}.`);
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to update job status."));
     }
+  };
+
+  const handleConfirmedJobStatusTransition = async (status: JobStatus) => {
+    if (!selectedJob) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Move ${selectedJob.title} to ${jobStatusLabel(status)}? This updates the job workflow status only.`,
+      )
+    ) {
+      return;
+    }
+
+    await handleUpdateJobStatus(status);
   };
 
   const handleCreateJobTask = async (event: FormEvent<HTMLFormElement>) => {
@@ -17286,11 +18300,22 @@ function JobsView({
       return;
     }
 
+    if (selectedJobTaskTitles.has(input.title.trim().toLowerCase())) {
+      onError("That checklist task already exists for this job.");
+      return;
+    }
+
     try {
       setProductionAction("create-task");
-      await createJobTask(client, input);
+      if (isDemoMode) {
+        saveDemoJobTask(input);
+      } else {
+        await createJobTask(client, input);
+      }
       form.reset();
-      await onScrollPreservingReload();
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to add checklist task."));
@@ -17305,15 +18330,26 @@ function JobsView({
       return;
     }
 
+    if (selectedJobTaskTitles.has(title.trim().toLowerCase())) {
+      onError("That checklist task already exists for this job.");
+      return;
+    }
+
     try {
       setProductionAction(`suggest:${title}`);
-      await createJobTask(client, {
+      const input: JobTaskInput = {
         job_id: selectedJob.id,
         title,
         status: "todo",
         sort_order: selectedJobTasks.length,
-      });
-      await onScrollPreservingReload();
+      };
+
+      if (isDemoMode) {
+        saveDemoJobTask(input);
+      } else {
+        await createJobTask(client, input);
+        await onScrollPreservingReload();
+      }
       onNotice("Checklist task added.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to add checklist task."));
@@ -17328,8 +18364,12 @@ function JobsView({
   ) => {
     try {
       setProductionAction(`status:${taskId}`);
-      await updateJobTask(client, taskId, { status });
-      await onScrollPreservingReload();
+      if (isDemoMode) {
+        updateDemoJobTask(taskId, { status });
+      } else {
+        await updateJobTask(client, taskId, { status });
+        await onScrollPreservingReload();
+      }
       onNotice(`Checklist task marked ${jobTaskStatusLabel(status)}.`);
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to update checklist task."));
@@ -17352,15 +18392,33 @@ function JobsView({
       return;
     }
 
+    const normalizedTitle = title.trim().toLowerCase();
+    const duplicateTask = selectedJobTasks.some(
+      (task) => task.id !== taskId && task.title.trim().toLowerCase() === normalizedTitle,
+    );
+
+    if (duplicateTask) {
+      onError("That checklist task already exists for this job.");
+      return;
+    }
+
     try {
       setProductionAction(`edit:${taskId}`);
-      await updateJobTask(client, taskId, {
+      const input = {
         title,
         description: getOptionalFormString(formData, "description"),
         status: getFormString(formData, "status", "todo") as JobTaskStatus,
-      });
+      };
+
+      if (isDemoMode) {
+        updateDemoJobTask(taskId, input);
+      } else {
+        await updateJobTask(client, taskId, input);
+      }
       updateUiPreservingScrollPosition(() => setEditingTaskId(null));
-      await onScrollPreservingReload();
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
       onNotice("Checklist task updated.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to update checklist task."));
@@ -17376,11 +18434,20 @@ function JobsView({
 
     try {
       setProductionAction(`delete:${taskId}`);
-      await deleteJobTask(client, taskId);
+      if (isDemoMode) {
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          jobTasks: currentSnapshot.jobTasks.filter((task) => task.id !== taskId),
+        }));
+      } else {
+        await deleteJobTask(client, taskId);
+      }
       updateUiPreservingScrollPosition(() =>
         setEditingTaskId((currentId) => (currentId === taskId ? null : currentId)),
       );
-      await onScrollPreservingReload();
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
       onNotice("Checklist task deleted.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to delete checklist task."));
@@ -17403,14 +18470,24 @@ function JobsView({
 
     try {
       setProductionAction(`move:${taskId}`);
-      await reorderJobTasks(
-        client,
-        reorderedTasks.map((task, index) => ({
-          id: task.id,
-          sort_order: index,
-        })),
-      );
-      await onScrollPreservingReload();
+      const updates = reorderedTasks.map((task, index) => ({
+        id: task.id,
+        sort_order: index,
+      }));
+
+      if (isDemoMode) {
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          jobTasks: currentSnapshot.jobTasks.map((task) => {
+            const update = updates.find((item) => item.id === task.id);
+
+            return update ? { ...task, sort_order: update.sort_order } : task;
+          }),
+        }));
+      } else {
+        await reorderJobTasks(client, updates);
+        await onScrollPreservingReload();
+      }
       onNotice("Checklist order updated.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to reorder checklist tasks."));
@@ -17441,9 +18518,15 @@ function JobsView({
 
     try {
       setProductionAction("add-note");
-      await addJobNote(client, input);
+      if (isDemoMode) {
+        addDemoJobNote(input);
+      } else {
+        await addJobNote(client, input);
+      }
       form.reset();
-      await onScrollPreservingReload();
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
       onNotice("Job note added.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to add job note."));
@@ -17477,12 +18560,110 @@ function JobsView({
 
     try {
       setProductionAction("add-material");
-      await addJobMaterial(client, input);
+      if (isDemoMode) {
+        addDemoJobMaterial(input);
+      } else {
+        await addJobMaterial(client, input);
+      }
       form.reset();
-      await onScrollPreservingReload();
+      if (!isDemoMode) {
+        await onScrollPreservingReload();
+      }
       onNotice("Job material added.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to add job material."));
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleSaveFieldDailyProgress = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before adding daily progress.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const workCompleted = getFormString(formData, "work_completed");
+
+    if (!workCompleted) {
+      onError("Add the work completed before saving a progress log.");
+      return;
+    }
+
+    const input: DailyLogInput = {
+      company_id: selectedJob.company_id,
+      employee_id: null,
+      job_id: selectedJob.id,
+      log_date: new Date().toISOString(),
+      weather_summary: getOptionalFormString(formData, "weather_summary"),
+      work_completed: workCompleted,
+      blockers: getOptionalFormString(formData, "blockers"),
+      tomorrow_plan: getOptionalFormString(formData, "tomorrow_plan"),
+    };
+
+    try {
+      setProductionAction("field-progress");
+      if (isDemoMode) {
+        saveDemoDailyLog(input);
+      } else {
+        await createDailyLog(client, input);
+        await onScrollPreservingReload();
+      }
+      form.reset();
+      onNotice("Daily progress saved.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save daily progress."));
+    } finally {
+      setProductionAction(null);
+    }
+  };
+
+  const handleRecordFieldIssue = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedJob) {
+      onError("Select or save a job before recording an issue.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const issueType = getFormString(formData, "issue_type", "Production issue");
+    const details = getFormString(formData, "details");
+    const needsChangeOrder = formData.get("change_order_needed") === "on";
+
+    if (!details) {
+      onError("Add issue details before saving.");
+      return;
+    }
+
+    const noteLines = [
+      `Field issue - ${issueType}: ${details}`,
+      needsChangeOrder
+        ? "Change order review may be needed. No change order was created automatically."
+        : null,
+    ].filter(Boolean);
+    const input: JobNoteInput = {
+      job_id: selectedJob.id,
+      note: noteLines.join("\n"),
+    };
+
+    try {
+      setProductionAction("field-issue");
+      if (isDemoMode) {
+        addDemoJobNote(input);
+      } else {
+        await addJobNote(client, input);
+        await onScrollPreservingReload();
+      }
+      form.reset();
+      onNotice("Production issue recorded.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to record production issue."));
     } finally {
       setProductionAction(null);
     }
@@ -17887,7 +19068,7 @@ function JobsView({
           detail: selectedJob.status === "in_progress" ? "Already in production" : "Mark job in progress",
           icon: Activity,
           disabled: selectedJob.status === "in_progress" || productionAction !== null,
-          onClick: () => void handleUpdateJobStatus("in_progress"),
+          onClick: () => void handleConfirmedJobStatusTransition("in_progress"),
         },
         {
           label: "Open Customer 360",
@@ -18325,6 +19506,43 @@ function JobsView({
                   value={formatMoney(selectedJobProductionTotal)}
                 />
               </div>
+
+              <FieldProductionMobileWorkspace
+                snapshot={snapshot}
+                job={selectedJob}
+                company={selectedJobCompany}
+                customer={selectedJobCustomer}
+                lead={selectedJobLead}
+                estimate={selectedJobEstimate}
+                scope={selectedJobScope}
+                tasks={selectedJobTasks}
+                materials={selectedJobMaterials}
+                materialOrders={selectedJobOrders}
+                photos={selectedJobPhotos}
+                documents={selectedJobDocuments}
+                changeOrders={selectedJobChangeOrders}
+                invoices={selectedJobInvoices}
+                dailyLogs={selectedJobDailyLogs}
+                fieldWorkBuckets={selectedJobFieldWorkBuckets}
+                finalReadiness={selectedJobFinalWalkthroughReadiness}
+                progressPercent={selectedJobTaskCompletionPercent}
+                crewLabel={getJobCrewLabel(snapshot, selectedJob)}
+                foremanLabel={getJobForemanLabel(snapshot, selectedJob)}
+                materialReadiness={
+                  selectedJobMaterialReadiness ??
+                  getJobMaterialReadiness(snapshot, selectedJob)
+                }
+                productionAction={productionAction}
+                onCreateTask={handleCreateJobTask}
+                onUpdateTaskStatus={handleUpdateJobTaskStatus}
+                onSaveDailyProgress={handleSaveFieldDailyProgress}
+                onRecordIssue={handleRecordFieldIssue}
+                onStatusTransition={handleConfirmedJobStatusTransition}
+                onOpenPhotos={() => onViewChange("photos")}
+                onOpenMaterials={() => onViewChange("orders")}
+                onOpenChangeOrders={() => onViewChange("changeOrders")}
+                onOpenChecklist={() => handleOpenJobWorkspaceTab("checklist")}
+              />
 
               <JobProductionSummaryPanel
                 snapshot={snapshot}
@@ -31190,7 +32408,17 @@ function ContactLine({
   );
 }
 
-function ToastViewport({ notice, error }: { notice: string; error: string }) {
+function ToastViewport({
+  notice,
+  error,
+  onDismissNotice,
+  onDismissError,
+}: {
+  notice: string;
+  error: string;
+  onDismissNotice: () => void;
+  onDismissError: () => void;
+}) {
   if (!notice && !error) {
     return null;
   }
@@ -31198,18 +32426,30 @@ function ToastViewport({ notice, error }: { notice: string; error: string }) {
   return (
     <div
       aria-live="polite"
-      className="fixed right-4 top-4 z-50 grid w-[calc(100%-2rem)] max-w-sm gap-2"
+      className="pointer-events-none fixed inset-x-3 top-3 z-50 grid justify-items-end gap-2 sm:inset-x-auto sm:right-5 sm:top-5 sm:w-[min(24rem,calc(100vw-2rem))]"
     >
-      {notice ? <Toast tone="success" message={notice} /> : null}
-      {error ? <Toast tone="error" message={error} /> : null}
+      {notice ? (
+        <Toast tone="success" message={notice} onDismiss={onDismissNotice} />
+      ) : null}
+      {error ? <Toast tone="error" message={error} onDismiss={onDismissError} /> : null}
     </div>
   );
 }
 
-function Toast({ tone, message }: { tone: "success" | "error"; message: string }) {
+function Toast({
+  tone,
+  message,
+  onDismiss,
+}: {
+  tone: "success" | "error";
+  message: string;
+  onDismiss: () => void;
+}) {
   return (
     <div
-      className={`rounded-lg border px-4 py-3 text-sm font-semibold shadow-xl backdrop-blur ${
+      role={tone === "error" ? "alert" : "status"}
+      aria-label={tone === "success" ? "Success notification" : "Error notification"}
+      className={`pointer-events-auto w-full rounded-lg border px-4 py-3 text-sm font-semibold shadow-xl backdrop-blur ${
         tone === "success"
           ? "border-emerald-200 bg-emerald-50/95 text-emerald-800"
           : "border-red-200 bg-red-50/95 text-red-800"
@@ -31221,7 +32461,15 @@ function Toast({ tone, message }: { tone: "success" | "error"; message: string }
         ) : (
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
         )}
-        <span>{message}</span>
+        <span className="min-w-0 flex-1 pr-1">{message}</span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={`Dismiss ${tone === "success" ? "success" : "error"} notification`}
+          className="rounded-md p-1 transition hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-current focus:ring-offset-2 focus:ring-offset-white"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
       </div>
     </div>
   );
