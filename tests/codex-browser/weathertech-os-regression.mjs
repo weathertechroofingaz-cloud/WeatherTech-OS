@@ -16,6 +16,7 @@ const DEFAULT_GROUPS = [
   "operations",
   "crm",
   "lead-intake",
+  "marketing",
   "themes",
   "layout",
   "settings",
@@ -4467,6 +4468,159 @@ async function testSettingsIntegrationCenter(tab) {
   return result;
 }
 
+async function testWebsiteMarketingFoundation(browser, tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Website & Marketing");
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="website-marketing-foundation"]');
+      const text = workspace?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("marketing integration foundation") &&
+        text.includes("read-only operating view") &&
+        text.includes("website, yelp, and gohighlevel intake") &&
+        text.includes("no live provider activation") &&
+        text.includes("weathertech roofing llc - phoenix") &&
+        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("ihc painting") &&
+        text.includes("website lead capture") &&
+        text.includes("secure form-intake foundation") &&
+        text.includes("yelp lead integration") &&
+        text.includes("secure yelp intake foundation") &&
+        text.includes("marketing providers are architecture-ready, not live-connected") &&
+        text.includes("open lead intake") &&
+        text.includes("review crm leads") &&
+        text.includes("provider setup") &&
+        text.includes("source settings")
+      );
+    },
+    "website marketing foundation",
+    15000,
+  );
+
+  const desktopState = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="website-marketing-foundation"]');
+
+    return {
+      visible: Boolean(workspace),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+      providerCards: workspace?.querySelectorAll("article").length ?? 0,
+      actionButtons: [...(workspace?.querySelectorAll("button") ?? [])]
+        .filter((button) =>
+          ["Open lead intake", "Review CRM leads", "Provider setup", "Source settings"]
+            .includes(button.textContent?.trim() ?? ""),
+        ).length,
+      statesLiveConnectivityHonestly:
+        workspace?.textContent?.toLowerCase().includes("does not connect providers") ?? false,
+    };
+  });
+
+  if (!desktopState.visible) {
+    throw new Error("Website & Marketing foundation workspace is not visible.");
+  }
+
+  if (desktopState.hasHorizontalOverflow) {
+    throw new Error("Website & Marketing desktop layout overflows horizontally.");
+  }
+
+  if (desktopState.providerCards < 3 || desktopState.actionButtons < 4) {
+    throw new Error(
+      `Website & Marketing rendered ${desktopState.providerCards} provider cards and ${desktopState.actionButtons} actions.`,
+    );
+  }
+
+  if (!desktopState.statesLiveConnectivityHonestly) {
+    throw new Error("Website & Marketing page does not clearly state live provider connectivity is disabled.");
+  }
+
+  await clickCompanyScope(tab, "IHC Painting");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="website-marketing-foundation"]')?.textContent ?? "";
+      return text.includes("IHC Painting");
+    },
+    "website marketing IHC scope",
+    10000,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="website-marketing-foundation"]')?.textContent ?? "";
+      return text.includes("WeatherTech Roofing LLC");
+    },
+    "website marketing WeatherTech scope",
+    10000,
+  );
+  await clickCompanyScope(tab, "All companies");
+
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="website-marketing-foundation"]//button[contains(normalize-space(.), "Provider setup")]',
+    ),
+    "marketing provider setup quick action",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+      return (
+        text.includes("integration hub") &&
+        text.includes("real-world service connections")
+      );
+    },
+    "marketing provider setup navigation",
+    10000,
+  );
+
+  await clickNav(tab, "Website & Marketing");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="website-marketing-foundation"]//button[contains(normalize-space(.), "Open lead intake")]',
+    ),
+    "marketing lead intake quick action",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Unified Communications Center"),
+    "marketing lead intake navigation",
+    10000,
+  );
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await clickNav(tab, "Website & Marketing");
+  const mobileState = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="website-marketing-foundation"]');
+
+    return {
+      visible: Boolean(workspace),
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+      hasFoundationPanels:
+        (workspace?.textContent?.includes("Website Lead Capture") ?? false) &&
+        (workspace?.textContent?.includes("Yelp Lead Integration") ?? false),
+    };
+  });
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (!mobileState.visible || !mobileState.hasFoundationPanels) {
+    throw new Error("Website & Marketing mobile layout did not render the foundation panels.");
+  }
+
+  if (mobileState.hasHorizontalOverflow) {
+    throw new Error(
+      `Website & Marketing mobile layout overflows horizontally: ${mobileState.scrollWidth}px > ${mobileState.viewportWidth}px.`,
+    );
+  }
+
+  return { desktopState, mobileState };
+}
+
 async function testCalendarScreen(tab) {
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Calendar");
@@ -6453,9 +6607,10 @@ export async function runWeatherTechOsRegression({
     const shouldReloadFreshSnapshot =
       shouldRunLeadWorkflow ||
       shouldRunEstimatesWorkflow ||
-	      shouldRunCustomersWorkflow ||
-	      shouldRunInboxWorkflow ||
+      shouldRunCustomersWorkflow ||
+      shouldRunInboxWorkflow ||
 	      enabledGroups.has("operations") ||
+	      enabledGroups.has("marketing") ||
 	      enabledGroups.has("lead-intake");
 
     if (shouldReloadFreshSnapshot) {
@@ -6495,6 +6650,12 @@ export async function runWeatherTechOsRegression({
 	    if (enabledGroups.has("settings")) {
       await record("Settings Integration Center displays provider readiness", () =>
         testSettingsIntegrationCenter(tab),
+      );
+    }
+
+    if (enabledGroups.has("marketing")) {
+      await record("Website & Marketing foundation opens and routes to existing workspaces", () =>
+        testWebsiteMarketingFoundation(browser, tab),
       );
     }
 

@@ -382,6 +382,7 @@ type WorkspaceView =
   | "orders"
   | "ai"
   | "weather"
+  | "marketing"
   | "customerPortal"
   | "employeePortal"
   | "routes"
@@ -452,6 +453,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     items: [
       { view: "ai", label: "AI Tools", icon: Bot },
       { view: "weather", label: "Weather", icon: CloudSun },
+      { view: "marketing", label: "Website & Marketing", icon: Globe2 },
       { view: "notifications", label: "Notifications", icon: Mail },
     ],
   },
@@ -5085,6 +5087,14 @@ function CrmWorkspace({
           ) : null}
 
           {view === "weather" ? <WeatherDashboardView snapshot={scopedSnapshot} /> : null}
+
+          {view === "marketing" ? (
+            <WebsiteMarketingView
+              snapshot={scopedSnapshot}
+              companyMap={companyMap}
+              onViewChange={onViewChange}
+            />
+          ) : null}
 
           {view === "customerPortal" ? (
             <CustomerPortalView
@@ -11257,6 +11267,419 @@ function LeadIntakeRoutingEnginePanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function WebsiteMarketingView({
+  snapshot,
+  companyMap,
+  onViewChange,
+}: {
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const marketingProviders = useMemo(
+    () => new Set(["website", "yelp", "gohighlevel"]),
+    [],
+  );
+  const inboxItems = useMemo(
+    () => buildUnifiedInboxItems(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const providerReadiness = useMemo(
+    () =>
+      buildCommunicationProviderReadiness(snapshot, inboxItems).filter((provider) =>
+        marketingProviders.has(provider.provider),
+      ),
+    [inboxItems, marketingProviders, snapshot],
+  );
+  const integrationProviders = useMemo(
+    () =>
+      buildIntegrationCenterProviders(snapshot).filter((provider) =>
+        marketingProviders.has(provider.metadata.id),
+      ),
+    [marketingProviders, snapshot],
+  );
+  const marketingLeads = useMemo(
+    () =>
+      sortByNewest(
+        snapshot.leads.filter((lead) => {
+          const source = lead.source.toLowerCase();
+          const compactSource = source.replace(/\s+/g, "");
+
+          return (
+            marketingProviders.has(compactSource) ||
+            ["website", "yelp", "gohighlevel", "go high level", "ghl"].some(
+              (candidate) => source.includes(candidate),
+            )
+          );
+        }),
+      ),
+    [marketingProviders, snapshot.leads],
+  );
+  const marketingItems = useMemo(
+    () =>
+      [...inboxItems]
+        .filter(
+          (item) =>
+            marketingProviders.has(item.provider) ||
+            marketingProviders.has(item.channel),
+        )
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    [inboxItems, marketingProviders],
+  );
+  const marketingSyncLogs = useMemo(
+    () =>
+      sortByNewest(
+        snapshot.integrationSyncLogs.filter((log) =>
+          marketingProviders.has(log.provider),
+        ),
+      ),
+    [marketingProviders, snapshot.integrationSyncLogs],
+  );
+  const failedMarketingLogs = marketingSyncLogs.filter(
+    (log) => log.status === "failed" || log.status === "retrying",
+  );
+  const sourceCounts = leadIntakeAdapterDefinitions
+    .filter((adapter) => ["website", "yelp", "gohighlevel"].includes(adapter.provider))
+    .map((adapter) => ({
+      ...adapter,
+      count:
+        adapter.provider === "gohighlevel"
+          ? marketingItems.filter((item) => item.provider === "gohighlevel").length
+          : marketingLeads.filter((lead) =>
+              lead.source.toLowerCase().includes(adapter.provider),
+            ).length,
+    }));
+  const companySummaries = snapshot.companies.map((company) => {
+    const companyLeads = marketingLeads.filter((lead) => lead.company_id === company.id);
+    const companyItems = marketingItems.filter((item) => item.companyId === company.id);
+    const latestActivity = companyItems[0] ?? null;
+
+    return {
+      company,
+      leads: companyLeads.length,
+      conversations: companyItems.length,
+      latestActivity,
+    };
+  });
+  const quickActions: {
+    label: string;
+    view: WorkspaceView;
+    icon: typeof Home;
+  }[] = [
+    { label: "Open lead intake", view: "inbox", icon: MessageSquare },
+    { label: "Review CRM leads", view: "leads", icon: ClipboardList },
+    { label: "Provider setup", view: "integrations", icon: PlugZap },
+    { label: "Source settings", view: "settings", icon: ShieldCheck },
+  ];
+
+  return (
+    <section
+      className="grid gap-5"
+      data-testid="website-marketing-foundation"
+    >
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Website & Marketing
+            </p>
+            <h2 className="mt-1 text-2xl font-black text-slate-950">
+              Marketing integration foundation
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              Read-only operating view for website leads, Yelp conversations,
+              GoHighLevel readiness, source routing, duplicate protection, and
+              owner setup requirements. This page does not connect providers,
+              send campaigns, alter CRM records, or create new workflows.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[440px]">
+            <ProfileStat label="Marketing leads" value={marketingLeads.length} />
+            <ProfileStat label="Visible activity" value={marketingItems.length} />
+            <ProfileStat label="Failed/retry logs" value={failedMarketingLogs.length} />
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {quickActions.map((action) => {
+            const Icon = action.icon;
+
+            return (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => onViewChange(action.view)}
+                className="flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 text-sky-700" />
+                  {action.label}
+                </span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-bold uppercase text-sky-700">
+                Source readiness
+              </p>
+              <h3 className="mt-1 text-xl font-black text-slate-950">
+                Website, Yelp, and GoHighLevel intake
+              </h3>
+            </div>
+            <ProviderStatusBadge label="No live provider activation" tone="blue" />
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {sourceCounts.map((source) => (
+              <article
+                key={source.provider}
+                className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-slate-950">{source.label}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      {source.summary}
+                    </p>
+                  </div>
+                  <ProviderStatusBadge
+                    label={
+                      source.status === "active"
+                        ? "Active foundation"
+                        : "Ready foundation"
+                    }
+                    tone={source.status === "active" ? "green" : "amber"}
+                  />
+                </div>
+                <p className="mt-4 text-xs font-bold uppercase text-slate-500">
+                  {source.count} existing item{source.count === 1 ? "" : "s"}
+                </p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            {leadIntakeRoutingBranches.map((branch) => (
+              <div
+                key={branch.key}
+                className="rounded-lg border border-slate-200 bg-white p-3"
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-bold text-slate-950">{branch.label}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      Queue {branch.queue ?? "manual review"}; company routing{" "}
+                      {branch.companyKey.replace(/_/g, " ")}.
+                    </p>
+                  </div>
+                  <ProviderStatusBadge
+                    label={
+                      branch.status === "review_only"
+                        ? "Review only"
+                        : "Configuration required"
+                    }
+                    tone={branch.status === "review_only" ? "blue" : "amber"}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <aside className="grid gap-5">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-bold uppercase text-sky-700">
+              Company coverage
+            </p>
+            <div className="mt-4 grid gap-3">
+              {companySummaries.map(({ company, leads, conversations, latestActivity }) => (
+                <div
+                  key={company.id}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">{company.name}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {companyTradeLabel(company)} marketing workspace
+                      </p>
+                    </div>
+                    <span
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={{ backgroundColor: getCompanyBrandColor(company) }}
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        Leads
+                      </p>
+                      <p className="font-bold text-slate-950">{leads}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        Activity
+                      </p>
+                      <p className="font-bold text-slate-950">{conversations}</p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-slate-500">
+                    Latest:{" "}
+                    {latestActivity
+                      ? `${latestActivity.sourceLabel} - ${formatDateTime(latestActivity.createdAt)}`
+                      : "No marketing activity in the loaded snapshot."}
+                  </p>
+                </div>
+              ))}
+              {!companySummaries.length ? (
+                <EmptyState label="No company records are available for marketing setup." />
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-bold uppercase text-sky-700">
+              Provider truth
+            </p>
+            <div className="mt-4 grid gap-3">
+              {providerReadiness.map((provider) => (
+                <div
+                  key={provider.provider}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">{provider.label}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-500">
+                        {provider.detail}
+                      </p>
+                    </div>
+                    <ProviderStatusBadge
+                      label={provider.connectionStatus}
+                      tone={provider.connectionStatus === "Connected" ? "green" : "blue"}
+                    />
+                  </div>
+                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">
+                    {provider.syncHealth}; last activity{" "}
+                    {provider.lastActivityAt
+                      ? formatDateTime(provider.lastActivityAt)
+                      : "not recorded"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold uppercase text-sky-700">
+              Recent marketing activity
+            </p>
+            <h3 className="mt-1 text-xl font-black text-slate-950">
+              Existing intake and campaign-adjacent records
+            </h3>
+          </div>
+          <ProviderStatusBadge
+            label={`${marketingItems.length} loaded`}
+            tone={marketingItems.length ? "green" : "slate"}
+          />
+        </div>
+
+        <div className="mt-5 grid gap-3">
+          {marketingItems.slice(0, 8).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onViewChange("inbox")}
+              className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 md:grid-cols-[minmax(0,1fr)_180px_150px]"
+            >
+              <div>
+                <p className="font-bold text-slate-950">{item.customerName}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  {item.summary}
+                </p>
+              </div>
+              <span className="text-sm font-semibold text-slate-600">
+                {item.sourceLabel}
+              </span>
+              <span className="text-sm text-slate-500">
+                {formatDateTime(item.createdAt)}
+              </span>
+            </button>
+          ))}
+          {!marketingItems.length ? (
+            <EmptyState label="No website, Yelp, or GoHighLevel activity is visible in the loaded CRM snapshot." />
+          ) : null}
+        </div>
+      </section>
+
+      <section className="grid gap-5">
+        <WebsiteLeadCaptureFoundationPanel />
+        <YelpLeadCaptureFoundationPanel />
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold uppercase text-sky-700">
+              Integration readiness
+            </p>
+            <h3 className="mt-1 text-xl font-black text-slate-950">
+              Marketing providers are architecture-ready, not live-connected
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => onViewChange("integrations")}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+          >
+            <PlugZap className="h-4 w-4" />
+            Open Integration Center
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {integrationProviders.map((provider) => (
+            <article
+              key={provider.metadata.id}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">
+                    {provider.metadata.label}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    {provider.connectionSummary}
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={integrationConnectionStateLabel(provider.connectionState)}
+                  tone={provider.connectionState === "connected" ? "green" : "blue"}
+                />
+              </div>
+              <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                {integrationReadinessStateLabel(provider.readinessState)}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </section>
   );
 }
 
