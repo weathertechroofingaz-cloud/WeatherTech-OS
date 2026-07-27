@@ -371,6 +371,7 @@ type WorkspaceView =
   | "operations"
   | "inbox"
   | "leadIntake"
+  | "salesPipeline"
   | "leads"
   | "customers"
   | "estimates"
@@ -418,6 +419,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     items: [
       { view: "inbox", label: "Inbox", icon: MessageSquare },
       { view: "leadIntake", label: "Lead Intake", icon: Plus },
+      { view: "salesPipeline", label: "Sales Pipeline", icon: DollarSign },
       { view: "leads", label: "Leads", icon: ClipboardList },
       { view: "customers", label: "Customers", icon: Users },
       { view: "estimates", label: "Estimates", icon: FileText },
@@ -5032,6 +5034,21 @@ function CrmWorkspace({
               companyMap={companyMap}
               onReload={onScrollPreservingReload}
               onDemoSnapshotChange={onDemoSnapshotChange}
+              onNotice={onNotice}
+              onError={onError}
+            />
+          ) : null}
+
+          {view === "salesPipeline" ? (
+            <SalesPipelineView
+              client={client}
+              isDemoMode={isDemoMode}
+              snapshot={scopedSnapshot}
+              companyMap={companyMap}
+              user={user}
+              onReload={onScrollPreservingReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
+              onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -11108,12 +11125,23 @@ type LeadIntakeViewProps = LeadsViewProps & {
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
 };
 
+type SalesPipelineViewProps = LeadsViewProps & {
+  isDemoMode: boolean;
+  user: User | null;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+  onViewChange: (view: WorkspaceView) => void;
+};
+
 type LeadEditDraft = {
   pipeline_stage: PipelineStage;
   priority: LeadPriority;
   estimated_value: string;
   next_follow_up: string;
   notes: string;
+};
+
+type OpportunityEditDraft = LeadEditDraft & {
+  owner: "unassigned" | "me" | "existing";
 };
 
 function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
@@ -11123,6 +11151,17 @@ function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
     estimated_value: lead ? String(lead.estimated_value) : "",
     next_follow_up: lead?.next_follow_up ?? "",
     notes: lead?.notes ?? "",
+  };
+}
+
+function getOpportunityEditDraft(lead: LeadRecord | null, user: User | null): OpportunityEditDraft {
+  return {
+    ...getLeadEditDraft(lead),
+    owner: lead?.created_by
+      ? lead.created_by === user?.id
+        ? "me"
+        : "existing"
+      : "unassigned",
   };
 }
 
@@ -11140,6 +11179,234 @@ function getLeadCreateValidationMessage(companies: CompanyRecord[], input: LeadI
   }
 
   return "";
+}
+
+function getOpportunityProbability(stage: PipelineStage) {
+  const probabilities: Record<PipelineStage, number> = {
+    new_lead: 10,
+    contacted: 25,
+    estimate_scheduled: 45,
+    estimate_sent: 65,
+    approved: 90,
+    job_scheduled: 95,
+    completed: 100,
+    paid: 100,
+    lost: 0,
+  };
+
+  return probabilities[stage];
+}
+
+function getOpportunityStageTone(stage: PipelineStage): "blue" | "green" | "amber" {
+  if (stage === "approved" || stage === "job_scheduled" || stage === "completed" || stage === "paid") {
+    return "green";
+  }
+
+  if (stage === "lost") {
+    return "amber";
+  }
+
+  return "blue";
+}
+
+function getOpportunityOwnerLabel(lead: LeadRecord, user: User | null) {
+  if (!lead.created_by) {
+    return "Unassigned";
+  }
+
+  if (lead.created_by === user?.id) {
+    return user.email ?? "You";
+  }
+
+  return `User ${lead.created_by.slice(0, 8)}`;
+}
+
+function getOpportunityNextAction(lead: LeadRecord, estimate: EstimateRecord | null, job: JobRecord | null) {
+  if (lead.status === "lost") {
+    return "Review lost reason before reactivation";
+  }
+
+  if (job) {
+    return job.status === "draft" ? "Prepare production handoff" : "Track job progress";
+  }
+
+  if (estimate) {
+    return estimate.status === "draft" ? "Complete estimate packet" : "Follow up on estimate";
+  }
+
+  if (!lead.customer_id && (lead.pipeline_stage === "estimate_scheduled" || lead.pipeline_stage === "estimate_sent")) {
+    return "Convert lead to customer";
+  }
+
+  if (lead.next_follow_up) {
+    return `Follow up ${formatDate(lead.next_follow_up)}`;
+  }
+
+  return "Qualify and set follow-up";
+}
+
+function getOpportunityRelatedEstimate(snapshot: CrmSnapshot, lead: LeadRecord) {
+  return (
+    snapshot.estimates.find((estimate) => estimate.lead_id === lead.id) ??
+    (lead.customer_id
+      ? snapshot.estimates.find(
+          (estimate) =>
+            estimate.customer_id === lead.customer_id &&
+            estimate.company_id === lead.company_id &&
+            estimate.location === lead.property_address,
+        )
+      : null) ??
+    null
+  );
+}
+
+function getOpportunityRelatedJob(
+  snapshot: CrmSnapshot,
+  lead: LeadRecord,
+  estimate: EstimateRecord | null,
+) {
+  return (
+    snapshot.jobs.find((job) => job.lead_id === lead.id) ??
+    (estimate ? snapshot.jobs.find((job) => job.estimate_id === estimate.id) : null) ??
+    null
+  );
+}
+
+function buildOpportunityCustomerInput(lead: LeadRecord): CustomerInput {
+  return {
+    company_id: lead.company_id,
+    display_name: lead.contact_name,
+    contact_name: lead.contact_name,
+    phone: lead.phone,
+    email: lead.email,
+    property_address: lead.property_address,
+    city: lead.city,
+    state: lead.state,
+    postal_code: lead.postal_code,
+    customer_type: "homeowner",
+    status: "active",
+    notes: lead.notes,
+  };
+}
+
+function findOpportunityCustomerMatch(snapshot: CrmSnapshot, lead: LeadRecord) {
+  if (lead.customer_id) {
+    return snapshot.customers.find((customer) => customer.id === lead.customer_id) ?? null;
+  }
+
+  return (
+    findPotentialCustomerDuplicates(snapshot.customers, buildOpportunityCustomerInput(lead))[0]
+      ?.customer ?? null
+  );
+}
+
+function buildOpportunityEstimateInput(
+  lead: LeadRecord,
+  customerId: string,
+  company: CompanyRecord | null | undefined,
+): EstimateInput {
+  const issueDate = todayIsoDate();
+
+  return {
+    company_id: lead.company_id,
+    customer_id: customerId,
+    lead_id: lead.id,
+    business: company?.name ?? null,
+    location: lead.property_address,
+    title: `${lead.contact_name} opportunity estimate`,
+    status: "draft",
+    service_type: lead.service_type,
+    issue_date: issueDate,
+    expiration_date: addDaysIsoDate(30),
+    tax_rate: 0,
+    discount_type: "fixed",
+    discount_value: 0,
+    profit_margin_rate: 0,
+    notes: lead.notes,
+    scope_of_work:
+      lead.notes ??
+      `Estimate draft created from opportunity for ${lead.contact_name}.`,
+  };
+}
+
+function buildOpportunityEstimateLineItems(lead: LeadRecord): EstimateLineItemInput[] {
+  const expectedValue = Math.max(lead.estimated_value, 0);
+
+  return [
+    {
+      category: "other",
+      name: "Opportunity planning allowance",
+      description: "Initial draft line item from the sales opportunity. Refine before sending.",
+      quantity: 1,
+      unit: "project",
+      unit_cost: expectedValue,
+      unit_price: expectedValue,
+      markup_rate: 0,
+      taxable: false,
+      sort_order: 0,
+    },
+  ];
+}
+
+function buildOpportunityJobInput(
+  lead: LeadRecord,
+  company: CompanyRecord | null | undefined,
+): JobInput {
+  return {
+    company_id: lead.company_id,
+    customer_id: lead.customer_id,
+    lead_id: lead.id,
+    estimate_id: null,
+    business: company?.name ?? null,
+    location: lead.property_address,
+    title: `${lead.contact_name} opportunity job`,
+    service_type: lead.service_type,
+    status: "draft",
+    scheduled_start: null,
+    scheduled_end: null,
+    start_date: null,
+    end_date: null,
+    crew_name: null,
+    project_manager: null,
+    address: lead.property_address,
+    property_address: lead.property_address,
+    scope_of_work: lead.notes,
+    total: lead.estimated_value,
+    notes: lead.notes,
+  };
+}
+
+function isMissingLeadCustomerIdColumnError(currentError: unknown) {
+  const message = getCaughtErrorMessage(currentError, "").toLowerCase();
+
+  return (
+    message.includes("customer_id") &&
+    message.includes("leads") &&
+    (message.includes("schema cache") || message.includes("could not find"))
+  );
+}
+
+async function updateOpportunityLead(
+  client: CrmClient,
+  leadId: string,
+  updates: Partial<LeadInput>,
+) {
+  try {
+    return await updateLead(client, leadId, updates);
+  } catch (currentError) {
+    if (!("customer_id" in updates) || !isMissingLeadCustomerIdColumnError(currentError)) {
+      throw currentError;
+    }
+
+    const supportedUpdates = { ...updates };
+    delete supportedUpdates.customer_id;
+
+    if (!Object.keys(supportedUpdates).length) {
+      return null;
+    }
+
+    return updateLead(client, leadId, supportedUpdates);
+  }
 }
 
 function getLeadCreateDuplicateMessage({
@@ -12469,6 +12736,1071 @@ function TwilioCommunicationsSetupNotice() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function SalesPipelineView({
+  client,
+  isDemoMode,
+  snapshot,
+  companyMap,
+  user,
+  onReload,
+  onDemoSnapshotChange,
+  onViewChange,
+  onNotice,
+  onError,
+}: SalesPipelineViewProps) {
+  const [selectedOpportunityId, setSelectedOpportunityId] = useState(
+    snapshot.leads[0]?.id ?? "",
+  );
+  const [search, setSearch] = useState("");
+  const [stageFilter, setStageFilter] = useState<PipelineStage | "all">("all");
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | "unassigned">("all");
+  const [followUpFilter, setFollowUpFilter] = useState<"all" | "due" | "none">("all");
+  const [isSavingOpportunity, setIsSavingOpportunity] = useState(false);
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+  const [isCreatingEstimate, setIsCreatingEstimate] = useState(false);
+  const [isCreatingJob, setIsCreatingJob] = useState(false);
+
+  const selectedOpportunity =
+    snapshot.leads.find((lead) => lead.id === selectedOpportunityId) ?? null;
+  const [opportunityDraft, setOpportunityDraft] = useState(() =>
+    getOpportunityEditDraft(selectedOpportunity, user),
+  );
+  const selectedOpportunityCompany = selectedOpportunity
+    ? companyMap.get(selectedOpportunity.company_id)
+    : null;
+  const selectedOpportunityCustomer = selectedOpportunity?.customer_id
+    ? snapshot.customers.find(
+        (customer) => customer.id === selectedOpportunity.customer_id,
+      ) ?? null
+    : null;
+  const selectedOpportunityCustomerMatch =
+    selectedOpportunity && !selectedOpportunity.customer_id
+      ? findOpportunityCustomerMatch(snapshot, selectedOpportunity)
+      : null;
+  const selectedOpportunityEstimate = selectedOpportunity
+    ? getOpportunityRelatedEstimate(snapshot, selectedOpportunity)
+    : null;
+  const selectedOpportunityJob = selectedOpportunity
+    ? getOpportunityRelatedJob(snapshot, selectedOpportunity, selectedOpportunityEstimate)
+    : null;
+  const unifiedInboxItems = useMemo(
+    () => buildUnifiedInboxItems(snapshot, companyMap),
+    [snapshot, companyMap],
+  );
+  const selectedOpportunityCommunications = selectedOpportunity
+    ? unifiedInboxItems.filter(
+        (item) =>
+          item.companyId === selectedOpportunity.company_id &&
+          (item.leadId === selectedOpportunity.id ||
+            (selectedOpportunity.customer_id !== null &&
+              item.customerId === selectedOpportunity.customer_id)),
+      )
+    : [];
+
+  useEffect(() => {
+    if (!snapshot.leads.length) {
+      if (selectedOpportunityId) {
+        setSelectedOpportunityId("");
+      }
+
+      return;
+    }
+
+    if (
+      !selectedOpportunityId ||
+      !snapshot.leads.some((lead) => lead.id === selectedOpportunityId)
+    ) {
+      setSelectedOpportunityId(snapshot.leads[0].id);
+    }
+  }, [selectedOpportunityId, snapshot.leads]);
+
+  useEffect(() => {
+    setOpportunityDraft(getOpportunityEditDraft(selectedOpportunity, user));
+  }, [selectedOpportunity, user]);
+
+  const filteredOpportunities = snapshot.leads.filter((lead) => {
+    const company = companyMap.get(lead.company_id);
+    const estimate = getOpportunityRelatedEstimate(snapshot, lead);
+    const job = getOpportunityRelatedJob(snapshot, lead, estimate);
+    const query = search.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      lead.contact_name.toLowerCase().includes(query) ||
+      lead.property_address.toLowerCase().includes(query) ||
+      lead.source.toLowerCase().includes(query) ||
+      pipelineStageLabel(lead.pipeline_stage).toLowerCase().includes(query) ||
+      (company?.name ?? "").toLowerCase().includes(query) ||
+      (estimate?.title ?? "").toLowerCase().includes(query) ||
+      (job?.title ?? "").toLowerCase().includes(query);
+    const matchesStage =
+      stageFilter === "all" || lead.pipeline_stage === stageFilter;
+    const matchesOwner =
+      ownerFilter === "all" ||
+      (ownerFilter === "mine" && lead.created_by === user?.id) ||
+      (ownerFilter === "unassigned" && !lead.created_by);
+    const matchesFollowUp =
+      followUpFilter === "all" ||
+      (followUpFilter === "due" &&
+        Boolean(lead.next_follow_up && lead.next_follow_up <= todayIsoDate())) ||
+      (followUpFilter === "none" && !lead.next_follow_up);
+
+    return matchesSearch && matchesStage && matchesOwner && matchesFollowUp;
+  });
+  const {
+    page: opportunityPage,
+    pageCount: opportunityPageCount,
+    setPage: setOpportunityPage,
+    pagedItems: pagedOpportunities,
+  } = usePagination(filteredOpportunities);
+  const stageGroups = pipelineStages.map((stage) => {
+    const opportunities = filteredOpportunities.filter(
+      (lead) => lead.pipeline_stage === stage.value,
+    );
+
+    return {
+      ...stage,
+      opportunities,
+      stageValue: opportunities.reduce((total, lead) => total + lead.estimated_value, 0),
+    };
+  });
+  const pipelineValue = filteredOpportunities.reduce(
+    (total, lead) => total + lead.estimated_value,
+    0,
+  );
+  const weightedValue = filteredOpportunities.reduce(
+    (total, lead) =>
+      total + lead.estimated_value * (getOpportunityProbability(lead.pipeline_stage) / 100),
+    0,
+  );
+  const dueFollowUps = filteredOpportunities.filter(
+    (lead) => lead.next_follow_up && lead.next_follow_up <= todayIsoDate(),
+  ).length;
+  const linkedEstimateCount = filteredOpportunities.filter((lead) =>
+    Boolean(getOpportunityRelatedEstimate(snapshot, lead)),
+  ).length;
+
+  useEffect(() => {
+    setOpportunityPage(1);
+  }, [followUpFilter, ownerFilter, search, setOpportunityPage, stageFilter]);
+
+  const updateDemoOpportunity = (leadId: string, updates: Partial<LeadInput>) => {
+    const now = new Date().toISOString();
+
+    onDemoSnapshotChange((currentSnapshot) => ({
+      ...currentSnapshot,
+      leads: currentSnapshot.leads.map((lead) =>
+        lead.id === leadId
+          ? {
+              ...lead,
+              ...updates,
+              status: updates.status ?? lead.status,
+              pipeline_stage: updates.pipeline_stage ?? lead.pipeline_stage,
+              updated_at: now,
+            }
+          : lead,
+      ),
+    }));
+  };
+
+  const ensureOpportunityCustomer = async (lead: LeadRecord) => {
+    if (lead.customer_id) {
+      return lead.customer_id;
+    }
+
+    const existingCustomer = findOpportunityCustomerMatch(snapshot, lead);
+
+    if (existingCustomer) {
+      if (isDemoMode) {
+        updateDemoOpportunity(lead.id, { customer_id: existingCustomer.id });
+      } else {
+        await updateOpportunityLead(client, lead.id, {
+          customer_id: existingCustomer.id,
+        });
+      }
+
+      return existingCustomer.id;
+    }
+
+    const input = buildOpportunityCustomerInput(lead);
+
+    if (isDemoMode) {
+      const customerId = `demo-customer-${Date.now()}`;
+      const now = new Date().toISOString();
+      const customer: CustomerRecord = {
+        id: customerId,
+        ...input,
+        phone: input.phone ?? null,
+        email: input.email ?? null,
+        city: input.city ?? null,
+        state: input.state ?? "AZ",
+        postal_code: input.postal_code ?? null,
+        customer_type: input.customer_type ?? "homeowner",
+        status: input.status ?? "active",
+        notes: input.notes ?? null,
+        created_at: now,
+        updated_at: now,
+      };
+
+      onDemoSnapshotChange((currentSnapshot) => ({
+        ...currentSnapshot,
+        customers: [customer, ...currentSnapshot.customers],
+        leads: currentSnapshot.leads.map((currentLead) =>
+          currentLead.id === lead.id
+            ? { ...currentLead, customer_id: customerId, updated_at: now }
+            : currentLead,
+        ),
+      }));
+
+      return customerId;
+    }
+
+    const customer = await createCustomer(client, input);
+    await updateOpportunityLead(client, lead.id, { customer_id: customer.id });
+
+    return customer.id;
+  };
+
+  const handleSelectOpportunity = (leadId: string) => {
+    updateUiPreservingScrollPosition(() => setSelectedOpportunityId(leadId));
+  };
+
+  const handleSaveOpportunity = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedOpportunity || isSavingOpportunity) {
+      return;
+    }
+
+    const estimatedValue = Number(
+      opportunityDraft.estimated_value.replace(/[^0-9.]/g, ""),
+    );
+    const ownerUpdate =
+      opportunityDraft.owner === "me"
+        ? user?.id
+        : opportunityDraft.owner === "unassigned"
+          ? null
+          : selectedOpportunity.created_by;
+
+    if (opportunityDraft.owner === "me" && !user?.id) {
+      onError("Sign in before assigning an opportunity to yourself.");
+      return;
+    }
+
+    if (
+      opportunityDraft.next_follow_up &&
+      !/^\d{4}-\d{2}-\d{2}$/.test(opportunityDraft.next_follow_up)
+    ) {
+      onError("Enter the next follow-up date as YYYY-MM-DD.");
+      return;
+    }
+
+    const pipelineStage = opportunityDraft.pipeline_stage;
+    const updates: Partial<LeadInput> = {
+      status: leadStatusForPipelineStage(pipelineStage),
+      pipeline_stage: pipelineStage,
+      priority: opportunityDraft.priority,
+      estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : 0,
+      next_follow_up: opportunityDraft.next_follow_up || null,
+      notes: opportunityDraft.notes || null,
+      created_by: ownerUpdate,
+    };
+
+    try {
+      setIsSavingOpportunity(true);
+      onError("");
+
+      if (isDemoMode) {
+        updateDemoOpportunity(selectedOpportunity.id, updates);
+      } else {
+        await updateLead(client, selectedOpportunity.id, updates);
+        await onReload();
+      }
+
+      onNotice("Opportunity updated.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to update opportunity."));
+    } finally {
+      setIsSavingOpportunity(false);
+    }
+  };
+
+  const handleMoveOpportunityStage = async (stage: PipelineStage) => {
+    if (!selectedOpportunity) {
+      return;
+    }
+
+    try {
+      const updates = {
+        status: leadStatusForPipelineStage(stage),
+        pipeline_stage: stage,
+      } satisfies Partial<LeadInput>;
+
+      if (isDemoMode) {
+        updateDemoOpportunity(selectedOpportunity.id, updates);
+      } else {
+        await updateLead(client, selectedOpportunity.id, updates);
+        await onReload();
+      }
+
+      onNotice(`Opportunity moved to ${pipelineStageLabel(stage)}.`);
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to move opportunity."));
+    }
+  };
+
+  const handleEnsureCustomer = async () => {
+    if (!selectedOpportunity || isCreatingCustomer) {
+      return;
+    }
+
+    try {
+      setIsCreatingCustomer(true);
+      onError("");
+      await ensureOpportunityCustomer(selectedOpportunity);
+      if (!isDemoMode) {
+        await onReload();
+      }
+      onNotice("Opportunity linked to a customer.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to link customer."));
+    } finally {
+      setIsCreatingCustomer(false);
+    }
+  };
+
+  const handleCreateOpportunityEstimate = async () => {
+    if (!selectedOpportunity || isCreatingEstimate) {
+      return;
+    }
+
+    if (selectedOpportunityEstimate) {
+      onNotice(`Existing linked estimate opened: ${selectedOpportunityEstimate.title}`);
+      onViewChange("estimates");
+      return;
+    }
+
+    try {
+      setIsCreatingEstimate(true);
+      onError("");
+      const customerId = await ensureOpportunityCustomer(selectedOpportunity);
+      const input = buildOpportunityEstimateInput(
+        selectedOpportunity,
+        customerId,
+        selectedOpportunityCompany,
+      );
+      const lineItems = buildOpportunityEstimateLineItems(selectedOpportunity);
+
+      if (isDemoMode) {
+        const estimateId = `demo-estimate-${Date.now()}`;
+        const now = new Date().toISOString();
+        const totals = calculateEstimateTotals(input, lineItems);
+        const estimate: EstimateRecord = {
+          id: estimateId,
+          company_id: input.company_id,
+          customer_id: customerId,
+          lead_id: selectedOpportunity.id,
+          business: input.business ?? null,
+          location: input.location ?? null,
+          title: input.title,
+          status: input.status ?? "draft",
+          service_type: input.service_type,
+          issue_date: input.issue_date,
+          expiration_date: input.expiration_date ?? null,
+          subtotal: totals.subtotal,
+          labor_total: totals.laborTotal,
+          material_total: totals.materialTotal,
+          tax_rate: input.tax_rate ?? 0,
+          tax_total: totals.taxTotal,
+          discount_type: input.discount_type ?? "fixed",
+          discount_value: input.discount_value ?? 0,
+          discount_total: totals.discountTotal,
+          profit_margin_rate: input.profit_margin_rate ?? 0,
+          profit_margin_total: totals.profitMarginTotal,
+          total: totals.total,
+          notes: input.notes ?? null,
+          scope_of_work: input.scope_of_work ?? null,
+          painting_area_type: input.painting_area_type ?? null,
+          paint_brand: input.paint_brand ?? "Dunn-Edwards",
+          paint_product_line: input.paint_product_line ?? null,
+          paint_finish: input.paint_finish ?? null,
+          color_selection_status: input.color_selection_status ?? "not_started",
+          paint_color_body: input.paint_color_body ?? null,
+          paint_color_trim: input.paint_color_trim ?? null,
+          paint_color_accent: input.paint_color_accent ?? null,
+          surface_prep_level: input.surface_prep_level ?? null,
+          coats: input.coats ?? 1,
+          primer_required: input.primer_required ?? false,
+          created_at: now,
+          updated_at: now,
+        };
+        const lineRecords: EstimateLineItemRecord[] = lineItems.map((item, index) => ({
+          id: `demo-estimate-line-${Date.now()}-${index}`,
+          estimate_id: estimateId,
+          category: item.category,
+          name: item.name,
+          description: item.description ?? null,
+          quantity: item.quantity,
+          unit: item.unit ?? "each",
+          unit_cost: item.unit_cost,
+          unit_price: item.unit_price ?? item.unit_cost,
+          markup_rate: item.markup_rate ?? 0,
+          taxable: item.taxable ?? false,
+          sort_order: item.sort_order ?? index,
+          total: calculateLineItemTotal(item),
+          created_at: now,
+          updated_at: now,
+        }));
+
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          estimates: [estimate, ...currentSnapshot.estimates],
+          estimateLineItems: [...lineRecords, ...currentSnapshot.estimateLineItems],
+          leads: currentSnapshot.leads.map((lead) =>
+            lead.id === selectedOpportunity.id
+              ? {
+                  ...lead,
+                  customer_id: customerId,
+                  status: "qualified",
+                  pipeline_stage: "estimate_scheduled",
+                  updated_at: now,
+                }
+              : lead,
+          ),
+        }));
+      } else {
+        await createEstimate(client, input, lineItems);
+        await updateOpportunityLead(client, selectedOpportunity.id, {
+          customer_id: customerId,
+          status: "qualified",
+          pipeline_stage: "estimate_scheduled",
+        });
+        await onReload();
+      }
+
+      onNotice("Draft estimate created from opportunity.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create estimate from opportunity."));
+    } finally {
+      setIsCreatingEstimate(false);
+    }
+  };
+
+  const handleCreateOpportunityJob = async () => {
+    if (!selectedOpportunity || isCreatingJob) {
+      return;
+    }
+
+    if (selectedOpportunityJob) {
+      onNotice(`Existing linked job opened: ${selectedOpportunityJob.title}`);
+      onViewChange("jobs");
+      return;
+    }
+
+    try {
+      setIsCreatingJob(true);
+      onError("");
+      const customerId = await ensureOpportunityCustomer(selectedOpportunity);
+      const input = buildOpportunityJobInput(
+        { ...selectedOpportunity, customer_id: customerId },
+        selectedOpportunityCompany,
+      );
+
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        const job: JobRecord = {
+          id: `demo-job-${Date.now()}`,
+          ...input,
+          customer_id: input.customer_id ?? null,
+          lead_id: input.lead_id ?? null,
+          estimate_id: input.estimate_id ?? null,
+          scope_id: input.scope_id ?? null,
+          business: input.business ?? null,
+          location: input.location ?? null,
+          status: input.status ?? "draft",
+          scheduled_start: null,
+          scheduled_end: null,
+          start_date: null,
+          end_date: null,
+          crew_name: null,
+          project_manager: null,
+          address: input.address ?? null,
+          scope_of_work: input.scope_of_work ?? null,
+          total: input.total ?? 0,
+          latitude: null,
+          longitude: null,
+          google_place_id: null,
+          address_verified_at: null,
+          notes: input.notes ?? null,
+          created_at: now,
+          updated_at: now,
+        };
+
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          jobs: [job, ...currentSnapshot.jobs],
+          leads: currentSnapshot.leads.map((lead) =>
+            lead.id === selectedOpportunity.id
+              ? {
+                  ...lead,
+                  customer_id: customerId,
+                  status: "won",
+                  pipeline_stage: "job_scheduled",
+                  updated_at: now,
+                }
+              : lead,
+          ),
+        }));
+      } else {
+        await createJob(client, input);
+        await updateOpportunityLead(client, selectedOpportunity.id, {
+          customer_id: customerId,
+          status: "won",
+          pipeline_stage: "job_scheduled",
+        });
+        await onReload();
+      }
+
+      onNotice("Draft job created from opportunity.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create job from opportunity."));
+    } finally {
+      setIsCreatingJob(false);
+    }
+  };
+
+  return (
+    <div
+      className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_440px]"
+      data-testid="sales-pipeline-workspace"
+    >
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase text-sky-700">
+                Sales Pipeline
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950">
+                Opportunity Management
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Manage qualified opportunities from lead intake through estimates,
+                production handoff, won work, and lost outcomes.
+              </p>
+            </div>
+            <div className="grid gap-2 text-sm sm:grid-cols-3 lg:min-w-[420px]">
+              <ProfileStat label="Pipeline" value={formatMoney(pipelineValue)} />
+              <ProfileStat label="Weighted" value={formatMoney(weightedValue)} />
+              <ProfileStat label="Follow-ups" value={dueFollowUps} />
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_auto_auto_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                data-testid="sales-pipeline-search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                placeholder="Search opportunities, customers, addresses, estimates, jobs"
+              />
+            </div>
+            <select
+              data-testid="sales-pipeline-stage-filter"
+              value={stageFilter}
+              onChange={(event) =>
+                setStageFilter(event.target.value as PipelineStage | "all")
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="all">All stages</option>
+              {pipelineStages.map((stage) => (
+                <option key={stage.value} value={stage.value}>
+                  {stage.label}
+                </option>
+              ))}
+            </select>
+            <select
+              data-testid="sales-pipeline-owner-filter"
+              value={ownerFilter}
+              onChange={(event) =>
+                setOwnerFilter(event.target.value as "all" | "mine" | "unassigned")
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="all">All owners</option>
+              <option value="mine">Assigned to me</option>
+              <option value="unassigned">Unassigned</option>
+            </select>
+            <select
+              data-testid="sales-pipeline-follow-up-filter"
+              value={followUpFilter}
+              onChange={(event) =>
+                setFollowUpFilter(event.target.value as "all" | "due" | "none")
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="all">All follow-ups</option>
+              <option value="due">Due follow-ups</option>
+              <option value="none">No follow-up</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="border-b border-slate-100 p-5">
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+            {stageGroups.map((stage) => (
+              <button
+                key={stage.value}
+                type="button"
+                onClick={() => setStageFilter(stage.value)}
+                className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
+                  stageFilter === stage.value
+                    ? "border-sky-400 bg-sky-50"
+                    : "border-slate-200 bg-slate-50 hover:bg-white"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-bold text-slate-950">{stage.label}</p>
+                  <Badge
+                    label={`${getOpportunityProbability(stage.value)}%`}
+                    tone={getOpportunityStageTone(stage.value)}
+                  />
+                </div>
+                <p className="mt-3 text-2xl font-bold text-slate-950">
+                  {stage.opportunities.length}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {formatMoney(stage.stageValue)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="divide-y divide-slate-100">
+          {pagedOpportunities.map((lead) => {
+            const company = companyMap.get(lead.company_id);
+            const estimate = getOpportunityRelatedEstimate(snapshot, lead);
+            const job = getOpportunityRelatedJob(snapshot, lead, estimate);
+            const nextAction = getOpportunityNextAction(lead, estimate, job);
+
+            return (
+              <button
+                key={lead.id}
+                type="button"
+                data-testid="sales-pipeline-opportunity-row"
+                aria-pressed={selectedOpportunity?.id === lead.id}
+                onClick={() => handleSelectOpportunity(lead.id)}
+                className={`grid w-full gap-3 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:grid-cols-[1fr_130px_120px_130px_130px] lg:items-center ${
+                  selectedOpportunity?.id === lead.id
+                    ? "border-l-sky-500 bg-sky-50"
+                    : "border-l-transparent bg-white"
+                }`}
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-slate-950">{lead.contact_name}</p>
+                    <Badge
+                      label={pipelineStageLabel(lead.pipeline_stage)}
+                      tone={getOpportunityStageTone(lead.pipeline_stage)}
+                    />
+                    {estimate ? <Badge label="Estimate linked" tone="green" /> : null}
+                    {job ? <Badge label="Job linked" tone="green" /> : null}
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">{lead.property_address}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {nextAction}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold text-slate-950">
+                  {formatMoney(lead.estimated_value)}
+                </span>
+                <span className="text-sm text-slate-600">
+                  {getOpportunityProbability(lead.pipeline_stage)}%
+                </span>
+                <span className="text-sm text-slate-600">
+                  {lead.next_follow_up ? formatDate(lead.next_follow_up) : "No follow-up"}
+                </span>
+                <span className="text-sm text-slate-600">
+                  {company?.short_name ?? company?.name ?? "Company"}
+                </span>
+              </button>
+            );
+          })}
+
+          {!filteredOpportunities.length ? (
+            <EmptyState label="No opportunities match this sales pipeline view." />
+          ) : null}
+        </div>
+
+        <PaginationControls
+          page={opportunityPage}
+          pageCount={opportunityPageCount}
+          total={filteredOpportunities.length}
+          onPageChange={setOpportunityPage}
+        />
+      </section>
+
+      <aside className="space-y-5 xl:sticky xl:top-5 xl:self-start">
+        {selectedOpportunity ? (
+          <section
+            key={selectedOpportunity.id}
+            className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold uppercase text-sky-700">
+                  Opportunity detail
+                </p>
+                <h3 className="mt-1 text-lg font-bold text-slate-950">
+                  {selectedOpportunity.contact_name}
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedOpportunityCompany?.name ?? "Company"} -{" "}
+                  {serviceLabel(selectedOpportunity.service_type)}
+                </p>
+              </div>
+              <Badge
+                label={`${getOpportunityProbability(selectedOpportunity.pipeline_stage)}%`}
+                tone={getOpportunityStageTone(selectedOpportunity.pipeline_stage)}
+              />
+            </div>
+
+            <div className="mt-4 grid gap-2 text-sm text-slate-600">
+              <ContactLine icon={Phone} value={selectedOpportunity.phone} />
+              <ContactLine icon={Mail} value={selectedOpportunity.email} />
+              <ContactLine icon={Building2} value={selectedOpportunity.property_address} />
+              <ContactLine
+                icon={UserRound}
+                value={getOpportunityOwnerLabel(selectedOpportunity, user)}
+              />
+            </div>
+
+            <form
+              onSubmit={handleSaveOpportunity}
+              className="mt-5 grid gap-3"
+              data-testid="sales-pipeline-detail-form"
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Stage
+                  <select
+                    name="pipeline_stage"
+                    value={opportunityDraft.pipeline_stage}
+                    onChange={(event) =>
+                      setOpportunityDraft((current) => ({
+                        ...current,
+                        pipeline_stage: event.target.value as PipelineStage,
+                      }))
+                    }
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  >
+                    {pipelineStages.map((stage) => (
+                      <option key={stage.value} value={stage.value}>
+                        {stage.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Owner
+                  <select
+                    name="owner"
+                    value={opportunityDraft.owner}
+                    onChange={(event) =>
+                      setOpportunityDraft((current) => ({
+                        ...current,
+                        owner: event.target.value as OpportunityEditDraft["owner"],
+                      }))
+                    }
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  >
+                    <option value="unassigned">Unassigned</option>
+                    <option value="me">Assign to me</option>
+                    {selectedOpportunity.created_by &&
+                    selectedOpportunity.created_by !== user?.id ? (
+                      <option value="existing">Keep current owner</option>
+                    ) : null}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Expected revenue
+                  <input
+                    name="estimated_value"
+                    value={opportunityDraft.estimated_value}
+                    onChange={(event) =>
+                      setOpportunityDraft((current) => ({
+                        ...current,
+                        estimated_value: event.target.value,
+                      }))
+                    }
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Next follow-up
+                  <input
+                    name="next_follow_up"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="\d{4}-\d{2}-\d{2}"
+                    placeholder="YYYY-MM-DD"
+                    value={opportunityDraft.next_follow_up}
+                    onChange={(event) =>
+                      setOpportunityDraft((current) => ({
+                        ...current,
+                        next_follow_up: event.target.value,
+                      }))
+                    }
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-slate-700">
+                  Priority
+                  <select
+                    name="priority"
+                    value={opportunityDraft.priority}
+                    onChange={(event) =>
+                      setOpportunityDraft((current) => ({
+                        ...current,
+                        priority: event.target.value as LeadPriority,
+                      }))
+                    }
+                    className="rounded-md border border-slate-300 px-3 py-2"
+                  >
+                    {leadPriorities.map((priority) => (
+                      <option key={priority.value} value={priority.value}>
+                        {priority.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="grid gap-1 text-sm font-medium text-slate-700">
+                Internal notes
+                <textarea
+                  name="notes"
+                  value={opportunityDraft.notes}
+                  onChange={(event) =>
+                    setOpportunityDraft((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
+                  className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={isSavingOpportunity}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <Save className="h-4 w-4" />
+                {isSavingOpportunity ? "Saving" : "Save opportunity"}
+              </button>
+            </form>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              {pipelineStages.map((stage) => (
+                <button
+                  key={stage.value}
+                  type="button"
+                  onClick={() => void handleMoveOpportunityStage(stage.value)}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Move to {stage.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void handleMoveOpportunityStage("approved")}
+                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+              >
+                Mark won
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleMoveOpportunityStage("lost")}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
+              >
+                Mark lost
+              </button>
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Opportunity detail</h3>
+            <div className="mt-4">
+              <EmptyState label="Select an opportunity to manage stage, owner, and next action." />
+            </div>
+          </section>
+        )}
+
+        {selectedOpportunity ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Linked workflow</h3>
+            <div className="mt-4 space-y-3">
+              <OpportunityRelationRow
+                label="Customer"
+                value={
+                  selectedOpportunityCustomer?.display_name ??
+                  selectedOpportunityCustomerMatch?.display_name ??
+                  "Not linked"
+                }
+                detail={
+                  selectedOpportunityCustomer
+                    ? "Customer 360 ready"
+                    : selectedOpportunityCustomerMatch
+                      ? "Matching customer can be linked"
+                      : "Create customer from opportunity"
+                }
+                actionLabel={selectedOpportunityCustomer ? "Open Customer 360" : "Link customer"}
+                onAction={() =>
+                  selectedOpportunityCustomer
+                    ? onViewChange("customers")
+                    : void handleEnsureCustomer()
+                }
+                isBusy={isCreatingCustomer}
+              />
+              <OpportunityRelationRow
+                label="Estimate"
+                value={selectedOpportunityEstimate?.title ?? "No estimate"}
+                detail={
+                  selectedOpportunityEstimate
+                    ? estimateStatusLabel(selectedOpportunityEstimate.status)
+                    : "Create draft estimate from opportunity"
+                }
+                actionLabel={selectedOpportunityEstimate ? "Open Estimates" : "Create estimate"}
+                onAction={() => void handleCreateOpportunityEstimate()}
+                isBusy={isCreatingEstimate}
+              />
+              <OpportunityRelationRow
+                label="Job"
+                value={selectedOpportunityJob?.title ?? "No job"}
+                detail={
+                  selectedOpportunityJob
+                    ? jobStatusLabel(selectedOpportunityJob.status)
+                    : "Create draft job from opportunity"
+                }
+                actionLabel={selectedOpportunityJob ? "Open Jobs" : "Create job"}
+                onAction={() => void handleCreateOpportunityJob()}
+                isBusy={isCreatingJob}
+              />
+            </div>
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => onViewChange("inbox")}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Open Communications
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange("calendar")}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Open Calendar
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {selectedOpportunity ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Timeline context</h3>
+            <div className="mt-4 space-y-3 text-sm text-slate-600">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="font-semibold text-slate-950">Opportunity created</p>
+                <p className="mt-1">
+                  {formatDateTime(selectedOpportunity.created_at)} - {selectedOpportunity.source}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="font-semibold text-slate-950">Next action</p>
+                <p className="mt-1">
+                  {getOpportunityNextAction(
+                    selectedOpportunity,
+                    selectedOpportunityEstimate,
+                    selectedOpportunityJob,
+                  )}
+                </p>
+              </div>
+              {selectedOpportunityCommunications.slice(0, 3).map((item) => (
+                <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="font-semibold text-slate-950">
+                    {communicationChannelLabels[item.channel]} - {item.sourceLabel}
+                  </p>
+                  <p className="mt-1">{truncateTimelineText(item.summary, 100)}</p>
+                </div>
+              ))}
+              {!selectedOpportunityCommunications.length ? (
+                <EmptyState label="No linked communications are recorded for this opportunity yet." />
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Pipeline health</h3>
+          <div className="mt-4 grid gap-3 text-sm text-slate-600">
+            <ProfileStat label="Linked estimates" value={linkedEstimateCount} />
+            <ProfileStat
+              label="Unassigned"
+              value={filteredOpportunities.filter((lead) => !lead.created_by).length}
+            />
+            <ProfileStat
+              label="Won opportunities"
+              value={filteredOpportunities.filter((lead) => lead.status === "won").length}
+            />
+          </div>
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function OpportunityRelationRow({
+  label,
+  value,
+  detail,
+  actionLabel,
+  isBusy,
+  onAction,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  actionLabel: string;
+  isBusy?: boolean;
+  onAction: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 font-semibold text-slate-950">{value}</p>
+      <p className="mt-1 text-sm text-slate-500">{detail}</p>
+      <button
+        type="button"
+        disabled={isBusy}
+        onClick={onAction}
+        className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+      >
+        {isBusy ? "Working" : actionLabel}
+      </button>
     </div>
   );
 }
@@ -14762,6 +16094,18 @@ function getCustomerNextAppointment(related: CustomerRelatedRecords) {
 }
 
 function getLeadTimelineLabel(lead: LeadRecord) {
+  if (lead.status === "won") {
+    return "Opportunity won";
+  }
+
+  if (lead.status === "lost") {
+    return "Opportunity lost";
+  }
+
+  if (lead.pipeline_stage !== "new_lead") {
+    return "Opportunity updated";
+  }
+
   const source = lead.source.toLowerCase();
 
   if (source.includes("website")) {

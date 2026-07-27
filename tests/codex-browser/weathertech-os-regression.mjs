@@ -15,6 +15,7 @@ const DEFAULT_GROUPS = [
   "dashboard",
   "operations",
   "crm",
+  "sales-pipeline",
   "lead-intake-workspace",
   "lead-intake",
   "marketing",
@@ -437,8 +438,8 @@ async function findJobNoteContaining(env, jobId, text) {
   return rows.find((row) => String(row.note ?? "").includes(text)) ?? null;
 }
 
-async function seedTestLead(env, companyId, runId, leadNameColumn) {
-  const leadName = `${TEST_PREFIX} ${runId} LEAD`;
+async function seedTestLead(env, companyId, runId, leadNameColumn, suffix = "LEAD") {
+  const leadName = `${TEST_PREFIX} ${runId} ${suffix}`;
   const basePayload = {
     company_id: companyId,
     phone: "6025550100",
@@ -545,6 +546,15 @@ async function findLeadsByContactName(env, contactName, leadNameColumn) {
     env,
     `leads?select=*&${leadNameColumn}=eq.${encodeURIComponent(contactName)}`,
   );
+}
+
+async function findLeadById(env, leadId) {
+  const rows = await restRequest(
+    env,
+    `leads?select=*&id=eq.${encodeURIComponent(leadId)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
 }
 
 function getLeadRowName(lead) {
@@ -907,10 +917,17 @@ async function clickUnique(locator, label, options = {}) {
 
 async function withAcceptedConfirm(tab, action) {
   let actionError = null;
-  const actionPromise = action().catch((error) => {
-    actionError = error;
-    return null;
-  });
+  let actionSettled = false;
+  const actionPromise = action()
+    .then((result) => {
+      actionSettled = true;
+      return result;
+    })
+    .catch((error) => {
+      actionSettled = true;
+      actionError = error;
+      return null;
+    });
 
   await waitForAsync(async () => {
     if (actionError) {
@@ -920,6 +937,10 @@ async function withAcceptedConfirm(tab, action) {
     const dialog = await tab.getJsDialog();
 
     if (!dialog) {
+      if (actionSettled) {
+        return true;
+      }
+
       return false;
     }
 
@@ -1063,6 +1084,46 @@ async function clickVisibleButtonByText(
 async function fillUnique(locator, value, label) {
   await waitForUniqueLocator(locator, label);
   await locator.fill(value, { timeoutMs: 8000 });
+}
+
+async function fillDateUnique(locator, value, label) {
+  await waitForUniqueLocator(locator, label);
+  await locator.fill(value, { timeoutMs: 8000 });
+
+  const currentValue = await locator.evaluate((element) =>
+    "value" in element ? element.value : "",
+  );
+
+  if (currentValue === value) {
+    return;
+  }
+
+  await locator.evaluate((element, nextValue) => {
+    const view = element.ownerDocument?.defaultView;
+    const setter = view
+      ? Object.getOwnPropertyDescriptor(
+          view.HTMLInputElement.prototype,
+          "value",
+        )?.set
+      : null;
+
+    if (setter) {
+      setter.call(element, nextValue);
+    } else if ("value" in element) {
+      element.value = nextValue;
+    }
+
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+  await waitForAsync(
+    async () =>
+      locator.evaluate((element) =>
+        "value" in element ? element.value === value : false,
+      ),
+    label,
+    3000,
+  );
 }
 
 async function selectUnique(locator, value, label) {
@@ -2369,6 +2430,364 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     leadName,
     pipelineStage: "estimate_scheduled",
     priority: "high",
+  };
+}
+
+async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progress) {
+  const leadName = lead.leadName;
+  const opportunityNotes = `${TEST_PREFIX} ${runId} OPPORTUNITY NOTE`;
+  const expectedRevenue = 8765;
+  const followUpDate = new Date().toISOString().slice(0, 10);
+  const estimateTitle = `${leadName} opportunity estimate`;
+  const jobTitle = `${leadName} opportunity job`;
+  const detailForm = '[data-testid="sales-pipeline-detail-form"]';
+
+  progress("sales-pipeline:open:start");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+  await clickCompanyScope(tab, company.name);
+  await clickNav(tab, "Sales Pipeline");
+  await waitFor(
+    tab,
+    () =>
+      Boolean(document.querySelector('[data-testid="sales-pipeline-workspace"]')) &&
+      document.body.innerText.includes("Opportunity Management"),
+    "Sales Pipeline workspace",
+    15000,
+  );
+  progress("sales-pipeline:open:done");
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-search"]'),
+    leadName,
+    "opportunity search",
+  );
+  await tab.playwright.waitForTimeout(500);
+  const opportunityRow = tab.playwright.locator(
+    `xpath=//*[@data-testid="sales-pipeline-opportunity-row" and .//p[normalize-space(.)=${xpathString(leadName)}]]`,
+  );
+  await clickUnique(opportunityRow, `opportunity row ${leadName}`, {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    (name) => {
+      const heading = document.querySelector('[data-testid="sales-pipeline-detail-form"]')
+        ?.closest("section")
+        ?.querySelector("h3");
+
+      return heading?.textContent?.trim() === name;
+    },
+    `selected opportunity ${leadName}`,
+    15000,
+    leadName,
+  );
+
+  await selectUnique(
+    tab.playwright.locator(`${detailForm} select[name="pipeline_stage"]`),
+    "estimate_sent",
+    "opportunity stage",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${detailForm} select[name="owner"]`),
+    "me",
+    "opportunity owner",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${detailForm} input[name="estimated_value"]`),
+    String(expectedRevenue),
+    "opportunity expected revenue",
+  );
+  await fillDateUnique(
+    tab.playwright.locator(`${detailForm} input[name="next_follow_up"]`),
+    followUpDate,
+    "opportunity follow-up date",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${detailForm} select[name="priority"]`),
+    "urgent",
+    "opportunity priority",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${detailForm} textarea[name="notes"]`),
+    opportunityNotes,
+    "opportunity notes",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const form = document.querySelector('[data-testid="sales-pipeline-detail-form"]');
+
+      return (
+        form?.querySelector('select[name="pipeline_stage"]')?.value === "estimate_sent" &&
+        form?.querySelector('select[name="owner"]')?.value === "me" &&
+        form?.querySelector('input[name="estimated_value"]')?.value === String(expected.expectedRevenue) &&
+        form?.querySelector('input[name="next_follow_up"]')?.value === expected.followUpDate &&
+        form?.querySelector('select[name="priority"]')?.value === "urgent" &&
+        form?.querySelector('textarea[name="notes"]')?.value === expected.opportunityNotes
+      );
+    },
+    "opportunity form values before save",
+    10000,
+    { expectedRevenue, followUpDate, opportunityNotes },
+  );
+  await activateSubmitButtonByText(tab, "Save opportunity", "Save opportunity");
+  const updatedLead = await waitForAsync(async () => {
+    const row = await findLeadById(env, lead.leadId);
+
+    if (
+      row?.pipeline_stage === "estimate_sent" &&
+      row.priority === "urgent" &&
+      Number(row.estimated_value) === expectedRevenue &&
+      row.next_follow_up === followUpDate &&
+      row.notes === opportunityNotes &&
+      row.created_by
+    ) {
+      return row;
+    }
+
+    return null;
+  }, "updated opportunity fields", 15000);
+
+  if (!updatedLead) {
+    throw new Error("Opportunity update was not confirmed in Supabase.");
+  }
+
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Opportunity updated."),
+    "opportunity update success toast",
+    15000,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-stage-filter"]'),
+    "estimate_sent",
+    "opportunity stage filter",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    "opportunity remains visible after stage filter",
+    10000,
+    leadName,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-owner-filter"]'),
+    "mine",
+    "opportunity owner filter",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    "opportunity remains visible after owner filter",
+    10000,
+    leadName,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-stage-filter"]'),
+    "all",
+    "reset opportunity stage filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-owner-filter"]'),
+    "all",
+    "reset opportunity owner filter",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    "opportunity remains visible after filters reset",
+    10000,
+    leadName,
+  );
+  await clickUnique(opportunityRow, `opportunity row ${leadName} before conversion`, {
+    retryTransientClick: true,
+  });
+
+  progress("sales-pipeline:estimate:start");
+  await clickVisibleDomButtonByText(
+    tab,
+    "Create estimate",
+    "Create opportunity estimate",
+  );
+  const estimate = await waitForAsync(
+    async () => {
+      const createdEstimate = await findEstimateByTitle(env, estimateTitle);
+
+      if (createdEstimate) {
+        return createdEstimate;
+      }
+
+      const visibleError = await tab.playwright.evaluate(() => {
+        const lines = document.body.innerText
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(
+            (line) =>
+              line.startsWith("Unable") ||
+              line.includes("violates") ||
+              line.includes("Could not") ||
+              line.includes("failed"),
+          );
+
+        return lines.slice(-3).join(" | ");
+      });
+
+      if (visibleError) {
+        throw new Error(`Opportunity estimate UI error: ${visibleError}`);
+      }
+
+      return null;
+    },
+    "opportunity estimate",
+    45000,
+  );
+
+  if (estimate.lead_id !== lead.leadId) {
+    throw new Error("Opportunity estimate was not linked to the source lead.");
+  }
+
+  if (estimate.company_id !== company.id) {
+    throw new Error("Opportunity estimate was not scoped to the expected company.");
+  }
+
+  if (!estimate.customer_id) {
+    throw new Error("Opportunity estimate did not link or create a customer.");
+  }
+
+  const estimateCount = await countEstimatesByTitle(env, estimateTitle);
+  if (estimateCount !== 1) {
+    throw new Error(`Expected one opportunity estimate, found ${estimateCount}.`);
+  }
+  progress("sales-pipeline:estimate:done");
+
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Draft estimate created from opportunity."),
+    "opportunity estimate success toast",
+    15000,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.toLowerCase().includes("estimate linked"),
+    "opportunity estimate linked badge",
+    15000,
+  );
+
+  progress("sales-pipeline:job:start");
+  await clickVisibleDomButtonByText(tab, "Create job", "Create opportunity job");
+  const job = await waitForAsync(
+    async () => {
+      const createdJob = await findJobByTitle(env, jobTitle);
+
+      if (createdJob) {
+        return createdJob;
+      }
+
+      const visibleError = await tab.playwright.evaluate(() => {
+        const lines = document.body.innerText
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(
+            (line) =>
+              line.startsWith("Unable") ||
+              line.includes("violates") ||
+              line.includes("Could not") ||
+              line.includes("failed"),
+          );
+
+        return lines.slice(-3).join(" | ");
+      });
+
+      if (visibleError) {
+        throw new Error(`Opportunity job UI error: ${visibleError}`);
+      }
+
+      return null;
+    },
+    "opportunity job",
+    45000,
+  );
+
+  if (job.lead_id !== lead.leadId) {
+    throw new Error("Opportunity job was not linked to the source lead.");
+  }
+
+  if (job.company_id !== company.id) {
+    throw new Error("Opportunity job was not scoped to the expected company.");
+  }
+
+  if (job.customer_id !== estimate.customer_id) {
+    throw new Error("Opportunity job did not reuse the linked customer.");
+  }
+
+  const jobCount = await countJobsByTitle(env, jobTitle);
+  if (jobCount !== 1) {
+    throw new Error(`Expected one opportunity job, found ${jobCount}.`);
+  }
+  progress("sales-pipeline:job:done");
+
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Draft job created from opportunity."),
+    "opportunity job success toast",
+    15000,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.toLowerCase().includes("job linked"),
+    "opportunity job linked badge",
+    15000,
+  );
+
+  progress("sales-pipeline:refresh:start");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+  await clickCompanyScope(tab, company.name);
+  await clickNav(tab, "Sales Pipeline");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-search"]'),
+    leadName,
+    "opportunity search after reload",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const text = document.body.innerText;
+
+      return (
+        text.includes(expected.leadName) &&
+        text.toLowerCase().includes("estimate linked") &&
+        text.toLowerCase().includes("job linked") &&
+        text.includes("95%")
+      );
+    },
+    "opportunity conversion persisted after reload",
+    20000,
+    { leadName },
+  );
+  progress("sales-pipeline:refresh:done");
+
+  const finalLead = await findLeadById(env, lead.leadId);
+
+  if (finalLead?.pipeline_stage !== "job_scheduled" || finalLead.status !== "won") {
+    throw new Error("Opportunity final won/job-scheduled state did not persist.");
+  }
+
+  if ("customer_id" in finalLead && finalLead.customer_id !== estimate.customer_id) {
+    throw new Error("Opportunity final customer linkage did not persist.");
+  }
+
+  return {
+    leadId: lead.leadId,
+    estimateId: estimate.id,
+    jobId: job.id,
+    customerId: estimate.customer_id,
+    finalStage: finalLead.pipeline_stage,
+    finalStatus: finalLead.status,
   };
 }
 
@@ -6747,6 +7166,7 @@ export async function runWeatherTechOsRegression({
       enabledGroups.has("crm-inbox");
     const shouldRunEstimatesWorkflow =
       enabledGroups.has("crm") || enabledGroups.has("crm-estimates");
+    const shouldRunSalesPipelineWorkflow = enabledGroups.has("sales-pipeline");
     const shouldSeedLeadForEstimates =
       enabledGroups.has("crm-estimates") && !shouldRunLeadWorkflow;
     const shouldRunCustomersWorkflow =
@@ -6756,6 +7176,7 @@ export async function runWeatherTechOsRegression({
     const shouldReloadFreshSnapshot =
       shouldRunLeadWorkflow ||
       shouldRunEstimatesWorkflow ||
+      shouldRunSalesPipelineWorkflow ||
       shouldRunCustomersWorkflow ||
       shouldRunInboxWorkflow ||
 	      enabledGroups.has("operations") ||
@@ -6816,6 +7237,7 @@ export async function runWeatherTechOsRegression({
     }
 
     let leadWorkflow = null;
+    let salesPipelineLead = null;
     let jobBuilderWorkflow = null;
 
     if (shouldRunLeadWorkflow) {
@@ -6855,6 +7277,29 @@ export async function runWeatherTechOsRegression({
         }
 
         return testUnifiedInboxSearchAndFilters(tab, leadWorkflow);
+      });
+    }
+
+    if (shouldRunSalesPipelineWorkflow) {
+      progress("lead:seed-for-sales-pipeline:start");
+      salesPipelineLead = await seedTestLead(
+        env,
+        weatherTech.id,
+        runId,
+        leadNameColumn,
+        "OPPORTUNITY",
+      );
+      await tab.reload();
+      await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+      await ensureAppShell(tab, baseUrl, progress);
+      progress("lead:seed-for-sales-pipeline:done");
+
+      await record("Sales Pipeline manages opportunities, conversion, filters, and reload persistence", async () => {
+        if (!salesPipelineLead) {
+          throw new Error("Sales Pipeline seed did not produce a test lead.");
+        }
+
+        return testSalesPipelineWorkflow(tab, env, weatherTech, salesPipelineLead, runId, progress);
       });
     }
 

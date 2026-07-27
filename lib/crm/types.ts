@@ -1208,6 +1208,7 @@ export type RoutePlanStopRecord = {
 
 export type LeadInput = {
   company_id: string;
+  customer_id?: string | null;
   contact_name: string;
   phone?: string | null;
   email?: string | null;
@@ -1227,6 +1228,7 @@ export type LeadInput = {
   estimated_value?: number;
   next_follow_up?: string | null;
   notes?: string | null;
+  created_by?: string | null;
 };
 
 export type CustomerInput = {
