@@ -34,4 +34,11 @@ WeatherTech OS is intended to support:
 
 ## Status
 
-This repository contains the initial project definition and README documentation for WeatherTech OS.`
+This repository contains the initial project definition and README documentation for WeatherTech OS.
+
+## Sprint Management
+
+WeatherTech OS sprint execution is controlled by the repository workflow in
+[project-management/SPRINT_WORKFLOW.md](./project-management/SPRINT_WORKFLOW.md).
+Codex must read the current sprint status before starting product development
+and must not begin work when the current sprint is awaiting owner approval.
