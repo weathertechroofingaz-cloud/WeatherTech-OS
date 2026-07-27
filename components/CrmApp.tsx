@@ -56,6 +56,7 @@ import {
   useState,
   type FormEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   addJobMaterial,
@@ -183,6 +184,8 @@ import {
   leadIntakeDuplicateConfidenceLabels,
   leadIntakeDuplicatePolicy,
   leadIntakeRoutingBranches,
+  normalizeLeadIntakeEmail,
+  normalizeLeadIntakePhone,
 } from "../lib/crm/leadRouting";
 import {
   twilioBusinessNumberRouteTemplates,
@@ -991,6 +994,42 @@ function getFormString(formData: FormData, key: string, fallback = "") {
 function getOptionalFormString(formData: FormData, key: string) {
   const value = getFormString(formData, key);
   return value || null;
+}
+
+function normalizeCrmTextInput(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function getNormalizedFormString(formData: FormData, key: string, fallback = "") {
+  const value = formData.get(key);
+  const normalized = typeof value === "string" ? normalizeCrmTextInput(value) : "";
+
+  return normalized || fallback;
+}
+
+function getNormalizedOptionalFormString(formData: FormData, key: string) {
+  const value = getNormalizedFormString(formData, key);
+  return value || null;
+}
+
+function getNormalizedEmailFormString(formData: FormData, key: string) {
+  const value = getNormalizedFormString(formData, key);
+
+  if (!value) {
+    return null;
+  }
+
+  return normalizeLeadIntakeEmail(value) ?? value.toLowerCase();
+}
+
+function getNormalizedPhoneFormString(formData: FormData, key: string) {
+  const value = getNormalizedFormString(formData, key);
+
+  return value ? normalizeLeadIntakePhone(value) ?? value : null;
+}
+
+function isValidOptionalEmail(value: string | null | undefined) {
+  return !value || normalizeLeadIntakeEmail(value) !== null;
 }
 
 function getOptionalRelation(formData: FormData, key: string) {
@@ -4949,6 +4988,7 @@ function CrmWorkspace({
               onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
+              onViewChange={onViewChange}
             />
           ) : null}
 
@@ -11899,6 +11939,7 @@ function LeadsView({
   const [createdLeadFingerprints, setCreatedLeadFingerprints] = useState<Set<string>>(
     () => new Set(),
   );
+  const creatingLeadFingerprintsRef = useRef<Set<string>>(new Set());
 
   const selectedLead =
     snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? null;
@@ -11993,30 +12034,50 @@ function LeadsView({
     try {
       const formData = new FormData(form);
       const input: LeadInput = {
-        company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-        contact_name: getFormString(formData, "contact_name"),
-        phone: getOptionalFormString(formData, "phone"),
-        email: getOptionalFormString(formData, "email"),
-        property_address: getFormString(formData, "property_address"),
-        city: getOptionalFormString(formData, "city"),
-        state: getFormString(formData, "state", "AZ"),
-        postal_code: getOptionalFormString(formData, "postal_code"),
-        service_type: getFormString(formData, "service_type", "roofing") as ServiceType,
-        source: getFormString(formData, "source", "Website"),
+        company_id: getNormalizedFormString(formData, "company_id", snapshot.companies[0]?.id),
+        contact_name: getNormalizedFormString(formData, "contact_name"),
+        phone: getNormalizedPhoneFormString(formData, "phone"),
+        email: getNormalizedEmailFormString(formData, "email"),
+        property_address: getNormalizedFormString(formData, "property_address"),
+        city: getNormalizedOptionalFormString(formData, "city"),
+        state: getNormalizedFormString(formData, "state", "AZ"),
+        postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
+        service_type: getNormalizedFormString(formData, "service_type", "roofing") as ServiceType,
+        source: getNormalizedFormString(formData, "source", "Website"),
         status: "new",
         pipeline_stage: "new_lead",
-        priority: getFormString(formData, "priority", "normal") as LeadPriority,
+        priority: getNormalizedFormString(formData, "priority", "normal") as LeadPriority,
         estimated_value: getFormNumber(formData, "estimated_value"),
-        next_follow_up: getOptionalFormString(formData, "next_follow_up"),
-        notes: getOptionalFormString(formData, "notes"),
+        next_follow_up: getNormalizedOptionalFormString(formData, "next_follow_up"),
+        notes: getNormalizedOptionalFormString(formData, "notes"),
       };
+
+      if (!snapshot.companies.some((company) => company.id === input.company_id)) {
+        onError("Choose a valid company before creating the lead.");
+        return;
+      }
+
+      if (!input.contact_name || !input.property_address) {
+        onError("Lead name and property address are required.");
+        return;
+      }
+
+      if (!isValidOptionalEmail(input.email)) {
+        onError("Enter a valid lead email address before saving.");
+        return;
+      }
+
       const duplicateLead = findPotentialLeadDuplicate(
         uniqueById(selectedLead ? [...snapshot.leads, selectedLead] : snapshot.leads),
         input,
       );
       const duplicateFingerprint = getLeadDuplicateFingerprint(input);
 
-      if (duplicateLead || createdLeadFingerprints.has(duplicateFingerprint)) {
+      if (
+        duplicateLead ||
+        createdLeadFingerprints.has(duplicateFingerprint) ||
+        creatingLeadFingerprintsRef.current.has(duplicateFingerprint)
+      ) {
         onError(
           duplicateLead
             ? `Possible duplicate lead: ${duplicateLead.contact_name} already exists at ${duplicateLead.property_address}. Update the existing lead before creating another.`
@@ -12025,6 +12086,7 @@ function LeadsView({
         return;
       }
 
+      creatingLeadFingerprintsRef.current.add(duplicateFingerprint);
       const createdLead = await createLead(client, input);
       setCreatedLeadFingerprints((current) => {
         const next = new Set(current);
@@ -12038,6 +12100,7 @@ function LeadsView({
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to create lead."));
     } finally {
+      creatingLeadFingerprintsRef.current.clear();
       setIsCreating(false);
     }
   };
@@ -13434,10 +13497,7 @@ function findPotentialCustomerDuplicates(
   const inputName = normalizeCrmLookup(input.contact_name || input.display_name);
 
   return customers
-    .filter(
-      (customer) =>
-        customer.id !== excludeCustomerId && customer.company_id === input.company_id,
-    )
+    .filter((customer) => customer.id !== excludeCustomerId)
     .map((customer) => {
       const reasons: string[] = [];
       const customerAddress = normalizeCrmLookup(customer.property_address);
@@ -13447,15 +13507,10 @@ function findPotentialCustomerDuplicates(
         customer.contact_name || customer.display_name,
       );
 
-      if (crmAddressesLikelyMatch(inputAddress, customerAddress)) {
-        reasons.push("same service address");
-      }
-
       if (
         inputEmail &&
         customerEmail &&
-        inputEmail === customerEmail &&
-        (!inputName || !customerName || inputName === customerName)
+        inputEmail === customerEmail
       ) {
         reasons.push("same email");
       }
@@ -13463,10 +13518,18 @@ function findPotentialCustomerDuplicates(
       if (
         inputPhone &&
         customerPhone &&
-        inputPhone === customerPhone &&
-        (!inputName || !customerName || inputName === customerName)
+        inputPhone === customerPhone
       ) {
         reasons.push("same phone");
+      }
+
+      if (
+        inputName &&
+        customerName &&
+        inputName === customerName &&
+        crmAddressesLikelyMatch(inputAddress, customerAddress)
+      ) {
+        reasons.push("same name and service address");
       }
 
       return { customer, reasons };
@@ -13518,6 +13581,64 @@ function getLeadDuplicateFingerprint(input: {
     normalizeCrmLookup(input.email),
     normalizeCrmLookup(input.contact_name),
   ].join("|");
+}
+
+function getCustomerDuplicateFingerprint(input: CustomerInput) {
+  return [
+    input.company_id,
+    normalizeCrmLookup(input.display_name),
+    normalizeCrmLookup(input.contact_name),
+    normalizeCrmLookup(input.property_address),
+    normalizePhoneDigits(input.phone),
+    normalizeCrmLookup(input.email),
+  ].join("|");
+}
+
+type CustomerDuplicateMatch = ReturnType<typeof findPotentialCustomerDuplicates>[number];
+
+type PendingCustomerDuplicateReview = {
+  input: CustomerInput;
+  matches: CustomerDuplicateMatch[];
+};
+
+function getEstimateDuplicateFingerprint(input: EstimateInput) {
+  return [
+    input.company_id,
+    input.customer_id ?? "",
+    normalizeCrmLookup(input.title),
+    normalizeCrmLookup(input.location),
+    input.issue_date,
+  ].join("|");
+}
+
+function findPotentialEstimateDuplicate(
+  estimates: EstimateRecord[],
+  input: EstimateInput,
+  excludeEstimateId?: string,
+) {
+  const inputTitle = normalizeCrmLookup(input.title);
+  const inputLocation = normalizeCrmLookup(input.location);
+
+  return estimates.find((estimate) => {
+    if (
+      estimate.id === excludeEstimateId ||
+      estimate.company_id !== input.company_id ||
+      estimate.customer_id !== input.customer_id ||
+      estimate.status === "declined" ||
+      estimate.status === "rejected" ||
+      estimate.status === "expired"
+    ) {
+      return false;
+    }
+
+    const sameTitle = Boolean(inputTitle && normalizeCrmLookup(estimate.title) === inputTitle);
+    const sameLocation = Boolean(
+      inputLocation &&
+        normalizeCrmLookup(estimate.location) === inputLocation,
+    );
+
+    return sameTitle || sameLocation;
+  });
 }
 
 function buildCustomerTimelineItems(
@@ -13985,6 +14106,10 @@ function CustomersView({
   const [typeFilter, setTypeFilter] = useState<CustomerType | "all">("all");
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [isUpdatingCustomer, setIsUpdatingCustomer] = useState(false);
+  const [pendingCustomerDuplicate, setPendingCustomerDuplicate] =
+    useState<PendingCustomerDuplicateReview | null>(null);
+  const customerCreateFormRef = useRef<HTMLFormElement | null>(null);
+  const creatingCustomerFingerprintsRef = useRef<Set<string>>(new Set());
   const customerNotesRef = useRef<HTMLTextAreaElement | null>(null);
 
   const filteredCustomers = useMemo(() => {
@@ -14028,59 +14153,112 @@ function CustomersView({
     }
   }, [filteredCustomers, selectedCustomerId]);
 
-  const handleCreateCustomer = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
+  const createCustomerFromInput = async (
+    input: CustomerInput,
+    form: HTMLFormElement | null,
+    successMessage = "Customer created.",
+  ) => {
     if (isCreatingCustomer) {
       return;
     }
+
+    const duplicateFingerprint = getCustomerDuplicateFingerprint(input);
+
+    if (creatingCustomerFingerprintsRef.current.has(duplicateFingerprint)) {
+      onError("Customer creation is already in progress for this record.");
+      return;
+    }
+
+    creatingCustomerFingerprintsRef.current.add(duplicateFingerprint);
+
+    try {
+      setIsCreatingCustomer(true);
+      const customer = await createCustomer(client, input);
+      updateUiPreservingScrollPosition(() => setSelectedCustomerId(customer.id));
+      setPendingCustomerDuplicate(null);
+      form?.reset();
+      await onReload();
+      onNotice(successMessage);
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create customer."));
+    } finally {
+      creatingCustomerFingerprintsRef.current.delete(duplicateFingerprint);
+      setIsCreatingCustomer(false);
+    }
+  };
+
+  const handleCreateCustomer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
     const form = event.currentTarget;
     onError("");
 
     const formData = new FormData(form);
     const input: CustomerInput = {
-      company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-      display_name: getFormString(formData, "display_name"),
-      contact_name: getFormString(formData, "contact_name"),
-      phone: getOptionalFormString(formData, "phone"),
-      email: getOptionalFormString(formData, "email"),
-      property_address: getFormString(formData, "property_address"),
-      city: getOptionalFormString(formData, "city"),
-      state: getFormString(formData, "state", "AZ"),
-      postal_code: getOptionalFormString(formData, "postal_code"),
-      customer_type: getFormString(formData, "customer_type", "homeowner") as CustomerType,
-      status: getFormString(formData, "status", "active") as CustomerStatus,
-      notes: getOptionalFormString(formData, "notes"),
+      company_id: getNormalizedFormString(formData, "company_id", snapshot.companies[0]?.id),
+      display_name: getNormalizedFormString(formData, "display_name"),
+      contact_name: getNormalizedFormString(formData, "contact_name"),
+      phone: getNormalizedPhoneFormString(formData, "phone"),
+      email: getNormalizedEmailFormString(formData, "email"),
+      property_address: getNormalizedFormString(formData, "property_address"),
+      city: getNormalizedOptionalFormString(formData, "city"),
+      state: getNormalizedFormString(formData, "state", "AZ"),
+      postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
+      customer_type: getNormalizedFormString(formData, "customer_type", "homeowner") as CustomerType,
+      status: getNormalizedFormString(formData, "status", "active") as CustomerStatus,
+      notes: getNormalizedOptionalFormString(formData, "notes"),
     };
 
-    if (!input.company_id || !input.display_name || !input.contact_name || !input.property_address) {
+    if (!snapshot.companies.some((company) => company.id === input.company_id)) {
+      setPendingCustomerDuplicate(null);
+      onError("Choose a valid company before creating the customer.");
+      return;
+    }
+
+    if (!input.display_name || !input.contact_name || !input.property_address) {
+      setPendingCustomerDuplicate(null);
       onError("Customer company, name, contact, and property address are required.");
+      return;
+    }
+
+    if (!isValidOptionalEmail(input.email)) {
+      setPendingCustomerDuplicate(null);
+      onError("Enter a valid customer email address before saving.");
       return;
     }
 
     const duplicates = findPotentialCustomerDuplicates(snapshot.customers, input);
 
     if (duplicates.length) {
-      onError(
-        `Possible duplicate customer: ${duplicates[0].customer.display_name} already has ${duplicates[0].reasons.join(
-          " and ",
-        )}. Review the existing customer before creating another.`,
-      );
+      setPendingCustomerDuplicate({ input, matches: duplicates });
+      onError("Possible duplicate customer detected. Review the matching records before creating another customer.");
       return;
     }
 
-    try {
-      setIsCreatingCustomer(true);
-      await createCustomer(client, input);
-      form.reset();
-      await onReload();
-      onNotice("Customer created.");
-    } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to create customer."));
-    } finally {
-      setIsCreatingCustomer(false);
+    await createCustomerFromInput(input, form);
+  };
+
+  const handleCreateSeparateCustomer = async () => {
+    if (!pendingCustomerDuplicate) {
+      return;
     }
+
+    onError("");
+    await createCustomerFromInput(
+      pendingCustomerDuplicate.input,
+      customerCreateFormRef.current,
+      "Customer created as a separate record after duplicate review.",
+    );
+  };
+
+  const handleOpenDuplicateCustomer = (customerId: string) => {
+    updateUiPreservingScrollPosition(() => {
+      setSelectedCustomerId(customerId);
+      setSearch("");
+      setPendingCustomerDuplicate(null);
+    });
+    onError("");
+    onNotice("Existing Customer 360 record opened.");
   };
 
   const handleUpdateCustomer = async (event: FormEvent<HTMLFormElement>) => {
@@ -14092,30 +14270,40 @@ function CustomersView({
 
     const formData = new FormData(event.currentTarget);
     const updates: CustomerInput = {
-      company_id: getFormString(formData, "company_id", selectedCustomer.company_id),
-      display_name: getFormString(formData, "display_name", selectedCustomer.display_name),
-      contact_name: getFormString(formData, "contact_name", selectedCustomer.contact_name),
-      phone: getOptionalFormString(formData, "phone"),
-      email: getOptionalFormString(formData, "email"),
-      property_address: getFormString(
+      company_id: getNormalizedFormString(formData, "company_id", selectedCustomer.company_id),
+      display_name: getNormalizedFormString(formData, "display_name", selectedCustomer.display_name),
+      contact_name: getNormalizedFormString(formData, "contact_name", selectedCustomer.contact_name),
+      phone: getNormalizedPhoneFormString(formData, "phone"),
+      email: getNormalizedEmailFormString(formData, "email"),
+      property_address: getNormalizedFormString(
         formData,
         "property_address",
         selectedCustomer.property_address,
       ),
-      city: getOptionalFormString(formData, "city"),
-      state: getFormString(formData, "state", selectedCustomer.state || "AZ"),
-      postal_code: getOptionalFormString(formData, "postal_code"),
-      status: getFormString(formData, "status", selectedCustomer.status) as CustomerStatus,
-      customer_type: getFormString(
+      city: getNormalizedOptionalFormString(formData, "city"),
+      state: getNormalizedFormString(formData, "state", selectedCustomer.state || "AZ"),
+      postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
+      status: getNormalizedFormString(formData, "status", selectedCustomer.status) as CustomerStatus,
+      customer_type: getNormalizedFormString(
         formData,
         "customer_type",
         selectedCustomer.customer_type,
       ) as CustomerType,
-      notes: getOptionalFormString(formData, "notes"),
+      notes: getNormalizedOptionalFormString(formData, "notes"),
     };
+
+    if (!snapshot.companies.some((company) => company.id === updates.company_id)) {
+      onError("Choose a valid company before saving the customer.");
+      return;
+    }
 
     if (!updates.display_name || !updates.contact_name || !updates.property_address) {
       onError("Customer name, contact, and property address are required.");
+      return;
+    }
+
+    if (!isValidOptionalEmail(updates.email)) {
+      onError("Enter a valid customer email address before saving.");
       return;
     }
 
@@ -14302,7 +14490,11 @@ function CustomersView({
           <CustomerCreateForm
             companies={snapshot.companies}
             isSubmitting={isCreatingCustomer}
+            formRef={customerCreateFormRef}
+            duplicateReview={pendingCustomerDuplicate}
             onSubmit={handleCreateCustomer}
+            onCreateSeparate={handleCreateSeparateCustomer}
+            onOpenDuplicateCustomer={handleOpenDuplicateCustomer}
           />
         </section>
 
@@ -15796,16 +15988,24 @@ function RelatedList({
 type CustomerCreateFormProps = {
   companies: CompanyRecord[];
   isSubmitting: boolean;
+  formRef: Ref<HTMLFormElement>;
+  duplicateReview: PendingCustomerDuplicateReview | null;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCreateSeparate: () => void;
+  onOpenDuplicateCustomer: (customerId: string) => void;
 };
 
 function CustomerCreateForm({
   companies,
   isSubmitting,
+  formRef,
+  duplicateReview,
   onSubmit,
+  onCreateSeparate,
+  onOpenDuplicateCustomer,
 }: CustomerCreateFormProps) {
   return (
-    <form onSubmit={onSubmit} className="mt-4 grid gap-3">
+    <form ref={formRef} onSubmit={onSubmit} className="mt-4 grid gap-3">
       <select
         name="company_id"
         required
@@ -15893,6 +16093,54 @@ function CustomerCreateForm({
         className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
         placeholder="Notes"
       />
+      {duplicateReview ? (
+        <div
+          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+          data-testid="customer-duplicate-review"
+        >
+          <p className="font-bold">Possible duplicate customer</p>
+          <p className="mt-1 text-amber-900">
+            Review the matching records before creating a separate customer.
+          </p>
+          <div className="mt-3 grid gap-2">
+            {duplicateReview.matches.slice(0, 3).map((match) => (
+              <div
+                key={match.customer.id}
+                className="rounded-md border border-amber-200 bg-white/80 p-3"
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-semibold text-slate-950">
+                      {match.customer.display_name}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {match.customer.property_address}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-amber-700">
+                      {match.reasons.join(", ")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDuplicateCustomer(match.customer.id)}
+                    className="inline-flex items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 transition hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  >
+                    Open existing Customer 360
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={isSubmitting}
+            onClick={onCreateSeparate}
+            className="mt-3 inline-flex w-full items-center justify-center rounded-md bg-amber-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-amber-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isSubmitting ? "Creating separate customer" : "Create separate customer"}
+          </button>
+        </div>
+      ) : null}
       <button
         type="submit"
         disabled={isSubmitting}
@@ -15912,6 +16160,7 @@ type EstimatesViewProps = {
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  onViewChange: (view: WorkspaceView) => void;
 };
 
 function EstimatesView({
@@ -15921,6 +16170,7 @@ function EstimatesView({
   onReload,
   onNotice,
   onError,
+  onViewChange,
 }: EstimatesViewProps) {
   const [selectedEstimateId, setSelectedEstimateId] = useState(
     snapshot.estimates[0]?.id ?? "new",
@@ -15930,6 +16180,9 @@ function EstimatesView({
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | "all">("all");
   const [isApprovingEstimate, setIsApprovingEstimate] = useState(false);
   const [isConvertingEstimate, setIsConvertingEstimate] = useState(false);
+  const [createdEstimateFingerprints, setCreatedEstimateFingerprints] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const selectedEstimate =
     snapshot.estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
@@ -16020,10 +16273,66 @@ function EstimatesView({
   ) => {
     onError("");
 
+    const company = snapshot.companies.find((item) => item.id === input.company_id);
+    const customer = input.customer_id
+      ? snapshot.customers.find((item) => item.id === input.customer_id)
+      : null;
+    const lead = input.lead_id
+      ? snapshot.leads.find((item) => item.id === input.lead_id)
+      : null;
+
+    if (!company) {
+      onError("Choose a valid company before saving the estimate.");
+      return;
+    }
+
+    if (!customer) {
+      onError("Select a customer before saving this estimate.");
+      return;
+    }
+
+    if (customer.company_id !== input.company_id) {
+      onError("Select a customer from the same company as the estimate.");
+      return;
+    }
+
+    if (lead && lead.company_id !== input.company_id) {
+      onError("Select a lead from the same company as the estimate.");
+      return;
+    }
+
+    if (!lineItems.length) {
+      onError("Add at least one estimate line item before saving.");
+      return;
+    }
+
+    const duplicateFingerprint = getEstimateDuplicateFingerprint(input);
+
+    if (!selectedEstimate) {
+      const duplicateEstimate = findPotentialEstimateDuplicate(snapshot.estimates, input);
+
+      if (duplicateEstimate || createdEstimateFingerprints.has(duplicateFingerprint)) {
+        onError(
+          duplicateEstimate
+            ? `Possible duplicate estimate: ${duplicateEstimate.title} already exists for this customer. Open the existing estimate before creating another.`
+            : "Possible duplicate estimate: this customer and project were just created. Refresh or open the existing estimate before creating another.",
+        );
+        return;
+      }
+    }
+
     try {
       const savedEstimate = selectedEstimate
         ? await updateEstimate(client, selectedEstimate.id, input, lineItems)
         : await createEstimate(client, input, lineItems);
+
+      if (!selectedEstimate) {
+        setCreatedEstimateFingerprints((current) => {
+          const next = new Set(current);
+          next.add(duplicateFingerprint);
+          return next;
+        });
+      }
 
       updateUiPreservingScrollPosition(() =>
         setSelectedEstimateId(savedEstimate.id),
@@ -16087,7 +16396,8 @@ function EstimatesView({
     }
 
     if (selectedEstimateJob) {
-      onNotice("This estimate already has a linked job.");
+      onNotice(`Existing linked job opened: ${selectedEstimateJob.title}`);
+      onViewChange("jobs");
       return;
     }
 
@@ -16716,6 +17026,12 @@ function EstimateEditor({
   const liveTotals = calculateEstimateTotals(estimateControls, draftLineItems);
   const selectedCompany =
     snapshot.companies.find((company) => company.id === selectedCompanyId) ?? null;
+  const companyCustomers = snapshot.customers.filter(
+    (customer) => customer.company_id === selectedCompanyId,
+  );
+  const companyLeads = snapshot.leads.filter(
+    (lead) => lead.company_id === selectedCompanyId,
+  );
   const showPaintingWorkflow =
     selectedServiceType === "painting" || isPaintingCompany(selectedCompany);
   const availableEstimateTemplates = useMemo(
@@ -16823,6 +17139,18 @@ function EstimateEditor({
     setSelectedCompanyId(companyId);
     const company = snapshot.companies.find((item) => item.id === companyId);
     setDraftBusiness(company?.name ?? "");
+    setDraftCustomerId((current) =>
+      snapshot.customers.some(
+        (customer) => customer.id === current && customer.company_id === companyId,
+      )
+        ? current
+        : "none",
+    );
+    setDraftLeadId((current) =>
+      snapshot.leads.some((lead) => lead.id === current && lead.company_id === companyId)
+        ? current
+        : "none",
+    );
     const nextTemplates = getEstimateTemplatesForTrade(
       company?.workflow_profile ?? company?.trade,
     );
@@ -16872,6 +17200,9 @@ function EstimateEditor({
 
         return {
           ...item,
+          name: normalizeCrmTextInput(item.name),
+          description: normalizeCrmTextInput(item.description),
+          unit: normalizeCrmTextInput(item.unit),
           unit_cost: unitPrice,
           unit_price: unitPrice,
           sort_order: index,
@@ -16886,10 +17217,10 @@ function EstimateEditor({
           customer_id: draftCustomerId === "none" ? null : draftCustomerId,
           lead_id: draftLeadId === "none" ? null : draftLeadId,
           business:
-            draftBusiness.trim() ||
+            normalizeCrmTextInput(draftBusiness) ||
             getEstimateBusinessName(snapshot, selectedCompanyId, null),
-          location: draftLocation.trim() || null,
-          title: draftTitle.trim() || "New estimate",
+          location: normalizeCrmTextInput(draftLocation) || null,
+          title: normalizeCrmTextInput(draftTitle) || "New estimate",
           status: draftStatus,
           service_type: selectedServiceType,
           issue_date: draftIssueDate || todayIsoDate(),
@@ -16898,7 +17229,7 @@ function EstimateEditor({
           discount_type: estimateControls.discount_type,
           discount_value: estimateControls.discount_value,
           profit_margin_rate: estimateControls.profit_margin_rate,
-          notes: draftNotes.trim() || null,
+          notes: normalizeCrmTextInput(draftNotes) || null,
           scope_of_work: draftScopeOfWork.trim() || null,
           painting_area_type: showPaintingWorkflow
             ? (paintingFields.painting_area_type as PaintingAreaType)
@@ -16914,13 +17245,13 @@ function EstimateEditor({
             ? selectedColorStatus
             : "not_started",
           paint_color_body: showPaintingWorkflow
-            ? paintingFields.paint_color_body.trim() || null
+            ? normalizeCrmTextInput(paintingFields.paint_color_body) || null
             : null,
           paint_color_trim: showPaintingWorkflow
-            ? paintingFields.paint_color_trim.trim() || null
+            ? normalizeCrmTextInput(paintingFields.paint_color_trim) || null
             : null,
           paint_color_accent: showPaintingWorkflow
-            ? paintingFields.paint_color_accent.trim() || null
+            ? normalizeCrmTextInput(paintingFields.paint_color_accent) || null
             : null,
           surface_prep_level: showPaintingWorkflow
             ? (paintingFields.surface_prep_level as SurfacePrepLevel)
@@ -17012,8 +17343,8 @@ function EstimateEditor({
           onChange={(event) => handleCustomerChange(event.target.value)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
-          <option value="none">No customer</option>
-          {snapshot.customers.map((customer) => (
+          <option value="none">Select customer (required)</option>
+          {companyCustomers.map((customer) => (
             <option key={customer.id} value={customer.id}>
               {customer.display_name}
             </option>
@@ -17026,7 +17357,7 @@ function EstimateEditor({
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No lead</option>
-          {snapshot.leads.map((lead) => (
+          {companyLeads.map((lead) => (
             <option key={lead.id} value={lead.id}>
               {lead.contact_name}
             </option>

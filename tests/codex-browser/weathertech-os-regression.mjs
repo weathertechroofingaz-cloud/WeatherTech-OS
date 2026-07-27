@@ -505,6 +505,30 @@ async function seedTestLead(env, companyId, runId, leadNameColumn) {
   throw lastError ?? new Error("Unable to seed estimate lead.");
 }
 
+async function seedTestCustomer(env, companyId, runId, suffix = "ESTIMATE CUSTOMER") {
+  const displayName = `${TEST_PREFIX} ${runId} ${suffix}`;
+  const [customer] = await restRequest(env, "customers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companyId,
+      display_name: displayName,
+      contact_name: `${displayName} CONTACT`,
+      phone: "+16025550666",
+      email: `${suffix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${runId}@example.test`,
+      property_address: "456 TEST Regression Lead Ave, Phoenix, AZ",
+      city: "Phoenix",
+      state: "AZ",
+      postal_code: "85001",
+      customer_type: "homeowner",
+      status: "active",
+      notes: `${TEST_PREFIX} ${runId} seeded customer for estimate workflow`,
+    }),
+  });
+
+  return customer;
+}
+
 async function findLeadByContactName(env, contactName, leadNameColumn) {
   const rows = await restRequest(
     env,
@@ -600,6 +624,15 @@ async function findEstimateByTitle(env, title) {
   return rows[0] ?? null;
 }
 
+async function countEstimatesByTitle(env, title) {
+  const rows = await restRequest(
+    env,
+    `estimates?select=id&title=eq.${encodeURIComponent(title)}`,
+  );
+
+  return rows.length;
+}
+
 async function findJobByTitle(env, title) {
   const rows = await restRequest(
     env,
@@ -607,6 +640,15 @@ async function findJobByTitle(env, title) {
   );
 
   return rows[0] ?? null;
+}
+
+async function countJobsByTitle(env, title) {
+  const rows = await restRequest(
+    env,
+    `jobs?select=id&title=eq.${encodeURIComponent(title)}`,
+  );
+
+  return rows.length;
 }
 
 async function findJobScheduleEvents(env, jobId) {
@@ -2034,8 +2076,10 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   const leadName = `${TEST_PREFIX} ${runId} LEAD`;
   const updatedNote = `${TEST_PREFIX} ${runId} LEAD UPDATED`;
   const leadAddress = "456 TEST Regression Lead Ave, Phoenix, AZ";
-  const leadPhone = "6025550100";
-  const leadEmail = `regression-${runId}@example.test`;
+  const leadPhone = "(602) 555-0100";
+  const normalizedLeadPhone = "+16025550100";
+  const leadEmail = `REGRESSION-${runId}@EXAMPLE.TEST`;
+  const normalizedLeadEmail = `regression-${runId}@example.test`;
   const leadUpdateForm = 'xpath=//form[.//button[normalize-space(.)="Save lead"]]';
 
   await clickNav(tab, "Leads");
@@ -2106,6 +2150,14 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
 
   if (!createdLead) {
     throw new Error("Created lead was not found through Supabase.");
+  }
+
+  if (createdLead.phone !== normalizedLeadPhone) {
+    throw new Error(`Created lead phone was ${createdLead.phone}, expected ${normalizedLeadPhone}.`);
+  }
+
+  if (createdLead.email !== normalizedLeadEmail) {
+    throw new Error(`Created lead email was ${createdLead.email}, expected ${normalizedLeadEmail}.`);
   }
 
   try {
@@ -2324,8 +2376,10 @@ async function testCustomersWorkflow(tab, env, company, runId) {
   const updatedContact = `${TEST_PREFIX} ${runId} CONTACT UPDATED`;
   const updatedNotes = `${TEST_PREFIX} ${runId} CUSTOMER NOTES UPDATED`;
   const updatedPhone = "(602) 555-0555";
+  const normalizedUpdatedPhone = "+16025550555";
   const updatedPhoneSearch = "6025550555";
-  const updatedEmail = `customer-updated-${runId}@example.test`;
+  const updatedEmail = `CUSTOMER-UPDATED-${runId}@EXAMPLE.TEST`;
+  const normalizedUpdatedEmail = `customer-updated-${runId}@example.test`;
   const updatedAddress = "790 TEST Customer Profile Dr, Phoenix, AZ";
   const profileForm = 'xpath=//form[.//button[contains(normalize-space(.), "Save customer")]]';
 
@@ -2579,6 +2633,18 @@ async function testCustomersWorkflow(tab, env, company, runId) {
 
   if (updatedCustomer.notes !== updatedNotes) {
     throw new Error("Updated customer notes did not persist.");
+  }
+
+  if (updatedCustomer.phone !== normalizedUpdatedPhone) {
+    throw new Error(
+      `Updated customer phone was ${updatedCustomer.phone}, expected ${normalizedUpdatedPhone}.`,
+    );
+  }
+
+  if (updatedCustomer.email !== normalizedUpdatedEmail) {
+    throw new Error(
+      `Updated customer email was ${updatedCustomer.email}, expected ${normalizedUpdatedEmail}.`,
+    );
   }
 
   await fillUnique(
@@ -2848,6 +2914,38 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     "Possible duplicate customer",
     "duplicate customer protection",
   );
+  await waitFor(
+    tab,
+    () => {
+      const review = document.querySelector('[data-testid="customer-duplicate-review"]');
+      const text = review?.textContent ?? "";
+
+      return (
+        text.includes("Possible duplicate customer") &&
+        text.includes("same email") &&
+        text.includes("Open existing Customer 360") &&
+        text.includes("Create separate customer")
+      );
+    },
+    "customer duplicate review panel",
+    10000,
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="customer-duplicate-review"] button').filter({
+      hasText: "Create separate customer",
+    }),
+    "Create separate duplicate-reviewed customer",
+    { retryTransientClick: true },
+  );
+  const duplicateCustomer = await waitForAsync(
+    () => findCustomerByDisplayName(env, `${displayName} DUPLICATE`),
+    "duplicate-reviewed separate customer",
+    12000,
+  );
+
+  if (!duplicateCustomer) {
+    throw new Error("Duplicate-reviewed customer was not created.");
+  }
 
   return {
     customerId: updatedCustomer.id,
@@ -3527,6 +3625,11 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
 async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   const estimateTitle = `${TEST_PREFIX} ${runId} ESTIMATE`;
   const scopeText = `${TEST_PREFIX} ${runId} estimate scope`;
+  const estimateCustomer = await seedTestCustomer(env, company.id, runId);
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
 
   let estimatesOpened = false;
 
@@ -3601,6 +3704,22 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     "456 TEST Regression Lead Ave, Phoenix, AZ",
     "estimate location",
   );
+  await clickVisibleDomSubmitByText(
+    tab,
+    "Create estimate",
+    "Create estimate without customer",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Select a customer before saving this estimate."),
+    "estimate requires customer validation",
+    10000,
+  );
+  await selectUnique(
+    tab.playwright.locator('#estimate-builder select[name="customer_id"]'),
+    estimateCustomer.id,
+    "estimate customer association",
+  );
   await selectUnique(
     tab.playwright.locator('#estimate-builder select[name="lead_id"]'),
     lead.leadId,
@@ -3674,11 +3793,97 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     throw new Error("Saved estimate was not associated with the test lead.");
   }
 
+  if (savedEstimate.customer_id !== estimateCustomer.id) {
+    throw new Error("Saved estimate was not associated with the test customer.");
+  }
+
   const lineItemCount = await countEstimateLineItems(env, savedEstimate.id);
 
   if (lineItemCount < 2) {
     throw new Error(`Expected at least 2 estimate line items, found ${lineItemCount}.`);
   }
+
+  const duplicateNewEstimateButton = tab.playwright.locator(
+    'xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]',
+  );
+  await waitForUniqueLocator(duplicateNewEstimateButton, "New Estimate before duplicate estimate test");
+  await clickUnique(duplicateNewEstimateButton, "New Estimate before duplicate estimate test", {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    () => {
+      const builder = document.querySelector("#estimate-builder");
+
+      return Boolean(
+        builder?.textContent?.includes("Create draft estimate") &&
+          [...builder.querySelectorAll('button[type="submit"]')].some(
+            (button) => button.textContent?.trim() === "Create estimate",
+          ),
+      );
+    },
+    "estimate editor duplicate create mode",
+    15000,
+  );
+  await selectUnique(
+    tab.playwright.locator('#estimate-builder select[name="company_id"]'),
+    company.id,
+    "duplicate estimate company",
+  );
+  await selectUnique(
+    tab.playwright.locator('#estimate-builder select[name="customer_id"]'),
+    estimateCustomer.id,
+    "duplicate estimate customer",
+  );
+  await fillUnique(
+    tab.playwright.locator('#estimate-builder input[name="title"]'),
+    estimateTitle,
+    "duplicate estimate title",
+  );
+  await fillUnique(
+    tab.playwright.locator('#estimate-builder input[name="business"]'),
+    company.name,
+    "duplicate estimate business",
+  );
+  await fillUnique(
+    tab.playwright.locator('#estimate-builder input[name="location"]'),
+    "456 TEST Regression Lead Ave, Phoenix, AZ",
+    "duplicate estimate location",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=(//section[@id="estimate-builder"]//input[@placeholder="Item name"])[1]'),
+    `${TEST_PREFIX} ${runId} LABOR DUPLICATE`,
+    "duplicate estimate labor item",
+  );
+  await fillUnique(
+    tab.playwright.locator('xpath=(//section[@id="estimate-builder"]//input[@placeholder="Price"])[1]'),
+    "150",
+    "duplicate estimate labor price",
+  );
+  await clickVisibleDomSubmitByText(
+    tab,
+    "Create estimate",
+    "Create duplicate estimate",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Possible duplicate estimate"),
+    "duplicate estimate protection",
+    10000,
+  );
+
+  const matchingEstimateCount = await countEstimatesByTitle(env, estimateTitle);
+
+  if (matchingEstimateCount !== 1) {
+    throw new Error(`Duplicate estimate protection left ${matchingEstimateCount} matching estimates.`);
+  }
+
+  await clickListRowByParagraph(
+    tab,
+    "Estimates",
+    estimateTitle,
+    `existing estimate row ${estimateTitle}`,
+  );
 
   await waitFor(
     tab,
@@ -3863,6 +4068,12 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
 
   if (linkedJob.scheduled_start !== null || linkedJob.scheduled_end !== null) {
     throw new Error("Converted draft job unexpectedly received a schedule.");
+  }
+
+  const linkedJobCount = await countJobsByTitle(env, estimateTitle);
+
+  if (linkedJobCount !== 1) {
+    throw new Error(`Estimate handoff created ${linkedJobCount} matching jobs, expected 1.`);
   }
 
   await waitFor(
