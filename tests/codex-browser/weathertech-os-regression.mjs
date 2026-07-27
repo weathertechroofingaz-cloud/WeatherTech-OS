@@ -15,6 +15,7 @@ const DEFAULT_GROUPS = [
   "dashboard",
   "operations",
   "crm",
+  "lead-intake-workspace",
   "lead-intake",
   "marketing",
   "themes",
@@ -2368,6 +2369,154 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     leadName,
     pipelineStage: "estimate_scheduled",
     priority: "high",
+  };
+}
+
+async function testLeadIntakeWorkspace(tab, env, company, runId, leadNameColumn) {
+  const leadName = `${TEST_PREFIX} ${runId} INTAKE`;
+  const leadAddress = "932 TEST Intake Way, Phoenix, AZ";
+  const leadPhone = "(602) 555-0123";
+  const normalizedLeadPhone = "+16025550123";
+  const leadEmail = `INTAKE-${runId}@EXAMPLE.TEST`;
+  const normalizedLeadEmail = `intake-${runId}@example.test`;
+  const intakeSection = 'xpath=//h3[normalize-space(.)="New lead intake"]/ancestor::section[1]';
+
+  await clickNav(tab, "Lead Intake");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Lead Intake") &&
+      document.body.innerText.includes("New lead intake") &&
+      document.body.innerText.includes("Recent intake"),
+    "lead intake workspace",
+  );
+
+  await selectUnique(
+    tab.playwright.locator(`${intakeSection}//select[@name="company_id"]`),
+    company.id,
+    "lead intake company",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="contact_name"]`),
+    leadName,
+    "lead intake contact name",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="property_address"]`),
+    leadAddress,
+    "lead intake property address",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="phone"]`),
+    leadPhone,
+    "lead intake phone",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="email"]`),
+    leadEmail,
+    "lead intake email",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="city"]`),
+    "Phoenix",
+    "lead intake city",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="source"]`),
+    "Office intake",
+    "lead intake source",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//input[@name="estimated_value"]`),
+    "7650",
+    "lead intake estimated value",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${intakeSection}//select[@name="pipeline_stage"]`),
+    "contacted",
+    "lead intake status",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${intakeSection}//textarea[@name="notes"]`),
+    `${TEST_PREFIX} ${runId} intake note`,
+    "lead intake notes",
+  );
+
+  let createdLead = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickVisibleDomSubmitByText(
+      tab,
+      "Save lead intake",
+      `Save lead intake attempt ${attempt}`,
+    );
+
+    try {
+      createdLead = await waitForAsync(
+        () => findLeadByContactName(env, leadName, leadNameColumn),
+        `Supabase lead intake ${leadName}`,
+        12000,
+      );
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+    }
+  }
+
+  if (!createdLead) {
+    throw new Error("Created lead intake record was not found through Supabase.");
+  }
+
+  if (createdLead.company_id !== company.id) {
+    throw new Error(`Lead intake company was ${createdLead.company_id}, expected ${company.id}.`);
+  }
+
+  if (createdLead.phone !== normalizedLeadPhone) {
+    throw new Error(`Lead intake phone was ${createdLead.phone}, expected ${normalizedLeadPhone}.`);
+  }
+
+  if (createdLead.email !== normalizedLeadEmail) {
+    throw new Error(`Lead intake email was ${createdLead.email}, expected ${normalizedLeadEmail}.`);
+  }
+
+  if (createdLead.pipeline_stage !== "contacted" || createdLead.status !== "contacted") {
+    throw new Error(
+      `Lead intake status was ${createdLead.status}/${createdLead.pipeline_stage}, expected contacted/contacted.`,
+    );
+  }
+
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `lead intake recent record ${leadName}`,
+    10000,
+    leadName,
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Lead intake saved to CRM."),
+    "lead intake success toast",
+    12000,
+  );
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickNav(tab, "Lead Intake");
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes(name),
+    `lead intake persisted after reload ${leadName}`,
+    15000,
+    leadName,
+  );
+
+  return {
+    leadId: createdLead.id,
+    leadName,
+    pipelineStage: createdLead.pipeline_stage,
+    status: createdLead.status,
   };
 }
 
@@ -6611,6 +6760,7 @@ export async function runWeatherTechOsRegression({
       shouldRunInboxWorkflow ||
 	      enabledGroups.has("operations") ||
 	      enabledGroups.has("marketing") ||
+	      enabledGroups.has("lead-intake-workspace") ||
 	      enabledGroups.has("lead-intake");
 
     if (shouldReloadFreshSnapshot) {
@@ -6706,6 +6856,12 @@ export async function runWeatherTechOsRegression({
 
         return testUnifiedInboxSearchAndFilters(tab, leadWorkflow);
       });
+    }
+
+    if (enabledGroups.has("lead-intake-workspace")) {
+      await record("Lead Intake workspace creates a company-scoped CRM lead", () =>
+        testLeadIntakeWorkspace(tab, env, weatherTech, runId, leadNameColumn),
+      );
     }
 
     if (enabledGroups.has("lead-intake")) {

@@ -370,6 +370,7 @@ type WorkspaceView =
   | "dashboard"
   | "operations"
   | "inbox"
+  | "leadIntake"
   | "leads"
   | "customers"
   | "estimates"
@@ -416,6 +417,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     label: "CRM",
     items: [
       { view: "inbox", label: "Inbox", icon: MessageSquare },
+      { view: "leadIntake", label: "Lead Intake", icon: Plus },
       { view: "leads", label: "Leads", icon: ClipboardList },
       { view: "customers", label: "Customers", icon: Users },
       { view: "estimates", label: "Estimates", icon: FileText },
@@ -1116,6 +1118,69 @@ function leadStatusForPipelineStage(stage: PipelineStage): LeadStatus {
   }
 
   return stage;
+}
+
+function getLeadPipelineStageFromForm(formData: FormData) {
+  const value = getNormalizedFormString(formData, "pipeline_stage", "new_lead");
+
+  return pipelineStages.some((stage) => stage.value === value)
+    ? (value as PipelineStage)
+    : "new_lead";
+}
+
+function buildLeadInputFromFormData(formData: FormData, companies: CompanyRecord[]) {
+  const pipelineStage = getLeadPipelineStageFromForm(formData);
+
+  return {
+    company_id: getNormalizedFormString(formData, "company_id", companies[0]?.id),
+    contact_name: getNormalizedFormString(formData, "contact_name"),
+    phone: getNormalizedPhoneFormString(formData, "phone"),
+    email: getNormalizedEmailFormString(formData, "email"),
+    property_address: getNormalizedFormString(formData, "property_address"),
+    city: getNormalizedOptionalFormString(formData, "city"),
+    state: getNormalizedFormString(formData, "state", "AZ"),
+    postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
+    service_type: getNormalizedFormString(formData, "service_type", "roofing") as ServiceType,
+    source: getNormalizedFormString(formData, "source", "Website"),
+    status: leadStatusForPipelineStage(pipelineStage),
+    pipeline_stage: pipelineStage,
+    priority: getNormalizedFormString(formData, "priority", "normal") as LeadPriority,
+    estimated_value: getFormNumber(formData, "estimated_value"),
+    next_follow_up: getNormalizedOptionalFormString(formData, "next_follow_up"),
+    notes: getNormalizedOptionalFormString(formData, "notes"),
+  } satisfies LeadInput;
+}
+
+function createDemoLeadRecord(input: LeadInput): LeadRecord {
+  const now = new Date().toISOString();
+
+  return {
+    id: `demo-lead-${Date.now()}`,
+    company_id: input.company_id,
+    customer_id: null,
+    contact_name: input.contact_name,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    property_address: input.property_address,
+    city: input.city ?? null,
+    state: input.state ?? "AZ",
+    postal_code: input.postal_code ?? null,
+    latitude: input.latitude ?? null,
+    longitude: input.longitude ?? null,
+    google_place_id: input.google_place_id ?? null,
+    address_verified_at: input.address_verified_at ?? null,
+    service_type: input.service_type,
+    source: input.source ?? "Website",
+    status: input.status ?? "new",
+    pipeline_stage: input.pipeline_stage ?? "new_lead",
+    priority: input.priority ?? "normal",
+    estimated_value: input.estimated_value ?? 0,
+    next_follow_up: input.next_follow_up ?? null,
+    notes: input.notes ?? null,
+    created_by: null,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 function customerStatusLabel(status: CustomerStatus) {
@@ -4938,7 +5003,7 @@ function CrmWorkspace({
               isDemoMode={isDemoMode}
               onCompanyScopeChange={setSelectedCompanyId}
               onViewChange={onViewChange}
-	              onCreateLead={() => onViewChange("leads")}
+	              onCreateLead={() => onViewChange("leadIntake")}
 	            />
 	          ) : null}
 
@@ -4951,11 +5016,24 @@ function CrmWorkspace({
 	            />
 	          ) : null}
 
-	          {view === "inbox" ? (
-	            <UnifiedInboxView
+          {view === "inbox" ? (
+            <UnifiedInboxView
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onViewChange={onViewChange}
+            />
+          ) : null}
+
+          {view === "leadIntake" ? (
+            <LeadIntakeView
+              client={client}
+              isDemoMode={isDemoMode}
+              snapshot={scopedSnapshot}
+              companyMap={companyMap}
+              onReload={onScrollPreservingReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
+              onNotice={onNotice}
+              onError={onError}
             />
           ) : null}
 
@@ -11025,6 +11103,11 @@ type LeadsViewProps = {
   onError: (message: string) => void;
 };
 
+type LeadIntakeViewProps = LeadsViewProps & {
+  isDemoMode: boolean;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+};
+
 type LeadEditDraft = {
   pipeline_stage: PipelineStage;
   priority: LeadPriority;
@@ -11041,6 +11124,49 @@ function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
     next_follow_up: lead?.next_follow_up ?? "",
     notes: lead?.notes ?? "",
   };
+}
+
+function getLeadCreateValidationMessage(companies: CompanyRecord[], input: LeadInput) {
+  if (!companies.some((company) => company.id === input.company_id)) {
+    return "Choose a valid company before creating the lead.";
+  }
+
+  if (!input.contact_name || !input.property_address) {
+    return "Lead name and property address are required.";
+  }
+
+  if (!isValidOptionalEmail(input.email)) {
+    return "Enter a valid lead email address before saving.";
+  }
+
+  return "";
+}
+
+function getLeadCreateDuplicateMessage({
+  leads,
+  input,
+  createdLeadFingerprints,
+  creatingLeadFingerprints,
+}: {
+  leads: LeadRecord[];
+  input: LeadInput;
+  createdLeadFingerprints: Set<string>;
+  creatingLeadFingerprints: Set<string>;
+}) {
+  const duplicateLead = findPotentialLeadDuplicate(leads, input);
+  const duplicateFingerprint = getLeadDuplicateFingerprint(input);
+
+  if (
+    duplicateLead ||
+    createdLeadFingerprints.has(duplicateFingerprint) ||
+    creatingLeadFingerprints.has(duplicateFingerprint)
+  ) {
+    return duplicateLead
+      ? `Possible duplicate lead: ${duplicateLead.contact_name} already exists at ${duplicateLead.property_address}. Update the existing lead before creating another.`
+      : "Possible duplicate lead: this contact and property were just created. Refresh or update the existing lead before creating another.";
+  }
+
+  return "";
 }
 
 type UnifiedInboxViewProps = {
@@ -12347,6 +12473,233 @@ function TwilioCommunicationsSetupNotice() {
   );
 }
 
+function LeadIntakeView({
+  client,
+  isDemoMode,
+  snapshot,
+  companyMap,
+  onReload,
+  onDemoSnapshotChange,
+  onNotice,
+  onError,
+}: LeadIntakeViewProps) {
+  const [isCreating, setIsCreating] = useState(false);
+  const [createdLeadFingerprints, setCreatedLeadFingerprints] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const creatingLeadFingerprintsRef = useRef<Set<string>>(new Set());
+  const recentLeads = [...snapshot.leads]
+    .sort(
+      (first, second) =>
+        new Date(second.created_at).getTime() - new Date(first.created_at).getTime(),
+    )
+    .slice(0, 6);
+  const newLeadCount = snapshot.leads.filter(
+    (lead) => lead.pipeline_stage === "new_lead",
+  ).length;
+  const followUpCount = snapshot.leads.filter(
+    (lead) => lead.next_follow_up || lead.priority === "urgent" || lead.priority === "high",
+  ).length;
+  const pipelineValue = snapshot.leads.reduce(
+    (total, lead) => total + lead.estimated_value,
+    0,
+  );
+
+  const handleCreateLead = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isCreating) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    setIsCreating(true);
+    onError("");
+
+    try {
+      const formData = new FormData(form);
+      const input = buildLeadInputFromFormData(formData, snapshot.companies);
+      const validationMessage = getLeadCreateValidationMessage(
+        snapshot.companies,
+        input,
+      );
+
+      if (validationMessage) {
+        onError(validationMessage);
+        return;
+      }
+
+      const duplicateFingerprint = getLeadDuplicateFingerprint(input);
+      const duplicateMessage = getLeadCreateDuplicateMessage({
+        leads: snapshot.leads,
+        input,
+        createdLeadFingerprints,
+        creatingLeadFingerprints: creatingLeadFingerprintsRef.current,
+      });
+
+      if (duplicateMessage) {
+        onError(duplicateMessage);
+        return;
+      }
+
+      creatingLeadFingerprintsRef.current.add(duplicateFingerprint);
+
+      if (isDemoMode) {
+        const createdLead = createDemoLeadRecord(input);
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          leads: [createdLead, ...currentSnapshot.leads],
+        }));
+      } else {
+        await createLead(client, input);
+        await onReload();
+      }
+
+      setCreatedLeadFingerprints((current) => {
+        const next = new Set(current);
+        next.add(duplicateFingerprint);
+        return next;
+      });
+      form.reset();
+      onNotice("Lead intake saved to CRM.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save lead intake."));
+    } finally {
+      creatingLeadFingerprintsRef.current.clear();
+      setIsCreating(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Lead Intake
+            </p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-950">
+              Capture every roofing and painting opportunity.
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+              Enter office calls, walk-ins, website callbacks, and referral leads
+              into the same CRM pipeline used by the rest of WeatherTech OS.
+            </p>
+          </div>
+          {isDemoMode ? (
+            <Badge label="Demo CRM" tone="amber" />
+          ) : (
+            <Badge label="Live CRM" tone="green" />
+          )}
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-500">Open intake</p>
+            <p className="mt-2 text-2xl font-bold text-slate-950">{newLeadCount}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              New leads waiting for qualification
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-500">Needs attention</p>
+            <p className="mt-2 text-2xl font-bold text-slate-950">{followUpCount}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Priority leads or follow-ups due
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-500">Pipeline value</p>
+            <p className="mt-2 text-2xl font-bold text-slate-950">
+              {formatMoney(pipelineValue)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Current filtered company scope
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">
+                New lead intake
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Required fields are company, lead name, and property address.
+              </p>
+            </div>
+            <Badge label="Existing CRM lead" tone="blue" />
+          </div>
+          <LeadCreateForm
+            companies={snapshot.companies}
+            isSubmitting={isCreating}
+            onSubmit={handleCreateLead}
+            showPipelineStage
+            submitLabel="Save lead intake"
+          />
+        </div>
+      </section>
+
+      <aside className="space-y-5 xl:sticky xl:top-5 xl:self-start">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Recent intake</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            The newest leads in the selected company scope.
+          </p>
+
+          <div className="mt-4 space-y-3">
+            {recentLeads.map((lead) => {
+              const company = companyMap.get(lead.company_id);
+
+              return (
+                <div
+                  key={lead.id}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-slate-950">
+                      {lead.contact_name}
+                    </p>
+                    <Badge label={pipelineStageLabel(lead.pipeline_stage)} tone="blue" />
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {lead.property_address}
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
+                    <span>{company?.name ?? "Company"}</span>
+                    <span aria-hidden="true">/</span>
+                    <span>{lead.source}</span>
+                    <span aria-hidden="true">/</span>
+                    <span>{formatDateTime(lead.created_at)}</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            {!recentLeads.length ? (
+              <EmptyState label="No leads exist yet for this company scope." />
+            ) : null}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Intake rules</h3>
+          <div className="mt-3 grid gap-3 text-sm leading-6 text-slate-600">
+            <p>
+              WeatherTech Roofing LLC and IHC Painting leads share the same CRM
+              model, but company assignment controls the workflow and reporting scope.
+            </p>
+            <p>
+              Duplicate protection checks active leads by company, contact, and
+              property before creating a new record.
+            </p>
+          </div>
+        </section>
+      </aside>
+    </div>
+  );
+}
+
 function LeadsView({
   client,
   snapshot,
@@ -12456,56 +12809,27 @@ function LeadsView({
 
     try {
       const formData = new FormData(form);
-      const input: LeadInput = {
-        company_id: getNormalizedFormString(formData, "company_id", snapshot.companies[0]?.id),
-        contact_name: getNormalizedFormString(formData, "contact_name"),
-        phone: getNormalizedPhoneFormString(formData, "phone"),
-        email: getNormalizedEmailFormString(formData, "email"),
-        property_address: getNormalizedFormString(formData, "property_address"),
-        city: getNormalizedOptionalFormString(formData, "city"),
-        state: getNormalizedFormString(formData, "state", "AZ"),
-        postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
-        service_type: getNormalizedFormString(formData, "service_type", "roofing") as ServiceType,
-        source: getNormalizedFormString(formData, "source", "Website"),
-        status: "new",
-        pipeline_stage: "new_lead",
-        priority: getNormalizedFormString(formData, "priority", "normal") as LeadPriority,
-        estimated_value: getFormNumber(formData, "estimated_value"),
-        next_follow_up: getNormalizedOptionalFormString(formData, "next_follow_up"),
-        notes: getNormalizedOptionalFormString(formData, "notes"),
-      };
-
-      if (!snapshot.companies.some((company) => company.id === input.company_id)) {
-        onError("Choose a valid company before creating the lead.");
-        return;
-      }
-
-      if (!input.contact_name || !input.property_address) {
-        onError("Lead name and property address are required.");
-        return;
-      }
-
-      if (!isValidOptionalEmail(input.email)) {
-        onError("Enter a valid lead email address before saving.");
-        return;
-      }
-
-      const duplicateLead = findPotentialLeadDuplicate(
-        uniqueById(selectedLead ? [...snapshot.leads, selectedLead] : snapshot.leads),
+      const input = buildLeadInputFromFormData(formData, snapshot.companies);
+      const validationMessage = getLeadCreateValidationMessage(
+        snapshot.companies,
         input,
       );
-      const duplicateFingerprint = getLeadDuplicateFingerprint(input);
 
-      if (
-        duplicateLead ||
-        createdLeadFingerprints.has(duplicateFingerprint) ||
-        creatingLeadFingerprintsRef.current.has(duplicateFingerprint)
-      ) {
-        onError(
-          duplicateLead
-            ? `Possible duplicate lead: ${duplicateLead.contact_name} already exists at ${duplicateLead.property_address}. Update the existing lead before creating another.`
-            : "Possible duplicate lead: this contact and property were just created. Refresh or update the existing lead before creating another.",
-        );
+      if (validationMessage) {
+        onError(validationMessage);
+        return;
+      }
+
+      const duplicateFingerprint = getLeadDuplicateFingerprint(input);
+      const duplicateMessage = getLeadCreateDuplicateMessage({
+        leads: uniqueById(selectedLead ? [...snapshot.leads, selectedLead] : snapshot.leads),
+        input,
+        createdLeadFingerprints,
+        creatingLeadFingerprints: creatingLeadFingerprintsRef.current,
+      });
+
+      if (duplicateMessage) {
+        onError(duplicateMessage);
         return;
       }
 
@@ -12902,9 +13226,17 @@ type LeadCreateFormProps = {
   companies: CompanyRecord[];
   isSubmitting: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  showPipelineStage?: boolean;
+  submitLabel?: string;
 };
 
-function LeadCreateForm({ companies, isSubmitting, onSubmit }: LeadCreateFormProps) {
+function LeadCreateForm({
+  companies,
+  isSubmitting,
+  onSubmit,
+  showPipelineStage = false,
+  submitLabel = "Create lead",
+}: LeadCreateFormProps) {
   return (
     <form onSubmit={onSubmit} className="mt-4 grid gap-3">
       <label className="grid gap-1 text-sm font-medium text-slate-700">
@@ -12986,6 +13318,22 @@ function LeadCreateForm({ companies, isSubmitting, onSubmit }: LeadCreateFormPro
           ))}
         </select>
       </div>
+      {showPipelineStage ? (
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Lead status
+          <select
+            name="pipeline_stage"
+            defaultValue="new_lead"
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {pipelineStages.map((stage) => (
+              <option key={stage.value} value={stage.value}>
+                {stage.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <input
           name="source"
@@ -13015,7 +13363,7 @@ function LeadCreateForm({ companies, isSubmitting, onSubmit }: LeadCreateFormPro
         className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         <Plus className="h-4 w-4" />
-        {isSubmitting ? "Saving" : "Create lead"}
+        {isSubmitting ? "Saving" : submitLabel}
       </button>
     </form>
   );
