@@ -44,3 +44,11 @@ WeatherTech OS sprint execution is controlled by the repository workflow in
 and [project-management/SPRINT_WORKFLOW.md](./project-management/SPRINT_WORKFLOW.md).
 Codex must verify owner approval before starting product development and must
 not begin work when the current sprint is awaiting owner approval.
+
+## Architecture & Engineering Documentation
+
+- [Architecture](./docs/ARCHITECTURE.md)
+- [Module Registry](./docs/MODULE_REGISTRY.md)
+- [Design System](./docs/DESIGN_SYSTEM.md)
+- [Testing Standard](./docs/TESTING_STANDARD.md)
+- [Changelog](./CHANGELOG.md)
