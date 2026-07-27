@@ -27,6 +27,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added navigation and browser regression coverage.
   - Did not modify CRM persistence, Supabase schema, APIs, packages, migrations, RLS, or provider credentials.
 
+### Lead Intake Foundation
+
+- Commit: `3f03c7e82c6dcb3395851fabc03d28027f68310a`
+- Message: `feat: add lead intake foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added a CRM Lead Intake workspace using the existing lead model and persistence path.
+  - Captured customer, property, source, company assignment, priority, and lead status/stage.
+  - Added browser regression coverage for company-scoped lead intake creation.
+  - Did not modify Supabase schema, RLS, auth, packages, migrations, provider integrations, or environment files.
+
 ## Recording Template
 
 ### Sprint Name
