@@ -2,11 +2,15 @@ export type Trade = "roofing" | "painting" | "both";
 export type CompanyMembershipRole =
   | "owner"
   | "admin"
+  | "office"
   | "sales"
   | "production"
   | "field"
+  | "technician"
   | "viewer"
-  | "team_member";
+  | "team_member"
+  | "customer_portal"
+  | "employee_portal";
 export type ServiceType = "roofing" | "painting" | "both";
 export type LeadStatus =
   | "new"
