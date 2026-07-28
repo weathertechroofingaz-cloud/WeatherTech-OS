@@ -10,11 +10,11 @@ Codex may begin development only after completing the approval gate in [SPRINT_W
 
 ## Sprint Name
 
-Sales Pipeline & Opportunity Management
+Document Center
 
 ## Objective
 
-Build a production-ready Sales Pipeline & Opportunity Management workspace for WeatherTech Roofing LLC and IHC Painting using the existing CRM architecture.
+Build a production-ready, company-aware Document Center for WeatherTech Roofing LLC and IHC Painting using the existing WeatherTech OS CRM architecture and document relationships.
 
 ## Owner
 
@@ -22,45 +22,36 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-07-27.
+2026-07-28.
 
 ## Owner-Approved Scope
 
-- Sales Pipeline workspace.
-- Opportunity management.
-- Company-scoped opportunities.
-- Opportunity stages.
-- Opportunity details.
-- Opportunity assignment.
-- Expected revenue.
-- Probability.
-- Next action.
-- Follow-up reminders.
-- Opportunity -> Estimate linkage.
-- Opportunity -> Job linkage.
-- Customer timeline integration.
-- Search and filtering.
-- Browser regression coverage.
+- Build the company-aware Document Center.
+- Reuse existing CRM architecture.
+- Reuse existing document relationships.
+- Support WeatherTech Roofing LLC and IHC Painting.
+- Preserve existing navigation and design language.
+- Include browser regression coverage where document workflows are affected.
 
 ## Explicit Exclusions
 
-- No provider integrations.
-- No Twilio.
-- No GoHighLevel.
-- No schema redesign.
+- Do not redesign the application.
+- No schema changes unless absolutely required and separately explained.
+- No RLS changes unless absolutely required and separately explained.
+- No fake integrations.
+- No provider activation.
 - No authentication changes.
-- No RLS changes.
-- No UI redesign outside the approved sprint.
+- No package or lockfile changes unless absolutely required.
+- No `.env.local` changes.
 
 ## Completion Criteria
 
-- The Sales Pipeline workspace is implemented using existing WeatherTech OS architecture.
-- Opportunities reuse existing CRM data and persistence wherever practical.
+- The Document Center workspace is implemented using existing WeatherTech OS architecture.
+- Document relationships reuse existing CRM, customer, lead, opportunity, estimate, job, and inspection context wherever practical.
 - Company scoping works for WeatherTech Roofing LLC, IHC Painting, and all-company views.
-- Search and filtering work for the approved opportunity fields.
-- Opportunity details display stage, assignment, expected revenue, probability, next action, follow-up reminders, and related estimate/job context where supported by existing data.
-- Existing Lead Intake, Customer 360, Estimates, Communications, Calendar, Operations, Jobs, and Inspections workflows remain intact.
-- Browser regression coverage is added for the Sales Pipeline workflow.
+- Search, filtering, categories, tags, upload status, preview/download, rename, archive, recent documents, and activity history work where supported by existing data.
+- Existing Customer 360, Leads, Opportunities, Estimates, Jobs, Inspections, Communications, Calendar, Dashboard, and navigation workflows remain intact.
+- Browser regression coverage is added for Document Center workflows.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
@@ -78,12 +69,12 @@ Joe Harris
 - Confirm the working tree is clean before development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before development begins.
-- Inspect the existing CRM, Leads, Customer 360, Estimates, Jobs, Communications, Calendar, Operations, and Inspections implementation before editing.
+- Inspect the existing CRM, Document Center, Customers, Leads, Opportunities, Estimates, Jobs, Inspections, Communications, Calendar, Dashboard, and navigation implementation before editing.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Sales Pipeline and directly related CRM workflows.
+- Run targeted signed-in browser regression for Document Center and directly related CRM workflows.
 - Run broader browser regression where the sprint changes shared navigation or CRM behavior.
 - Clean all disposable regression records.
 

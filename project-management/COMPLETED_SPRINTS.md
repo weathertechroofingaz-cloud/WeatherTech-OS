@@ -47,6 +47,25 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added browser regression coverage for company-scoped lead intake creation.
   - Did not modify Supabase schema, RLS, auth, packages, migrations, provider integrations, or environment files.
 
+### Sales Pipeline & Opportunity Management
+
+- Commit: `4c8b2935f06e30dd6dba45619f777b84e4baa9f4`
+- Message: `feat: add sales pipeline opportunity management`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added the Sales Pipeline workspace and opportunity management workflow.
+  - Reused existing WeatherTech OS CRM records, company scoping, estimates, jobs, and browser regression coverage.
+  - Did not modify authentication, RLS, provider integrations, packages, or environment files.
+
 ## Recording Template
 
 ### Sprint Name
