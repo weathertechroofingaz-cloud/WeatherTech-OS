@@ -953,6 +953,75 @@ const documentStatuses: { value: DocumentStatus; label: string }[] = [
   { value: "archived", label: "Archived" },
 ];
 
+type DocumentLibraryCategory =
+  | "all"
+  | "proposal"
+  | "signed_proposal"
+  | "contract"
+  | "change_order"
+  | "invoice"
+  | "roof_report"
+  | "inspection_report"
+  | "warranty"
+  | "insurance"
+  | "permit"
+  | "photo_set"
+  | "other";
+
+type DocumentRelationFilter =
+  | "all"
+  | "customer"
+  | "lead"
+  | "opportunity"
+  | "estimate"
+  | "job"
+  | "inspection"
+  | "invoice"
+  | "change_order";
+
+type DocumentSortMode =
+  | "updated_desc"
+  | "updated_asc"
+  | "created_desc"
+  | "title_asc"
+  | "status";
+
+const documentLibraryCategories: { value: DocumentLibraryCategory; label: string }[] = [
+  { value: "all", label: "All categories" },
+  { value: "proposal", label: "Proposal" },
+  { value: "signed_proposal", label: "Signed proposal" },
+  { value: "contract", label: "Contract" },
+  { value: "change_order", label: "Change order" },
+  { value: "invoice", label: "Invoice" },
+  { value: "roof_report", label: "Roof report" },
+  { value: "inspection_report", label: "Inspection report" },
+  { value: "warranty", label: "Warranty" },
+  { value: "insurance", label: "Insurance" },
+  { value: "permit", label: "Permit" },
+  { value: "photo_set", label: "Photo set" },
+  { value: "other", label: "Other" },
+];
+
+const documentRelationFilters: { value: DocumentRelationFilter; label: string }[] = [
+  { value: "all", label: "All records" },
+  { value: "customer", label: "Customers" },
+  { value: "lead", label: "Leads" },
+  { value: "opportunity", label: "Opportunities" },
+  { value: "estimate", label: "Estimates" },
+  { value: "job", label: "Jobs" },
+  { value: "inspection", label: "Inspections" },
+  { value: "invoice", label: "Invoices" },
+  { value: "change_order", label: "Change orders" },
+];
+
+const documentSortOptions: { value: DocumentSortMode; label: string }[] = [
+  { value: "updated_desc", label: "Recently modified" },
+  { value: "created_desc", label: "Newest upload" },
+  { value: "updated_asc", label: "Oldest modified" },
+  { value: "title_asc", label: "Title A-Z" },
+  { value: "status", label: "Status" },
+];
+
 const notificationChannels: { value: NotificationChannel; label: string }[] = [
   { value: "email", label: "Email" },
   { value: "sms", label: "SMS" },
@@ -3988,6 +4057,388 @@ function getDocumentAssociationSummary(snapshot: CrmSnapshot, document: Document
     jobTitle: job?.title ?? "No job linked",
     source: getDocumentTargetName(snapshot, document),
   };
+}
+
+type DocumentActivityItem = {
+  id: string;
+  label: string;
+  detail: string;
+  occurredAt: string | null;
+};
+
+type DocumentLibraryDetails = {
+  association: ReturnType<typeof getDocumentAssociationSummary>;
+  libraryCategory: DocumentLibraryCategory;
+  relationTypes: DocumentRelationFilter[];
+  tags: string[];
+  uploadStatus: string;
+  uploadTone: "blue" | "green" | "amber";
+  previewMode: string;
+  relatedCustomer: CustomerRecord | null;
+  relatedLead: LeadRecord | null;
+  relatedEstimate: EstimateRecord | null;
+  relatedJob: JobRecord | null;
+  relatedInspection: InspectionRecord | null;
+  relatedInvoice: InvoiceRecord | null;
+  relatedChangeOrder: ChangeOrderRecord | null;
+  signatures: SignatureRecord[];
+  activity: DocumentActivityItem[];
+};
+
+function uniqueDocumentStrings(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+  );
+}
+
+function getLeadIsOpportunity(lead: LeadRecord | null) {
+  return Boolean(
+    lead &&
+      (lead.pipeline_stage !== "new_lead" ||
+        lead.status === "qualified" ||
+        lead.status === "estimate_sent" ||
+        lead.status === "won" ||
+        lead.status === "lost" ||
+        lead.estimated_value > 0),
+  );
+}
+
+function getDocumentRelatedRecords(
+  snapshot: CrmSnapshot,
+  document: DocumentRecord,
+) {
+  const job = document.job_id
+    ? snapshot.jobs.find((item) => item.id === document.job_id) ?? null
+    : null;
+  const invoice = document.invoice_id
+    ? snapshot.invoices.find((item) => item.id === document.invoice_id) ?? null
+    : null;
+  const changeOrder = document.change_order_id
+    ? snapshot.changeOrders.find((item) => item.id === document.change_order_id) ?? null
+    : null;
+  const estimate = document.estimate_id
+    ? snapshot.estimates.find((item) => item.id === document.estimate_id) ?? null
+    : job?.estimate_id
+      ? snapshot.estimates.find((item) => item.id === job.estimate_id) ?? null
+      : invoice?.estimate_id
+        ? snapshot.estimates.find((item) => item.id === invoice.estimate_id) ?? null
+        : changeOrder?.estimate_id
+          ? snapshot.estimates.find((item) => item.id === changeOrder.estimate_id) ?? null
+          : null;
+  const customer =
+    (document.customer_id
+      ? snapshot.customers.find((item) => item.id === document.customer_id) ?? null
+      : null) ??
+    (job?.customer_id
+      ? snapshot.customers.find((item) => item.id === job.customer_id) ?? null
+      : null) ??
+    (estimate?.customer_id
+      ? snapshot.customers.find((item) => item.id === estimate.customer_id) ?? null
+      : null) ??
+    (invoice?.customer_id
+      ? snapshot.customers.find((item) => item.id === invoice.customer_id) ?? null
+      : null) ??
+    (changeOrder?.customer_id
+      ? snapshot.customers.find((item) => item.id === changeOrder.customer_id) ?? null
+      : null);
+  const lead =
+    (job?.lead_id ? snapshot.leads.find((item) => item.id === job.lead_id) ?? null : null) ??
+    (estimate?.lead_id
+      ? snapshot.leads.find((item) => item.id === estimate.lead_id) ?? null
+      : null) ??
+    (customer?.id
+      ? snapshot.leads.find((item) => item.customer_id === customer.id) ?? null
+      : null) ??
+    (document.template_key?.includes("lead") || document.template_key?.includes("opportunity")
+      ? snapshot.leads.find((item) => document.title.includes(item.contact_name)) ?? null
+      : null);
+  const inspection =
+    snapshot.inspections.find((item) => item.report_document_id === document.id) ??
+    (job ? snapshot.inspections.find((item) => item.job_id === job.id) ?? null : null) ??
+    (estimate
+      ? snapshot.inspections.find((item) => item.estimate_id === estimate.id) ?? null
+      : null) ??
+    (lead ? snapshot.inspections.find((item) => item.lead_id === lead.id) ?? null : null) ??
+    null;
+
+  return {
+    customer,
+    lead,
+    estimate,
+    job,
+    inspection,
+    invoice,
+    changeOrder,
+  };
+}
+
+function getDocumentLibraryCategory(
+  document: DocumentRecord,
+  related: ReturnType<typeof getDocumentRelatedRecords>,
+  signatures: SignatureRecord[],
+): DocumentLibraryCategory {
+  const searchable = [
+    document.title,
+    document.body,
+    document.template_key,
+    document.file_url,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (searchable.includes("permit")) {
+    return "permit";
+  }
+
+  if (searchable.includes("insurance") || searchable.includes("hoa")) {
+    return "insurance";
+  }
+
+  if (document.category === "photo" || searchable.includes("photo set")) {
+    return "photo_set";
+  }
+
+  if (
+    related.inspection &&
+    (searchable.includes("roof report") ||
+      searchable.includes("roof inspection") ||
+      related.inspection.inspection_type === "roof_inspection")
+  ) {
+    return "roof_report";
+  }
+
+  if (related.inspection || searchable.includes("inspection")) {
+    return "inspection_report";
+  }
+
+  if (
+    document.category === "estimate" &&
+    (document.status === "signed" ||
+      signatures.some((signature) => signature.status === "signed") ||
+      searchable.includes("signed proposal"))
+  ) {
+    return "signed_proposal";
+  }
+
+  if (document.category === "estimate" || searchable.includes("proposal")) {
+    return "proposal";
+  }
+
+  if (document.category === "contract") {
+    return "contract";
+  }
+
+  if (document.category === "change_order") {
+    return "change_order";
+  }
+
+  if (document.category === "invoice") {
+    return "invoice";
+  }
+
+  if (document.category === "warranty") {
+    return "warranty";
+  }
+
+  return "other";
+}
+
+function documentLibraryCategoryLabel(category: DocumentLibraryCategory) {
+  return (
+    documentLibraryCategories.find((item) => item.value === category)?.label ?? "Other"
+  );
+}
+
+function getDocumentLibraryDetails(
+  snapshot: CrmSnapshot,
+  document: DocumentRecord,
+): DocumentLibraryDetails {
+  const association = getDocumentAssociationSummary(snapshot, document);
+  const related = getDocumentRelatedRecords(snapshot, document);
+  const signatures = snapshot.signatures.filter(
+    (signature) => signature.document_id === document.id,
+  );
+  const libraryCategory = getDocumentLibraryCategory(document, related, signatures);
+  const relationTypes = uniqueDocumentStrings([
+    related.customer ? "customer" : null,
+    related.lead ? "lead" : null,
+    getLeadIsOpportunity(related.lead) || document.template_key?.includes("opportunity")
+      ? "opportunity"
+      : null,
+    related.estimate ? "estimate" : null,
+    related.job ? "job" : null,
+    related.inspection ? "inspection" : null,
+    related.invoice ? "invoice" : null,
+    related.changeOrder ? "change_order" : null,
+  ]) as DocumentRelationFilter[];
+  const uploadStatus = document.file_url
+    ? "Linked file"
+    : document.body
+      ? "PDF-ready draft"
+      : "Needs content";
+  const uploadTone: "blue" | "green" | "amber" = document.file_url
+    ? "green"
+    : document.body
+      ? "blue"
+      : "amber";
+  const previewMode = document.file_url
+    ? "File link"
+    : document.body
+      ? "Text preview"
+      : "Metadata only";
+  const tags = uniqueDocumentStrings([
+    documentLibraryCategoryLabel(libraryCategory),
+    documentStatusLabel(document.status),
+    companyMapSafeName(snapshot, document.company_id),
+    related.customer?.status,
+    related.job?.status,
+    related.estimate?.status,
+    related.invoice?.status,
+    related.inspection?.status,
+    related.lead?.source,
+    related.lead?.pipeline_stage?.replace(/_/g, " "),
+    document.template_key?.replace(/_/g, " "),
+    document.file_url ? "File linked" : "Generated",
+  ]);
+  const activityItems: Array<DocumentActivityItem | null> = [
+    {
+      id: "created",
+      label: "Document created",
+      detail: `${documentLibraryCategoryLabel(libraryCategory)} linked to ${association.source}`,
+      occurredAt: document.created_at,
+    },
+    {
+      id: "updated",
+      label: "Document updated",
+      detail: `${documentStatusLabel(document.status)} · ${uploadStatus}`,
+      occurredAt: document.updated_at,
+    },
+    ...signatures.map((signature) => ({
+      id: `signature-${signature.id}`,
+      label: signature.status === "signed" ? "Signature captured" : "Signature requested",
+      detail: signature.signer_name,
+      occurredAt: signature.signed_at ?? signature.updated_at,
+    })),
+    related.inspection
+      ? {
+          id: `inspection-${related.inspection.id}`,
+          label: "Inspection relationship",
+          detail: `${related.inspection.title} · ${inspectionStatusLabel(related.inspection.status)}`,
+          occurredAt: related.inspection.updated_at,
+        }
+      : null,
+  ];
+  const activity = activityItems.filter(
+    (item): item is DocumentActivityItem => item !== null,
+  );
+
+  return {
+    association,
+    libraryCategory,
+    relationTypes,
+    tags,
+    uploadStatus,
+    uploadTone,
+    previewMode,
+    relatedCustomer: related.customer,
+    relatedLead: related.lead,
+    relatedEstimate: related.estimate,
+    relatedJob: related.job,
+    relatedInspection: related.inspection,
+    relatedInvoice: related.invoice,
+    relatedChangeOrder: related.changeOrder,
+    signatures,
+    activity: activity.sort((a, b) =>
+      (b.occurredAt ?? "").localeCompare(a.occurredAt ?? ""),
+    ),
+  };
+}
+
+function companyMapSafeName(snapshot: CrmSnapshot, companyId: string) {
+  return snapshot.companies.find((company) => company.id === companyId)?.name ?? null;
+}
+
+function buildDocumentReadinessWarnings(snapshot: CrmSnapshot) {
+  const estimateWarnings = snapshot.estimates
+    .filter(
+      (estimate) =>
+        (estimate.status === "sent" || estimate.status === "approved") &&
+        !snapshot.documents.some((document) => document.estimate_id === estimate.id),
+    )
+    .map((estimate) => ({
+      id: `estimate-${estimate.id}`,
+      companyId: estimate.company_id,
+      title: "Proposal document missing",
+      detail: `${estimate.title} is ${estimate.status.replace("_", " ")} without a saved proposal packet.`,
+      action: "Open estimate",
+    }));
+  const invoiceWarnings = snapshot.invoices
+    .filter(
+      (invoice) =>
+        invoice.status !== "draft" &&
+        !snapshot.documents.some((document) => document.invoice_id === invoice.id),
+    )
+    .map((invoice) => ({
+      id: `invoice-${invoice.id}`,
+      companyId: invoice.company_id,
+      title: "Invoice document missing",
+      detail: `${invoice.invoice_number} is ${invoice.status} without a saved invoice packet.`,
+      action: "Open invoice",
+    }));
+  const completionWarnings = snapshot.jobs
+    .filter(
+      (job) =>
+        job.status === "completed" &&
+        !snapshot.documents.some(
+          (document) =>
+            document.job_id === job.id && document.category === "completion_certificate",
+        ),
+    )
+    .map((job) => ({
+      id: `completion-${job.id}`,
+      companyId: job.company_id,
+      title: "Completion certificate missing",
+      detail: `${job.title} is completed without a completion certificate.`,
+      action: "Open job",
+    }));
+  const warrantyWarnings = snapshot.jobs
+    .filter(
+      (job) =>
+        job.status === "completed" &&
+        !snapshot.documents.some(
+          (document) => document.job_id === job.id && document.category === "warranty",
+        ),
+    )
+    .map((job) => ({
+      id: `warranty-${job.id}`,
+      companyId: job.company_id,
+      title: "Warranty document missing",
+      detail: `${job.title} is completed without a warranty packet.`,
+      action: "Open job",
+    }));
+  const inspectionWarnings = snapshot.inspections
+    .filter(
+      (inspection) =>
+        inspection.report_requested &&
+        !inspection.report_document_id &&
+        inspection.status !== "canceled",
+    )
+    .map((inspection) => ({
+      id: `inspection-${inspection.id}`,
+      companyId: inspection.company_id,
+      title: "Inspection report requested",
+      detail: `${inspection.title} needs a saved inspection report document.`,
+      action: "Open inspection",
+    }));
+
+  return [
+    ...estimateWarnings,
+    ...invoiceWarnings,
+    ...completionWarnings,
+    ...warrantyWarnings,
+    ...inspectionWarnings,
+  ];
 }
 
 function documentStatusTone(status: DocumentStatus) {
@@ -31182,12 +31633,19 @@ function DocumentsAndSignaturesView({
     snapshot.documents[0]?.id ?? "",
   );
   const [documentSearch, setDocumentSearch] = useState("");
+  const [documentCompanyFilter, setDocumentCompanyFilter] =
+    useState<CompanyScopeId>("all");
+  const [documentCustomerFilter, setDocumentCustomerFilter] = useState("all");
   const [documentStatusFilter, setDocumentStatusFilter] = useState<
     DocumentStatus | "all"
   >("all");
-  const [documentCategoryFilter, setDocumentCategoryFilter] = useState<
-    DocumentCategory | "all"
-  >("all");
+  const [documentCategoryFilter, setDocumentCategoryFilter] =
+    useState<DocumentLibraryCategory>("all");
+  const [documentRelationFilter, setDocumentRelationFilter] =
+    useState<DocumentRelationFilter>("all");
+  const [documentTagFilter, setDocumentTagFilter] = useState("all");
+  const [documentSortMode, setDocumentSortMode] =
+    useState<DocumentSortMode>("updated_desc");
   const selectedTemplate =
     documentTemplates.find(
       (template) => template.key === selectedTemplateKey,
@@ -31211,45 +31669,127 @@ function DocumentsAndSignaturesView({
   const selectedDocument =
     snapshot.documents.find((document) => document.id === selectedDocumentId) ??
     null;
-  const selectedAssociation = selectedDocument
-    ? getDocumentAssociationSummary(snapshot, selectedDocument)
+  const documentLibraryItems = useMemo(
+    () =>
+      snapshot.documents.map((document) => ({
+        document,
+        details: getDocumentLibraryDetails(snapshot, document),
+      })),
+    [snapshot],
+  );
+  const selectedDocumentDetails = selectedDocument
+    ? documentLibraryItems.find((item) => item.document.id === selectedDocument.id)
+        ?.details ?? getDocumentLibraryDetails(snapshot, selectedDocument)
     : null;
-  const filteredDocuments = snapshot.documents.filter((document) => {
+  const documentTagOptions = useMemo(
+    () =>
+      uniqueDocumentStrings(documentLibraryItems.flatMap((item) => item.details.tags))
+        .sort((a, b) => a.localeCompare(b)),
+    [documentLibraryItems],
+  );
+  const recentDocumentItems = useMemo(
+    () =>
+      [...documentLibraryItems]
+        .sort((a, b) => b.document.updated_at.localeCompare(a.document.updated_at))
+        .slice(0, 5),
+    [documentLibraryItems],
+  );
+  const readinessWarnings = useMemo(
+    () => buildDocumentReadinessWarnings(snapshot),
+    [snapshot],
+  );
+  const filteredReadinessWarnings = readinessWarnings.filter(
+    (warning) =>
+      documentCompanyFilter === "all" || warning.companyId === documentCompanyFilter,
+  );
+  const filteredDocumentItems = documentLibraryItems.filter(({ document, details }) => {
     const query = documentSearch.toLowerCase();
-    const association = getDocumentAssociationSummary(snapshot, document);
     const searchableText = [
       document.title,
       document.body,
       document.file_url,
-      association.customerName,
-      association.property,
-      association.jobTitle,
-      association.source,
+      details.association.customerName,
+      details.association.property,
+      details.association.jobTitle,
+      details.association.source,
+      details.relatedLead?.contact_name,
+      details.relatedEstimate?.title,
+      details.relatedJob?.title,
+      details.relatedInspection?.title,
+      details.relatedInvoice?.invoice_number,
+      details.relatedChangeOrder?.title,
+      documentLibraryCategoryLabel(details.libraryCategory),
+      details.tags.join(" "),
       document.template_key,
     ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
     const matchesSearch = !query || searchableText.includes(query);
+    const matchesCompany =
+      documentCompanyFilter === "all" || document.company_id === documentCompanyFilter;
+    const matchesCustomer =
+      documentCustomerFilter === "all" ||
+      document.customer_id === documentCustomerFilter ||
+      details.relatedCustomer?.id === documentCustomerFilter;
     const matchesStatus =
       documentStatusFilter === "all" || document.status === documentStatusFilter;
     const matchesCategory =
-      documentCategoryFilter === "all" || document.category === documentCategoryFilter;
+      documentCategoryFilter === "all" ||
+      details.libraryCategory === documentCategoryFilter;
+    const matchesRelation =
+      documentRelationFilter === "all" ||
+      details.relationTypes.includes(documentRelationFilter);
+    const matchesTag =
+      documentTagFilter === "all" || details.tags.includes(documentTagFilter);
 
-    return matchesSearch && matchesStatus && matchesCategory;
+    return (
+      matchesSearch &&
+      matchesCompany &&
+      matchesCustomer &&
+      matchesStatus &&
+      matchesCategory &&
+      matchesRelation &&
+      matchesTag
+    );
+  });
+  const sortedDocumentItems = [...filteredDocumentItems].sort((a, b) => {
+    if (documentSortMode === "updated_asc") {
+      return a.document.updated_at.localeCompare(b.document.updated_at);
+    }
+
+    if (documentSortMode === "created_desc") {
+      return b.document.created_at.localeCompare(a.document.created_at);
+    }
+
+    if (documentSortMode === "title_asc") {
+      return a.document.title.localeCompare(b.document.title);
+    }
+
+    if (documentSortMode === "status") {
+      return (
+        documentStatusLabel(a.document.status).localeCompare(
+          documentStatusLabel(b.document.status),
+        ) || b.document.updated_at.localeCompare(a.document.updated_at)
+      );
+    }
+
+    return b.document.updated_at.localeCompare(a.document.updated_at);
   });
   const {
     page: documentPage,
     pageCount: documentPageCount,
     setPage: setDocumentPage,
-    pagedItems: pagedDocuments,
-  } = usePagination(filteredDocuments, 10);
+    pagedItems: pagedDocumentItems,
+  } = usePagination(sortedDocumentItems, 10);
   const documentStats = {
     total: snapshot.documents.length,
     draft: snapshot.documents.filter((document) => document.status === "draft").length,
     ready: snapshot.documents.filter((document) => document.status === "ready").length,
     sent: snapshot.documents.filter((document) => document.status === "sent").length,
     signed: snapshot.documents.filter((document) => document.status === "signed").length,
+    archived: snapshot.documents.filter((document) => document.status === "archived").length,
+    fileLinked: snapshot.documents.filter((document) => document.file_url).length,
   };
 
   useEffect(() => {
@@ -31346,6 +31886,15 @@ function DocumentsAndSignaturesView({
     }
   };
 
+  const handleDownloadDocument = (document: DocumentRecord) => {
+    if (document.file_url) {
+      window.open(document.file_url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    window.print();
+  };
+
   const handleUpdateSelectedDocument = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -31410,7 +31959,7 @@ function DocumentsAndSignaturesView({
   };
 
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
+    <div data-testid="document-center-workspace" className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
       <section className="space-y-5">
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 p-5">
@@ -31418,32 +31967,46 @@ function DocumentsAndSignaturesView({
               <div>
                 <h2 className="text-xl font-bold text-slate-950">Document Center</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Generate PDF-ready WeatherTech Roofing packets, track drafts, and manage signatures.
+                  Manage customer, lead, opportunity, estimate, job, inspection, and invoice documents from the existing CRM.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <Printer className="h-4 w-4" />
-                Print center
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <Printer className="h-4 w-4" />
+                  Print center
+                </button>
+                {selectedDocument ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadDocument(selectedDocument)}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    <ArrowDown className="h-4 w-4" />
+                    Download
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
 
           <div className="border-b border-slate-200 p-5">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <ProfileStat label="Documents" value={documentStats.total} />
               <ProfileStat label="Drafts" value={documentStats.draft} />
               <ProfileStat label="Ready" value={documentStats.ready} />
               <ProfileStat label="Sent" value={documentStats.sent} />
               <ProfileStat label="Signed" value={documentStats.signed} />
+              <ProfileStat label="Files linked" value={documentStats.fileLinked} />
             </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_180px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
+                  data-testid="document-search"
                   value={documentSearch}
                   onChange={(event) => {
                     setDocumentSearch(event.target.value);
@@ -31454,6 +32017,39 @@ function DocumentsAndSignaturesView({
                 />
               </div>
               <select
+                data-testid="document-company-filter"
+                value={documentCompanyFilter}
+                onChange={(event) => {
+                  setDocumentCompanyFilter(event.target.value as CompanyScopeId);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All companies</option>
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-customer-filter"
+                value={documentCustomerFilter}
+                onChange={(event) => {
+                  setDocumentCustomerFilter(event.target.value);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All customers</option>
+                {snapshot.customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.display_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-status-filter"
                 value={documentStatusFilter}
                 onChange={(event) => {
                   setDocumentStatusFilter(event.target.value as DocumentStatus | "all");
@@ -31468,18 +32064,66 @@ function DocumentsAndSignaturesView({
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-4">
               <select
+                data-testid="document-category-filter"
                 value={documentCategoryFilter}
                 onChange={(event) => {
-                  setDocumentCategoryFilter(event.target.value as DocumentCategory | "all");
+                  setDocumentCategoryFilter(event.target.value as DocumentLibraryCategory);
                   setDocumentPage(1);
                 }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
-                <option value="all">All categories</option>
-                {documentCategories.map((category) => (
+                {documentLibraryCategories.map((category) => (
                   <option key={category.value} value={category.value}>
                     {category.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-relation-filter"
+                value={documentRelationFilter}
+                onChange={(event) => {
+                  setDocumentRelationFilter(event.target.value as DocumentRelationFilter);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentRelationFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-tag-filter"
+                value={documentTagFilter}
+                onChange={(event) => {
+                  setDocumentTagFilter(event.target.value);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="all">All tags</option>
+                {documentTagOptions.map((tag) => (
+                  <option key={tag} value={tag}>
+                    {tag}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-sort"
+                value={documentSortMode}
+                onChange={(event) => {
+                  setDocumentSortMode(event.target.value as DocumentSortMode);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentSortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -31508,15 +32152,16 @@ function DocumentsAndSignaturesView({
           </div>
 
           <div className="divide-y divide-slate-100">
-            {pagedDocuments.map((document) => {
-              const association = getDocumentAssociationSummary(snapshot, document);
+            {pagedDocumentItems.map(({ document, details }) => {
+              const association = details.association;
 
               return (
                 <button
                   key={document.id}
                   type="button"
                   onClick={() => handleSelectDocument(document.id)}
-                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_120px_160px] xl:items-center ${
+                  data-testid="document-library-row"
+                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_120px_130px_160px] xl:items-center ${
                     selectedDocument?.id === document.id ? "bg-sky-50" : "bg-white"
                   }`}
                 >
@@ -31525,34 +32170,121 @@ function DocumentsAndSignaturesView({
                     <p className="mt-1 text-sm text-slate-500">
                       {association.customerName} - {association.property}
                     </p>
-                    <p className="mt-1 text-xs font-semibold uppercase text-sky-700">
-                      {association.jobTitle}
-                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {details.tags.slice(0, 4).map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                   <Badge
-                    label={documentCategoryLabel(document.category)}
+                    label={documentLibraryCategoryLabel(details.libraryCategory)}
                     tone="blue"
                   />
                   <Badge
                     label={documentStatusLabel(document.status)}
                     tone={documentStatusTone(document.status)}
                   />
+                  <Badge label={details.uploadStatus} tone={details.uploadTone} />
                   <span className="text-sm text-slate-600">
                     {companyMap.get(document.company_id)?.name ?? "Company"}
                   </span>
                 </button>
               );
             })}
-            {!filteredDocuments.length ? (
+            {!filteredDocumentItems.length ? (
               <EmptyState label="No documents match this view." />
             ) : null}
           </div>
           <PaginationControls
             page={documentPage}
             pageCount={documentPageCount}
-            total={filteredDocuments.length}
+            total={filteredDocumentItems.length}
             onPageChange={setDocumentPage}
           />
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">Recent documents</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Latest customer, estimate, job, and inspection document activity.
+                </p>
+              </div>
+              <Badge label={`${recentDocumentItems.length} recent`} tone="blue" />
+            </div>
+            <div className="mt-4 grid gap-3">
+              {recentDocumentItems.map(({ document, details }) => (
+                <button
+                  key={document.id}
+                  type="button"
+                  onClick={() => handleSelectDocument(document.id)}
+                  className="rounded-lg border border-slate-200 p-3 text-left transition hover:border-sky-300 hover:bg-sky-50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-950">{document.title}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {details.association.source}
+                      </p>
+                    </div>
+                    <Badge
+                      label={documentStatusLabel(document.status)}
+                      tone={documentStatusTone(document.status)}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs font-semibold uppercase text-slate-500">
+                    Updated {formatDateTime(document.updated_at)}
+                  </p>
+                </button>
+              ))}
+              {!recentDocumentItems.length ? (
+                <EmptyState label="No recent documents yet." />
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">Missing required documents</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Document readiness checks from live estimates, jobs, inspections, and invoices.
+                </p>
+              </div>
+              <Badge
+                label={`${filteredReadinessWarnings.length} open`}
+                tone={filteredReadinessWarnings.length ? "amber" : "green"}
+              />
+            </div>
+            <div className="mt-4 grid gap-3">
+              {filteredReadinessWarnings.slice(0, 6).map((warning) => (
+                <article
+                  key={warning.id}
+                  className="rounded-lg border border-amber-200 bg-amber-50 p-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-amber-950">{warning.title}</p>
+                      <p className="mt-1 text-sm text-amber-800">{warning.detail}</p>
+                    </div>
+                    <span className="text-xs font-bold uppercase text-amber-700">
+                      {warning.action}
+                    </span>
+                  </div>
+                </article>
+              ))}
+              {!filteredReadinessWarnings.length ? (
+                <EmptyState label="No required document gaps in this company view." />
+              ) : null}
+            </div>
+          </section>
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -31663,6 +32395,9 @@ function DocumentsAndSignaturesView({
                   title={generatedDraft.title}
                   category={generatedDraft.category}
                   status="draft"
+                  companyName={
+                    companyMap.get(generatedDraft.company_id)?.name ?? "WeatherTech OS"
+                  }
                   templateName={generatedDraft.templateName}
                   body={generatedDraft.body}
                 />
@@ -31707,7 +32442,7 @@ function DocumentsAndSignaturesView({
                   Selected document
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Edit draft metadata, association, status, and body.
+                  Preview, rename, archive, and manage the linked CRM record.
                 </p>
               </div>
               <Badge
@@ -31716,22 +32451,76 @@ function DocumentsAndSignaturesView({
               />
             </div>
 
-            {selectedAssociation ? (
+            {selectedDocumentDetails ? (
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-bold text-slate-950">
-                  {selectedAssociation.customerName}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {selectedAssociation.property}
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-950">
+                      {selectedDocumentDetails.association.customerName}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {selectedDocumentDetails.association.property}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge
+                      label={documentLibraryCategoryLabel(
+                        selectedDocumentDetails.libraryCategory,
+                      )}
+                      tone="blue"
+                    />
+                    <Badge
+                      label={selectedDocumentDetails.uploadStatus}
+                      tone={selectedDocumentDetails.uploadTone}
+                    />
+                  </div>
+                </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <ProfileStat label="Job" value={selectedAssociation.jobTitle} />
-                  <ProfileStat label="Contact" value={selectedAssociation.phone} />
+                  <ProfileStat
+                    label="Source"
+                    value={selectedDocumentDetails.association.source}
+                  />
+                  <ProfileStat
+                    label="Preview"
+                    value={selectedDocumentDetails.previewMode}
+                  />
+                  <ProfileStat
+                    label="Lead / opportunity"
+                    value={
+                      selectedDocumentDetails.relatedLead?.contact_name ??
+                      "Not linked"
+                    }
+                  />
+                  <ProfileStat
+                    label="Inspection"
+                    value={
+                      selectedDocumentDetails.relatedInspection?.title ??
+                      "Not linked"
+                    }
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {selectedDocumentDetails.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200"
+                    >
+                      {tag}
+                    </span>
+                  ))}
                 </div>
               </div>
             ) : null}
 
             <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleDownloadDocument(selectedDocument)}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <ArrowDown className="h-4 w-4" />
+                {selectedDocument.file_url ? "Open file" : "Print/download preview"}
+              </button>
               {documentStatuses.map((status) => (
                 <button
                   key={status.value}
@@ -31745,12 +32534,25 @@ function DocumentsAndSignaturesView({
                   {status.label}
                 </button>
               ))}
+              {selectedDocument.status !== "archived" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleUpdateDocumentStatus(selectedDocument, "archived")}
+                  className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Archive
+                </button>
+              ) : null}
             </div>
 
             <DocumentPdfPreview
               title={selectedDocument.title}
               category={selectedDocument.category}
               status={selectedDocument.status}
+              companyName={
+                companyMap.get(selectedDocument.company_id)?.name ?? "WeatherTech OS"
+              }
               templateName={
                 weatherTechDocumentTemplates.find(
                   (template) => template.key === selectedDocument.template_key,
@@ -31758,6 +32560,34 @@ function DocumentsAndSignaturesView({
               }
               body={selectedDocument.body}
             />
+
+            {selectedDocumentDetails ? (
+              <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+                <h4 className="text-sm font-bold uppercase text-slate-500">
+                  Activity history
+                </h4>
+                <div className="mt-3 grid gap-3">
+                  {selectedDocumentDetails.activity.map((activity) => (
+                    <div
+                      key={activity.id}
+                      className="grid gap-1 border-l-2 border-sky-200 pl-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-950">
+                          {activity.label}
+                        </p>
+                        <span className="text-xs font-semibold text-slate-500">
+                          {activity.occurredAt
+                            ? formatDateTime(activity.occurredAt)
+                            : "No date"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-500">{activity.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             <form
               key={selectedDocument.id}
@@ -31781,6 +32611,7 @@ function DocumentsAndSignaturesView({
                 defaultValue={selectedDocument.title}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 placeholder="Document title"
+                aria-label="Rename document"
               />
               <div className="grid gap-3 sm:grid-cols-2">
                 <select
@@ -31898,7 +32729,7 @@ function DocumentsAndSignaturesView({
                 type="submit"
                 className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
               >
-                Save draft
+                Save document changes
               </button>
             </form>
           </section>
@@ -32042,12 +32873,14 @@ function DocumentPdfPreview({
   title,
   category,
   status,
+  companyName,
   templateName,
   body,
 }: {
   title: string;
   category: DocumentCategory;
   status: DocumentStatus;
+  companyName: string;
   templateName: string;
   body: string | null | undefined;
 }) {
@@ -32058,7 +32891,7 @@ function DocumentPdfPreview({
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase text-sky-700">
-                WeatherTech Roofing
+                {companyName}
               </p>
               <h4 className="mt-1 text-xl font-bold text-slate-950">{title}</h4>
               <p className="mt-1 text-sm text-slate-500">{templateName}</p>

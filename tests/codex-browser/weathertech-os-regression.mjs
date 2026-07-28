@@ -22,6 +22,7 @@ const DEFAULT_GROUPS = [
   "themes",
   "layout",
   "settings",
+  "documents",
   "calendar",
   "dispatch",
   "inspections",
@@ -530,6 +531,39 @@ async function seedTestCustomer(env, companyId, runId, suffix = "ESTIMATE CUSTOM
   });
 
   return customer;
+}
+
+async function seedTestDocument(env, companyId, customerId, jobId, runId) {
+  const title = `${TEST_PREFIX} ${runId} DOCUMENT CENTER PACKET`;
+  const [document] = await restRequest(env, "documents", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companyId,
+      customer_id: customerId,
+      job_id: jobId,
+      title,
+      category: "estimate",
+      status: "ready",
+      template_key: "weathertech_estimate",
+      file_url: "https://example.invalid/weathertech-os-regression-document.pdf",
+      body: [
+        `${TEST_PREFIX} ${runId} document center body.`,
+        "Proposal packet with customer and job references for regression coverage.",
+      ].join("\n"),
+    }),
+  });
+
+  return document;
+}
+
+async function findDocumentByTitle(env, title) {
+  const rows = await restRequest(
+    env,
+    `documents?select=*&title=eq.${encodeURIComponent(title)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
 }
 
 async function findLeadByContactName(env, contactName, leadNameColumn) {
@@ -5214,6 +5248,214 @@ async function testCalendarScreen(tab) {
   return { opened: true };
 }
 
+async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, runId) {
+  const viewport = await browser.capabilities.get("viewport");
+  const customer = await seedTestCustomer(
+    env,
+    company.id,
+    runId,
+    "DOCUMENT CENTER CUSTOMER",
+  );
+  const documentRecord = await seedTestDocument(
+    env,
+    company.id,
+    customer.id,
+    testJob.id,
+    runId,
+  );
+  const updatedTitle = `${TEST_PREFIX} ${runId} DOCUMENT CENTER RENAMED`;
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Documents");
+
+  await waitFor(
+    tab,
+    () =>
+      Boolean(document.querySelector('[data-testid="document-center-workspace"]')) &&
+      document.body.innerText.includes("Document Center") &&
+      document.body.innerText.includes("Missing required documents") &&
+      document.body.innerText.includes("Recent documents"),
+    "Document Center workspace",
+    20000,
+  );
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="document-search"]'),
+    documentRecord.title,
+    "document center search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-company-filter"]'),
+    company.id,
+    "document company filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-customer-filter"]'),
+    customer.id,
+    "document customer filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-category-filter"]'),
+    "proposal",
+    "document category filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-relation-filter"]'),
+    "customer",
+    "document relation filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-status-filter"]'),
+    "ready",
+    "document status filter",
+  );
+
+  await waitFor(
+    tab,
+    (title) => {
+      const workspace = document.querySelector('[data-testid="document-center-workspace"]');
+      const text = workspace?.textContent ?? "";
+
+      return (
+        text.includes(title) &&
+        text.includes("Proposal") &&
+        text.includes("Ready") &&
+        text.includes("Linked file")
+      );
+    },
+    "seeded document filtered row",
+    15000,
+    documentRecord.title,
+  );
+
+  const seededDocumentRow = tab.playwright.locator(
+    `xpath=//*[@data-testid="document-library-row" and contains(normalize-space(.), ${xpathString(documentRecord.title)})]`,
+  );
+  const seededDocumentRowCount = await seededDocumentRow.count();
+  if (seededDocumentRowCount !== 1) {
+    const documentCenterState = await tab.playwright.evaluate((title) => {
+      const workspace = document.querySelector('[data-testid="document-center-workspace"]');
+      const rows = [...document.querySelectorAll('[data-testid="document-library-row"]')];
+
+      return {
+        title,
+        rowCount: rows.length,
+        matchingRows: rows
+          .map((row) => row.textContent ?? "")
+          .filter((text) => text.includes(title)),
+        selectedFilters: Object.fromEntries(
+          [...document.querySelectorAll('[data-testid^="document-"]')]
+            .filter((element) => ["INPUT", "SELECT"].includes(element.tagName))
+            .map((element) => [element.getAttribute("data-testid"), element.value]),
+        ),
+        workspaceText: workspace?.textContent?.slice(0, 1200) ?? "",
+      };
+    }, documentRecord.title);
+
+    throw new Error(
+      `seeded document row expected 1 match, found ${seededDocumentRowCount}. State: ${JSON.stringify(documentCenterState)}`,
+    );
+  }
+  await seededDocumentRow.click({ timeoutMs: 8000 });
+
+  await waitFor(
+    tab,
+    (title) =>
+      document.body.innerText.includes("Selected document") &&
+      document.querySelector('[aria-label="Rename document"]')?.value === title &&
+      document.body.innerText.toLowerCase().includes("activity history") &&
+      (document.body.innerText.includes("Open file") ||
+        document.body.innerText.includes("Download")),
+    "selected document detail",
+    15000,
+    documentRecord.title,
+  );
+
+  await fillUnique(
+    tab.playwright.locator('[aria-label="Rename document"]'),
+    updatedTitle,
+    "rename document title",
+  );
+  await clickVisibleDomSubmitByText(tab, "Save document changes", "Save document changes");
+  await waitFor(
+    tab,
+    (title) =>
+      document.body.innerText.includes("Document draft updated.") &&
+      document.body.innerText.includes(title),
+    "renamed document UI",
+    15000,
+    updatedTitle,
+  );
+
+  const renamedDocument = await waitForAsync(
+    () => findDocumentByTitle(env, updatedTitle),
+    "renamed document persistence",
+    15000,
+  );
+
+  if (renamedDocument.status !== "ready") {
+    throw new Error(`Renamed document status changed unexpectedly to ${renamedDocument.status}.`);
+  }
+
+  await clickUnique(
+    tab.playwright.locator('xpath=//button[normalize-space(.)="Archive"]'),
+    "archive document",
+    { retryTransientClick: true },
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Document marked Archived."),
+    "archive document notice",
+    15000,
+  );
+  const archivedDocument = await waitForAsync(
+    async () => {
+      const current = await findDocumentByTitle(env, updatedTitle);
+
+      return current?.status === "archived" ? current : null;
+    },
+    "archived document persistence",
+    15000,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-status-filter"]'),
+    "archived",
+    "document archived status filter",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title) && document.body.innerText.includes("Archived"),
+    "archived document filtered row",
+    15000,
+    updatedTitle,
+  );
+
+  await viewport.set({ width: 390, height: 844 });
+  await tab.playwright.waitForTimeout(500);
+  const mobileLayout = await tab.playwright.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    workspaceVisible: Boolean(document.querySelector('[data-testid="document-center-workspace"]')),
+  }));
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (mobileLayout.scrollWidth > mobileLayout.clientWidth + 8) {
+    throw new Error(
+      `Document Center overflowed on mobile: ${mobileLayout.scrollWidth}px > ${mobileLayout.clientWidth}px.`,
+    );
+  }
+
+  return {
+    documentId: archivedDocument.id,
+    customerId: customer.id,
+    updatedTitle,
+    mobileLayout,
+  };
+}
+
 async function testDispatchWorkspace(browser, tab, env, company, testJob, runId, progress) {
   const migrationReady = await detectInspectionFoundationSupport(env);
   const dispatchStart = new Date();
@@ -7218,9 +7460,15 @@ export async function runWeatherTechOsRegression({
 	      );
 	    }
 
-	    if (enabledGroups.has("settings")) {
+    if (enabledGroups.has("settings")) {
       await record("Settings Integration Center displays provider readiness", () =>
         testSettingsIntegrationCenter(tab),
+      );
+    }
+
+    if (enabledGroups.has("documents")) {
+      await record("Document Center filters, previews, renames, archives, and stays responsive", () =>
+        testDocumentCenterWorkspace(browser, tab, env, weatherTech, seededJob, runId),
       );
     }
 

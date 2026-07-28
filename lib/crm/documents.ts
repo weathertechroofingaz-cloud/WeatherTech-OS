@@ -6,8 +6,10 @@ import type {
   DocumentCategory,
   DocumentInput,
   EstimateRecord,
+  InspectionRecord,
   InvoiceRecord,
   JobRecord,
+  LeadRecord,
   ScopeRecord,
   Trade,
 } from "./types";
@@ -19,11 +21,14 @@ import {
 } from "./painting";
 
 type DocumentSourceType =
+  | "lead"
+  | "opportunity"
   | "estimate"
   | "invoice"
   | "scope"
   | "change_order"
   | "job"
+  | "inspection"
   | "completion_certificate"
   | "warranty"
   | "customer";
@@ -55,6 +60,24 @@ export type WeatherTechDocumentTemplate = {
 
 export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
   {
+    key: "weathertech_lead_summary",
+    name: "WeatherTech Lead Summary",
+    category: "other",
+    sourceType: "lead",
+    trade: "roofing",
+    description: "Internal intake summary with customer, property, source, status, and notes.",
+    aiPrompt: "Create a concise WeatherTech roofing lead intake summary using customer contact, property, service type, lead source, priority, status, follow-up, and internal notes.",
+  },
+  {
+    key: "weathertech_opportunity_summary",
+    name: "WeatherTech Opportunity Summary",
+    category: "other",
+    sourceType: "opportunity",
+    trade: "roofing",
+    description: "Sales opportunity brief for estimating, follow-up, and handoff readiness.",
+    aiPrompt: "Create a WeatherTech roofing opportunity summary with stage, expected value, probability, next action, follow-up date, source, customer context, and estimating notes.",
+  },
+  {
     key: "weathertech_estimate",
     name: "WeatherTech Roofing Estimate",
     category: "estimate",
@@ -71,6 +94,15 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     trade: "roofing",
     description: "Detailed work plan for roofing, repairs, painting, underlayment, and custom production scopes.",
     aiPrompt: "Create a detailed WeatherTech scope of work from the selected scope record with project sequence, customer expectations, cleanup, exclusions, safety notes, and warranty boundaries.",
+  },
+  {
+    key: "weathertech_inspection_report",
+    name: "WeatherTech Inspection Summary",
+    category: "other",
+    sourceType: "inspection",
+    trade: "roofing",
+    description: "Internal inspection summary with findings, measurements, schedule, and report readiness.",
+    aiPrompt: "Create a WeatherTech roofing inspection summary using inspection type, findings, measurements, customer-visible notes, internal notes, report status, and estimate readiness.",
   },
   {
     key: "weathertech_invoice",
@@ -100,6 +132,28 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
     aiPrompt: "Create a workmanship warranty document for the selected roofing job with coverage terms, exclusions, claim process, maintenance requirements, and transferable limitations.",
   },
   {
+    key: "ihc_lead_summary",
+    name: "IHC Lead Summary",
+    category: "other",
+    sourceType: "lead",
+    trade: "painting",
+    description:
+      "Internal painting lead intake summary with customer, property, source, color needs, status, and notes.",
+    aiPrompt:
+      "Create a concise IHC Painting lead intake summary using customer contact, property, service type, lead source, priority, status, follow-up, color/prep context, and internal notes.",
+  },
+  {
+    key: "ihc_opportunity_summary",
+    name: "IHC Opportunity Summary",
+    category: "other",
+    sourceType: "opportunity",
+    trade: "painting",
+    description:
+      "Painting opportunity brief for estimating, color selection, follow-up, and handoff readiness.",
+    aiPrompt:
+      "Create an IHC Painting opportunity summary with stage, expected value, probability, next action, follow-up date, source, customer context, painting scope, color readiness, and estimating notes.",
+  },
+  {
     key: "ihc_painting_estimate",
     name: "IHC Painting Estimate",
     category: "estimate",
@@ -120,6 +174,17 @@ export const weatherTechDocumentTemplates: WeatherTechDocumentTemplate[] = [
       "Interior, exterior, and cabinet refinishing work plan with prep, masking, color placement, and finish requirements.",
     aiPrompt:
       "Create a detailed IHC Painting scope of work from the selected scope with room/surface schedule, prep expectations, masking, Dunn-Edwards product details, sheen, color placement, cleanup, exclusions, and final walkthrough.",
+  },
+  {
+    key: "ihc_inspection_report",
+    name: "IHC Inspection Summary",
+    category: "other",
+    sourceType: "inspection",
+    trade: "painting",
+    description:
+      "Lightweight painting inspection summary with surfaces, prep, colors, photos, and follow-up needs.",
+    aiPrompt:
+      "Create an IHC Painting inspection summary using inspection type, surfaces, prep observations, color readiness, customer-visible notes, internal notes, report status, and estimate readiness.",
   },
   {
     key: "ihc_invoice",
@@ -248,6 +313,25 @@ function leadName(snapshot: CrmSnapshot, leadId: string | null) {
   return leadId
     ? snapshot.leads.find((lead) => lead.id === leadId)?.contact_name ?? null
     : null;
+}
+
+function leadAddress(lead: LeadRecord | null) {
+  if (!lead) {
+    return "Not linked";
+  }
+
+  return [
+    lead.property_address,
+    lead.city,
+    lead.state,
+    lead.postal_code,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function pipelineStageLabel(value: string | null | undefined) {
+  return value ? value.replace(/_/g, " ") : "Not set";
 }
 
 function customerLabel(snapshot: CrmSnapshot, customerId: string | null) {
@@ -450,6 +534,139 @@ function buildEstimateDraft(
     }),
     sourceLabel: `Estimate - ${estimate.title}`,
     summary: `${lineItems.length} line items, ${formatMoney(estimate.total)} total`,
+    templateKey: template.key,
+    templateName: template.name,
+  };
+}
+
+function buildLeadDraft(
+  snapshot: CrmSnapshot,
+  lead: LeadRecord,
+): GeneratedDocumentDraft {
+  const company = companyName(snapshot, lead.company_id);
+  const template = templateForSource(snapshot, lead.company_id, "lead");
+  const customer = customerById(snapshot, lead.customer_id);
+
+  return {
+    company_id: lead.company_id,
+    customer_id: lead.customer_id,
+    job_id: null,
+    estimate_id: null,
+    invoice_id: null,
+    change_order_id: null,
+    title: `${lead.contact_name} - Lead Intake Summary`,
+    category: "other",
+    status: "draft",
+    template_key: template.key,
+    file_url: null,
+    body: packet({
+      title: `${lead.contact_name} Lead Intake Summary`,
+      company,
+      sections: [
+        {
+          title: "Lead",
+          body: keyValueRows([
+            ["Contact", lead.contact_name],
+            ["Phone", lead.phone],
+            ["Email", lead.email],
+            ["Company", company],
+            ["Source", lead.source],
+            ["Status", lead.status],
+            ["Pipeline stage", pipelineStageLabel(lead.pipeline_stage)],
+            ["Priority", lead.priority],
+            ["Service", lead.service_type],
+            ["Expected value", formatMoney(lead.estimated_value)],
+            ["Next follow-up", formatDate(lead.next_follow_up)],
+          ]),
+        },
+        {
+          title: "Property",
+          body: keyValueRows([
+            ["Address", leadAddress(lead)],
+            ["Converted customer", customer?.display_name],
+          ]),
+        },
+        {
+          title: "Notes",
+          body: lead.notes ?? "No notes recorded.",
+        },
+      ],
+    }),
+    sourceLabel: `Lead - ${lead.contact_name}`,
+    summary: `${lead.source} lead, ${pipelineStageLabel(lead.pipeline_stage)}`,
+    templateKey: template.key,
+    templateName: template.name,
+  };
+}
+
+function buildOpportunityDraft(
+  snapshot: CrmSnapshot,
+  lead: LeadRecord,
+): GeneratedDocumentDraft {
+  const company = companyName(snapshot, lead.company_id);
+  const template = templateForSource(snapshot, lead.company_id, "opportunity");
+  const estimate = snapshot.estimates.find((item) => item.lead_id === lead.id) ?? null;
+  const job = snapshot.jobs.find((item) => item.lead_id === lead.id) ?? null;
+  const probability =
+    lead.status === "won"
+      ? 100
+      : lead.status === "lost"
+        ? 0
+        : lead.pipeline_stage === "approved"
+          ? 85
+          : lead.pipeline_stage === "estimate_sent"
+            ? 65
+            : lead.pipeline_stage === "estimate_scheduled"
+              ? 45
+              : lead.pipeline_stage === "contacted"
+                ? 25
+                : 10;
+
+  return {
+    company_id: lead.company_id,
+    customer_id: lead.customer_id,
+    job_id: job?.id ?? null,
+    estimate_id: estimate?.id ?? null,
+    invoice_id: null,
+    change_order_id: null,
+    title: `${lead.contact_name} - Opportunity Summary`,
+    category: "other",
+    status: "draft",
+    template_key: template.key,
+    file_url: null,
+    body: packet({
+      title: `${lead.contact_name} Opportunity Summary`,
+      company,
+      sections: [
+        {
+          title: "Opportunity",
+          body: keyValueRows([
+            ["Stage", pipelineStageLabel(lead.pipeline_stage)],
+            ["Status", lead.status],
+            ["Expected revenue", formatMoney(lead.estimated_value)],
+            ["Probability", `${probability}%`],
+            ["Assigned owner", lead.created_by],
+            ["Next follow-up", formatDate(lead.next_follow_up)],
+            ["Lead source", lead.source],
+          ]),
+        },
+        {
+          title: "Relationship",
+          body: keyValueRows([
+            ["Contact", lead.contact_name],
+            ["Property", leadAddress(lead)],
+            ["Estimate", estimate?.title],
+            ["Job", job?.title],
+          ]),
+        },
+        {
+          title: "Next Action",
+          body: lead.notes ?? "No next action recorded.",
+        },
+      ],
+    }),
+    sourceLabel: `Opportunity - ${lead.contact_name}`,
+    summary: `${pipelineStageLabel(lead.pipeline_stage)}, ${formatMoney(lead.estimated_value)} expected`,
     templateKey: template.key,
     templateName: template.name,
   };
@@ -860,6 +1077,93 @@ function buildWarrantyDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDoc
   };
 }
 
+function buildInspectionDraft(
+  snapshot: CrmSnapshot,
+  inspection: InspectionRecord,
+): GeneratedDocumentDraft {
+  const company = companyName(snapshot, inspection.company_id);
+  const template = templateForSource(snapshot, inspection.company_id, "inspection");
+  const customer = customerById(snapshot, inspection.customer_id);
+  const lead = inspection.lead_id
+    ? snapshot.leads.find((item) => item.id === inspection.lead_id) ?? null
+    : null;
+  const job = inspection.job_id
+    ? snapshot.jobs.find((item) => item.id === inspection.job_id) ?? null
+    : null;
+  const estimate = inspection.estimate_id
+    ? snapshot.estimates.find((item) => item.id === inspection.estimate_id) ?? null
+    : null;
+
+  return {
+    company_id: inspection.company_id,
+    customer_id: inspection.customer_id,
+    job_id: inspection.job_id,
+    estimate_id: inspection.estimate_id,
+    invoice_id: null,
+    change_order_id: null,
+    title: `${inspection.title} - Inspection Summary`,
+    category: "other",
+    status: "draft",
+    template_key: template.key,
+    file_url: null,
+    body: packet({
+      title: `${inspection.title} Inspection Summary`,
+      company,
+      sections: [
+        {
+          title: "Inspection",
+          body: keyValueRows([
+            ["Type", inspection.inspection_type.replace(/_/g, " ")],
+            ["Service category", inspection.service_category.replace(/_/g, " ")],
+            ["Status", inspection.status],
+            ["Scheduled start", formatDateTime(inspection.scheduled_start)],
+            ["Scheduled end", formatDateTime(inspection.scheduled_end)],
+            ["Inspector", inspection.assigned_inspector],
+            ["Priority", inspection.priority],
+            ["Outcome", inspection.outcome],
+          ]),
+        },
+        {
+          title: "Relationships",
+          body: keyValueRows([
+            ["Customer", customer?.display_name],
+            ["Lead", lead?.contact_name],
+            ["Job", job?.title],
+            ["Estimate", estimate?.title],
+            ["Property", inspection.property_address ?? customerAddress(customer) ?? leadAddress(lead)],
+          ]),
+        },
+        {
+          title: "Findings",
+          body: list(
+            inspection.findings.map(
+              (finding) =>
+                `${finding.area || "Area"} - ${finding.category || "Finding"}: ${finding.observation || finding.recommendation || "No note"}`,
+            ),
+          ),
+        },
+        {
+          title: "Measurements",
+          body: list(
+            inspection.measurements.map(
+              (measurement) =>
+                `${measurement.label}: ${measurement.value} ${measurement.unit ?? ""}`.trim(),
+            ),
+          ),
+        },
+        {
+          title: "Internal Notes",
+          body: inspection.internal_notes ?? inspection.notes ?? "No notes recorded.",
+        },
+      ],
+    }),
+    sourceLabel: `Inspection - ${inspection.title}`,
+    summary: `${inspection.findings.length} findings, ${inspection.measurements.length} measurements`,
+    templateKey: template.key,
+    templateName: template.name,
+  };
+}
+
 function buildCustomerDraft(
   snapshot: CrmSnapshot,
   customer: CustomerRecord,
@@ -947,7 +1251,31 @@ function buildCustomerDraft(
 }
 
 export function buildDocumentSourceOptions(snapshot: CrmSnapshot): DocumentSourceOption[] {
+  const opportunityLeads = snapshot.leads.filter(
+    (lead) =>
+      lead.pipeline_stage !== "new_lead" ||
+      lead.status === "qualified" ||
+      lead.status === "estimate_sent" ||
+      lead.status === "won" ||
+      lead.status === "lost" ||
+      lead.estimated_value > 0,
+  );
+
   return [
+    ...snapshot.leads.map((lead) => ({
+      value: `lead:${lead.id}`,
+      label: `Lead - ${lead.contact_name}`,
+      type: "lead" as const,
+      category: "other" as const,
+      templateKey: templateForSource(snapshot, lead.company_id, "lead").key,
+    })),
+    ...opportunityLeads.map((lead) => ({
+      value: `opportunity:${lead.id}`,
+      label: `Opportunity - ${lead.contact_name}`,
+      type: "opportunity" as const,
+      category: "other" as const,
+      templateKey: templateForSource(snapshot, lead.company_id, "opportunity").key,
+    })),
     ...snapshot.estimates.map((estimate) => ({
       value: `estimate:${estimate.id}`,
       label: `Estimate - ${estimate.title}`,
@@ -997,6 +1325,13 @@ export function buildDocumentSourceOptions(snapshot: CrmSnapshot): DocumentSourc
       category: "contract" as const,
       templateKey: "weathertech_job_packet",
     })),
+    ...snapshot.inspections.map((inspection) => ({
+      value: `inspection:${inspection.id}`,
+      label: `Inspection summary - ${inspection.title}`,
+      type: "inspection" as const,
+      category: "other" as const,
+      templateKey: templateForSource(snapshot, inspection.company_id, "inspection").key,
+    })),
     ...snapshot.customers.map((customer) => ({
       value: `customer:${customer.id}`,
       label: `Customer packet - ${customer.display_name}`,
@@ -1016,6 +1351,16 @@ export function buildGeneratedDocumentDraft(
   if (type === "estimate") {
     const estimate = snapshot.estimates.find((item) => item.id === id);
     return estimate ? buildEstimateDraft(snapshot, estimate) : null;
+  }
+
+  if (type === "lead") {
+    const lead = snapshot.leads.find((item) => item.id === id);
+    return lead ? buildLeadDraft(snapshot, lead) : null;
+  }
+
+  if (type === "opportunity") {
+    const lead = snapshot.leads.find((item) => item.id === id);
+    return lead ? buildOpportunityDraft(snapshot, lead) : null;
   }
 
   if (type === "invoice") {
@@ -1046,6 +1391,11 @@ export function buildGeneratedDocumentDraft(
   if (type === "job") {
     const job = snapshot.jobs.find((item) => item.id === id);
     return job ? buildJobDraft(snapshot, job) : null;
+  }
+
+  if (type === "inspection") {
+    const inspection = snapshot.inspections.find((item) => item.id === id);
+    return inspection ? buildInspectionDraft(snapshot, inspection) : null;
   }
 
   if (type === "customer") {
