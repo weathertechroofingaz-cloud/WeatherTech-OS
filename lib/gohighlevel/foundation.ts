@@ -2,7 +2,7 @@ export const goHighLevelReadinessEndpoint =
   "/api/integrations/gohighlevel/readiness";
 
 export const goHighLevelSyncFoundationMigration =
-  "0021_gohighlevel_sync_foundation.sql";
+  "0022_gohighlevel_sync_foundation.sql";
 
 export type GoHighLevelLiveSyncStatus =
   | "not_connected"

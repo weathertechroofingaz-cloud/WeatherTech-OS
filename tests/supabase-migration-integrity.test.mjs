@@ -5,9 +5,86 @@ import process from "node:process";
 
 const migrationsDir = path.join(process.cwd(), "supabase", "migrations");
 const migrationPattern = /^([0-9]+)_[a-z0-9][a-z0-9_]*\.sql$/;
-const jobProductionMigration = "0012001_job_production_details.sql";
-const jobProductionSqlSha256 =
-  "49529318b462b3e5ab132aa87fe7890a72705d3f3e7f85aeeb7a73ae02a0eda8";
+const expectedMigrations = [
+  ["0001_weathertech_crm.sql", "9d5f3978dbda49757ad67d9f4f97a780f07ef95fd7fcfcc900a165b1351a49eb"],
+  ["0002_estimates_scopes.sql", "c2de0277a9a89eec5a8a816944aa1fb0ba94f2277942693b4dbc7494bac004f4"],
+  ["0003_operations_crm.sql", "02722f0e0d63fb1f04da709b8af4fd200f477ca92ea65cd8ff0f8f818c5a5f65"],
+  [
+    "0004_portals_documents_workflows.sql",
+    "6290237429b2818769142f88f91a90dafeb660503d26094ad5ffaa93547c9735",
+  ],
+  [
+    "0005_google_calendar_integration.sql",
+    "b022debdbb09018c72b631d0ce9e88955f1d65b47a7c07a5493998f361776124",
+  ],
+  ["0006_gmail_outbox.sql", "914c97d59023d102784ca96368fa7fec5144bd6934348aedd6a5a3dbb5b64e21"],
+  [
+    "0007_google_maps_routing.sql",
+    "464f7776f037009bd1030d9c7c197394b13adde3c2c7a91803024c3fbea9da3c",
+  ],
+  [
+    "0008_twilio_sms_integration.sql",
+    "a9ecdb666111a0e9fbaf55df7aad9ad6cc271dfc105434c8f4f2b7fe7f2bda56",
+  ],
+  ["0009_document_center.sql", "dc271b8de49c8453b22d16aa8b3f96faf9b39160a9d40c3f01344c7fd0827458"],
+  [
+    "0010_multi_company_architecture.sql",
+    "381c692e8e5f8441b7d14847e85d9aff56cc420b412720eb5f17c44a70ef1ee1",
+  ],
+  [
+    "0011_ihc_painting_workflows.sql",
+    "fd48ea46540b7ba90fd61220e731e52513539e06f116b3f6000c5b18d5ef7167",
+  ],
+  [
+    "0012_integration_sync_logs.sql",
+    "807f2b0d0321330f5b8acac1e34dc4dc852833b321d754b4d9672fa231d95f88",
+  ],
+  [
+    "0013_job_production_details.sql",
+    "49529318b462b3e5ab132aa87fe7890a72705d3f3e7f85aeeb7a73ae02a0eda8",
+  ],
+  [
+    "0014_website_lead_intake_provider.sql",
+    "3bb3654aa597724aa237e79e6e964213e6b3b3f434f0918dff324d3ec0ba16f2",
+  ],
+  [
+    "0015_expand_integration_provider_checks.sql",
+    "e89e0517eb37e71c899c71ec0e215e2a9df3a989dc4ddebcec61ff3b991b6a19",
+  ],
+  [
+    "0016_lead_source_mappings.sql",
+    "4becfc759bdf0c43406b1bb8d8eaccccbe36b75613eef3aaaf468e5415120cfb",
+  ],
+  ["0017_lead_pipeline_stage.sql", "0652878340a476132d090d8b6dc730c9732f79f1263c3112120cb6bea7384008"],
+  [
+    "0018_estimate_builder_foundation.sql",
+    "d7e1a516c400acb4a57b131203d84d04c0aff4d0af02da1709a2f4e9bc8a96c0",
+  ],
+  [
+    "0019_jobs_projects_foundation.sql",
+    "a32db91497c1c319dc25af39333e0b46a68db802e8d412e1fed70a0615432181",
+  ],
+  [
+    "0020_inspections_foundation.sql",
+    "2f274db49f4dcf808a7f024b0a0452a07d36265e614f1492faf90835baa1ef4e",
+  ],
+  [
+    "0021_twilio_live_integration_foundation.sql",
+    "549c07af949ca3241ce2edb2238bfb5c3c06c5de4d345019636198bed7c41faa",
+  ],
+  [
+    "0022_gohighlevel_sync_foundation.sql",
+    "cbfe922c8624690ab9aca0ad2994104437db875d94ca2cf13a73540daab19ad7",
+  ],
+  [
+    "0023_unified_lead_intake_routing_engine.sql",
+    "a36c11e09a121ece56c15cba2a84ee2b180c26dc9e852f9da08dc8170170b8b7",
+  ],
+  [
+    "0024_security_company_access_hardening.sql",
+    "61bc67becf0743df18ff78a57af8966e2b94de4b7d2e9b25f74ecef9dd96e7df",
+  ],
+];
 
 const files = fs
   .readdirSync(migrationsDir)
@@ -16,6 +93,8 @@ const files = fs
 
 const failures = [];
 const versions = new Map();
+const expectedFiles = expectedMigrations.map(([file]) => file);
+const expectedHashes = new Map(expectedMigrations);
 
 for (const file of files) {
   const match = migrationPattern.exec(file);
@@ -35,34 +114,34 @@ for (const file of files) {
   }
 }
 
-const ordered = files
-  .filter((file) => migrationPattern.test(file))
-  .map((file) => ({
-    file,
-    version: migrationPattern.exec(file)?.[1] ?? "",
-  }))
-  .sort((left, right) => {
-    const byVersion = left.version.localeCompare(right.version);
-    return byVersion === 0 ? left.file.localeCompare(right.file) : byVersion;
-  });
+const orderedByVersion = [...files].sort((left, right) => {
+  const leftVersion = migrationPattern.exec(left)?.[1] ?? "";
+  const rightVersion = migrationPattern.exec(right)?.[1] ?? "";
+  const byVersion = Number.parseInt(leftVersion, 10) - Number.parseInt(rightVersion, 10);
+  return byVersion === 0 ? left.localeCompare(right) : byVersion;
+});
 
-const integrationSyncIndex = ordered.findIndex(
-  (migration) => migration.file === "0012_integration_sync_logs.sql",
-);
-const jobProductionIndex = ordered.findIndex(
-  (migration) => migration.file === jobProductionMigration,
-);
-const websiteLeadIntakeIndex = ordered.findIndex(
-  (migration) => migration.file === "0013_website_lead_intake_provider.sql",
-);
-
-if (jobProductionIndex === -1) {
-  failures.push(`${jobProductionMigration} is missing.`);
+if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
+  failures.push("Raw filename sorting and numeric migration order do not agree.");
 }
 
-if (files.includes("0012_job_production_details.sql")) {
-  failures.push("0012_job_production_details.sql must remain renamed to avoid duplicate versions.");
+if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
+  failures.push("Migration files must be sequential from 0001 through 0024 with expected names.");
 }
+
+for (let index = 0; index < expectedFiles.length; index += 1) {
+  const expectedVersion = String(index + 1).padStart(4, "0");
+  const version = migrationPattern.exec(expectedFiles[index])?.[1];
+
+  if (version !== expectedVersion) {
+    failures.push(`${expectedFiles[index]} must use version ${expectedVersion}.`);
+  }
+}
+
+const integrationSyncIndex = files.indexOf("0012_integration_sync_logs.sql");
+const jobProductionIndex = files.indexOf("0013_job_production_details.sql");
+const websiteLeadIntakeIndex = files.indexOf("0014_website_lead_intake_provider.sql");
+const securityHardeningIndex = files.indexOf("0024_security_company_access_hardening.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -75,14 +154,23 @@ if (
   );
 }
 
-if (jobProductionIndex !== -1) {
-  const sql = fs.readFileSync(path.join(migrationsDir, jobProductionMigration));
+if (securityHardeningIndex !== files.length - 1) {
+  failures.push("Security company access hardening migration must remain last.");
+}
+
+for (const file of files) {
+  const expectedHash = expectedHashes.get(file);
+
+  if (!expectedHash) {
+    failures.push(`${file} is missing an expected SQL hash.`);
+    continue;
+  }
+
+  const sql = fs.readFileSync(path.join(migrationsDir, file));
   const sha256 = createHash("sha256").update(sql).digest("hex");
 
-  if (sha256 !== jobProductionSqlSha256) {
-    failures.push(
-      `${jobProductionMigration} SQL hash changed: expected ${jobProductionSqlSha256}, received ${sha256}.`,
-    );
+  if (sha256 !== expectedHash) {
+    failures.push(`${file} SQL hash changed: expected ${expectedHash}, received ${sha256}.`);
   }
 }
 
@@ -97,6 +185,9 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified 0012_integration_sync_logs.sql -> 0012001_job_production_details.sql -> 0013_website_lead_intake_provider.sql.",
+  "Verified raw filename order matches numeric order from 0001 through 0024.",
 );
-console.log(`Verified ${jobProductionMigration} SQL SHA-256 ${jobProductionSqlSha256}.`);
+console.log(
+  "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
+);
+console.log("Verified all migration SQL SHA-256 hashes remain unchanged.");

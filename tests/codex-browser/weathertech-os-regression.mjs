@@ -4972,7 +4972,7 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("retry readiness") &&
         text.includes("pipeline discovery") &&
         text.includes("/api/integrations/gohighlevel/readiness") &&
-        text.includes("0021_gohighlevel_sync_foundation.sql") &&
+        text.includes("0022_gohighlevel_sync_foundation.sql") &&
         text.includes("website lead capture") &&
         text.includes("secure form-intake foundation") &&
         text.includes("/api/leads/website") &&

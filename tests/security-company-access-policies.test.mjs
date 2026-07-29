@@ -8,7 +8,7 @@ const migrationPath = path.join(
   repoRoot,
   "supabase",
   "migrations",
-  "0023_security_company_access_hardening.sql",
+  "0024_security_company_access_hardening.sql",
 );
 const migration = fs.readFileSync(migrationPath, "utf8");
 const normalized = migration.replace(/\s+/g, " ").toLowerCase();
