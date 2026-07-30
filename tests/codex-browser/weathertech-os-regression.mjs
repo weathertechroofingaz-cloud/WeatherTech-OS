@@ -3422,14 +3422,25 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     (address) => {
       const propertySection = document.querySelector('[data-testid="customer-properties-section"]');
 
-      return Boolean(
-        propertySection?.textContent?.includes("Primary service property") &&
-          propertySection.textContent.includes(address) &&
-          propertySection.textContent.includes("Roof system") &&
-          propertySection.textContent.includes("Exterior paint colors") &&
-          propertySection.textContent.includes("Gate codes") &&
-          propertySection.textContent.includes("Inspection history"),
-      );
+	      return Boolean(
+	        propertySection?.textContent?.includes("Primary service property") &&
+	          propertySection.textContent.includes(address) &&
+	          propertySection.textContent.includes("Property health") &&
+	          propertySection.textContent.includes("Roof condition") &&
+	          propertySection.textContent.includes("Paint condition") &&
+	          propertySection.textContent.includes("Warranty status") &&
+	          propertySection.textContent.includes("Document complete") &&
+	          propertySection.textContent.includes("Property intelligence") &&
+	          propertySection.textContent.includes("Roof system") &&
+	          propertySection.textContent.includes("Roof manufacturer") &&
+	          propertySection.textContent.includes("Roofing material") &&
+	          propertySection.textContent.includes("Exterior paint colors") &&
+	          propertySection.textContent.includes("Gate codes") &&
+	          propertySection.textContent.includes("Inspection history") &&
+	          propertySection.textContent.includes("Property timeline") &&
+	          propertySection.textContent.includes("Operational history") &&
+	          propertySection.textContent.includes("AI-ready summary"),
+	      );
     },
     "customer properties workspace section",
     10000,

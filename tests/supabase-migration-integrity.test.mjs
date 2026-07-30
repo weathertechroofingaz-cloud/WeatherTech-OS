@@ -88,6 +88,10 @@ const expectedMigrations = [
     "0025_document_storage_signature_workflow.sql",
     "8e8af7442520c1c3542da82320423ff93e3060e0538f8230f14fe119f22b2412",
   ],
+  [
+    "0026_property_intelligence_foundation.sql",
+    "38d70de853c3fff13a41fcc3d8810dc9b9ced78d6fc64a7e73a5cd606cf0862a",
+  ],
 ];
 
 const files = fs
@@ -140,7 +144,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0025 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0026 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -157,6 +161,7 @@ const jobProductionIndex = files.indexOf("0013_job_production_details.sql");
 const websiteLeadIntakeIndex = files.indexOf("0014_website_lead_intake_provider.sql");
 const securityHardeningIndex = files.indexOf("0024_security_company_access_hardening.sql");
 const documentStorageIndex = files.indexOf("0025_document_storage_signature_workflow.sql");
+const propertyIntelligenceIndex = files.indexOf("0026_property_intelligence_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -177,8 +182,16 @@ if (
   failures.push("Document storage migration must order after security company access hardening.");
 }
 
-if (documentStorageIndex !== files.length - 1) {
-  failures.push("Document storage and signature workflow migration must remain last.");
+if (
+  documentStorageIndex === -1 ||
+  propertyIntelligenceIndex === -1 ||
+  !(documentStorageIndex < propertyIntelligenceIndex)
+) {
+  failures.push("Property intelligence migration must order after document storage.");
+}
+
+if (propertyIntelligenceIndex !== files.length - 1) {
+  failures.push("Property intelligence foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -295,6 +308,98 @@ if (!documentStorageMigration.includes("customer-documents")) {
   failures.push("0025 must create and use the private customer-documents storage bucket.");
 }
 
+const propertyIntelligenceMigration = fs.readFileSync(
+  path.join(migrationsDir, "0026_property_intelligence_foundation.sql"),
+  "utf8",
+);
+
+for (const requiredPropertyColumn of [
+  "property_type",
+  "year_built",
+  "square_feet",
+  "stories",
+  "occupancy",
+  "hoa_name",
+  "gate_code",
+  "access_instructions",
+  "latitude",
+  "longitude",
+  "parcel_number",
+  "roof_age_years",
+  "roof_manufacturer",
+  "roof_system",
+  "roof_pitch",
+  "roof_layers",
+  "roofing_material",
+  "flat_roof_sections",
+  "tile_information",
+  "has_solar",
+  "has_skylights",
+  "hvac_penetrations",
+  "chimneys",
+  "paint_system",
+  "exterior_finish",
+  "exterior_paint_colors",
+  "last_inspection_at",
+  "next_recommended_inspection_at",
+  "roof_condition",
+  "paint_condition",
+  "warranty_status",
+  "document_status",
+  "maintenance_status",
+  "health_score",
+  "ai_summary",
+]) {
+  if (!propertyIntelligenceMigration.includes(requiredPropertyColumn)) {
+    failures.push(`0026 properties table must include ${requiredPropertyColumn}.`);
+  }
+}
+
+for (const propertyLinkedTable of [
+  "leads",
+  "estimates",
+  "jobs",
+  "schedule_events",
+  "job_photos",
+  "invoices",
+  "material_orders",
+  "inspections",
+  "change_orders",
+  "documents",
+  "payments",
+]) {
+  if (!propertyIntelligenceMigration.includes(`('${propertyLinkedTable}', '${propertyLinkedTable}_property_id_fkey')`)) {
+    failures.push(`0026 must add a property_id foreign key for ${propertyLinkedTable}.`);
+  }
+
+  if (!propertyIntelligenceMigration.includes(`${propertyLinkedTable}_property_id_idx`)) {
+    failures.push(`0026 must index ${propertyLinkedTable}.property_id.`);
+  }
+}
+
+for (const requiredPolicy of [
+  "WTOS users read properties",
+  "WTOS users insert properties",
+  "WTOS users update properties",
+]) {
+  if (!propertyIntelligenceMigration.includes(requiredPolicy)) {
+    failures.push(`0026 must include the ${requiredPolicy} policy.`);
+  }
+}
+
+if (propertyIntelligenceMigration.includes("WTOS users delete properties")) {
+  failures.push("0026 must not create an authenticated property delete policy.");
+}
+
+if (!propertyIntelligenceMigration.includes("revoke delete on table public.properties from authenticated")) {
+  failures.push("0026 must explicitly revoke authenticated property delete access.");
+}
+
+if (!propertyIntelligenceMigration.trim().startsWith("begin;") ||
+    !propertyIntelligenceMigration.trim().endsWith("commit;")) {
+  failures.push("0026 must remain transactionally wrapped.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -306,7 +411,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0025.",
+  "Verified raw filename order matches numeric order from 0001 through 0026.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -314,10 +419,16 @@ console.log(
 console.log(
   "Verified 0024_security_company_access_hardening.sql precedes 0025_document_storage_signature_workflow.sql.",
 );
+console.log(
+  "Verified 0025_document_storage_signature_workflow.sql precedes 0026_property_intelligence_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
 );
 console.log(
   "Verified 0025 document categories, signature statuses, and storage policies.",
+);
+console.log(
+  "Verified 0026 property intelligence schema, property links, RLS policies, and transactional wrapper.",
 );

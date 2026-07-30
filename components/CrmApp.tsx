@@ -346,6 +346,7 @@ import type {
   PaintFinish,
   PaintingAreaType,
   PipelineStage,
+  PropertyRecord,
   ScheduleEventInput,
   ScheduleEventRecord,
   ScheduleEventStatus,
@@ -15520,6 +15521,7 @@ type CustomerWorkspaceSection =
   | "communications";
 
 type CustomerRelatedRecords = {
+  properties: PropertyRecord[];
   leads: LeadRecord[];
   estimates: EstimateRecord[];
   scopes: ScopeRecord[];
@@ -15534,25 +15536,59 @@ type CustomerRelatedRecords = {
 
 type CustomerPropertySummary = {
   id: string;
+  record: PropertyRecord | null;
+  displayName: string;
   address: string;
   city: string | null;
   state: string | null;
   postalCode: string | null;
+  type: string;
+  yearBuilt: string;
+  squareFeet: string;
+  stories: string;
+  occupancy: string;
+  gpsLocation: string;
+  parcelNumber: string;
   sources: string[];
   activeWorkCount: number;
   lastActivity: string;
   roofSystem: string;
   roofAge: string;
+  roofManufacturer: string;
+  roofPitch: string;
+  roofLayers: string;
+  roofingMaterial: string;
+  flatRoofSections: string;
+  tileInformation: string;
   exteriorPaintColors: string;
+  paintSystem: string;
+  exteriorFinish: string;
   hoa: string;
   gateCodes: string;
   accessInstructions: string;
   pets: string;
   solar: string;
+  skylights: string;
   hvacNotes: string;
+  chimneys: string;
+  roofCondition: string;
+  paintCondition: string;
+  warrantyStatus: string;
+  documentStatus: string;
+  maintenanceStatus: string;
+  healthScore: number | null;
+  healthLabel: string;
+  healthTone: "green" | "amber" | "red" | "blue" | "slate";
+  portfolioLabel: string;
+  managerName: string;
+  lastInspectionAt: string | null;
+  nextInspectionAt: string | null;
   warrantyDocuments: DocumentRecord[];
   photos: JobPhotoRecord[];
   inspections: InspectionRecord[];
+  timeline: CustomerTimelineItem[];
+  recommendations: string[];
+  aiReadySummary: string;
 };
 
 type CustomerTimelineKind =
@@ -15703,6 +15739,183 @@ function formatCustomerPropertyAddress(property: {
     .join(", ");
 }
 
+function formatNullableNumber(value: number | null | undefined, suffix = "") {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toLocaleString()}${suffix}`
+    : "Not documented";
+}
+
+function propertyTypeLabel(value: PropertyRecord["property_type"] | null | undefined) {
+  const labels: Record<PropertyRecord["property_type"], string> = {
+    single_family: "Single-family",
+    townhome: "Townhome",
+    condo: "Condo",
+    multi_family: "Multi-family",
+    commercial: "Commercial",
+    hoa: "HOA / community",
+    property_management: "Managed portfolio",
+    other: "Other",
+  };
+
+  return labels[value ?? "single_family"] ?? "Single-family";
+}
+
+function propertyOccupancyLabel(value: PropertyRecord["occupancy"] | null | undefined) {
+  const labels: Record<PropertyRecord["occupancy"], string> = {
+    owner_occupied: "Owner occupied",
+    tenant_occupied: "Tenant occupied",
+    vacant: "Vacant",
+    commercial: "Commercial",
+    hoa_common_area: "HOA common area",
+    unknown: "Not documented",
+  };
+
+  return labels[value ?? "unknown"] ?? "Not documented";
+}
+
+function propertyConditionLabel(value: PropertyRecord["roof_condition"] | null | undefined) {
+  const labels: Record<PropertyRecord["roof_condition"], string> = {
+    unknown: "Not documented",
+    good: "Good",
+    fair: "Fair",
+    poor: "Poor",
+    critical: "Critical",
+  };
+
+  return labels[value ?? "unknown"] ?? "Not documented";
+}
+
+function propertyWarrantyStatusLabel(
+  value: PropertyRecord["warranty_status"] | null | undefined,
+) {
+  const labels: Record<PropertyRecord["warranty_status"], string> = {
+    unknown: "Not documented",
+    active: "Active",
+    expiring: "Expiring",
+    expired: "Expired",
+    none: "No warranty",
+  };
+
+  return labels[value ?? "unknown"] ?? "Not documented";
+}
+
+function propertyDocumentStatusLabel(
+  value: PropertyRecord["document_status"] | null | undefined,
+) {
+  const labels: Record<PropertyRecord["document_status"], string> = {
+    unknown: "Not documented",
+    complete: "Complete",
+    missing: "Missing",
+    partial: "Partial",
+  };
+
+  return labels[value ?? "unknown"] ?? "Not documented";
+}
+
+function propertyMaintenanceStatusLabel(
+  value: PropertyRecord["maintenance_status"] | null | undefined,
+) {
+  const labels: Record<PropertyRecord["maintenance_status"], string> = {
+    unknown: "Not documented",
+    current: "Current",
+    due: "Due",
+    overdue: "Overdue",
+    not_required: "Not required",
+  };
+
+  return labels[value ?? "unknown"] ?? "Not documented";
+}
+
+function getPropertyHealthTone(score: number | null) {
+  if (score === null) {
+    return "slate" as const;
+  }
+
+  if (score >= 80) {
+    return "green" as const;
+  }
+
+  if (score >= 55) {
+    return "amber" as const;
+  }
+
+  return "red" as const;
+}
+
+function getPropertyHealthLabel(score: number | null) {
+  if (score === null) {
+    return "Needs baseline";
+  }
+
+  if (score >= 80) {
+    return "Healthy";
+  }
+
+  if (score >= 55) {
+    return "Monitor";
+  }
+
+  return "Needs attention";
+}
+
+function getConditionHealthPenalty(condition: PropertyRecord["roof_condition"]) {
+  if (condition === "critical") {
+    return 30;
+  }
+
+  if (condition === "poor") {
+    return 22;
+  }
+
+  if (condition === "fair") {
+    return 10;
+  }
+
+  return 0;
+}
+
+function calculatePropertyHealthScore(
+  record: PropertyRecord | null,
+  inspections: InspectionRecord[],
+  documents: DocumentRecord[],
+) {
+  if (record?.health_score !== null && record?.health_score !== undefined) {
+    return record.health_score;
+  }
+
+  if (!record && inspections.length === 0 && documents.length === 0) {
+    return null;
+  }
+
+  let score = 82;
+  score -= getConditionHealthPenalty(record?.roof_condition ?? "unknown");
+  score -= getConditionHealthPenalty(record?.paint_condition ?? "unknown");
+
+  if (record?.warranty_status === "expired" || record?.warranty_status === "none") {
+    score -= 12;
+  } else if (record?.warranty_status === "expiring") {
+    score -= 6;
+  }
+
+  if (record?.maintenance_status === "overdue") {
+    score -= 14;
+  } else if (record?.maintenance_status === "due") {
+    score -= 7;
+  }
+
+  if (record?.document_status === "missing") {
+    score -= 10;
+  } else if (record?.document_status === "partial") {
+    score -= 5;
+  }
+
+  if (inspections.some((inspection) => inspection.priority === "urgent")) {
+    score -= 8;
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
 function isFutureDateTime(value: string | null) {
   return Boolean(value && new Date(value).getTime() >= Date.now());
 }
@@ -15738,23 +15951,44 @@ function recordBelongsToProperty(
 
 function getPropertySourceText(
   customer: CustomerRecord,
-  property: Pick<CustomerPropertySummary, "address">,
+  property: Pick<CustomerPropertySummary, "address" | "record">,
   related: CustomerRelatedRecords,
 ) {
+  const propertyRecord = property.record;
   const matchingLeads = related.leads.filter((lead) =>
+    (propertyRecord?.id && lead.property_id === propertyRecord.id) ||
     recordBelongsToProperty(property, lead.property_address),
   );
   const matchingEstimates = related.estimates.filter((estimate) =>
+    (propertyRecord?.id && estimate.property_id === propertyRecord.id) ||
     recordBelongsToProperty(property, estimate.location),
   );
   const matchingInspections = related.inspections.filter((inspection) =>
+    (propertyRecord?.id && inspection.property_id === propertyRecord.id) ||
     recordBelongsToProperty(property, inspection.property_address),
   );
   const matchingJobs = related.jobs.filter((job) =>
+    (propertyRecord?.id && job.property_id === propertyRecord.id) ||
     recordBelongsToProperty(property, job.property_address || job.address),
   );
 
   return [
+    propertyRecord?.notes,
+    propertyRecord?.ai_summary,
+    propertyRecord?.roof_system,
+    propertyRecord?.roof_manufacturer,
+    propertyRecord?.roof_pitch,
+    propertyRecord?.roofing_material,
+    propertyRecord?.flat_roof_sections,
+    propertyRecord?.tile_information,
+    propertyRecord?.paint_system,
+    propertyRecord?.exterior_finish,
+    propertyRecord?.exterior_paint_colors,
+    propertyRecord?.hoa_name,
+    propertyRecord?.gate_code,
+    propertyRecord?.access_instructions,
+    propertyRecord?.hvac_penetrations,
+    propertyRecord?.chimneys,
     customer.notes,
     ...matchingLeads.flatMap((lead) => [lead.notes, lead.source, lead.service_type]),
     ...matchingEstimates.flatMap((estimate) => [
@@ -15812,20 +16046,241 @@ function detectPropertyMention(sourceText: string, keywords: RegExp[], fallback:
   return keywords.some((pattern) => pattern.test(sourceText)) ? fallback : "Not documented";
 }
 
+function buildPropertyTimelineItems(
+  property: Pick<CustomerPropertySummary, "record" | "address">,
+  related: {
+    inspections: InspectionRecord[];
+    estimates: EstimateRecord[];
+    jobs: JobRecord[];
+    documents: DocumentRecord[];
+    photos: JobPhotoRecord[];
+    invoices: InvoiceRecord[];
+    changeOrders: ChangeOrderRecord[];
+    scheduleEvents: ScheduleEventRecord[];
+  },
+): CustomerTimelineItem[] {
+  const items: CustomerTimelineItem[] = [];
+
+  if (property.record) {
+    items.push({
+      id: `property-${property.record.id}`,
+      label: "Property record updated",
+      description: property.record.display_name || property.record.address,
+      occurredAt: property.record.updated_at,
+      user: "WeatherTech OS",
+      icon: Home,
+      tone: "blue",
+      kind: "profile",
+    });
+  }
+
+  related.inspections.forEach((inspection) => {
+    items.push({
+      id: `property-inspection-${inspection.id}`,
+      label: "Inspection",
+      description: `${inspectionStatusLabel(inspection.status)} - ${inspection.title}`,
+      occurredAt: inspection.completed_at ?? inspection.scheduled_start ?? inspection.updated_at,
+      user: inspection.assigned_inspector || "Inspection team",
+      icon: ClipboardList,
+      tone: inspection.status === "completed" ? "green" : "amber",
+      kind: "inspection",
+    });
+  });
+
+  related.estimates.forEach((estimate) => {
+    items.push({
+      id: `property-estimate-${estimate.id}`,
+      label: "Estimate",
+      description: `${estimateStatusLabel(estimate.status)} - ${estimate.title}`,
+      occurredAt: estimate.updated_at,
+      user: "Sales",
+      icon: Calculator,
+      tone: estimate.status === "approved" ? "green" : "purple",
+      kind: "estimate",
+    });
+  });
+
+  related.jobs.forEach((job) => {
+    items.push({
+      id: `property-job-${job.id}`,
+      label: "Project",
+      description: `${jobStatusLabel(job.status)} - ${job.title}`,
+      occurredAt: job.scheduled_start ?? job.start_date ?? job.updated_at,
+      user: job.project_manager || job.crew_name || "Production",
+      icon: Package,
+      tone: job.status === "completed" || job.status === "closed" ? "green" : "blue",
+      kind: "job",
+    });
+  });
+
+  related.documents.forEach((document) => {
+    items.push({
+      id: `property-document-${document.id}`,
+      label: "Document",
+      description: `${documentCategoryLabel(document.category)} - ${document.title}`,
+      occurredAt: document.uploaded_at ?? document.updated_at,
+      user: "Documents",
+      icon: FileText,
+      tone: document.status === "signed" ? "green" : "slate",
+      kind: "document",
+    });
+  });
+
+  related.photos.slice(0, 8).forEach((photo) => {
+    items.push({
+      id: `property-photo-${photo.id}`,
+      label: "Photo",
+      description: photo.caption || photo.label || "Jobsite photo",
+      occurredAt: photo.taken_at ?? photo.created_at,
+      user: photo.is_customer_visible ? "Customer-visible" : "Internal",
+      icon: Camera,
+      tone: photo.is_customer_visible ? "green" : "slate",
+      kind: "photo",
+    });
+  });
+
+  related.invoices.forEach((invoice) => {
+    items.push({
+      id: `property-invoice-${invoice.id}`,
+      label: "Invoice",
+      description: `${invoiceStatusLabel(invoice.status)} - ${invoice.title}`,
+      occurredAt: invoice.issue_date ?? invoice.updated_at,
+      user: "Financial",
+      icon: ReceiptText,
+      tone: invoice.status === "paid" ? "green" : "amber",
+      kind: "invoice",
+    });
+  });
+
+  related.changeOrders.forEach((changeOrder) => {
+    items.push({
+      id: `property-change-order-${changeOrder.id}`,
+      label: "Change order",
+      description: `${changeOrderStatusLabel(changeOrder.status)} - ${changeOrder.title}`,
+      occurredAt: changeOrder.approved_at ?? changeOrder.requested_date ?? changeOrder.updated_at,
+      user: "Production",
+      icon: Copy,
+      tone: changeOrder.status === "approved" ? "green" : "amber",
+      kind: "change_order",
+    });
+  });
+
+  related.scheduleEvents.forEach((event) => {
+    items.push({
+      id: `property-schedule-${event.id}`,
+      label: scheduleEventTypeLabel(event.event_type),
+      description: `${scheduleEventStatusLabel(event.status)} - ${event.title}`,
+      occurredAt: event.start_at,
+      user: "Calendar",
+      icon: CalendarClock,
+      tone: isFutureDateTime(event.start_at) ? "blue" : "slate",
+      kind: "calendar",
+    });
+  });
+
+  return items
+    .filter((item) => Boolean(item.occurredAt))
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
+    .slice(0, 12);
+}
+
+function buildPropertyRecommendations(
+  property: PropertyRecord | null,
+  healthScore: number | null,
+  inspections: InspectionRecord[],
+  warrantyDocuments: DocumentRecord[],
+) {
+  const recommendations: string[] = [];
+
+  if (healthScore === null || inspections.length === 0) {
+    recommendations.push("Schedule a baseline property inspection.");
+  }
+
+  if (property?.next_recommended_inspection_at) {
+    const nextInspectionTime = new Date(property.next_recommended_inspection_at).getTime();
+    if (nextInspectionTime <= Date.now()) {
+      recommendations.push("Review overdue recommended inspection.");
+    }
+  }
+
+  if (property?.roof_condition === "poor" || property?.roof_condition === "critical") {
+    recommendations.push("Prioritize roof condition review before the next weather event.");
+  }
+
+  if (property?.paint_condition === "poor" || property?.paint_condition === "critical") {
+    recommendations.push("Review exterior coating condition and surface preparation needs.");
+  }
+
+  if (property?.warranty_status === "expiring") {
+    recommendations.push("Confirm warranty renewal or customer notification.");
+  }
+
+  if (property?.warranty_status === "expired" || warrantyDocuments.length === 0) {
+    recommendations.push("Attach or verify warranty documentation.");
+  }
+
+  if (property?.document_status === "missing" || property?.document_status === "partial") {
+    recommendations.push("Complete required property documents before production.");
+  }
+
+  if (property?.maintenance_status === "due" || property?.maintenance_status === "overdue") {
+    recommendations.push("Schedule maintenance follow-up.");
+  }
+
+  return recommendations.length
+    ? [...new Set(recommendations)].slice(0, 4)
+    : ["No immediate property recommendations."];
+}
+
+function buildPropertyAiReadySummary({
+  roofSystem,
+  exteriorPaintColors,
+  healthScore,
+  inspectionCount,
+  documentCount,
+  lastInspectionAt,
+  nextInspectionAt,
+}: {
+  roofSystem: string;
+  exteriorPaintColors: string;
+  healthScore: number | null;
+  inspectionCount: number;
+  documentCount: number;
+  lastInspectionAt: string | null;
+  nextInspectionAt: string | null;
+}) {
+  return [
+    `Roof system: ${roofSystem}.`,
+    `Exterior paint: ${exteriorPaintColors}.`,
+    `Health: ${healthScore === null ? "baseline needed" : `${healthScore}/100`}.`,
+    `Inspections: ${inspectionCount}.`,
+    `Warranty documents: ${documentCount}.`,
+    lastInspectionAt ? `Last inspection: ${formatDateTime(lastInspectionAt)}.` : null,
+    nextInspectionAt ? `Next recommended inspection: ${formatDateTime(nextInspectionAt)}.` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function buildCustomerPropertyIntelligence(
   customer: CustomerRecord,
-  property: Pick<CustomerPropertySummary, "address">,
+  property: Pick<CustomerPropertySummary, "address" | "record">,
   related: CustomerRelatedRecords,
 ) {
+  const propertyRecord = property.record;
+  const propertyId = propertyRecord?.id ?? null;
   const sourceText = getPropertySourceText(customer, property, related);
   const normalizedText = sourceText.toLowerCase();
   const matchingEstimates = related.estimates.filter((estimate) =>
+    (propertyId && estimate.property_id === propertyId) ||
     recordBelongsToProperty(property, estimate.location),
   );
   const matchingInspections = related.inspections.filter((inspection) =>
+    (propertyId && inspection.property_id === propertyId) ||
     recordBelongsToProperty(property, inspection.property_address),
   );
   const matchingJobs = related.jobs.filter((job) =>
+    (propertyId && job.property_id === propertyId) ||
     recordBelongsToProperty(property, job.property_address || job.address),
   );
   const matchingPhotos = related.photos.filter((photo) => {
@@ -15837,12 +16292,20 @@ function buildCustomerPropertyIntelligence(
       : null;
 
     return (
+      (propertyId && photo.property_id === propertyId) ||
       recordBelongsToProperty(property, inspection?.property_address) ||
       recordBelongsToProperty(property, job?.property_address || job?.address)
     );
   });
   const warrantyDocuments = related.documents.filter(
-    (document) => document.category === "warranty",
+    (document) =>
+      ((propertyId && document.property_id === propertyId) ||
+        recordBelongsToProperty(property, document.property_address)) &&
+      [
+        "warranty",
+        "manufacturer_warranty",
+        "workmanship_warranty",
+      ].includes(document.category),
   );
   const paintingEstimate = matchingEstimates.find(
     (estimate) =>
@@ -15860,42 +16323,125 @@ function buildCustomerPropertyIntelligence(
       : null,
   ].filter(Boolean);
 
+  const healthScore = calculatePropertyHealthScore(
+    propertyRecord,
+    matchingInspections,
+    warrantyDocuments,
+  );
+  const lastInspectionAt =
+    propertyRecord?.last_inspection_at ??
+    matchingInspections
+      .map((inspection) => inspection.completed_at ?? inspection.scheduled_start ?? inspection.updated_at)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ??
+    null;
+  const nextInspectionAt = propertyRecord?.next_recommended_inspection_at ?? null;
+  const roofSystem =
+    propertyRecord?.roof_system ??
+    extractPropertyDetail(sourceText, [
+      /roof(?:ing)? system[:\-]\s*([^\n]+)/i,
+      /roof type[:\-]\s*([^\n]+)/i,
+      /system[:\-]\s*([^\n]+)/i,
+    ]) ??
+    (matchingJobs.some((job) => job.service_type === "roofing") ||
+    matchingInspections.some((inspection) => inspection.service_category === "roofing")
+      ? "Roofing history linked"
+      : "Not documented");
+  const exteriorPaintColors =
+    propertyRecord?.exterior_paint_colors ??
+    (colors.length
+      ? colors.join(" · ")
+      : extractPropertyDetail(sourceText, [
+          /paint colors?[:\-]\s*([^\n]+)/i,
+          /exterior colors?[:\-]\s*([^\n]+)/i,
+          /body color[:\-]\s*([^\n]+)/i,
+        ]) ?? "Not documented");
+
+  const timeline = buildPropertyTimelineItems(property, {
+    inspections: matchingInspections,
+    estimates: matchingEstimates,
+    jobs: matchingJobs,
+    documents: related.documents.filter(
+      (document) =>
+        (propertyId && document.property_id === propertyId) ||
+        recordBelongsToProperty(property, document.property_address),
+    ),
+    photos: matchingPhotos,
+    invoices: related.invoices.filter(
+      (invoice) =>
+        (propertyId && invoice.property_id === propertyId) ||
+        (propertyRecord?.customer_id !== null &&
+          propertyRecord?.customer_id !== undefined &&
+          invoice.customer_id === propertyRecord.customer_id),
+    ),
+    changeOrders: related.changeOrders.filter(
+      (changeOrder) =>
+        (propertyId && changeOrder.property_id === propertyId) ||
+        (propertyRecord?.customer_id !== null &&
+          propertyRecord?.customer_id !== undefined &&
+          changeOrder.customer_id === propertyRecord.customer_id),
+    ),
+    scheduleEvents: related.scheduleEvents.filter(
+      (event) =>
+        (propertyId && event.property_id === propertyId) ||
+        recordBelongsToProperty(property, event.location),
+    ),
+  });
+  const recommendations = buildPropertyRecommendations(
+    propertyRecord,
+    healthScore,
+    matchingInspections,
+    warrantyDocuments,
+  );
+
   return {
+    type: propertyTypeLabel(propertyRecord?.property_type),
+    yearBuilt: formatNullableNumber(propertyRecord?.year_built ?? null),
+    squareFeet: formatNullableNumber(propertyRecord?.square_feet ?? null, " sq ft"),
+    stories: formatNullableNumber(propertyRecord?.stories ?? null),
+    occupancy: propertyOccupancyLabel(propertyRecord?.occupancy),
+    gpsLocation:
+      propertyRecord?.latitude !== null &&
+      propertyRecord?.latitude !== undefined &&
+      propertyRecord.longitude !== null &&
+      propertyRecord.longitude !== undefined
+        ? `${propertyRecord.latitude.toFixed(5)}, ${propertyRecord.longitude.toFixed(5)}`
+        : "Not documented",
+    parcelNumber: propertyRecord?.parcel_number ?? "Not documented",
     roofSystem:
-      extractPropertyDetail(sourceText, [
-        /roof(?:ing)? system[:\-]\s*([^\n]+)/i,
-        /roof type[:\-]\s*([^\n]+)/i,
-        /system[:\-]\s*([^\n]+)/i,
-      ]) ??
-      (matchingJobs.some((job) => job.service_type === "roofing") ||
-      matchingInspections.some((inspection) => inspection.service_category === "roofing")
-        ? "Roofing history linked"
-        : "Not documented"),
+      roofSystem,
     roofAge:
-      extractPropertyDetail(sourceText, [
+      propertyRecord?.roof_age_years !== null && propertyRecord?.roof_age_years !== undefined
+        ? `${propertyRecord.roof_age_years} years`
+        : extractPropertyDetail(sourceText, [
         /roof age[:\-]\s*([^\n]+)/i,
         /roof(?: is)?\s+([0-9]{1,2}\s*(?:years?|yrs?)\s*old)/i,
         /installed[:\-]\s*([^\n]+)/i,
       ]) ?? "Not documented",
-    exteriorPaintColors:
-      colors.length
-        ? colors.join(" · ")
-        : extractPropertyDetail(sourceText, [
-            /paint colors?[:\-]\s*([^\n]+)/i,
-            /exterior colors?[:\-]\s*([^\n]+)/i,
-            /body color[:\-]\s*([^\n]+)/i,
-          ]) ?? "Not documented",
+    roofManufacturer: propertyRecord?.roof_manufacturer ?? "Not documented",
+    roofPitch: propertyRecord?.roof_pitch ?? "Not documented",
+    roofLayers: formatNullableNumber(propertyRecord?.roof_layers ?? null),
+    roofingMaterial: propertyRecord?.roofing_material ?? "Not documented",
+    flatRoofSections: propertyRecord?.flat_roof_sections ?? "Not documented",
+    tileInformation: propertyRecord?.tile_information ?? "Not documented",
+    exteriorPaintColors,
+    paintSystem: propertyRecord?.paint_system ?? "Not documented",
+    exteriorFinish: propertyRecord?.exterior_finish ?? "Not documented",
     hoa:
-      customer.customer_type === "hoa"
+      propertyRecord?.hoa_name ??
+      (customer.customer_type === "hoa"
         ? "HOA account"
         : extractPropertyDetail(sourceText, [/hoa[:\-]\s*([^\n]+)/i]) ??
-          detectPropertyMention(normalizedText, [/\bhoa\b/, /homeowners association/], "HOA mentioned"),
+          detectPropertyMention(normalizedText, [/\bhoa\b/, /homeowners association/], "HOA mentioned")),
     gateCodes:
+      propertyRecord?.gate_code ??
       extractPropertyDetail(sourceText, [
         /gate code[:\-]\s*([^\n]+)/i,
         /access code[:\-]\s*([^\n]+)/i,
       ]) ?? "Not documented",
     accessInstructions:
+      propertyRecord?.access_instructions ??
       extractPropertyDetail(sourceText, [
         /access instructions?[:\-]\s*([^\n]+)/i,
         /access[:\-]\s*([^\n]+)/i,
@@ -15905,18 +16451,50 @@ function buildCustomerPropertyIntelligence(
       extractPropertyDetail(sourceText, [/pets?[:\-]\s*([^\n]+)/i]) ??
       detectPropertyMention(normalizedText, [/\bdog\b/, /\bcat\b/, /\bpets?\b/], "Pets mentioned"),
     solar:
-      extractPropertyDetail(sourceText, [/solar[:\-]\s*([^\n]+)/i]) ??
+      propertyRecord?.has_solar
+        ? "Solar present"
+        : extractPropertyDetail(sourceText, [/solar[:\-]\s*([^\n]+)/i]) ??
       detectPropertyMention(normalizedText, [/\bsolar\b/, /pv panels?/], "Solar mentioned"),
+    skylights: propertyRecord?.has_skylights
+      ? "Skylights present"
+      : detectPropertyMention(normalizedText, [/\bskylights?\b/], "Skylights mentioned"),
     hvacNotes:
+      propertyRecord?.hvac_penetrations ??
       extractPropertyDetail(sourceText, [
         /hvac[:\-]\s*([^\n]+)/i,
         /a\/c[:\-]\s*([^\n]+)/i,
         /air conditioning[:\-]\s*([^\n]+)/i,
       ]) ??
       detectPropertyMention(normalizedText, [/\bhvac\b/, /\ba\/c\b/, /air conditioning/], "HVAC mentioned"),
+    chimneys: propertyRecord?.chimneys ?? detectPropertyMention(normalizedText, [/\bchimneys?\b/], "Chimney mentioned"),
+    roofCondition: propertyConditionLabel(propertyRecord?.roof_condition),
+    paintCondition: propertyConditionLabel(propertyRecord?.paint_condition),
+    warrantyStatus: propertyWarrantyStatusLabel(propertyRecord?.warranty_status),
+    documentStatus: propertyDocumentStatusLabel(propertyRecord?.document_status),
+    maintenanceStatus: propertyMaintenanceStatusLabel(propertyRecord?.maintenance_status),
+    healthScore,
+    healthLabel: getPropertyHealthLabel(healthScore),
+    healthTone: getPropertyHealthTone(healthScore),
+    portfolioLabel: propertyRecord?.portfolio_label ?? "Not documented",
+    managerName: propertyRecord?.manager_name ?? "Not documented",
+    lastInspectionAt,
+    nextInspectionAt,
     warrantyDocuments,
     photos: matchingPhotos.length ? matchingPhotos : related.photos.slice(0, 3),
     inspections: matchingInspections,
+    timeline,
+    recommendations,
+    aiReadySummary:
+      propertyRecord?.ai_summary ??
+      buildPropertyAiReadySummary({
+        roofSystem,
+        exteriorPaintColors,
+        healthScore,
+        inspectionCount: matchingInspections.length,
+        documentCount: warrantyDocuments.length,
+        lastInspectionAt,
+        nextInspectionAt,
+      }),
   };
 }
 
@@ -15927,6 +16505,8 @@ function buildCustomerPropertySummaries(
   const propertyMap = new Map<string, CustomerPropertySummary>();
 
   const upsertProperty = ({
+    record = null,
+    displayName,
     address,
     city = null,
     state = null,
@@ -15935,6 +16515,8 @@ function buildCustomerPropertySummaries(
     activeWork = false,
     lastActivity,
   }: {
+    record?: PropertyRecord | null;
+    displayName?: string | null;
     address?: string | null;
     city?: string | null;
     state?: string | null;
@@ -15958,6 +16540,8 @@ function buildCustomerPropertySummaries(
     if (existing) {
       propertyMap.set(key, {
         ...existing,
+        record: existing.record ?? record,
+        displayName: existing.displayName || displayName || record?.display_name || address,
         city: existing.city ?? city,
         state: existing.state ?? state,
         postalCode: existing.postalCode ?? postalCode,
@@ -15974,28 +16558,76 @@ function buildCustomerPropertySummaries(
     }
 
     propertyMap.set(key, {
-      id: key,
+      id: record?.id ?? key,
+      record,
+      displayName: displayName || record?.display_name || address,
       address,
       city,
       state,
       postalCode,
+      type: "Single-family",
+      yearBuilt: "Not documented",
+      squareFeet: "Not documented",
+      stories: "Not documented",
+      occupancy: "Not documented",
+      gpsLocation: "Not documented",
+      parcelNumber: "Not documented",
       sources: [source],
       activeWorkCount: activeWork ? 1 : 0,
       lastActivity,
       roofSystem: "Not documented",
       roofAge: "Not documented",
+      roofManufacturer: "Not documented",
+      roofPitch: "Not documented",
+      roofLayers: "Not documented",
+      roofingMaterial: "Not documented",
+      flatRoofSections: "Not documented",
+      tileInformation: "Not documented",
       exteriorPaintColors: "Not documented",
+      paintSystem: "Not documented",
+      exteriorFinish: "Not documented",
       hoa: "Not documented",
       gateCodes: "Not documented",
       accessInstructions: "Not documented",
       pets: "Not documented",
       solar: "Not documented",
+      skylights: "Not documented",
       hvacNotes: "Not documented",
+      chimneys: "Not documented",
+      roofCondition: "Not documented",
+      paintCondition: "Not documented",
+      warrantyStatus: "Not documented",
+      documentStatus: "Not documented",
+      maintenanceStatus: "Not documented",
+      healthScore: null,
+      healthLabel: "Needs baseline",
+      healthTone: "slate",
+      portfolioLabel: "Not documented",
+      managerName: "Not documented",
+      lastInspectionAt: null,
+      nextInspectionAt: null,
       warrantyDocuments: [],
       photos: [],
       inspections: [],
+      timeline: [],
+      recommendations: [],
+      aiReadySummary: "",
     });
   };
+
+  related.properties.forEach((property) =>
+    upsertProperty({
+      record: property,
+      displayName: property.display_name,
+      address: property.address,
+      city: property.city,
+      state: property.state,
+      postalCode: property.postal_code,
+      source: property.is_primary ? "Primary property" : "Property intelligence",
+      activeWork: false,
+      lastActivity: property.updated_at,
+    }),
+  );
 
   upsertProperty({
     address: customer.property_address,
@@ -16106,14 +16738,35 @@ function getCustomerRelatedRecords(
   snapshot: CrmSnapshot,
   customer: CustomerRecord,
 ): CustomerRelatedRecords {
+  const properties = uniqueById(
+    snapshot.properties.filter(
+      (property) =>
+        property.customer_id === customer.id ||
+        recordMatchesCustomerIdentity(customer, {
+          company_id: property.company_id,
+          customer_id: property.customer_id,
+          address: property.address,
+        }),
+    ),
+  );
+  const propertyIds = new Set(properties.map((property) => property.id));
   const leads = uniqueById(
-    snapshot.leads.filter((lead) => recordMatchesCustomerIdentity(customer, lead)),
+    snapshot.leads.filter(
+      (lead) =>
+        recordMatchesCustomerIdentity(customer, lead) ||
+        (lead.property_id !== null &&
+          lead.property_id !== undefined &&
+          propertyIds.has(lead.property_id)),
+    ),
   );
   const leadIds = new Set(leads.map((lead) => lead.id));
   const estimates = uniqueById(
     snapshot.estimates.filter(
       (estimate) =>
         estimate.customer_id === customer.id ||
+        (estimate.property_id !== null &&
+          estimate.property_id !== undefined &&
+          propertyIds.has(estimate.property_id)) ||
         (estimate.lead_id !== null && leadIds.has(estimate.lead_id)),
     ),
   );
@@ -16130,6 +16783,9 @@ function getCustomerRelatedRecords(
     snapshot.jobs.filter(
       (job) =>
         recordMatchesCustomerIdentity(customer, job) ||
+        (job.property_id !== null &&
+          job.property_id !== undefined &&
+          propertyIds.has(job.property_id)) ||
         (job.lead_id !== null && leadIds.has(job.lead_id)) ||
         (job.estimate_id !== null && estimateIds.has(job.estimate_id)),
     ),
@@ -16139,6 +16795,9 @@ function getCustomerRelatedRecords(
     snapshot.inspections.filter(
       (inspection) =>
         recordMatchesCustomerIdentity(customer, inspection) ||
+        (inspection.property_id !== null &&
+          inspection.property_id !== undefined &&
+          propertyIds.has(inspection.property_id)) ||
         (inspection.lead_id !== null && leadIds.has(inspection.lead_id)) ||
         (inspection.estimate_id !== null && estimateIds.has(inspection.estimate_id)) ||
         (inspection.job_id !== null && jobIds.has(inspection.job_id)),
@@ -16149,6 +16808,9 @@ function getCustomerRelatedRecords(
     snapshot.invoices.filter(
       (invoice) =>
         invoice.customer_id === customer.id ||
+        (invoice.property_id !== null &&
+          invoice.property_id !== undefined &&
+          propertyIds.has(invoice.property_id)) ||
         (invoice.job_id !== null && jobIds.has(invoice.job_id)) ||
         (invoice.estimate_id !== null && estimateIds.has(invoice.estimate_id)),
     ),
@@ -16158,6 +16820,9 @@ function getCustomerRelatedRecords(
     snapshot.changeOrders.filter(
       (changeOrder) =>
         changeOrder.customer_id === customer.id ||
+        (changeOrder.property_id !== null &&
+          changeOrder.property_id !== undefined &&
+          propertyIds.has(changeOrder.property_id)) ||
         (changeOrder.job_id !== null && jobIds.has(changeOrder.job_id)) ||
         (changeOrder.estimate_id !== null && estimateIds.has(changeOrder.estimate_id)),
     ),
@@ -16167,6 +16832,9 @@ function getCustomerRelatedRecords(
     snapshot.jobPhotos.filter(
       (photo) =>
         photo.customer_id === customer.id ||
+        (photo.property_id !== null &&
+          photo.property_id !== undefined &&
+          propertyIds.has(photo.property_id)) ||
         (photo.job_id !== null && jobIds.has(photo.job_id)) ||
         (photo.estimate_id !== null && estimateIds.has(photo.estimate_id)) ||
         (photo.inspection_id !== null && inspectionIds.has(photo.inspection_id)),
@@ -16176,6 +16844,9 @@ function getCustomerRelatedRecords(
     snapshot.documents.filter(
       (document) =>
         document.customer_id === customer.id ||
+        (document.property_id !== null &&
+          document.property_id !== undefined &&
+          propertyIds.has(document.property_id)) ||
         (document.job_id !== null && jobIds.has(document.job_id)) ||
         (document.estimate_id !== null && estimateIds.has(document.estimate_id)) ||
         (document.invoice_id !== null && invoiceIds.has(document.invoice_id)) ||
@@ -16187,12 +16858,16 @@ function getCustomerRelatedRecords(
     snapshot.scheduleEvents.filter(
       (event) =>
         event.customer_id === customer.id ||
+        (event.property_id !== null &&
+          event.property_id !== undefined &&
+          propertyIds.has(event.property_id)) ||
         (event.lead_id !== null && leadIds.has(event.lead_id)) ||
         (event.job_id !== null && jobIds.has(event.job_id)),
     ),
   );
 
   return {
+    properties,
     leads,
     estimates,
     scopes,
@@ -16272,11 +16947,32 @@ function buildCustomerSearchText(
     customerStatusLabel(customer.status),
     customerTypeLabel(customer.customer_type),
     ...properties.flatMap((property) => [
+      property.displayName,
       property.address,
       property.city,
       property.state,
       property.postalCode,
       formatCustomerPropertyAddress(property),
+      property.type,
+      property.occupancy,
+      property.parcelNumber,
+      property.roofSystem,
+      property.roofAge,
+      property.roofManufacturer,
+      property.roofPitch,
+      property.roofingMaterial,
+      property.flatRoofSections,
+      property.tileInformation,
+      property.exteriorPaintColors,
+      property.paintSystem,
+      property.exteriorFinish,
+      property.hoa,
+      property.portfolioLabel,
+      property.managerName,
+      property.warrantyStatus,
+      property.documentStatus,
+      property.maintenanceStatus,
+      property.aiReadySummary,
       ...property.sources,
     ]),
     ...related.leads.flatMap((lead) => [
@@ -16423,6 +17119,22 @@ function findPotentialCustomerDuplicates(
         crmAddressesLikelyMatch(inputAddress, customerAddress)
       ) {
         reasons.push("same name and service address");
+      } else if (
+        inputAddress &&
+        customerAddress &&
+        crmAddressesLikelyMatch(inputAddress, customerAddress)
+      ) {
+        reasons.push("same service property");
+      }
+
+      if (
+        inputName &&
+        customerName &&
+        inputName === customerName &&
+        ((inputPhone && customerPhone && inputPhone === customerPhone) ||
+          (inputEmail && customerEmail && inputEmail === customerEmail))
+      ) {
+        reasons.push("same owner contact");
       }
 
       return { customer, reasons };
@@ -18530,25 +19242,26 @@ function CustomerPropertiesSection({
   }
 
   return (
-    <div className="grid gap-3" data-testid="customer-properties-section">
+    <div className="grid gap-4" data-testid="customer-properties-section">
       {properties.map((property, index) => (
         <div
           key={property.id}
           className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+          data-testid="property-overview-page"
         >
-          <div className="grid gap-0 lg:grid-cols-[180px_minmax(0,1fr)]">
+          <div className="grid gap-0 xl:grid-cols-[260px_minmax(0,1fr)]">
             <div className="bg-slate-100">
               {property.photos[0] ? (
                 <Image
                   src={property.photos[0].file_url}
                   alt={property.photos[0].caption ?? property.photos[0].label ?? "Property photo"}
                   width={360}
-                  height={176}
+                  height={360}
                   unoptimized
-                  className="h-44 w-full object-cover lg:h-full"
+                  className="h-56 w-full object-cover xl:h-full"
                 />
               ) : (
-                <div className="grid h-44 place-items-center text-slate-500 lg:h-full">
+                <div className="grid h-56 place-items-center text-slate-500 xl:h-full">
                   <div className="text-center">
                     <Home className="mx-auto h-7 w-7" />
                     <p className="mt-2 text-xs font-semibold uppercase">Property</p>
@@ -18556,42 +19269,166 @@ function CustomerPropertiesSection({
                 </div>
               )}
             </div>
-            <div className="p-4">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="p-4 sm:p-5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <p className="text-sm font-bold text-slate-950">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
                     {index === 0 ? "Primary service property" : "Linked property"}
                   </p>
+                  <h4 className="mt-1 text-lg font-black tracking-tight text-slate-950">
+                    {property.displayName}
+                  </h4>
                   <p className="mt-1 text-sm text-slate-600">
                     {formatCustomerPropertyAddress(property)}
                   </p>
                 </div>
-                <Badge
-                  label={
-                    property.activeWorkCount
-                      ? `${property.activeWorkCount} active`
-                      : "No active work"
-                  }
-                  tone={property.activeWorkCount ? "blue" : "green"}
-                />
+                <div className="flex flex-wrap gap-2">
+                  <Badge label={property.type} tone="blue" />
+                  <Badge
+                    label={property.healthLabel}
+                    tone={property.healthTone === "green" ? "green" : "amber"}
+                  />
+                  <Badge
+                    label={
+                      property.activeWorkCount
+                        ? `${property.activeWorkCount} active`
+                        : "No active work"
+                    }
+                    tone={property.activeWorkCount ? "blue" : "green"}
+                  />
+                </div>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <CustomerDetail label="Roof system" value={property.roofSystem} />
-                <CustomerDetail label="Roof age" value={property.roofAge} />
-                <CustomerDetail label="Exterior paint colors" value={property.exteriorPaintColors} />
-                <CustomerDetail label="HOA" value={property.hoa} />
-                <CustomerDetail label="Gate codes" value={property.gateCodes} />
-                <CustomerDetail label="Access instructions" value={property.accessInstructions} />
-                <CustomerDetail label="Pets" value={property.pets} />
-                <CustomerDetail label="Solar" value={property.solar} />
-                <CustomerDetail label="HVAC notes" value={property.hvacNotes} />
+              <div
+                className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4"
+                data-testid="property-health-panel"
+              >
+                <ProfileStat
+                  label="Property health"
+                  value={property.healthScore === null ? "Baseline" : `${property.healthScore}/100`}
+                />
+                <ProfileStat label="Roof condition" value={property.roofCondition} />
+                <ProfileStat label="Paint condition" value={property.paintCondition} />
+                <ProfileStat label="Warranty status" value={property.warrantyStatus} />
+                <ProfileStat label="Inspection due" value={property.nextInspectionAt ? formatDateTime(property.nextInspectionAt) : "Not scheduled"} />
+                <ProfileStat label="Document complete" value={property.documentStatus} />
+                <ProfileStat label="Maintenance due" value={property.maintenanceStatus} />
+                <ProfileStat label="Last inspection" value={property.lastInspectionAt ? formatDateTime(property.lastInspectionAt) : "No record"} />
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="text-sm font-bold text-slate-950">
+                    Property intelligence
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <CustomerDetail label="Year built" value={property.yearBuilt} />
+                    <CustomerDetail label="Square footage" value={property.squareFeet} />
+                    <CustomerDetail label="Stories" value={property.stories} />
+                    <CustomerDetail label="Occupancy" value={property.occupancy} />
+                    <CustomerDetail label="GPS location" value={property.gpsLocation} />
+                    <CustomerDetail label="Parcel / APN" value={property.parcelNumber} />
+                    <CustomerDetail label="Roof system" value={property.roofSystem} />
+                    <CustomerDetail label="Roof age" value={property.roofAge} />
+                    <CustomerDetail label="Roof manufacturer" value={property.roofManufacturer} />
+                    <CustomerDetail label="Roof pitch" value={property.roofPitch} />
+                    <CustomerDetail label="Roof layers" value={property.roofLayers} />
+                    <CustomerDetail label="Roofing material" value={property.roofingMaterial} />
+                    <CustomerDetail label="Flat roof sections" value={property.flatRoofSections} />
+                    <CustomerDetail label="Tile information" value={property.tileInformation} />
+                    <CustomerDetail label="Solar" value={property.solar} />
+                    <CustomerDetail label="Skylights" value={property.skylights} />
+                    <CustomerDetail label="HVAC penetrations" value={property.hvacNotes} />
+                    <CustomerDetail label="Chimneys" value={property.chimneys} />
+                    <CustomerDetail label="Paint system" value={property.paintSystem} />
+                    <CustomerDetail label="Exterior finish" value={property.exteriorFinish} />
+                    <CustomerDetail label="Exterior paint colors" value={property.exteriorPaintColors} />
+                    <CustomerDetail label="HOA" value={property.hoa} />
+                    <CustomerDetail label="Gate codes" value={property.gateCodes} />
+                    <CustomerDetail label="Access instructions" value={property.accessInstructions} />
+                    <CustomerDetail label="Pets" value={property.pets} />
+                    <CustomerDetail label="Portfolio" value={property.portfolioLabel} />
+                    <CustomerDetail label="Property manager" value={property.managerName} />
+                  </div>
+                </div>
+
+                <div className="grid gap-3">
+                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-950">Open items</p>
+                    <div className="mt-3 grid gap-2">
+                      {property.recommendations.map((recommendation) => (
+                        <div
+                          key={recommendation}
+                          className="flex gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                        >
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                          <span>{recommendation}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-950">AI-ready summary</p>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                      {property.aiReadySummary}
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <ProfileStat label="Warranty docs" value={property.warrantyDocuments.length} />
                 <ProfileStat label="Photos" value={property.photos.length} />
                 <ProfileStat label="Inspection history" value={property.inspections.length} />
+              </div>
+
+              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3" data-testid="property-timeline">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-bold text-slate-950">Property timeline</p>
+                  <span className="text-xs font-semibold uppercase text-slate-400">
+                    Operational history
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {property.timeline.length ? (
+                    property.timeline.map((item) => {
+                      const Icon = item.icon;
+
+                      return (
+                        <div
+                          key={item.id}
+                          className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md border border-slate-100 bg-slate-50 px-3 py-2"
+                        >
+                          <span className="grid h-8 w-8 place-items-center rounded-md bg-white text-slate-500 shadow-sm">
+                            <Icon className="h-4 w-4" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="text-sm font-semibold text-slate-900">
+                                {item.label}
+                              </p>
+                              <span className="text-xs font-medium text-slate-500">
+                                {formatDateTime(item.occurredAt)}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-sm text-slate-600">
+                              {item.description}
+                            </p>
+                            <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                              {item.user}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                      Property history will appear here as inspections, projects,
+                      documents, photos, invoices, and maintenance records are linked.
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="mt-3 flex flex-wrap gap-2">

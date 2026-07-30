@@ -61,6 +61,8 @@ import type {
   NotificationRecord,
   PaymentInput,
   PaymentRecord,
+  PropertyInput,
+  PropertyRecord,
   RoutePlanInput,
   RoutePlanRecord,
   RoutePlanStopInput,
@@ -137,6 +139,46 @@ function requireRows<T>(tableName: string, result: CrmListResult<T>): T[] {
   }
 
   return result.data ?? [];
+}
+
+function isOptionalTableMissingError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    details?: unknown;
+    message?: unknown;
+  };
+  const message = [
+    candidate.code,
+    candidate.details,
+    candidate.message,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    message.includes("42p01") ||
+    message.includes("pgrst205") ||
+    message.includes("could not find the table") ||
+    message.includes("relation \"public.properties\" does not exist") ||
+    message.includes("relation \"properties\" does not exist")
+  );
+}
+
+function optionalRows<T>(tableName: string, result: CrmListResult<T>): T[] {
+  if (!result.error) {
+    return result.data ?? [];
+  }
+
+  if (isOptionalTableMissingError(result.error)) {
+    return [];
+  }
+
+  throwCrmTableError(tableName, result.error);
 }
 
 type LegacyLeadRecord = Partial<LeadRecord> & {
@@ -328,6 +370,63 @@ function normalizeStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+function normalizePropertyRows(properties: PropertyRecord[]): PropertyRecord[] {
+  return properties.map((property) => {
+    const createdAt = getLegacyLeadString(property.created_at) ?? new Date().toISOString();
+
+    return {
+      ...property,
+      customer_id: property.customer_id ?? null,
+      city: getLegacyLeadString(property.city),
+      state: getLegacyLeadString(property.state) ?? "AZ",
+      postal_code: getLegacyLeadString(property.postal_code),
+      property_type: property.property_type ?? "single_family",
+      year_built: property.year_built ?? null,
+      square_feet: property.square_feet ?? null,
+      stories: property.stories ?? null,
+      occupancy: property.occupancy ?? "unknown",
+      hoa_name: getLegacyLeadString(property.hoa_name),
+      gate_code: getLegacyLeadString(property.gate_code),
+      access_instructions: getLegacyLeadString(property.access_instructions),
+      latitude: property.latitude ?? null,
+      longitude: property.longitude ?? null,
+      parcel_number: getLegacyLeadString(property.parcel_number),
+      roof_age_years: property.roof_age_years ?? null,
+      roof_manufacturer: getLegacyLeadString(property.roof_manufacturer),
+      roof_system: getLegacyLeadString(property.roof_system),
+      roof_pitch: getLegacyLeadString(property.roof_pitch),
+      roof_layers: property.roof_layers ?? null,
+      roofing_material: getLegacyLeadString(property.roofing_material),
+      flat_roof_sections: getLegacyLeadString(property.flat_roof_sections),
+      tile_information: getLegacyLeadString(property.tile_information),
+      has_solar: Boolean(property.has_solar),
+      has_skylights: Boolean(property.has_skylights),
+      hvac_penetrations: getLegacyLeadString(property.hvac_penetrations),
+      chimneys: getLegacyLeadString(property.chimneys),
+      paint_system: getLegacyLeadString(property.paint_system),
+      exterior_finish: getLegacyLeadString(property.exterior_finish),
+      exterior_paint_colors: getLegacyLeadString(property.exterior_paint_colors),
+      last_inspection_at: getLegacyLeadString(property.last_inspection_at),
+      next_recommended_inspection_at: getLegacyLeadString(
+        property.next_recommended_inspection_at,
+      ),
+      roof_condition: property.roof_condition ?? "unknown",
+      paint_condition: property.paint_condition ?? "unknown",
+      warranty_status: property.warranty_status ?? "unknown",
+      document_status: property.document_status ?? "unknown",
+      maintenance_status: property.maintenance_status ?? "unknown",
+      health_score: property.health_score ?? null,
+      is_primary: Boolean(property.is_primary),
+      portfolio_label: getLegacyLeadString(property.portfolio_label),
+      manager_name: getLegacyLeadString(property.manager_name),
+      notes: getLegacyLeadString(property.notes),
+      ai_summary: getLegacyLeadString(property.ai_summary),
+      created_at: createdAt,
+      updated_at: getLegacyLeadString(property.updated_at) ?? createdAt,
+    };
+  });
+}
+
 function normalizeInspectionRows(inspections: InspectionRecord[]): InspectionRecord[] {
   return inspections.map((row) => {
     const inspection = row as LegacyInspectionRecord;
@@ -382,6 +481,7 @@ function normalizeInspectionRows(inspections: InspectionRecord[]): InspectionRec
 function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
   return {
     ...core,
+    properties: [],
     estimateLineItems: [],
     scopeTemplates: [],
     jobTasks: [],
@@ -451,6 +551,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
 
   const [
     companies,
+    properties,
     leads,
     customers,
     estimates,
@@ -488,6 +589,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     companyWorkflowSettings,
   ] = await Promise.all([
     client.from("companies").select("*").order("name", { ascending: true }),
+    client.from("properties").select("*").order("updated_at", { ascending: false }),
     client.from("leads").select("*").order("created_at", { ascending: false }),
     client.from("customers").select("*").order("updated_at", { ascending: false }),
     client.from("estimates").select("*").order("updated_at", { ascending: false }),
@@ -569,6 +671,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
 
   throwFirstTableError([
     ["companies", companies],
+    ...(properties.error && !isOptionalTableMissingError(properties.error)
+      ? [["properties", properties] as [string, { error: unknown }]]
+      : []),
     ["leads", leads],
     ["customers", customers],
     ["estimates", estimates],
@@ -608,6 +713,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
 
   return {
     companies: requireRows("companies", companies),
+    properties: normalizePropertyRows(optionalRows("properties", properties)),
     leads: normalizeLeadRows(requireRows("leads", leads)),
     customers: requireRows("customers", customers),
     estimates: requireRows("estimates", estimates),
@@ -666,6 +772,7 @@ function buildLiveLeadInput(input: LeadInput) {
 
   return {
     company_id: input.company_id || null,
+    ...(input.property_id !== undefined ? { property_id: input.property_id ?? null } : {}),
     customer_name: input.contact_name,
     phone: input.phone ?? null,
     email: input.email ?? null,
@@ -784,6 +891,90 @@ export async function updateCustomer(
   return data;
 }
 
+function buildPropertyPayload(input: PropertyInput) {
+  return {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    display_name: input.display_name,
+    address: input.address,
+    city: input.city ?? null,
+    state: input.state ?? "AZ",
+    postal_code: input.postal_code ?? null,
+    property_type: input.property_type ?? "single_family",
+    year_built: input.year_built ?? null,
+    square_feet: input.square_feet ?? null,
+    stories: input.stories ?? null,
+    occupancy: input.occupancy ?? "unknown",
+    hoa_name: input.hoa_name ?? null,
+    gate_code: input.gate_code ?? null,
+    access_instructions: input.access_instructions ?? null,
+    latitude: input.latitude ?? null,
+    longitude: input.longitude ?? null,
+    parcel_number: input.parcel_number ?? null,
+    roof_age_years: input.roof_age_years ?? null,
+    roof_manufacturer: input.roof_manufacturer ?? null,
+    roof_system: input.roof_system ?? null,
+    roof_pitch: input.roof_pitch ?? null,
+    roof_layers: input.roof_layers ?? null,
+    roofing_material: input.roofing_material ?? null,
+    flat_roof_sections: input.flat_roof_sections ?? null,
+    tile_information: input.tile_information ?? null,
+    has_solar: input.has_solar ?? false,
+    has_skylights: input.has_skylights ?? false,
+    hvac_penetrations: input.hvac_penetrations ?? null,
+    chimneys: input.chimneys ?? null,
+    paint_system: input.paint_system ?? null,
+    exterior_finish: input.exterior_finish ?? null,
+    exterior_paint_colors: input.exterior_paint_colors ?? null,
+    last_inspection_at: input.last_inspection_at ?? null,
+    next_recommended_inspection_at: input.next_recommended_inspection_at ?? null,
+    roof_condition: input.roof_condition ?? "unknown",
+    paint_condition: input.paint_condition ?? "unknown",
+    warranty_status: input.warranty_status ?? "unknown",
+    document_status: input.document_status ?? "unknown",
+    maintenance_status: input.maintenance_status ?? "unknown",
+    health_score: input.health_score ?? null,
+    is_primary: input.is_primary ?? false,
+    portfolio_label: input.portfolio_label ?? null,
+    manager_name: input.manager_name ?? null,
+    notes: input.notes ?? null,
+    ai_summary: input.ai_summary ?? null,
+  };
+}
+
+export async function createProperty(client: CrmClient, input: PropertyInput) {
+  const { data, error } = await client
+    .from("properties")
+    .insert(buildPropertyPayload(input))
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return normalizePropertyRows([data])[0];
+}
+
+export async function updateProperty(
+  client: CrmClient,
+  id: string,
+  input: Partial<PropertyInput>,
+) {
+  const { data, error } = await client
+    .from("properties")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return normalizePropertyRows([data])[0];
+}
+
 export async function convertLeadToCustomer(client: CrmClient, lead: LeadRecord) {
   const customer = await createCustomer(client, {
     company_id: lead.company_id,
@@ -829,6 +1020,7 @@ function buildEstimatePayload(input: EstimateInput, lineItems: EstimateLineItemI
     profit_margin_rate: input.profit_margin_rate ?? 0,
     customer_id: input.customer_id ?? null,
     lead_id: input.lead_id ?? null,
+    ...(input.property_id !== undefined ? { property_id: input.property_id ?? null } : {}),
     business: input.business ?? null,
     location: input.location ?? null,
     expiration_date: input.expiration_date ?? null,
@@ -1441,6 +1633,7 @@ export async function createJobPhoto(
   } = {
     company_id: input.company_id,
     customer_id: input.customer_id ?? null,
+    ...(input.property_id !== undefined ? { property_id: input.property_id ?? null } : {}),
     job_id: input.job_id ?? null,
     estimate_id: input.estimate_id ?? null,
     caption: input.caption ?? null,
@@ -1827,6 +2020,7 @@ function buildInspectionPayload(input: InspectionInput) {
   };
 
   if ("customer_id" in input) payload.customer_id = input.customer_id ?? null;
+  if ("property_id" in input) payload.property_id = input.property_id ?? null;
   if ("lead_id" in input) payload.lead_id = input.lead_id ?? null;
   if ("schedule_event_id" in input) {
     payload.schedule_event_id = input.schedule_event_id ?? null;
@@ -2057,6 +2251,7 @@ export async function createDocument(client: CrmClient, input: DocumentInput) {
     inspection_id: input.inspection_id ?? null,
     invoice_id: input.invoice_id ?? null,
     change_order_id: input.change_order_id ?? null,
+    ...(input.property_id !== undefined ? { property_id: input.property_id ?? null } : {}),
     title: input.title,
     category: input.category,
     status: input.status ?? "draft",
@@ -2123,6 +2318,7 @@ export async function updateDocument(
     ...(input.change_order_id !== undefined
       ? { change_order_id: input.change_order_id }
       : {}),
+    ...(input.property_id !== undefined ? { property_id: input.property_id } : {}),
     ...(input.title !== undefined ? { title: input.title } : {}),
     ...(input.category !== undefined ? { category: input.category } : {}),
     ...(input.status !== undefined ? { status: input.status } : {}),

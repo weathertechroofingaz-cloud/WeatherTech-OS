@@ -32,6 +32,36 @@ export type PipelineStage =
 export type LeadPriority = "low" | "normal" | "high" | "urgent";
 export type CustomerType = "homeowner" | "commercial" | "hoa" | "property_manager";
 export type CustomerStatus = "active" | "inactive" | "prospect";
+export type PropertyType =
+  | "single_family"
+  | "townhome"
+  | "condo"
+  | "multi_family"
+  | "commercial"
+  | "hoa"
+  | "property_management"
+  | "other";
+export type PropertyOccupancy =
+  | "owner_occupied"
+  | "tenant_occupied"
+  | "vacant"
+  | "commercial"
+  | "hoa_common_area"
+  | "unknown";
+export type PropertyCondition = "unknown" | "good" | "fair" | "poor" | "critical";
+export type PropertyWarrantyStatus =
+  | "unknown"
+  | "active"
+  | "expiring"
+  | "expired"
+  | "none";
+export type PropertyDocumentStatus = "unknown" | "complete" | "missing" | "partial";
+export type PropertyMaintenanceStatus =
+  | "unknown"
+  | "current"
+  | "due"
+  | "overdue"
+  | "not_required";
 export type EstimateStatus =
   | "draft"
   | "sent"
@@ -384,10 +414,63 @@ export type CustomerRecord = {
   updated_at: string;
 };
 
+export type PropertyRecord = {
+  id: string;
+  company_id: string;
+  customer_id: string | null;
+  display_name: string;
+  address: string;
+  city: string | null;
+  state: string;
+  postal_code: string | null;
+  property_type: PropertyType;
+  year_built: number | null;
+  square_feet: number | null;
+  stories: number | null;
+  occupancy: PropertyOccupancy;
+  hoa_name: string | null;
+  gate_code: string | null;
+  access_instructions: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  parcel_number: string | null;
+  roof_age_years: number | null;
+  roof_manufacturer: string | null;
+  roof_system: string | null;
+  roof_pitch: string | null;
+  roof_layers: number | null;
+  roofing_material: string | null;
+  flat_roof_sections: string | null;
+  tile_information: string | null;
+  has_solar: boolean;
+  has_skylights: boolean;
+  hvac_penetrations: string | null;
+  chimneys: string | null;
+  paint_system: string | null;
+  exterior_finish: string | null;
+  exterior_paint_colors: string | null;
+  last_inspection_at: string | null;
+  next_recommended_inspection_at: string | null;
+  roof_condition: PropertyCondition;
+  paint_condition: PropertyCondition;
+  warranty_status: PropertyWarrantyStatus;
+  document_status: PropertyDocumentStatus;
+  maintenance_status: PropertyMaintenanceStatus;
+  health_score: number | null;
+  is_primary: boolean;
+  portfolio_label: string | null;
+  manager_name: string | null;
+  notes: string | null;
+  ai_summary: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LeadRecord = {
   id: string;
   company_id: string;
   customer_id: string | null;
+  property_id?: string | null;
   contact_name: string;
   phone: string | null;
   email: string | null;
@@ -417,6 +500,7 @@ export type EstimateRecord = {
   company_id: string;
   customer_id: string | null;
   lead_id: string | null;
+  property_id?: string | null;
   business: string | null;
   location: string | null;
   title: string;
@@ -506,6 +590,7 @@ export type JobRecord = {
   lead_id: string | null;
   estimate_id: string | null;
   scope_id: string | null;
+  property_id?: string | null;
   business: string | null;
   location: string | null;
   title: string;
@@ -564,6 +649,7 @@ export type ScheduleEventRecord = {
   customer_id: string | null;
   lead_id: string | null;
   job_id: string | null;
+  property_id?: string | null;
   title: string;
   event_type: ScheduleEventType;
   status: ScheduleEventStatus;
@@ -582,6 +668,7 @@ export type JobPhotoRecord = {
   job_id: string | null;
   estimate_id: string | null;
   inspection_id: string | null;
+  property_id?: string | null;
   caption: string | null;
   label: string | null;
   file_path: string;
@@ -599,6 +686,7 @@ export type InvoiceRecord = {
   customer_id: string | null;
   job_id: string | null;
   estimate_id: string | null;
+  property_id?: string | null;
   invoice_number: string;
   title: string;
   status: InvoiceStatus;
@@ -632,6 +720,7 @@ export type InvoiceLineItemRecord = {
 export type MaterialOrderRecord = {
   id: string;
   company_id: string;
+  property_id?: string | null;
   job_id: string | null;
   supplier_name: string;
   status: MaterialOrderStatus;
@@ -707,6 +796,7 @@ export type InspectionRecord = {
   schedule_event_id: string | null;
   estimate_id: string | null;
   report_document_id: string | null;
+  property_id?: string | null;
   title: string;
   status: InspectionStatus;
   inspection_type: InspectionType;
@@ -787,6 +877,7 @@ export type ChangeOrderRecord = {
   customer_id: string | null;
   job_id: string | null;
   estimate_id: string | null;
+  property_id?: string | null;
   title: string;
   status: ChangeOrderStatus;
   reason: string;
@@ -833,6 +924,7 @@ export type DocumentRecord = {
   inspection_id: string | null;
   invoice_id: string | null;
   change_order_id: string | null;
+  property_id?: string | null;
   title: string;
   category: DocumentCategory;
   status: DocumentStatus;
@@ -860,6 +952,7 @@ export type PaymentRecord = {
   company_id: string;
   customer_id: string | null;
   invoice_id: string | null;
+  property_id?: string | null;
   amount: number;
   method: string;
   status: PaymentStatus;
@@ -1248,6 +1341,7 @@ export type RoutePlanStopRecord = {
 export type LeadInput = {
   company_id: string;
   customer_id?: string | null;
+  property_id?: string | null;
   contact_name: string;
   phone?: string | null;
   email?: string | null;
@@ -1285,6 +1379,55 @@ export type CustomerInput = {
   notes?: string | null;
 };
 
+export type PropertyInput = {
+  company_id: string;
+  customer_id?: string | null;
+  display_name: string;
+  address: string;
+  city?: string | null;
+  state?: string;
+  postal_code?: string | null;
+  property_type?: PropertyType;
+  year_built?: number | null;
+  square_feet?: number | null;
+  stories?: number | null;
+  occupancy?: PropertyOccupancy;
+  hoa_name?: string | null;
+  gate_code?: string | null;
+  access_instructions?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  parcel_number?: string | null;
+  roof_age_years?: number | null;
+  roof_manufacturer?: string | null;
+  roof_system?: string | null;
+  roof_pitch?: string | null;
+  roof_layers?: number | null;
+  roofing_material?: string | null;
+  flat_roof_sections?: string | null;
+  tile_information?: string | null;
+  has_solar?: boolean;
+  has_skylights?: boolean;
+  hvac_penetrations?: string | null;
+  chimneys?: string | null;
+  paint_system?: string | null;
+  exterior_finish?: string | null;
+  exterior_paint_colors?: string | null;
+  last_inspection_at?: string | null;
+  next_recommended_inspection_at?: string | null;
+  roof_condition?: PropertyCondition;
+  paint_condition?: PropertyCondition;
+  warranty_status?: PropertyWarrantyStatus;
+  document_status?: PropertyDocumentStatus;
+  maintenance_status?: PropertyMaintenanceStatus;
+  health_score?: number | null;
+  is_primary?: boolean;
+  portfolio_label?: string | null;
+  manager_name?: string | null;
+  notes?: string | null;
+  ai_summary?: string | null;
+};
+
 export type EstimateLineItemInput = {
   id?: string;
   category: EstimateLineItemCategory;
@@ -1303,6 +1446,7 @@ export type EstimateInput = {
   company_id: string;
   customer_id?: string | null;
   lead_id?: string | null;
+  property_id?: string | null;
   business?: string | null;
   location?: string | null;
   title: string;
@@ -1358,6 +1502,7 @@ export type JobInput = {
   lead_id?: string | null;
   estimate_id?: string | null;
   scope_id?: string | null;
+  property_id?: string | null;
   business?: string | null;
   location?: string | null;
   title: string;
@@ -1406,6 +1551,7 @@ export type ScheduleEventInput = {
   customer_id?: string | null;
   lead_id?: string | null;
   job_id?: string | null;
+  property_id?: string | null;
   title: string;
   event_type: ScheduleEventType;
   status?: ScheduleEventStatus;
@@ -1421,6 +1567,7 @@ export type JobPhotoInput = {
   job_id?: string | null;
   estimate_id?: string | null;
   inspection_id?: string | null;
+  property_id?: string | null;
   caption?: string | null;
   label?: string | null;
   taken_at?: string | null;
@@ -1442,6 +1589,7 @@ export type InvoiceInput = {
   customer_id?: string | null;
   job_id?: string | null;
   estimate_id?: string | null;
+  property_id?: string | null;
   invoice_number: string;
   title: string;
   status?: InvoiceStatus;
@@ -1464,6 +1612,7 @@ export type MaterialOrderItemInput = {
 
 export type MaterialOrderInput = {
   company_id: string;
+  property_id?: string | null;
   job_id?: string | null;
   supplier_name: string;
   status?: MaterialOrderStatus;
@@ -1513,6 +1662,7 @@ export type InspectionInput = {
   schedule_event_id?: string | null;
   estimate_id?: string | null;
   report_document_id?: string | null;
+  property_id?: string | null;
   title: string;
   status?: InspectionStatus;
   inspection_type?: InspectionType;
@@ -1600,6 +1750,7 @@ export type ChangeOrderInput = {
   customer_id?: string | null;
   job_id?: string | null;
   estimate_id?: string | null;
+  property_id?: string | null;
   title: string;
   status?: ChangeOrderStatus;
   reason: string;
@@ -1638,6 +1789,7 @@ export type DocumentInput = {
   inspection_id?: string | null;
   invoice_id?: string | null;
   change_order_id?: string | null;
+  property_id?: string | null;
   title: string;
   category: DocumentCategory;
   status?: DocumentStatus;
@@ -1662,6 +1814,7 @@ export type PaymentInput = {
   company_id: string;
   customer_id?: string | null;
   invoice_id?: string | null;
+  property_id?: string | null;
   amount: number;
   method: string;
   status?: PaymentStatus;
@@ -1991,6 +2144,12 @@ export type CustomerInsert = CustomerInput & {
   updated_at?: string;
 };
 
+export type PropertyInsert = PropertyInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type LeadInsert = LeadInput & {
   id?: string;
   customer_id?: string | null;
@@ -2274,6 +2433,7 @@ export type CompanyWorkflowSettingsInsert = {
 
 export type CrmSnapshot = {
   companies: CompanyRecord[];
+  properties: PropertyRecord[];
   leads: LeadRecord[];
   customers: CustomerRecord[];
   estimates: EstimateRecord[];
@@ -2347,6 +2507,12 @@ export type Database = {
         Row: CustomerRecord;
         Insert: CustomerInsert;
         Update: Partial<Database["public"]["Tables"]["customers"]["Insert"]>;
+        Relationships: [];
+      };
+      properties: {
+        Row: PropertyRecord;
+        Insert: PropertyInsert;
+        Update: Partial<Database["public"]["Tables"]["properties"]["Insert"]>;
         Relationships: [];
       };
       leads: {

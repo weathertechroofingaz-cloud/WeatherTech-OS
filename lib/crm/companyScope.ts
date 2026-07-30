@@ -43,6 +43,7 @@ export function scopeCrmSnapshotByCompany(
   const companies = snapshot.companies.filter((company) => company.id === companyId);
   const companyTrade = companies[0]?.workflow_profile ?? companies[0]?.trade ?? "both";
   const leads = byCompany(snapshot.leads, companyId);
+  const properties = byCompany(snapshot.properties, companyId);
   const customers = byCompany(snapshot.customers, companyId);
   const estimates = byCompany(snapshot.estimates, companyId);
   const estimateIds = new Set(estimates.map((estimate) => estimate.id));
@@ -63,6 +64,7 @@ export function scopeCrmSnapshotByCompany(
 
   return {
     companies,
+    properties,
     leads,
     customers,
     estimates,
