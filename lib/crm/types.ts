@@ -145,18 +145,33 @@ export type InspectionOutcome =
   | "save_and_close";
 export type InspectionSeverity = "low" | "moderate" | "high" | "urgent";
 export type ChangeOrderStatus = "draft" | "sent" | "approved" | "rejected";
-export type SignatureStatus = "pending" | "signed" | "declined";
+export type SignatureStatus =
+  | "pending"
+  | "sent"
+  | "viewed"
+  | "signed"
+  | "declined"
+  | "expired";
 export type DocumentCategory =
   | "estimate"
   | "scope"
   | "invoice"
   | "change_order"
   | "contract"
+  | "signed_agreement"
   | "completion_certificate"
   | "warranty"
+  | "insurance"
+  | "permit"
+  | "material_order"
+  | "manufacturer_warranty"
+  | "workmanship_warranty"
+  | "inspection_report"
   | "photo"
+  | "photo_set"
   | "other";
 export type DocumentStatus = "draft" | "ready" | "sent" | "signed" | "archived";
+export type DocumentRequirementLevel = "required" | "optional";
 export type PaymentStatus = "pending" | "posted" | "failed" | "refunded";
 export type NotificationChannel = "email" | "sms" | "in_app";
 export type NotificationStatus = "queued" | "sent" | "read" | "dismissed";
@@ -796,8 +811,14 @@ export type SignatureRecord = {
   signer_name: string;
   signer_email: string | null;
   status: SignatureStatus;
+  provider: string | null;
+  provider_envelope_id: string | null;
   signature_data: string | null;
+  sent_at: string | null;
+  viewed_at: string | null;
   signed_at: string | null;
+  declined_at: string | null;
+  expires_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -806,8 +827,10 @@ export type DocumentRecord = {
   id: string;
   company_id: string;
   customer_id: string | null;
+  lead_id: string | null;
   job_id: string | null;
   estimate_id: string | null;
+  inspection_id: string | null;
   invoice_id: string | null;
   change_order_id: string | null;
   title: string;
@@ -815,6 +838,18 @@ export type DocumentRecord = {
   status: DocumentStatus;
   template_key: string | null;
   file_url: string | null;
+  file_name: string | null;
+  file_size_bytes: number | null;
+  mime_type: string | null;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  uploaded_by: string | null;
+  uploaded_at: string | null;
+  archived_at: string | null;
+  property_address: string | null;
+  tags: string[];
+  requirement_level: DocumentRequirementLevel;
+  required_for: string[];
   body: string | null;
   created_at: string;
   updated_at: string;
@@ -1584,15 +1619,23 @@ export type SignatureInput = {
   signer_name: string;
   signer_email?: string | null;
   status?: SignatureStatus;
+  provider?: string | null;
+  provider_envelope_id?: string | null;
   signature_data?: string | null;
+  sent_at?: string | null;
+  viewed_at?: string | null;
   signed_at?: string | null;
+  declined_at?: string | null;
+  expires_at?: string | null;
 };
 
 export type DocumentInput = {
   company_id: string;
   customer_id?: string | null;
+  lead_id?: string | null;
   job_id?: string | null;
   estimate_id?: string | null;
+  inspection_id?: string | null;
   invoice_id?: string | null;
   change_order_id?: string | null;
   title: string;
@@ -1600,6 +1643,18 @@ export type DocumentInput = {
   status?: DocumentStatus;
   template_key?: string | null;
   file_url?: string | null;
+  file_name?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  storage_bucket?: string | null;
+  storage_path?: string | null;
+  uploaded_by?: string | null;
+  uploaded_at?: string | null;
+  archived_at?: string | null;
+  property_address?: string | null;
+  tags?: string[];
+  requirement_level?: DocumentRequirementLevel;
+  required_for?: string[];
   body?: string | null;
 };
 

@@ -78,6 +78,7 @@ import type {
 } from "./types";
 
 type CrmClient = SupabaseClient<Database>;
+export const DOCUMENT_STORAGE_BUCKET = "customer-documents";
 
 type CrmListResult<T> = {
   data: T[] | null;
@@ -1280,6 +1281,128 @@ function safeStorageName(fileName: string) {
   return fileName.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 }
 
+function randomStorageId() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildDocumentStoragePath(input: DocumentInput, file: File) {
+  const relationId =
+    input.customer_id ??
+    input.job_id ??
+    input.estimate_id ??
+    input.inspection_id ??
+    input.lead_id ??
+    "general";
+
+  return `${input.company_id}/${relationId}/${randomStorageId()}-${safeStorageName(file.name)}`;
+}
+
+function isDocumentMetadataSchemaError(error: unknown) {
+  const message =
+    typeof error === "object" && error && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : String(error);
+
+  return (
+    message.includes("Could not find") ||
+    message.includes("schema cache") ||
+    message.includes("column") ||
+    message.includes("documents_lead_id")
+  );
+}
+
+function buildLegacyDocumentInput(input: DocumentInput) {
+  return {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    job_id: input.job_id ?? null,
+    estimate_id: input.estimate_id ?? null,
+    invoice_id: input.invoice_id ?? null,
+    change_order_id: input.change_order_id ?? null,
+    title: input.title,
+    category: input.category,
+    status: input.status ?? "draft",
+    template_key: input.template_key ?? null,
+    file_url: input.file_url ?? null,
+    body: input.body ?? null,
+  };
+}
+
+function isSignatureWorkflowSchemaError(error: unknown) {
+  const message =
+    typeof error === "object" && error && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : String(error);
+
+  return (
+    message.includes("Could not find") ||
+    message.includes("schema cache") ||
+    message.includes("column")
+  );
+}
+
+function signatureInputRequiresWorkflowSchema(input: Partial<SignatureInput>) {
+  return Boolean(
+    (input.status !== undefined &&
+      !["pending", "signed", "declined"].includes(input.status)) ||
+      (input.provider !== undefined &&
+        input.provider !== null &&
+        input.provider !== "native") ||
+      input.provider_envelope_id ||
+      input.sent_at ||
+      input.viewed_at ||
+      input.declined_at ||
+      input.expires_at,
+  );
+}
+
+function buildLegacySignatureInput(input: SignatureInput) {
+  return {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    employee_id: input.employee_id ?? null,
+    document_id: input.document_id ?? null,
+    change_order_id: input.change_order_id ?? null,
+    signer_name: input.signer_name,
+    signer_email: input.signer_email ?? null,
+    status: input.status ?? "pending",
+    signature_data: input.signature_data ?? null,
+    signed_at: input.signed_at ?? null,
+  };
+}
+
+function buildLegacySignatureUpdateInput(input: Partial<SignatureInput>) {
+  return {
+    ...(input.company_id !== undefined ? { company_id: input.company_id } : {}),
+    ...(input.customer_id !== undefined ? { customer_id: input.customer_id } : {}),
+    ...(input.employee_id !== undefined ? { employee_id: input.employee_id } : {}),
+    ...(input.document_id !== undefined ? { document_id: input.document_id } : {}),
+    ...(input.change_order_id !== undefined
+      ? { change_order_id: input.change_order_id }
+      : {}),
+    ...(input.signer_name !== undefined ? { signer_name: input.signer_name } : {}),
+    ...(input.signer_email !== undefined ? { signer_email: input.signer_email } : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
+    ...(input.signature_data !== undefined ? { signature_data: input.signature_data } : {}),
+    ...(input.signed_at !== undefined ? { signed_at: input.signed_at } : {}),
+  };
+}
+
+function inputRequiresDocumentStorageSchema(input: Partial<DocumentInput>) {
+  return Boolean(
+    input.file_name ||
+      input.file_size_bytes ||
+      input.mime_type ||
+      input.storage_bucket ||
+      input.storage_path ||
+      input.uploaded_by ||
+      input.uploaded_at ||
+      input.tags?.length ||
+      input.requirement_level === "required" ||
+      input.required_for?.length,
+  );
+}
+
 export async function createJobPhoto(
   client: CrmClient,
   input: JobPhotoInput,
@@ -1841,15 +1964,46 @@ export async function updateChangeOrder(
 }
 
 export async function createSignature(client: CrmClient, input: SignatureInput) {
-  
-
   const { data, error } = await client
     .from("signatures")
-    .insert(input)
+    .insert({
+      ...input,
+      customer_id: input.customer_id ?? null,
+      employee_id: input.employee_id ?? null,
+      document_id: input.document_id ?? null,
+      change_order_id: input.change_order_id ?? null,
+      signer_email: input.signer_email ?? null,
+      status: input.status ?? "pending",
+      provider: input.provider ?? "native",
+      provider_envelope_id: input.provider_envelope_id ?? null,
+      signature_data: input.signature_data ?? null,
+      sent_at: input.sent_at ?? null,
+      viewed_at: input.viewed_at ?? null,
+      signed_at: input.signed_at ?? null,
+      declined_at: input.declined_at ?? null,
+      expires_at: input.expires_at ?? null,
+    })
     .select("*")
     .single();
 
   if (error) {
+    if (
+      !signatureInputRequiresWorkflowSchema(input) &&
+      isSignatureWorkflowSchemaError(error)
+    ) {
+      const { data: legacyData, error: legacyError } = await client
+        .from("signatures")
+        .insert(buildLegacySignatureInput(input))
+        .select("*")
+        .single();
+
+      if (legacyError) {
+        throw legacyError;
+      }
+
+      return legacyData;
+    }
+
     throw error;
   }
 
@@ -1861,8 +2015,6 @@ export async function updateSignature(
   id: string,
   input: Partial<SignatureInput>,
 ) {
-  
-
   const { data, error } = await client
     .from("signatures")
     .update(input)
@@ -1871,6 +2023,24 @@ export async function updateSignature(
     .single();
 
   if (error) {
+    if (
+      !signatureInputRequiresWorkflowSchema(input) &&
+      isSignatureWorkflowSchemaError(error)
+    ) {
+      const { data: legacyData, error: legacyError } = await client
+        .from("signatures")
+        .update(buildLegacySignatureUpdateInput(input))
+        .eq("id", id)
+        .select("*")
+        .single();
+
+      if (legacyError) {
+        throw legacyError;
+      }
+
+      return legacyData;
+    }
+
     throw error;
   }
 
@@ -1881,8 +2051,10 @@ export async function createDocument(client: CrmClient, input: DocumentInput) {
   const documentInput = {
     company_id: input.company_id,
     customer_id: input.customer_id ?? null,
+    lead_id: input.lead_id ?? null,
     job_id: input.job_id ?? null,
     estimate_id: input.estimate_id ?? null,
+    inspection_id: input.inspection_id ?? null,
     invoice_id: input.invoice_id ?? null,
     change_order_id: input.change_order_id ?? null,
     title: input.title,
@@ -1890,6 +2062,18 @@ export async function createDocument(client: CrmClient, input: DocumentInput) {
     status: input.status ?? "draft",
     template_key: input.template_key ?? null,
     file_url: input.file_url ?? null,
+    file_name: input.file_name ?? null,
+    file_size_bytes: input.file_size_bytes ?? null,
+    mime_type: input.mime_type ?? null,
+    storage_bucket: input.storage_bucket ?? null,
+    storage_path: input.storage_path ?? null,
+    uploaded_by: input.uploaded_by ?? null,
+    uploaded_at: input.uploaded_at ?? null,
+    archived_at: input.archived_at ?? null,
+    property_address: input.property_address ?? null,
+    tags: input.tags ?? [],
+    requirement_level: input.requirement_level ?? "optional",
+    required_for: input.required_for ?? [],
     body: input.body ?? null,
   };
 
@@ -1900,6 +2084,23 @@ export async function createDocument(client: CrmClient, input: DocumentInput) {
     .single();
 
   if (error) {
+    if (
+      !inputRequiresDocumentStorageSchema(input) &&
+      isDocumentMetadataSchemaError(error)
+    ) {
+      const { data: legacyData, error: legacyError } = await client
+        .from("documents")
+        .insert(buildLegacyDocumentInput(input))
+        .select("*")
+        .single();
+
+      if (legacyError) {
+        throw legacyError;
+      }
+
+      return legacyData;
+    }
+
     throw error;
   }
 
@@ -1914,8 +2115,10 @@ export async function updateDocument(
   const documentInput = {
     ...(input.company_id !== undefined ? { company_id: input.company_id } : {}),
     ...(input.customer_id !== undefined ? { customer_id: input.customer_id } : {}),
+    ...(input.lead_id !== undefined ? { lead_id: input.lead_id } : {}),
     ...(input.job_id !== undefined ? { job_id: input.job_id } : {}),
     ...(input.estimate_id !== undefined ? { estimate_id: input.estimate_id } : {}),
+    ...(input.inspection_id !== undefined ? { inspection_id: input.inspection_id } : {}),
     ...(input.invoice_id !== undefined ? { invoice_id: input.invoice_id } : {}),
     ...(input.change_order_id !== undefined
       ? { change_order_id: input.change_order_id }
@@ -1925,6 +2128,20 @@ export async function updateDocument(
     ...(input.status !== undefined ? { status: input.status } : {}),
     ...(input.template_key !== undefined ? { template_key: input.template_key } : {}),
     ...(input.file_url !== undefined ? { file_url: input.file_url } : {}),
+    ...(input.file_name !== undefined ? { file_name: input.file_name } : {}),
+    ...(input.file_size_bytes !== undefined ? { file_size_bytes: input.file_size_bytes } : {}),
+    ...(input.mime_type !== undefined ? { mime_type: input.mime_type } : {}),
+    ...(input.storage_bucket !== undefined ? { storage_bucket: input.storage_bucket } : {}),
+    ...(input.storage_path !== undefined ? { storage_path: input.storage_path } : {}),
+    ...(input.uploaded_by !== undefined ? { uploaded_by: input.uploaded_by } : {}),
+    ...(input.uploaded_at !== undefined ? { uploaded_at: input.uploaded_at } : {}),
+    ...(input.archived_at !== undefined ? { archived_at: input.archived_at } : {}),
+    ...(input.property_address !== undefined ? { property_address: input.property_address } : {}),
+    ...(input.tags !== undefined ? { tags: input.tags } : {}),
+    ...(input.requirement_level !== undefined
+      ? { requirement_level: input.requirement_level }
+      : {}),
+    ...(input.required_for !== undefined ? { required_for: input.required_for } : {}),
     ...(input.body !== undefined ? { body: input.body } : {}),
   };
 
@@ -1936,10 +2153,115 @@ export async function updateDocument(
     .single();
 
   if (error) {
+    if (
+      !inputRequiresDocumentStorageSchema(input) &&
+      isDocumentMetadataSchemaError(error)
+    ) {
+      const updatePayload = {
+        ...(input.company_id !== undefined ? { company_id: input.company_id } : {}),
+        ...(input.customer_id !== undefined ? { customer_id: input.customer_id } : {}),
+        ...(input.job_id !== undefined ? { job_id: input.job_id } : {}),
+        ...(input.estimate_id !== undefined ? { estimate_id: input.estimate_id } : {}),
+        ...(input.invoice_id !== undefined ? { invoice_id: input.invoice_id } : {}),
+        ...(input.change_order_id !== undefined
+          ? { change_order_id: input.change_order_id }
+          : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.category !== undefined ? { category: input.category } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.template_key !== undefined ? { template_key: input.template_key } : {}),
+        ...(input.file_url !== undefined ? { file_url: input.file_url } : {}),
+        ...(input.body !== undefined ? { body: input.body } : {}),
+      };
+      const { data: legacyData, error: legacyError } = await client
+        .from("documents")
+        .update(updatePayload)
+        .eq("id", id)
+        .select("*")
+        .single();
+
+      if (legacyError) {
+        throw legacyError;
+      }
+
+      return legacyData;
+    }
+
     throw error;
   }
 
   return data;
+}
+
+export async function uploadDocumentFile(
+  client: CrmClient,
+  input: DocumentInput,
+  file: File | null,
+) {
+  if (!file) {
+    throw new Error("Choose a document file to upload.");
+  }
+
+  const storagePath = buildDocumentStoragePath(input, file);
+  const { error: uploadError } = await client.storage
+    .from(DOCUMENT_STORAGE_BUCKET)
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType: file.type || "application/octet-stream",
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  try {
+    return await createDocument(client, {
+      ...input,
+      status: input.status ?? "ready",
+      file_name: input.file_name ?? file.name,
+      file_size_bytes: input.file_size_bytes ?? file.size,
+      mime_type: input.mime_type ?? (file.type || "application/octet-stream"),
+      storage_bucket: DOCUMENT_STORAGE_BUCKET,
+      storage_path: storagePath,
+      uploaded_at: input.uploaded_at ?? new Date().toISOString(),
+    });
+  } catch (error) {
+    try {
+      await client.storage.from(DOCUMENT_STORAGE_BUCKET).remove([storagePath]);
+    } catch {
+      // Preserve the metadata failure as the primary error; cleanup is best effort.
+    }
+    throw error;
+  }
+}
+
+export async function getDocumentFileSignedUrl(
+  client: CrmClient,
+  document: DocumentRecord,
+  options: { download?: boolean } = {},
+) {
+  if (document.storage_path) {
+    const { data, error } = await client.storage
+      .from(document.storage_bucket ?? DOCUMENT_STORAGE_BUCKET)
+      .createSignedUrl(
+        document.storage_path,
+        60 * 10,
+        options.download ? { download: document.file_name ?? true } : undefined,
+      );
+
+    if (error) {
+      throw error;
+    }
+
+    return data.signedUrl;
+  }
+
+  if (document.file_url) {
+    return document.file_url;
+  }
+
+  throw new Error("This document does not have a file attached.");
 }
 
 export async function createPayment(client: CrmClient, input: PaymentInput) {

@@ -263,6 +263,34 @@ async function detectInspectionFoundationSupport(env) {
   }
 }
 
+async function detectDocumentStorageWorkflowSupport(env) {
+  try {
+    await restRequest(
+      env,
+      [
+        "documents?select=",
+        encodeURIComponent(
+          "id,lead_id,inspection_id,file_name,file_size_bytes,mime_type,storage_bucket,storage_path,uploaded_by,uploaded_at,archived_at,property_address,tags,requirement_level,required_for",
+        ),
+        "&limit=1",
+      ].join(""),
+    );
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (
+      message.includes("does not exist") ||
+      message.includes("schema cache") ||
+      message.includes("Could not find")
+    ) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const resolvedLeadNameColumn = leadNameColumn ?? await detectLeadNameColumn(env);
   const prefixFilter = encodeURIComponent(`${TEST_PREFIX}%`);
@@ -533,28 +561,67 @@ async function seedTestCustomer(env, companyId, runId, suffix = "ESTIMATE CUSTOM
   return customer;
 }
 
-async function seedTestDocument(env, companyId, customerId, jobId, runId) {
+async function seedTestDocument(
+  env,
+  companyId,
+  customerId,
+  jobId,
+  runId,
+  documentStorageWorkflowReady = false,
+) {
   const title = `${TEST_PREFIX} ${runId} DOCUMENT CENTER PACKET`;
+  const documentPayload = {
+    company_id: companyId,
+    customer_id: customerId,
+    job_id: jobId,
+    title,
+    category: "estimate",
+    status: "ready",
+    template_key: "weathertech_estimate",
+    file_url: "https://example.invalid/weathertech-os-regression-document.pdf",
+    body: [
+      `${TEST_PREFIX} ${runId} document center body.`,
+      "Proposal packet with customer and job references for regression coverage.",
+    ].join("\n"),
+  };
+
+  if (documentStorageWorkflowReady) {
+    Object.assign(documentPayload, {
+      file_name: `${TEST_PREFIX.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${runId}.pdf`,
+      file_size_bytes: 245760,
+      mime_type: "application/pdf",
+      uploaded_at: new Date().toISOString(),
+      property_address: "456 TEST Regression Lead Ave, Phoenix, AZ",
+      tags: ["Regression", "Estimate Approval"],
+      requirement_level: "required",
+      required_for: ["estimate_approval"],
+    });
+  }
+
   const [document] = await restRequest(env, "documents", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(documentPayload),
+  });
+
+  return document;
+}
+
+async function seedTestSignature(env, companyId, customerId, documentId, runId) {
+  const [signature] = await restRequest(env, "signatures", {
     method: "POST",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({
       company_id: companyId,
       customer_id: customerId,
-      job_id: jobId,
-      title,
-      category: "estimate",
-      status: "ready",
-      template_key: "weathertech_estimate",
-      file_url: "https://example.invalid/weathertech-os-regression-document.pdf",
-      body: [
-        `${TEST_PREFIX} ${runId} document center body.`,
-        "Proposal packet with customer and job references for regression coverage.",
-      ].join("\n"),
+      document_id: documentId,
+      signer_name: `${TEST_PREFIX} ${runId} SIGNER`,
+      signer_email: `document-signer-${runId}@example.test`,
+      status: "pending",
     }),
   });
 
-  return document;
+  return signature;
 }
 
 async function findDocumentByTitle(env, title) {
@@ -5250,6 +5317,7 @@ async function testCalendarScreen(tab) {
 
 async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, runId) {
   const viewport = await browser.capabilities.get("viewport");
+  const documentStorageWorkflowReady = await detectDocumentStorageWorkflowSupport(env);
   const customer = await seedTestCustomer(
     env,
     company.id,
@@ -5262,21 +5330,32 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
     customer.id,
     testJob.id,
     runId,
+    documentStorageWorkflowReady,
   );
+  await seedTestSignature(env, company.id, customer.id, documentRecord.id, runId);
   const updatedTitle = `${TEST_PREFIX} ${runId} DOCUMENT CENTER RENAMED`;
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, () => {});
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Documents");
 
   await waitFor(
     tab,
-    () =>
-      Boolean(document.querySelector('[data-testid="document-center-workspace"]')) &&
-      document.body.innerText.includes("Document Center") &&
-      document.body.innerText.includes("Missing required documents") &&
-      document.body.innerText.includes("Recent documents"),
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        Boolean(document.querySelector('[data-testid="document-center-workspace"]')) &&
+        text.includes("document center") &&
+        text.includes("missing required documents") &&
+        text.includes("recent documents") &&
+        text.includes("stored files") &&
+        text.includes("awaiting signatures") &&
+        text.includes("upload or draft document")
+      );
+    },
     "Document Center workspace",
     20000,
   );
@@ -5308,8 +5387,13 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
   );
   await selectUnique(
     tab.playwright.locator('[data-testid="document-status-filter"]'),
-    "ready",
+    "awaiting_signature",
     "document status filter",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="document-upload-date-filter"]'),
+    "last_30",
+    "document upload date filter",
   );
 
   await waitFor(
@@ -5322,7 +5406,8 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
         text.includes(title) &&
         text.includes("Proposal") &&
         text.includes("Ready") &&
-        text.includes("Linked file")
+        text.includes("Linked file") &&
+        text.toLowerCase().includes("awaiting signatures")
       );
     },
     "seeded document filtered row",
@@ -5362,12 +5447,20 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
 
   await waitFor(
     tab,
-    (title) =>
-      document.body.innerText.includes("Selected document") &&
-      document.querySelector('[aria-label="Rename document"]')?.value === title &&
-      document.body.innerText.toLowerCase().includes("activity history") &&
-      (document.body.innerText.includes("Open file") ||
-        document.body.innerText.includes("Download")),
+    (title) => {
+      const selectedPanel = document.querySelector('[data-testid="document-selected-panel"]');
+      const selectedPanelText = selectedPanel?.textContent ?? "";
+      const renameInput = selectedPanel?.querySelector('[aria-label="Rename document"]');
+
+      return (
+        renameInput?.value === title &&
+        selectedPanelText.toLowerCase().includes("activity history") &&
+        selectedPanelText.includes("Pending Signature") &&
+        selectedPanelText.includes("Filename") &&
+        selectedPanelText.includes("Size") &&
+        (selectedPanelText.includes("Open") || selectedPanelText.includes("Download"))
+      );
+    },
     "selected document detail",
     15000,
     documentRecord.title,
@@ -5400,15 +5493,11 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
   }
 
   await clickUnique(
-    tab.playwright.locator('xpath=//button[normalize-space(.)="Archive"]'),
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="document-selected-panel"]//button[normalize-space(.)="Archive"]',
+    ),
     "archive document",
     { retryTransientClick: true },
-  );
-  await waitFor(
-    tab,
-    () => document.body.innerText.includes("Document marked Archived."),
-    "archive document notice",
-    15000,
   );
   const archivedDocument = await waitForAsync(
     async () => {
@@ -5417,6 +5506,20 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
       return current?.status === "archived" ? current : null;
     },
     "archived document persistence",
+    15000,
+  );
+  await waitFor(
+    tab,
+    () => {
+      const selectedPanel = document.querySelector('[data-testid="document-selected-panel"]');
+      const selectedPanelText = selectedPanel?.textContent ?? "";
+
+      return (
+        document.body.innerText.includes("Document marked Archived.") ||
+        selectedPanelText.includes("Archived")
+      );
+    },
+    "archive document UI confirmation",
     15000,
   );
 

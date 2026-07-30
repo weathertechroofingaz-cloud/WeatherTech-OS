@@ -84,6 +84,10 @@ const expectedMigrations = [
     "0024_security_company_access_hardening.sql",
     "61bc67becf0743df18ff78a57af8966e2b94de4b7d2e9b25f74ecef9dd96e7df",
   ],
+  [
+    "0025_document_storage_signature_workflow.sql",
+    "8e8af7442520c1c3542da82320423ff93e3060e0538f8230f14fe119f22b2412",
+  ],
 ];
 
 const files = fs
@@ -136,7 +140,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0024 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0025 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -152,6 +156,7 @@ const integrationSyncIndex = files.indexOf("0012_integration_sync_logs.sql");
 const jobProductionIndex = files.indexOf("0013_job_production_details.sql");
 const websiteLeadIntakeIndex = files.indexOf("0014_website_lead_intake_provider.sql");
 const securityHardeningIndex = files.indexOf("0024_security_company_access_hardening.sql");
+const documentStorageIndex = files.indexOf("0025_document_storage_signature_workflow.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -164,8 +169,16 @@ if (
   );
 }
 
-if (securityHardeningIndex !== files.length - 1) {
-  failures.push("Security company access hardening migration must remain last.");
+if (
+  securityHardeningIndex === -1 ||
+  documentStorageIndex === -1 ||
+  !(securityHardeningIndex < documentStorageIndex)
+) {
+  failures.push("Document storage migration must order after security company access hardening.");
+}
+
+if (documentStorageIndex !== files.length - 1) {
+  failures.push("Document storage and signature workflow migration must remain last.");
 }
 
 for (const file of files) {
@@ -231,6 +244,57 @@ for (const constraintName of [
   }
 }
 
+const documentStorageMigration = fs.readFileSync(
+  path.join(migrationsDir, "0025_document_storage_signature_workflow.sql"),
+  "utf8",
+);
+
+for (const requiredCategory of [
+  "signed_agreement",
+  "insurance",
+  "permit",
+  "material_order",
+  "manufacturer_warranty",
+  "workmanship_warranty",
+  "inspection_report",
+  "photo_set",
+]) {
+  if (!documentStorageMigration.includes(`'${requiredCategory}'`)) {
+    failures.push(`0025 document category check must allow ${requiredCategory}.`);
+  }
+}
+
+for (const requiredSignatureStatus of [
+  "pending",
+  "sent",
+  "viewed",
+  "signed",
+  "declined",
+  "expired",
+]) {
+  if (!documentStorageMigration.includes(`'${requiredSignatureStatus}'`)) {
+    failures.push(`0025 signature status check must allow ${requiredSignatureStatus}.`);
+  }
+}
+
+for (const requiredStoragePolicy of [
+  "WTOS users read customer documents",
+  "WTOS users upload customer documents",
+  "WTOS users update customer documents",
+]) {
+  if (!documentStorageMigration.includes(requiredStoragePolicy)) {
+    failures.push(`0025 must include the ${requiredStoragePolicy} storage policy.`);
+  }
+}
+
+if (documentStorageMigration.includes("WTOS users remove customer documents")) {
+  failures.push("0025 must not grant authenticated users document storage delete access.");
+}
+
+if (!documentStorageMigration.includes("customer-documents")) {
+  failures.push("0025 must create and use the private customer-documents storage bucket.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -242,12 +306,18 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0024.",
+  "Verified raw filename order matches numeric order from 0001 through 0025.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
 );
+console.log(
+  "Verified 0024_security_company_access_hardening.sql precedes 0025_document_storage_signature_workflow.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
+);
+console.log(
+  "Verified 0025 document categories, signature statuses, and storage policies.",
 );

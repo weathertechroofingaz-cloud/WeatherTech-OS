@@ -54,6 +54,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type FormEvent,
   type ReactNode,
   type Ref,
@@ -65,6 +66,7 @@ import {
   createChangeOrder,
   createDailyLog,
   createDocument,
+  getDocumentFileSignedUrl,
   createEmailMessage,
   createEmployee,
   createInvoice,
@@ -110,6 +112,7 @@ import {
   updateSmsMessage,
   updateTimeEntry,
   updateDocument,
+  uploadDocumentFile,
   updateScope,
   updateScopeTemplate,
   upsertCalendarEventSync,
@@ -284,6 +287,7 @@ import type {
   Database,
   DocumentCategory,
   DocumentInput,
+  DocumentRequirementLevel,
   DocumentRecord,
   DocumentStatus,
   EmployeeInput,
@@ -928,20 +932,31 @@ const changeOrderStatuses: { value: ChangeOrderStatus; label: string }[] = [
 ];
 
 const signatureStatuses: { value: SignatureStatus; label: string }[] = [
-  { value: "pending", label: "Pending" },
+  { value: "pending", label: "Pending Signature" },
+  { value: "sent", label: "Sent" },
+  { value: "viewed", label: "Viewed" },
   { value: "signed", label: "Signed" },
   { value: "declined", label: "Declined" },
+  { value: "expired", label: "Expired" },
 ];
 
 const documentCategories: { value: DocumentCategory; label: string }[] = [
-  { value: "estimate", label: "Estimate" },
+  { value: "contract", label: "Contracts" },
+  { value: "estimate", label: "Estimates" },
+  { value: "signed_agreement", label: "Signed agreements" },
+  { value: "insurance", label: "Insurance" },
+  { value: "photo", label: "Photos" },
+  { value: "photo_set", label: "Photo sets" },
+  { value: "inspection_report", label: "Inspection reports" },
+  { value: "permit", label: "Permits" },
+  { value: "material_order", label: "Material orders" },
+  { value: "manufacturer_warranty", label: "Manufacturer warranties" },
+  { value: "workmanship_warranty", label: "Workmanship warranties" },
   { value: "scope", label: "Scope" },
   { value: "invoice", label: "Invoice" },
   { value: "change_order", label: "Change order" },
-  { value: "contract", label: "Contract" },
   { value: "completion_certificate", label: "Completion certificate" },
   { value: "warranty", label: "Warranty" },
-  { value: "photo", label: "Photo" },
   { value: "other", label: "Other" },
 ];
 
@@ -963,8 +978,11 @@ type DocumentLibraryCategory =
   | "roof_report"
   | "inspection_report"
   | "warranty"
+  | "manufacturer_warranty"
+  | "workmanship_warranty"
   | "insurance"
   | "permit"
+  | "material_order"
   | "photo_set"
   | "other";
 
@@ -983,8 +1001,16 @@ type DocumentSortMode =
   | "updated_desc"
   | "updated_asc"
   | "created_desc"
+  | "uploaded_desc"
   | "title_asc"
   | "status";
+type DocumentStatusFilter =
+  | DocumentStatus
+  | "all"
+  | "unsigned"
+  | "awaiting_signature"
+  | "missing_required";
+type DocumentUploadDateFilter = "all" | "last_7" | "last_30" | "no_file";
 
 const documentLibraryCategories: { value: DocumentLibraryCategory; label: string }[] = [
   { value: "all", label: "All categories" },
@@ -996,11 +1022,62 @@ const documentLibraryCategories: { value: DocumentLibraryCategory; label: string
   { value: "roof_report", label: "Roof report" },
   { value: "inspection_report", label: "Inspection report" },
   { value: "warranty", label: "Warranty" },
+  { value: "manufacturer_warranty", label: "Manufacturer warranty" },
+  { value: "workmanship_warranty", label: "Workmanship warranty" },
   { value: "insurance", label: "Insurance" },
   { value: "permit", label: "Permit" },
+  { value: "material_order", label: "Material order" },
   { value: "photo_set", label: "Photo set" },
   { value: "other", label: "Other" },
 ];
+
+const documentRequirementLevels: {
+  value: DocumentRequirementLevel;
+  label: string;
+}[] = [
+  { value: "optional", label: "Optional" },
+  { value: "required", label: "Required" },
+];
+
+const documentWorkflowRequirements = [
+  {
+    id: "estimate_approval",
+    label: "Estimate Approval",
+    required: ["Signed contract"],
+    categories: ["contract", "signed_agreement"] as DocumentCategory[],
+  },
+  {
+    id: "job_start",
+    label: "Job Start",
+    required: ["Permit", "Material order"],
+    categories: ["permit", "material_order"] as DocumentCategory[],
+  },
+  {
+    id: "job_completion",
+    label: "Job Completion",
+    required: ["Warranty", "Final invoice"],
+    categories: [
+      "warranty",
+      "manufacturer_warranty",
+      "workmanship_warranty",
+      "invoice",
+    ] as DocumentCategory[],
+  },
+];
+
+const documentUploadMimeTypes = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+];
+const documentUploadAccept = documentUploadMimeTypes.join(",");
+const maxDocumentUploadBytes = 50 * 1024 * 1024;
 
 const documentRelationFilters: { value: DocumentRelationFilter; label: string }[] = [
   { value: "all", label: "All records" },
@@ -1017,9 +1094,28 @@ const documentRelationFilters: { value: DocumentRelationFilter; label: string }[
 const documentSortOptions: { value: DocumentSortMode; label: string }[] = [
   { value: "updated_desc", label: "Recently modified" },
   { value: "created_desc", label: "Newest upload" },
+  { value: "uploaded_desc", label: "Uploaded date" },
   { value: "updated_asc", label: "Oldest modified" },
   { value: "title_asc", label: "Title A-Z" },
   { value: "status", label: "Status" },
+];
+
+const documentStatusFilterOptions: { value: DocumentStatusFilter; label: string }[] = [
+  { value: "all", label: "All statuses" },
+  ...documentStatuses,
+  { value: "unsigned", label: "Unsigned" },
+  { value: "awaiting_signature", label: "Awaiting signature" },
+  { value: "missing_required", label: "Missing required" },
+];
+
+const documentUploadDateFilters: {
+  value: DocumentUploadDateFilter;
+  label: string;
+}[] = [
+  { value: "all", label: "All upload dates" },
+  { value: "last_7", label: "Uploaded last 7 days" },
+  { value: "last_30", label: "Uploaded last 30 days" },
+  { value: "no_file", label: "No file attached" },
 ];
 
 const notificationChannels: { value: NotificationChannel; label: string }[] = [
@@ -1059,6 +1155,23 @@ const moneyFormatter = new Intl.NumberFormat("en-US", {
 
 function formatMoney(value: number) {
   return moneyFormatter.format(value);
+}
+
+function formatFileSize(bytes: number | null | undefined) {
+  if (!bytes || bytes <= 0) {
+    return "Size pending";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function getFormString(formData: FormData, key: string, fallback = "") {
@@ -1110,6 +1223,11 @@ function isValidOptionalEmail(value: string | null | undefined) {
 function getOptionalRelation(formData: FormData, key: string) {
   const value = getFormString(formData, key);
   return value && value !== "none" ? value : null;
+}
+
+function getOptionalFormFile(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return value instanceof File && value.size > 0 ? value : null;
 }
 
 function getFormNumber(formData: FormData, key: string) {
@@ -1504,12 +1622,44 @@ function signatureStatusLabel(status: SignatureStatus) {
   return signatureStatuses.find((item) => item.value === status)?.label ?? status;
 }
 
+function signatureStatusTone(status: SignatureStatus): "blue" | "green" | "amber" {
+  if (status === "signed") {
+    return "green";
+  }
+
+  if (status === "sent" || status === "viewed") {
+    return "blue";
+  }
+
+  return "amber";
+}
+
+function isActiveSignatureRequest(signature: SignatureRecord) {
+  return signature.status !== "declined" && signature.status !== "expired";
+}
+
 function documentCategoryLabel(category: DocumentCategory) {
   return documentCategories.find((item) => item.value === category)?.label ?? category;
 }
 
 function documentStatusLabel(status: DocumentStatus) {
   return documentStatuses.find((item) => item.value === status)?.label ?? status;
+}
+
+function getDocumentTags(document: DocumentRecord) {
+  return Array.isArray(document.tags) ? document.tags : [];
+}
+
+function getDocumentRequiredFor(document: DocumentRecord) {
+  return Array.isArray(document.required_for) ? document.required_for : [];
+}
+
+function getDocumentRequirementLevel(document: DocumentRecord): DocumentRequirementLevel {
+  return document.requirement_level === "required" ? "required" : "optional";
+}
+
+function hasDocumentFile(document: DocumentRecord) {
+  return Boolean(document.storage_path || document.file_url);
 }
 
 function notificationStatusLabel(status: NotificationStatus) {
@@ -3993,8 +4143,11 @@ function getChangeOrderTargetName(snapshot: CrmSnapshot, changeOrder: ChangeOrde
 function getDocumentTargetName(snapshot: CrmSnapshot, document: DocumentRecord) {
   return (
     getCustomerName(snapshot, document.customer_id) ??
+    snapshot.leads.find((lead) => lead.id === document.lead_id)?.contact_name ??
     getJobName(snapshot, document.job_id) ??
     snapshot.estimates.find((estimate) => estimate.id === document.estimate_id)?.title ??
+    snapshot.inspections.find((inspection) => inspection.id === document.inspection_id)
+      ?.title ??
     snapshot.invoices.find((invoice) => invoice.id === document.invoice_id)
       ?.invoice_number ??
     snapshot.changeOrders.find((changeOrder) => changeOrder.id === document.change_order_id)
@@ -4009,6 +4162,12 @@ function getDocumentAssociationSummary(snapshot: CrmSnapshot, document: Document
     : null;
   const invoice = document.invoice_id
     ? snapshot.invoices.find((item) => item.id === document.invoice_id) ?? null
+    : null;
+  const directLead = document.lead_id
+    ? snapshot.leads.find((item) => item.id === document.lead_id) ?? null
+    : null;
+  const directInspection = document.inspection_id
+    ? snapshot.inspections.find((item) => item.id === document.inspection_id) ?? null
     : null;
   const estimate = document.estimate_id
     ? snapshot.estimates.find((item) => item.id === document.estimate_id) ?? null
@@ -4032,6 +4191,7 @@ function getDocumentAssociationSummary(snapshot: CrmSnapshot, document: Document
       : null) ??
     null;
   const lead =
+    directLead ??
     (job?.lead_id ? snapshot.leads.find((item) => item.id === job.lead_id) : null) ??
     (estimate?.lead_id
       ? snapshot.leads.find((item) => item.id === estimate.lead_id)
@@ -4053,7 +4213,11 @@ function getDocumentAssociationSummary(snapshot: CrmSnapshot, document: Document
     email: customer?.email ?? lead?.email ?? "No email",
     phone: customer?.phone ?? lead?.phone ?? "No phone",
     property:
-      job?.property_address || addressParts.filter(Boolean).join(", ") || "No property linked",
+      document.property_address ||
+      job?.property_address ||
+      directInspection?.property_address ||
+      addressParts.filter(Boolean).join(", ") ||
+      "No property linked",
     jobTitle: job?.title ?? "No job linked",
     source: getDocumentTargetName(snapshot, document),
   };
@@ -4116,6 +4280,12 @@ function getDocumentRelatedRecords(
   const changeOrder = document.change_order_id
     ? snapshot.changeOrders.find((item) => item.id === document.change_order_id) ?? null
     : null;
+  const directLead = document.lead_id
+    ? snapshot.leads.find((item) => item.id === document.lead_id) ?? null
+    : null;
+  const directInspection = document.inspection_id
+    ? snapshot.inspections.find((item) => item.id === document.inspection_id) ?? null
+    : null;
   const estimate = document.estimate_id
     ? snapshot.estimates.find((item) => item.id === document.estimate_id) ?? null
     : job?.estimate_id
@@ -4142,6 +4312,7 @@ function getDocumentRelatedRecords(
       ? snapshot.customers.find((item) => item.id === changeOrder.customer_id) ?? null
       : null);
   const lead =
+    directLead ??
     (job?.lead_id ? snapshot.leads.find((item) => item.id === job.lead_id) ?? null : null) ??
     (estimate?.lead_id
       ? snapshot.leads.find((item) => item.id === estimate.lead_id) ?? null
@@ -4153,6 +4324,7 @@ function getDocumentRelatedRecords(
       ? snapshot.leads.find((item) => document.title.includes(item.contact_name)) ?? null
       : null);
   const inspection =
+    directInspection ??
     snapshot.inspections.find((item) => item.report_document_id === document.id) ??
     (job ? snapshot.inspections.find((item) => item.job_id === job.id) ?? null : null) ??
     (estimate
@@ -4182,21 +4354,50 @@ function getDocumentLibraryCategory(
     document.body,
     document.template_key,
     document.file_url,
+    document.file_name,
+    document.storage_path,
+    document.property_address,
+    getDocumentTags(document).join(" "),
+    getDocumentRequiredFor(document).join(" "),
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 
-  if (searchable.includes("permit")) {
+  if (document.category === "permit" || searchable.includes("permit")) {
     return "permit";
+  }
+
+  if (document.category === "material_order" || searchable.includes("material order")) {
+    return "material_order";
   }
 
   if (searchable.includes("insurance") || searchable.includes("hoa")) {
     return "insurance";
   }
 
-  if (document.category === "photo" || searchable.includes("photo set")) {
+  if (
+    document.category === "insurance" ||
+    searchable.includes("insurance") ||
+    searchable.includes("hoa")
+  ) {
+    return "insurance";
+  }
+
+  if (
+    document.category === "photo" ||
+    document.category === "photo_set" ||
+    searchable.includes("photo set")
+  ) {
     return "photo_set";
+  }
+
+  if (document.category === "manufacturer_warranty") {
+    return "manufacturer_warranty";
+  }
+
+  if (document.category === "workmanship_warranty") {
+    return "workmanship_warranty";
   }
 
   if (
@@ -4208,7 +4409,11 @@ function getDocumentLibraryCategory(
     return "roof_report";
   }
 
-  if (related.inspection || searchable.includes("inspection")) {
+  if (
+    document.category === "inspection_report" ||
+    related.inspection ||
+    searchable.includes("inspection")
+  ) {
     return "inspection_report";
   }
 
@@ -4225,7 +4430,7 @@ function getDocumentLibraryCategory(
     return "proposal";
   }
 
-  if (document.category === "contract") {
+  if (document.category === "contract" || document.category === "signed_agreement") {
     return "contract";
   }
 
@@ -4272,24 +4477,35 @@ function getDocumentLibraryDetails(
     related.invoice ? "invoice" : null,
     related.changeOrder ? "change_order" : null,
   ]) as DocumentRelationFilter[];
-  const uploadStatus = document.file_url
-    ? "Linked file"
-    : document.body
+  const uploadStatus = document.storage_path
+    ? "Stored file"
+    : document.file_url
+      ? "Linked file"
+      : document.body
       ? "PDF-ready draft"
       : "Needs content";
   const uploadTone: "blue" | "green" | "amber" = document.file_url
     ? "green"
+    : document.storage_path
+      ? "green"
     : document.body
       ? "blue"
       : "amber";
-  const previewMode = document.file_url
-    ? "File link"
-    : document.body
+  const previewMode = document.storage_path
+    ? "Private file"
+    : document.file_url
+      ? "File link"
+      : document.body
       ? "Text preview"
       : "Metadata only";
   const tags = uniqueDocumentStrings([
+    ...getDocumentTags(document),
     documentLibraryCategoryLabel(libraryCategory),
     documentStatusLabel(document.status),
+    getDocumentRequirementLevel(document) === "required" ? "Required" : "Optional",
+    ...getDocumentRequiredFor(document),
+    document.file_name,
+    document.file_size_bytes ? formatFileSize(document.file_size_bytes) : null,
     companyMapSafeName(snapshot, document.company_id),
     related.customer?.status,
     related.job?.status,
@@ -4299,7 +4515,7 @@ function getDocumentLibraryDetails(
     related.lead?.source,
     related.lead?.pipeline_stage?.replace(/_/g, " "),
     document.template_key?.replace(/_/g, " "),
-    document.file_url ? "File linked" : "Generated",
+    document.storage_path ? "Stored file" : document.file_url ? "File linked" : "Generated",
   ]);
   const activityItems: Array<DocumentActivityItem | null> = [
     {
@@ -4407,7 +4623,11 @@ function buildDocumentReadinessWarnings(snapshot: CrmSnapshot) {
       (job) =>
         job.status === "completed" &&
         !snapshot.documents.some(
-          (document) => document.job_id === job.id && document.category === "warranty",
+          (document) =>
+            document.job_id === job.id &&
+            (document.category === "warranty" ||
+              document.category === "manufacturer_warranty" ||
+              document.category === "workmanship_warranty"),
         ),
     )
     .map((job) => ({
@@ -4431,6 +4651,40 @@ function buildDocumentReadinessWarnings(snapshot: CrmSnapshot) {
       detail: `${inspection.title} needs a saved inspection report document.`,
       action: "Open inspection",
     }));
+  const jobStartWarnings = snapshot.jobs
+    .filter(
+      (job) =>
+        (job.status === "scheduled" || job.status === "in_progress") &&
+        (!snapshot.documents.some(
+          (document) => document.job_id === job.id && document.category === "permit",
+        ) ||
+          !snapshot.documents.some(
+            (document) =>
+              document.job_id === job.id && document.category === "material_order",
+          )),
+    )
+    .map((job) => ({
+      id: `job-start-${job.id}`,
+      companyId: job.company_id,
+      title: "Job start packet incomplete",
+      detail: `${job.title} should have permit and material order documents before production starts.`,
+      action: "Open job",
+    }));
+  const requiredMetadataWarnings = snapshot.documents
+    .filter(
+      (document) =>
+        getDocumentRequirementLevel(document) === "required" &&
+        !hasDocumentFile(document) &&
+        !document.body &&
+        document.status !== "archived",
+    )
+    .map((document) => ({
+      id: `required-document-${document.id}`,
+      companyId: document.company_id,
+      title: "Required document missing content",
+      detail: `${document.title} is marked required without a stored file, link, or draft body.`,
+      action: "Open document",
+    }));
 
   return [
     ...estimateWarnings,
@@ -4438,6 +4692,8 @@ function buildDocumentReadinessWarnings(snapshot: CrmSnapshot) {
     ...completionWarnings,
     ...warrantyWarnings,
     ...inspectionWarnings,
+    ...jobStartWarnings,
+    ...requiredMetadataWarnings,
   ];
 }
 
@@ -5689,6 +5945,7 @@ function CrmWorkspace({
               client={client}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              user={user}
               onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
@@ -6113,6 +6370,20 @@ function isTodayDate(value: string | null | undefined, today: string) {
 function isUpcomingDate(value: string | null | undefined, today: string) {
   const key = dateKey(value);
   return Boolean(key && key >= today);
+}
+
+function isRecentDate(value: string | null | undefined, today: string, days: number) {
+  const key = dateKey(value);
+
+  if (!key) {
+    return false;
+  }
+
+  const current = new Date(`${today}T00:00:00`).getTime();
+  const target = new Date(`${key}T00:00:00`).getTime();
+  const maxAge = days * 24 * 60 * 60 * 1000;
+
+  return target <= current && target >= current - maxAge;
 }
 
 function sortByNewest<T extends { created_at?: string; updated_at?: string }>(
@@ -7970,6 +8241,7 @@ function OperationsCommandCenter({
   crewStatus,
   leadEstimateSnapshot,
   productionSnapshot,
+  documentHealthSnapshot,
   tradeHighlights,
   pipelineStages,
   pipelineFilter,
@@ -7986,6 +8258,7 @@ function OperationsCommandCenter({
   crewStatus: DashboardOperatingMetric[];
   leadEstimateSnapshot: DashboardOperatingMetric[];
   productionSnapshot: DashboardOperatingMetric[];
+  documentHealthSnapshot: DashboardOperatingMetric[];
   tradeHighlights: DashboardOperatingMetric[];
   pipelineStages: DashboardPipelineStage[];
   pipelineFilter: DashboardPipelineFilter;
@@ -8140,6 +8413,14 @@ function OperationsCommandCenter({
       />
 
       <QuickActionPanel actions={quickActions} />
+
+      <DashboardMetricCluster
+        title="Document readiness"
+        detail="Required packets, signatures, uploads, and warranty paperwork."
+        metrics={documentHealthSnapshot}
+        onOpen={openView}
+        accent="orange"
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
         <DashboardLowerPriorityPanel
@@ -9223,6 +9504,24 @@ function DashboardView({
       order.status === "ordered" ||
       order.status === "partial",
   );
+  const missingRequiredDocuments = buildDocumentReadinessWarnings(snapshot);
+  const awaitingDocumentSignatures = snapshot.signatures.filter((signature) =>
+    ["pending", "sent", "viewed"].includes(signature.status),
+  );
+  const recentlyUploadedDocuments = snapshot.documents.filter(
+    (document) =>
+      hasDocumentFile(document) &&
+      isRecentDate(document.uploaded_at ?? document.created_at, today, 7),
+  );
+  const expiringWarrantyDocuments = snapshot.documents.filter(
+    (document) =>
+      ["warranty", "manufacturer_warranty", "workmanship_warranty"].includes(
+        document.category,
+      ) &&
+      document.status !== "archived" &&
+      (document.title.toLowerCase().includes("expir") ||
+        document.body?.toLowerCase().includes("expir")),
+  );
   const revenueSnapshot: DashboardOperatingMetric[] = [
     {
       id: "scheduled-revenue",
@@ -9437,6 +9736,45 @@ function DashboardView({
       tone: pendingMaterialDeliveries.length ? "amber" : "green",
     },
   ];
+  const documentHealthSnapshot: DashboardOperatingMetric[] = [
+    {
+      id: "missing-required-documents",
+      label: "Missing Required Documents",
+      value: missingRequiredDocuments.length,
+      detail: "Estimate approval, job start, completion, permit, warranty, and invoice gaps",
+      view: "documents",
+      icon: FileText,
+      tone: missingRequiredDocuments.length ? "amber" : "green",
+      emphasis: true,
+    },
+    {
+      id: "awaiting-document-signatures",
+      label: "Awaiting Signatures",
+      value: awaitingDocumentSignatures.length,
+      detail: "Pending, sent, or viewed native signature requests",
+      view: "documents",
+      icon: Pencil,
+      tone: awaitingDocumentSignatures.length ? "amber" : "green",
+    },
+    {
+      id: "recent-document-uploads",
+      label: "Recently Uploaded",
+      value: recentlyUploadedDocuments.length,
+      detail: "Private files or linked documents added in the last 7 days",
+      view: "documents",
+      icon: Upload,
+      tone: recentlyUploadedDocuments.length ? "blue" : "green",
+    },
+    {
+      id: "expiring-warranties",
+      label: "Expiring Warranties",
+      value: expiringWarrantyDocuments.length,
+      detail: "Warranty documents with expiration language needing review",
+      view: "documents",
+      icon: ShieldCheck,
+      tone: expiringWarrantyDocuments.length ? "amber" : "green",
+    },
+  ];
   const pipelineStages: DashboardPipelineStage[] = [
     {
       id: "pipeline-leads",
@@ -9501,6 +9839,7 @@ function DashboardView({
       crewStatus={crewStatus}
       leadEstimateSnapshot={leadEstimateSnapshot}
       productionSnapshot={productionSnapshot}
+      documentHealthSnapshot={documentHealthSnapshot}
       tradeHighlights={tradeHighlights}
       pipelineStages={pipelineStages}
       pipelineFilter={pipelineFilter}
@@ -17713,7 +18052,11 @@ function CustomerProfilePanel({
               title: document.title,
               meta: `${documentCategoryLabel(document.category)} - ${documentStatusLabel(
                 document.status,
-              )}`,
+              )} - ${
+                getDocumentRequirementLevel(document) === "required"
+                  ? "Required"
+                  : "Optional"
+              } - ${formatFileSize(document.file_size_bytes)}`,
             }))}
           />
         ) : null}
@@ -19101,7 +19444,7 @@ function EstimatesView({
         "id" in document ? document : await createDocument(client, document);
       const existingSignature = snapshot.signatures.find(
         (signature) =>
-          signature.document_id === savedDocument.id && signature.status !== "declined",
+          signature.document_id === savedDocument.id && isActiveSignatureRequest(signature),
       );
 
       if (existingSignature) {
@@ -20722,7 +21065,7 @@ function EstimateWorkflowPanel({
   const hasEstimateDocument = documents.some(
     (document) => document.category === "estimate",
   );
-  const activeSignature = signatures.find((signature) => signature.status !== "declined");
+  const activeSignature = signatures.find(isActiveSignatureRequest);
   const isTerminalEstimate =
     estimate.status === "declined" ||
     estimate.status === "rejected" ||
@@ -30597,7 +30940,7 @@ function CustomerPortalView({
                   <div className="mt-3">
                     <Badge
                       label={signatureStatusLabel(signature.status)}
-                      tone={signature.status === "signed" ? "green" : "amber"}
+                      tone={signatureStatusTone(signature.status)}
                     />
                   </div>
                 </div>
@@ -31602,6 +31945,7 @@ function DocumentsAndSignaturesView({
   client,
   snapshot,
   companyMap,
+  user,
   onReload,
   onNotice,
   onError,
@@ -31609,6 +31953,7 @@ function DocumentsAndSignaturesView({
   client: CrmClient;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  user: User | null;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -31636,9 +31981,10 @@ function DocumentsAndSignaturesView({
   const [documentCompanyFilter, setDocumentCompanyFilter] =
     useState<CompanyScopeId>("all");
   const [documentCustomerFilter, setDocumentCustomerFilter] = useState("all");
-  const [documentStatusFilter, setDocumentStatusFilter] = useState<
-    DocumentStatus | "all"
-  >("all");
+  const [documentStatusFilter, setDocumentStatusFilter] =
+    useState<DocumentStatusFilter>("all");
+  const [documentUploadDateFilter, setDocumentUploadDateFilter] =
+    useState<DocumentUploadDateFilter>("all");
   const [documentCategoryFilter, setDocumentCategoryFilter] =
     useState<DocumentLibraryCategory>("all");
   const [documentRelationFilter, setDocumentRelationFilter] =
@@ -31646,6 +31992,17 @@ function DocumentsAndSignaturesView({
   const [documentTagFilter, setDocumentTagFilter] = useState("all");
   const [documentSortMode, setDocumentSortMode] =
     useState<DocumentSortMode>("updated_desc");
+  const [documentUploadFile, setDocumentUploadFile] = useState<File | null>(null);
+  const [isDraggingDocument, setIsDraggingDocument] = useState(false);
+  const [documentUploadProgress, setDocumentUploadProgress] = useState<{
+    label: string;
+    percent: number;
+  } | null>(null);
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  const [selectedDocumentPreviewUrl, setSelectedDocumentPreviewUrl] = useState<
+    string | null
+  >(null);
+  const [selectedDocumentPreviewError, setSelectedDocumentPreviewError] = useState("");
   const selectedTemplate =
     documentTemplates.find(
       (template) => template.key === selectedTemplateKey,
@@ -31732,8 +32089,23 @@ function DocumentsAndSignaturesView({
       documentCustomerFilter === "all" ||
       document.customer_id === documentCustomerFilter ||
       details.relatedCustomer?.id === documentCustomerFilter;
+    const hasSignedSignature = details.signatures.some(
+      (signature) => signature.status === "signed",
+    );
+    const hasAwaitingSignature = details.signatures.some((signature) =>
+      ["pending", "sent", "viewed"].includes(signature.status),
+    );
     const matchesStatus =
-      documentStatusFilter === "all" || document.status === documentStatusFilter;
+      documentStatusFilter === "all" ||
+      document.status === documentStatusFilter ||
+      (documentStatusFilter === "unsigned" &&
+        document.status !== "signed" &&
+        !hasSignedSignature) ||
+      (documentStatusFilter === "awaiting_signature" && hasAwaitingSignature) ||
+      (documentStatusFilter === "missing_required" &&
+        getDocumentRequirementLevel(document) === "required" &&
+        !hasDocumentFile(document) &&
+        !document.body);
     const matchesCategory =
       documentCategoryFilter === "all" ||
       details.libraryCategory === documentCategoryFilter;
@@ -31742,6 +32114,16 @@ function DocumentsAndSignaturesView({
       details.relationTypes.includes(documentRelationFilter);
     const matchesTag =
       documentTagFilter === "all" || details.tags.includes(documentTagFilter);
+    const uploadedAt = document.uploaded_at ?? document.created_at;
+    const uploadedAtTime = uploadedAt ? new Date(uploadedAt).getTime() : 0;
+    const now = Date.now();
+    const matchesUploadDate =
+      documentUploadDateFilter === "all" ||
+      (documentUploadDateFilter === "last_7" &&
+        uploadedAtTime >= now - 7 * 24 * 60 * 60 * 1000) ||
+      (documentUploadDateFilter === "last_30" &&
+        uploadedAtTime >= now - 30 * 24 * 60 * 60 * 1000) ||
+      (documentUploadDateFilter === "no_file" && !hasDocumentFile(document));
 
     return (
       matchesSearch &&
@@ -31750,7 +32132,8 @@ function DocumentsAndSignaturesView({
       matchesStatus &&
       matchesCategory &&
       matchesRelation &&
-      matchesTag
+      matchesTag &&
+      matchesUploadDate
     );
   });
   const sortedDocumentItems = [...filteredDocumentItems].sort((a, b) => {
@@ -31760,6 +32143,12 @@ function DocumentsAndSignaturesView({
 
     if (documentSortMode === "created_desc") {
       return b.document.created_at.localeCompare(a.document.created_at);
+    }
+
+    if (documentSortMode === "uploaded_desc") {
+      return (b.document.uploaded_at ?? b.document.created_at).localeCompare(
+        a.document.uploaded_at ?? a.document.created_at,
+      );
     }
 
     if (documentSortMode === "title_asc") {
@@ -31789,7 +32178,22 @@ function DocumentsAndSignaturesView({
     sent: snapshot.documents.filter((document) => document.status === "sent").length,
     signed: snapshot.documents.filter((document) => document.status === "signed").length,
     archived: snapshot.documents.filter((document) => document.status === "archived").length,
-    fileLinked: snapshot.documents.filter((document) => document.file_url).length,
+    fileLinked: snapshot.documents.filter(hasDocumentFile).length,
+    awaitingSignature: snapshot.signatures.filter((signature) =>
+      ["pending", "sent", "viewed"].includes(signature.status),
+    ).length,
+    required: snapshot.documents.filter(
+      (document) => getDocumentRequirementLevel(document) === "required",
+    ).length,
+    expiringWarranties: snapshot.documents.filter(
+      (document) =>
+        ["warranty", "manufacturer_warranty", "workmanship_warranty"].includes(
+          document.category,
+        ) &&
+        document.status !== "archived" &&
+        (document.title.toLowerCase().includes("expir") ||
+          document.body?.toLowerCase().includes("expir")),
+    ).length,
   };
 
   useEffect(() => {
@@ -31824,8 +32228,118 @@ function DocumentsAndSignaturesView({
     }
   }, [selectedDocumentId, snapshot.documents]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    setSelectedDocumentPreviewUrl(null);
+    setSelectedDocumentPreviewError("");
+
+    if (!selectedDocument || !hasDocumentFile(selectedDocument)) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    getDocumentFileSignedUrl(client, selectedDocument)
+      .then((url) => {
+        if (isMounted) {
+          setSelectedDocumentPreviewUrl(url);
+        }
+      })
+      .catch((currentError) => {
+        if (isMounted) {
+          setSelectedDocumentPreviewError(
+            getCaughtErrorMessage(currentError, "Unable to prepare file preview."),
+          );
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [client, selectedDocument]);
+
   const handleSelectDocument = (documentId: string) => {
     updateUiPreservingScrollPosition(() => setSelectedDocumentId(documentId));
+  };
+
+  const getDocumentWorkflowSelections = (formData: FormData) =>
+    formData.getAll("required_for").filter((value): value is string => typeof value === "string");
+
+  const validateDocumentUpload = (file: File) => {
+    if (file.size > maxDocumentUploadBytes) {
+      return `Documents must be ${formatFileSize(maxDocumentUploadBytes)} or smaller.`;
+    }
+
+    if (file.type && !documentUploadMimeTypes.includes(file.type)) {
+      return "Upload a PDF, image, text, Word, or Excel document.";
+    }
+
+    return "";
+  };
+
+  const getDocumentUploaderLabel = (document: DocumentRecord) => {
+    if (!document.uploaded_by) {
+      return document.storage_path || document.file_url ? "Uploaded user not recorded" : "Generated by WeatherTech OS";
+    }
+
+    if (user?.id && document.uploaded_by === user.id) {
+      return "You";
+    }
+
+    return `User ${document.uploaded_by.slice(0, 8)}`;
+  };
+
+  const getDuplicateFileMatch = (
+    input: DocumentInput,
+    file: File | null,
+  ) => {
+    if (!file) {
+      return null;
+    }
+
+    const normalizedFileName = file.name.trim().toLowerCase();
+
+    return (
+      snapshot.documents.find(
+        (document) =>
+          document.company_id === input.company_id &&
+          (document.customer_id ?? null) === (input.customer_id ?? null) &&
+          (document.file_name ?? "").trim().toLowerCase() === normalizedFileName,
+      ) ?? null
+    );
+  };
+
+  const openDocumentFile = async (
+    document: DocumentRecord,
+    options: { download?: boolean } = {},
+  ) => {
+    try {
+      const url = await getDocumentFileSignedUrl(client, document, options);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to open document file."));
+    }
+  };
+
+  const copyDocumentFileLink = async (document: DocumentRecord) => {
+    try {
+      const url = await getDocumentFileSignedUrl(client, document);
+      await navigator.clipboard.writeText(url);
+      onNotice("Secure document link copied.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to copy document link."));
+    }
+  };
+
+  const handleDocumentDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsDraggingDocument(false);
+    const [file] = Array.from(event.dataTransfer.files);
+
+    if (file) {
+      setDocumentUploadFile(file);
+    }
   };
 
   const signDocument = async (signature: SignatureRecord, form: HTMLFormElement) => {
@@ -31841,6 +32355,31 @@ function DocumentsAndSignaturesView({
       onNotice("Signature captured.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to sign."));
+    }
+  };
+
+  const handleUpdateSignatureStatus = async (
+    signature: SignatureRecord,
+    status: SignatureStatus,
+  ) => {
+    const now = new Date().toISOString();
+    const timestampUpdates: Partial<SignatureInput> = {
+      ...(status === "sent" ? { sent_at: now } : {}),
+      ...(status === "viewed" ? { viewed_at: now } : {}),
+      ...(status === "signed" ? { signed_at: now } : {}),
+      ...(status === "declined" ? { declined_at: now } : {}),
+      ...(status === "expired" ? { expires_at: now } : {}),
+    };
+
+    try {
+      await updateSignature(client, signature.id, {
+        status,
+        ...timestampUpdates,
+      });
+      await onReload();
+      onNotice(`Signature marked ${signatureStatusLabel(status)}.`);
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to update signature."));
     }
   };
 
@@ -31878,7 +32417,10 @@ function DocumentsAndSignaturesView({
     status: DocumentStatus,
   ) => {
     try {
-      await updateDocument(client, document.id, { status });
+      await updateDocument(client, document.id, {
+        status,
+        archived_at: status === "archived" ? new Date().toISOString() : null,
+      });
       await onReload();
       onNotice(`Document marked ${documentStatusLabel(status)}.`);
     } catch (currentError) {
@@ -31887,8 +32429,8 @@ function DocumentsAndSignaturesView({
   };
 
   const handleDownloadDocument = (document: DocumentRecord) => {
-    if (document.file_url) {
-      window.open(document.file_url, "_blank", "noopener,noreferrer");
+    if (hasDocumentFile(document)) {
+      void openDocumentFile(document, { download: true });
       return;
     }
 
@@ -31907,8 +32449,10 @@ function DocumentsAndSignaturesView({
     const input: Partial<DocumentInput> = {
       company_id: getFormString(formData, "company_id", selectedDocument.company_id),
       customer_id: getOptionalRelation(formData, "customer_id"),
+      lead_id: getOptionalRelation(formData, "lead_id"),
       job_id: getOptionalRelation(formData, "job_id"),
       estimate_id: getOptionalRelation(formData, "estimate_id"),
+      inspection_id: getOptionalRelation(formData, "inspection_id"),
       invoice_id: getOptionalRelation(formData, "invoice_id"),
       change_order_id: getOptionalRelation(formData, "change_order_id"),
       title: getFormString(formData, "title", selectedDocument.title),
@@ -31916,6 +32460,19 @@ function DocumentsAndSignaturesView({
       status: getFormString(formData, "status", selectedDocument.status) as DocumentStatus,
       template_key: getOptionalFormString(formData, "template_key"),
       file_url: getOptionalFormString(formData, "file_url"),
+      file_name: getOptionalFormString(formData, "file_name"),
+      property_address: getOptionalFormString(formData, "property_address"),
+      tags: uniqueDocumentStrings(
+        getFormString(formData, "tags")
+          .split(",")
+          .map((tag) => tag.trim()),
+      ),
+      requirement_level: getFormString(
+        formData,
+        "requirement_level",
+        getDocumentRequirementLevel(selectedDocument),
+      ) as DocumentRequirementLevel,
+      required_for: getDocumentWorkflowSelections(formData),
       body: getOptionalFormString(formData, "body"),
     };
 
@@ -31932,11 +32489,21 @@ function DocumentsAndSignaturesView({
     event.preventDefault();
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const selectedFile = documentUploadFile ?? getOptionalFormFile(formData, "document_file");
+    const validationMessage = selectedFile ? validateDocumentUpload(selectedFile) : "";
+
+    if (validationMessage) {
+      onError(validationMessage);
+      return;
+    }
+
     const input: DocumentInput = {
       company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
       customer_id: getOptionalRelation(formData, "customer_id"),
+      lead_id: getOptionalRelation(formData, "lead_id"),
       job_id: getOptionalRelation(formData, "job_id"),
       estimate_id: getOptionalRelation(formData, "estimate_id"),
+      inspection_id: getOptionalRelation(formData, "inspection_id"),
       invoice_id: getOptionalRelation(formData, "invoice_id"),
       change_order_id: getOptionalRelation(formData, "change_order_id"),
       title: getFormString(formData, "title"),
@@ -31944,17 +32511,66 @@ function DocumentsAndSignaturesView({
       status: getFormString(formData, "status", "draft") as DocumentStatus,
       template_key: getOptionalFormString(formData, "template_key"),
       file_url: getOptionalFormString(formData, "file_url"),
+      file_name: selectedFile?.name ?? getOptionalFormString(formData, "file_name"),
+      file_size_bytes: selectedFile?.size ?? null,
+      mime_type: selectedFile?.type || null,
+      uploaded_by: user?.id ?? null,
+      uploaded_at: selectedFile ? new Date().toISOString() : null,
+      property_address: getOptionalFormString(formData, "property_address"),
+      tags: uniqueDocumentStrings(
+        getFormString(formData, "tags")
+          .split(",")
+          .map((tag) => tag.trim()),
+      ),
+      requirement_level: getFormString(
+        formData,
+        "requirement_level",
+        "optional",
+      ) as DocumentRequirementLevel,
+      required_for: getDocumentWorkflowSelections(formData),
       body: getOptionalFormString(formData, "body"),
     };
+    const duplicateFileMatch = getDuplicateFileMatch(input, selectedFile);
+    const documentInput = duplicateFileMatch
+      ? {
+          ...input,
+          title: `${input.title} - duplicate ${formatDateTime(new Date().toISOString())}`,
+          tags: uniqueDocumentStrings([...(input.tags ?? []), "Duplicate filename"]),
+        }
+      : input;
 
     try {
-      const savedDocument = await createDocument(client, input);
+      setIsUploadingDocument(Boolean(selectedFile));
+      setDocumentUploadProgress(
+        selectedFile ? { label: "Validating document", percent: 20 } : null,
+      );
+      const savedDocument = selectedFile
+        ? await (async () => {
+            setDocumentUploadProgress({ label: "Uploading private file", percent: 55 });
+            const uploadedDocument = await uploadDocumentFile(client, documentInput, selectedFile);
+            setDocumentUploadProgress({ label: "Saving document metadata", percent: 85 });
+            return uploadedDocument;
+          })()
+        : await createDocument(client, documentInput);
+      setDocumentUploadProgress(
+        selectedFile ? { label: "Document upload complete", percent: 100 } : null,
+      );
       form.reset();
+      setDocumentUploadFile(null);
       await onReload();
       handleSelectDocument(savedDocument.id);
-      onNotice("Document draft saved.");
+      onNotice(
+        selectedFile
+          ? duplicateFileMatch
+            ? "Document uploaded with a duplicate filename preserved safely."
+            : "Document uploaded."
+          : "Document draft saved.",
+      );
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to save document."));
+    } finally {
+      setIsUploadingDocument(false);
+      window.setTimeout(() => setDocumentUploadProgress(null), 900);
     }
   };
 
@@ -31996,11 +32612,11 @@ function DocumentsAndSignaturesView({
           <div className="border-b border-slate-200 p-5">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <ProfileStat label="Documents" value={documentStats.total} />
-              <ProfileStat label="Drafts" value={documentStats.draft} />
-              <ProfileStat label="Ready" value={documentStats.ready} />
-              <ProfileStat label="Sent" value={documentStats.sent} />
+              <ProfileStat label="Stored files" value={documentStats.fileLinked} />
+              <ProfileStat label="Required" value={documentStats.required} />
+              <ProfileStat label="Awaiting signatures" value={documentStats.awaitingSignature} />
               <ProfileStat label="Signed" value={documentStats.signed} />
-              <ProfileStat label="Files linked" value={documentStats.fileLinked} />
+              <ProfileStat label="Expiring warranties" value={documentStats.expiringWarranties} />
             </div>
             <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_180px]">
               <div className="relative">
@@ -32052,20 +32668,19 @@ function DocumentsAndSignaturesView({
                 data-testid="document-status-filter"
                 value={documentStatusFilter}
                 onChange={(event) => {
-                  setDocumentStatusFilter(event.target.value as DocumentStatus | "all");
+                  setDocumentStatusFilter(event.target.value as DocumentStatusFilter);
                   setDocumentPage(1);
                 }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
-                <option value="all">All statuses</option>
-                {documentStatuses.map((status) => (
+                {documentStatusFilterOptions.map((status) => (
                   <option key={status.value} value={status.value}>
                     {status.label}
                   </option>
                 ))}
               </select>
             </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-4">
+            <div className="mt-3 grid gap-3 lg:grid-cols-5">
               <select
                 data-testid="document-category-filter"
                 value={documentCategoryFilter}
@@ -32109,6 +32724,21 @@ function DocumentsAndSignaturesView({
                 {documentTagOptions.map((tag) => (
                   <option key={tag} value={tag}>
                     {tag}
+                  </option>
+                ))}
+              </select>
+              <select
+                data-testid="document-upload-date-filter"
+                value={documentUploadDateFilter}
+                onChange={(event) => {
+                  setDocumentUploadDateFilter(event.target.value as DocumentUploadDateFilter);
+                  setDocumentPage(1);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentUploadDateFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
                   </option>
                 ))}
               </select>
@@ -32169,6 +32799,11 @@ function DocumentsAndSignaturesView({
                     <p className="font-semibold text-slate-950">{document.title}</p>
                     <p className="mt-1 text-sm text-slate-500">
                       {association.customerName} - {association.property}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                      {document.file_name ?? "No file name"} -{" "}
+                      {formatFileSize(document.file_size_bytes)} -{" "}
+                      Uploaded {formatDateTime(document.uploaded_at ?? document.created_at)}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {details.tags.slice(0, 4).map((tag) => (
@@ -32304,12 +32939,32 @@ function DocumentsAndSignaturesView({
                     <p className="font-semibold text-slate-950">
                       {getSignatureTargetName(snapshot, signature)}
                     </p>
-                    <p className="mt-1 text-sm text-slate-500">{signature.signer_name}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {signature.signer_name}
+                      {signature.provider ? ` - ${signature.provider}` : ""}
+                    </p>
                   </div>
                   <Badge
                     label={signatureStatusLabel(signature.status)}
-                    tone={signature.status === "signed" ? "green" : "amber"}
+                    tone={signatureStatusTone(signature.status)}
                   />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {signatureStatuses
+                    .filter((status) => status.value !== "signed")
+                    .map((status) => (
+                      <button
+                        key={status.value}
+                        type="button"
+                        disabled={signature.status === status.value}
+                        onClick={() =>
+                          void handleUpdateSignatureStatus(signature, status.value)
+                        }
+                        className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {status.label}
+                      </button>
+                    ))}
                 </div>
                 {signature.status !== "signed" ? (
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -32435,7 +33090,10 @@ function DocumentsAndSignaturesView({
         </section>
 
         {selectedDocument ? (
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <section
+            data-testid="document-selected-panel"
+            className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-slate-950">
@@ -32485,6 +33143,40 @@ function DocumentsAndSignaturesView({
                     value={selectedDocumentDetails.previewMode}
                   />
                   <ProfileStat
+                    label="Filename"
+                    value={selectedDocument.file_name ?? selectedDocument.title}
+                  />
+                  <ProfileStat
+                    label="Size"
+                    value={formatFileSize(selectedDocument.file_size_bytes)}
+                  />
+                  <ProfileStat
+                    label="Uploaded by"
+                    value={getDocumentUploaderLabel(selectedDocument)}
+                  />
+                  <ProfileStat
+                    label="Uploaded"
+                    value={formatDateTime(
+                      selectedDocument.uploaded_at ?? selectedDocument.created_at,
+                    )}
+                  />
+                  <ProfileStat
+                    label="Requirement"
+                    value={
+                      getDocumentRequirementLevel(selectedDocument) === "required"
+                        ? "Required"
+                        : "Optional"
+                    }
+                  />
+                  <ProfileStat
+                    label="Signature"
+                    value={
+                      selectedDocumentDetails.signatures[0]
+                        ? signatureStatusLabel(selectedDocumentDetails.signatures[0].status)
+                        : "No request"
+                    }
+                  />
+                  <ProfileStat
                     label="Lead / opportunity"
                     value={
                       selectedDocumentDetails.relatedLead?.contact_name ??
@@ -32519,8 +33211,28 @@ function DocumentsAndSignaturesView({
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <ArrowDown className="h-4 w-4" />
-                {selectedDocument.file_url ? "Open file" : "Print/download preview"}
+                {hasDocumentFile(selectedDocument) ? "Download" : "Print/download preview"}
               </button>
+              {hasDocumentFile(selectedDocument) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void openDocumentFile(selectedDocument)}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void copyDocumentFileLink(selectedDocument)}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy link
+                  </button>
+                </>
+              ) : null}
               {documentStatuses.map((status) => (
                 <button
                   key={status.value}
@@ -32537,7 +33249,9 @@ function DocumentsAndSignaturesView({
               {selectedDocument.status !== "archived" ? (
                 <button
                   type="button"
-                  onClick={() => void handleUpdateDocumentStatus(selectedDocument, "archived")}
+                  onClick={() =>
+                    void handleUpdateDocumentStatus(selectedDocument, "archived")
+                  }
                   className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -32546,10 +33260,8 @@ function DocumentsAndSignaturesView({
               ) : null}
             </div>
 
-            <DocumentPdfPreview
-              title={selectedDocument.title}
-              category={selectedDocument.category}
-              status={selectedDocument.status}
+            <DocumentFileViewer
+              document={selectedDocument}
               companyName={
                 companyMap.get(selectedDocument.company_id)?.name ?? "WeatherTech OS"
               }
@@ -32558,7 +33270,11 @@ function DocumentsAndSignaturesView({
                   (template) => template.key === selectedDocument.template_key,
                 )?.name ?? "Custom document"
               }
-              body={selectedDocument.body}
+              previewUrl={selectedDocumentPreviewUrl}
+              previewError={selectedDocumentPreviewError}
+              onOpen={() => void openDocumentFile(selectedDocument)}
+              onDownload={() => handleDownloadDocument(selectedDocument)}
+              onCopyLink={() => void copyDocumentFileLink(selectedDocument)}
             />
 
             {selectedDocumentDetails ? (
@@ -32663,6 +33379,20 @@ function DocumentsAndSignaturesView({
                   ))}
                 </select>
                 <select
+                  name="lead_id"
+                  defaultValue={selectedDocument.lead_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No lead / opportunity</option>
+                  {snapshot.leads.map((lead) => (
+                    <option key={lead.id} value={lead.id}>
+                      {lead.contact_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select
                   name="job_id"
                   defaultValue={selectedDocument.job_id ?? "none"}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -32671,6 +33401,18 @@ function DocumentsAndSignaturesView({
                   {snapshot.jobs.map((job) => (
                     <option key={job.id} value={job.id}>
                       {job.title}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  name="inspection_id"
+                  defaultValue={selectedDocument.inspection_id ?? "none"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="none">No inspection</option>
+                  {snapshot.inspections.map((inspection) => (
+                    <option key={inspection.id} value={inspection.id}>
+                      {inspection.title}
                     </option>
                   ))}
                 </select>
@@ -32719,6 +33461,62 @@ function DocumentsAndSignaturesView({
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 placeholder="File URL"
               />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input
+                  name="file_name"
+                  defaultValue={selectedDocument.file_name ?? ""}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Filename"
+                />
+                <input
+                  name="property_address"
+                  defaultValue={selectedDocument.property_address ?? ""}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Property address"
+                />
+              </div>
+              <input
+                name="tags"
+                defaultValue={getDocumentTags(selectedDocument).join(", ")}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Tags separated by commas"
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select
+                  name="requirement_level"
+                  defaultValue={getDocumentRequirementLevel(selectedDocument)}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {documentRequirementLevels.map((level) => (
+                    <option key={level.value} value={level.value}>
+                      {level.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="rounded-md border border-slate-200 p-3">
+                  <p className="text-xs font-bold uppercase text-slate-500">
+                    Required for
+                  </p>
+                  <div className="mt-2 grid gap-2">
+                    {documentWorkflowRequirements.map((workflow) => (
+                      <label
+                        key={workflow.id}
+                        className="flex items-center gap-2 text-sm text-slate-700"
+                      >
+                        <input
+                          type="checkbox"
+                          name="required_for"
+                          value={workflow.id}
+                          defaultChecked={getDocumentRequiredFor(selectedDocument).includes(
+                            workflow.id,
+                          )}
+                        />
+                        {workflow.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
               <textarea
                 name="body"
                 defaultValue={selectedDocument.body ?? ""}
@@ -32736,8 +33534,69 @@ function DocumentsAndSignaturesView({
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-950">New custom draft</h3>
+          <h3 className="text-lg font-bold text-slate-950">Upload or draft document</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Store customer files privately, or save a metadata-only draft when the
+            file is not ready yet.
+          </p>
           <form onSubmit={handleCreateDocument} className="mt-4 grid gap-3">
+            <label
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDraggingDocument(true);
+              }}
+              onDragLeave={() => setIsDraggingDocument(false)}
+              onDrop={handleDocumentDrop}
+              className={`grid cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition ${
+                isDraggingDocument
+                  ? "border-sky-400 bg-sky-50"
+                  : "border-slate-300 bg-slate-50 hover:border-sky-300 hover:bg-sky-50"
+              }`}
+            >
+              <Upload className="h-6 w-6 text-sky-600" />
+              <span className="mt-2 text-sm font-bold text-slate-950">
+                Drop a document here or browse
+              </span>
+              <span className="mt-1 text-xs text-slate-500">
+                PDF, image, text, Word, or Excel up to {formatFileSize(maxDocumentUploadBytes)}
+              </span>
+              {documentUploadFile ? (
+                <span className="mt-2 rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
+                  {documentUploadFile.name} - {formatFileSize(documentUploadFile.size)}
+                </span>
+              ) : null}
+              <input
+                data-testid="document-file-input"
+                name="document_file"
+                type="file"
+                accept={documentUploadAccept}
+                className="sr-only"
+                onChange={(event) =>
+                  setDocumentUploadFile(event.currentTarget.files?.[0] ?? null)
+                }
+              />
+            </label>
+            {documentUploadProgress ? (
+              <div
+                data-testid="document-upload-progress"
+                className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-slate-700">
+                    {documentUploadProgress.label}
+                  </span>
+                  <span className="font-bold text-slate-950">
+                    {documentUploadProgress.percent}%
+                  </span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full wt-progress-fill"
+                    style={{ width: `${documentUploadProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
             <select
               name="company_id"
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -32800,17 +33659,30 @@ function DocumentsAndSignaturesView({
                 </option>
               ))}
             </select>
-            <select
-              name="job_id"
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="none">No job</option>
-              {snapshot.jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.title}
-                </option>
-              ))}
-            </select>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select
+                name="lead_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No lead / opportunity</option>
+                {snapshot.leads.map((lead) => (
+                  <option key={lead.id} value={lead.id}>
+                    {lead.contact_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="job_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No job</option>
+                {snapshot.jobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.title}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <select
                 name="estimate_id"
@@ -32823,6 +33695,19 @@ function DocumentsAndSignaturesView({
                   </option>
                 ))}
               </select>
+              <select
+                name="inspection_id"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="none">No inspection</option>
+                {snapshot.inspections.map((inspection) => (
+                  <option key={inspection.id} value={inspection.id}>
+                    {inspection.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
               <select
                 name="invoice_id"
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -32851,6 +33736,45 @@ function DocumentsAndSignaturesView({
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="File URL"
             />
+            <input
+              name="property_address"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Property address"
+            />
+            <input
+              name="tags"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Tags separated by commas"
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select
+                name="requirement_level"
+                defaultValue="optional"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {documentRequirementLevels.map((level) => (
+                  <option key={level.value} value={level.value}>
+                    {level.label}
+                  </option>
+                ))}
+              </select>
+              <div className="rounded-md border border-slate-200 p-3">
+                <p className="text-xs font-bold uppercase text-slate-500">
+                  Required for
+                </p>
+                <div className="mt-2 grid gap-2">
+                  {documentWorkflowRequirements.map((workflow) => (
+                    <label
+                      key={workflow.id}
+                      className="flex items-center gap-2 text-sm text-slate-700"
+                    >
+                      <input type="checkbox" name="required_for" value={workflow.id} />
+                      {workflow.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
             <textarea
               name="body"
               className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -32858,13 +33782,121 @@ function DocumentsAndSignaturesView({
             />
             <button
               type="submit"
+              disabled={isUploadingDocument}
               className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
             >
-              Save draft
+              {isUploadingDocument ? "Saving document" : "Save document"}
             </button>
           </form>
         </section>
       </aside>
+    </div>
+  );
+}
+
+function DocumentFileViewer({
+  document,
+  companyName,
+  templateName,
+  previewUrl,
+  previewError,
+  onOpen,
+  onDownload,
+  onCopyLink,
+}: {
+  document: DocumentRecord;
+  companyName: string;
+  templateName: string;
+  previewUrl: string | null;
+  previewError: string;
+  onOpen: () => void;
+  onDownload: () => void;
+  onCopyLink: () => void;
+}) {
+  const mimeType = document.mime_type ?? "";
+  const canPreviewImage = Boolean(previewUrl && mimeType.startsWith("image/"));
+  const canPreviewPdf = Boolean(previewUrl && mimeType === "application/pdf");
+
+  if (!hasDocumentFile(document)) {
+    return (
+      <DocumentPdfPreview
+        title={document.title}
+        category={document.category}
+        status={document.status}
+        companyName={companyName}
+        templateName={templateName}
+        body={document.body}
+      />
+    );
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-100 p-3">
+      <div className="rounded-md bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase text-sky-700">
+              {companyName}
+            </p>
+            <h4 className="mt-1 text-xl font-bold text-slate-950">{document.title}</h4>
+            <p className="mt-1 text-sm text-slate-500">
+              {document.file_name ?? "Stored document"} - {formatFileSize(document.file_size_bytes)}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpen}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <FileText className="h-4 w-4" />
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={onDownload}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <ArrowDown className="h-4 w-4" />
+              Download
+            </button>
+            <button
+              type="button"
+              onClick={onCopyLink}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <Copy className="h-4 w-4" />
+              Copy link
+            </button>
+          </div>
+        </div>
+
+        {previewError ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            {previewError}
+          </div>
+        ) : canPreviewImage ? (
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewUrl ?? ""}
+              alt={document.title}
+              className="max-h-[560px] w-full object-contain"
+            />
+          </div>
+        ) : canPreviewPdf ? (
+          <iframe
+            title={document.title}
+            src={previewUrl ?? ""}
+            className="mt-4 h-[560px] w-full rounded-lg border border-slate-200 bg-white"
+          />
+        ) : (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+            Preview is not available for this file type. Use Open, Download, or Copy
+            link to review the document.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

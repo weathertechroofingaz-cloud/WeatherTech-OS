@@ -434,6 +434,9 @@ function buildEstimateDraft(
     .filter((item) => item.estimate_id === estimate.id)
     .sort((a, b) => a.sort_order - b.sort_order);
   const customer = customerById(snapshot, estimate.customer_id);
+  const lead = estimate.lead_id
+    ? snapshot.leads.find((item) => item.id === estimate.lead_id) ?? null
+    : null;
   const company = companyName(snapshot, estimate.company_id);
   const template = templateForSource(snapshot, estimate.company_id, "estimate");
   const companyRecord = companyById(snapshot, estimate.company_id);
@@ -466,10 +469,13 @@ function buildEstimateDraft(
   return {
     company_id: estimate.company_id,
     customer_id: estimate.customer_id,
+    lead_id: estimate.lead_id,
     job_id: null,
     estimate_id: estimate.id,
+    inspection_id: null,
     invoice_id: null,
     change_order_id: null,
+    property_address: estimate.location ?? (customer ? customerAddress(customer) : leadAddress(lead)),
     title: `${estimate.title} - Estimate Packet`,
     category: "estimate",
     status: "draft",
@@ -550,10 +556,13 @@ function buildLeadDraft(
   return {
     company_id: lead.company_id,
     customer_id: lead.customer_id,
+    lead_id: lead.id,
     job_id: null,
     estimate_id: null,
+    inspection_id: null,
     invoice_id: null,
     change_order_id: null,
+    property_address: leadAddress(lead),
     title: `${lead.contact_name} - Lead Intake Summary`,
     category: "other",
     status: "draft",
@@ -625,10 +634,13 @@ function buildOpportunityDraft(
   return {
     company_id: lead.company_id,
     customer_id: lead.customer_id,
+    lead_id: lead.id,
     job_id: job?.id ?? null,
     estimate_id: estimate?.id ?? null,
+    inspection_id: null,
     invoice_id: null,
     change_order_id: null,
+    property_address: leadAddress(lead),
     title: `${lead.contact_name} - Opportunity Summary`,
     category: "other",
     status: "draft",
@@ -859,10 +871,13 @@ function buildJobDraft(snapshot: CrmSnapshot, job: JobRecord): GeneratedDocument
   return {
     company_id: job.company_id,
     customer_id: job.customer_id,
+    lead_id: job.lead_id,
     job_id: job.id,
     estimate_id: job.estimate_id,
+    inspection_id: null,
     invoice_id: null,
     change_order_id: null,
+    property_address: job.property_address,
     title: `${job.title} - Production Packet`,
     category: "contract",
     status: "draft",
@@ -1097,10 +1112,13 @@ function buildInspectionDraft(
   return {
     company_id: inspection.company_id,
     customer_id: inspection.customer_id,
+    lead_id: inspection.lead_id,
     job_id: inspection.job_id,
     estimate_id: inspection.estimate_id,
+    inspection_id: inspection.id,
     invoice_id: null,
     change_order_id: null,
+    property_address: inspection.property_address,
     title: `${inspection.title} - Inspection Summary`,
     category: "other",
     status: "draft",
