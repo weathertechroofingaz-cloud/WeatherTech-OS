@@ -2103,7 +2103,17 @@ async function testOfficeOperationsWorkspace(browser, tab) {
         text.includes("open calendar") &&
         text.includes("open production") &&
         text.includes("open communications") &&
-        text.includes("open inspection")
+        text.includes("open inspection") &&
+        text.includes("scheduling intelligence") &&
+        text.includes("operations dispatch workspace") &&
+        text.includes("today's schedule") &&
+        text.includes("tomorrow") &&
+        text.includes("unassigned jobs") &&
+        text.includes("scheduling conflicts") &&
+        text.includes("overbooked employees") &&
+        text.includes("available capacity") &&
+        text.includes("upcoming inspections") &&
+        text.includes("production queue")
       );
     },
     "office operations command center",
@@ -2113,7 +2123,9 @@ async function testOfficeOperationsWorkspace(browser, tab) {
   const desktopLayout = await tab.playwright.evaluate(() => {
     const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
     const queue = document.querySelector('[data-testid="operations-intelligence-queue"]');
+    const scheduling = document.querySelector('[data-testid="scheduling-intelligence-dispatch"]');
     const queueRows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
+    const schedulingAlerts = [...document.querySelectorAll('[data-testid="scheduling-alert-row"]')];
     const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 };
     const prioritySorted = queueRows.every((row, index) => {
       const next = queueRows[index + 1];
@@ -2141,16 +2153,36 @@ async function testOfficeOperationsWorkspace(browser, tab) {
       "recent-signed-estimates",
       "recently-completed-jobs",
     ];
+    const schedulingSections = [
+      "scheduling-today-schedule",
+      "scheduling-tomorrow",
+      "scheduling-unassigned-jobs",
+      "scheduling-conflicts",
+      "scheduling-overbooked-employees",
+      "scheduling-available-capacity",
+      "scheduling-upcoming-inspections",
+      "scheduling-production-queue",
+      "scheduling-alerts",
+    ];
 
     return {
       visible: Boolean(workspace),
       queueVisible: Boolean(queue),
+      schedulingVisible: Boolean(scheduling),
+      schedulingText: scheduling?.textContent?.toLowerCase() ?? "",
       queueText: queue?.textContent?.toLowerCase() ?? "",
       queueRowCount: queueRows.length,
+      schedulingAlertCount: schedulingAlerts.length,
+      queueSchedulingRows: queueRows.filter(
+        (row) => row.getAttribute("data-source-module") === "Scheduling Intelligence",
+      ).length,
       prioritySorted,
       queueCount: workspace?.querySelectorAll('[data-testid^="operations-queue-"]').length ?? 0,
       missingQueues: requiredQueues.filter(
         (queue) => !document.querySelector(`[data-testid="operations-queue-${queue}"]`),
+      ),
+      missingSchedulingSections: schedulingSections.filter(
+        (section) => !document.querySelector(`[data-testid="${section}"]`),
       ),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
       emptyStates: workspace?.textContent?.includes("No live records currently match this operational priority.") ?? false,
@@ -2163,6 +2195,10 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
   if (!desktopLayout.queueVisible) {
     throw new Error("Operations Queue did not render.");
+  }
+
+  if (!desktopLayout.schedulingVisible) {
+    throw new Error("Scheduling Intelligence Dispatch workspace did not render.");
   }
 
   if (desktopLayout.queueRowCount < 1) {
@@ -2196,6 +2232,30 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     throw new Error(`Office Operations missing queues: ${desktopLayout.missingQueues.join(", ")}`);
   }
 
+  if (desktopLayout.missingSchedulingSections.length) {
+    throw new Error(
+      `Scheduling Intelligence workspace missing sections: ${desktopLayout.missingSchedulingSections.join(", ")}`,
+    );
+  }
+
+  for (const expected of [
+    "technician availability",
+    "crew availability",
+    "property",
+    "roof system",
+    "required documents",
+    "operations queue integration",
+    "future routing optimization",
+  ]) {
+    if (!desktopLayout.schedulingText.includes(expected)) {
+      throw new Error(`Scheduling Intelligence missing ${expected}.`);
+    }
+  }
+
+  if (desktopLayout.schedulingAlertCount > 0 && desktopLayout.queueSchedulingRows < 1) {
+    throw new Error("Scheduling alerts are not integrated into the Operations Queue.");
+  }
+
   if (desktopLayout.queueCount < 14) {
     throw new Error(`Office Operations rendered only ${desktopLayout.queueCount} queue cards.`);
   }
@@ -2206,6 +2266,50 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
   if (!desktopLayout.emptyStates) {
     throw new Error("Office Operations did not render truthful empty states.");
+  }
+
+  if (desktopLayout.schedulingAlertCount > 0) {
+    const routedSchedulingAlert = await tab.playwright.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-testid="scheduling-alert-row"]')];
+      const first = rows.find((row) => row.getAttribute("data-target-view")) ?? null;
+
+      return {
+        index: first ? rows.indexOf(first) : -1,
+        targetView: first?.getAttribute("data-target-view") ?? null,
+      };
+    });
+
+    if (routedSchedulingAlert.index < 0 || !routedSchedulingAlert.targetView) {
+      throw new Error("Scheduling alert did not expose a target workflow.");
+    }
+
+    await clickUnique(
+      tab.playwright.locator('[data-testid="scheduling-alert-row"]').nth(routedSchedulingAlert.index),
+      "scheduling alert route",
+    );
+    await waitFor(
+      tab,
+      (targetView) => {
+        const text = document.body.innerText;
+        const selectors = {
+          calendar: () => text.includes("Schedule inspections, estimates, jobs, follow-ups, and deliveries."),
+          customers: () => text.includes("Customer 360"),
+          documents: () => text.includes("Document Center"),
+          inspections: () => text.includes("Inspections"),
+          jobs: () =>
+            Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+            text.includes("Jobs / Projects"),
+          orders: () => text.includes("Material Orders"),
+        };
+
+        return selectors[targetView]?.() ?? text.length > 0;
+      },
+      "scheduling alert routes to existing module",
+      10000,
+      routedSchedulingAlert.targetView,
+    );
+
+    await clickNav(tab, "Operations");
   }
 
   await selectUnique(
@@ -2358,11 +2462,12 @@ async function testOfficeOperationsWorkspace(browser, tab) {
       scrollWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       quickActionsVisible: Boolean(document.querySelector('[data-testid="operations-quick-actions"]')),
+      schedulingVisible: Boolean(document.querySelector('[data-testid="scheduling-intelligence-dispatch"]')),
     };
   });
   await viewport.set(LAPTOP_VIEWPORT);
 
-  if (!mobileLayout.visible || !mobileLayout.quickActionsVisible) {
+  if (!mobileLayout.visible || !mobileLayout.quickActionsVisible || !mobileLayout.schedulingVisible) {
     throw new Error("Office Operations workspace did not render at mobile width.");
   }
 

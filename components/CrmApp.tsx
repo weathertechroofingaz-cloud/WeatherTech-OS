@@ -368,6 +368,7 @@ import type {
   TimeEntryRecord,
 } from "../lib/crm/types";
 import { OperationsQueuePanel } from "./OperationsQueuePanel";
+import { SchedulingIntelligencePanel } from "./SchedulingIntelligencePanel";
 import { createDemoCrmSnapshot, isCrmDemoFallbackEnabled } from "../lib/crm/demoSnapshot";
 import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
@@ -9225,6 +9226,13 @@ function OfficeOperationsView({
         companyMap={companyMap}
         activeCompanyId={activeCompanyId}
         onOpenItem={handleOpenQueueItem}
+      />
+
+      <SchedulingIntelligencePanel
+        snapshot={snapshot}
+        companyMap={companyMap}
+        activeCompanyId={activeCompanyId}
+        onOpenTarget={onViewChange}
       />
 
       <section className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white shadow-[0_22px_60px_-46px_rgba(15,23,42,0.9)]">

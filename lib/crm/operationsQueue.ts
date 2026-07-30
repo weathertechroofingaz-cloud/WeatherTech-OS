@@ -17,6 +17,10 @@ import {
   getJobScheduledEnd,
   getJobScheduledStart,
 } from "./jobs";
+import {
+  buildSchedulingIntelligence,
+  type SchedulingAlert,
+} from "./schedulingIntelligence";
 
 export type OperationsQueuePriority = "critical" | "high" | "medium" | "low";
 
@@ -32,6 +36,7 @@ export type OperationsQueueCategory =
   | "signature"
   | "change_order"
   | "communication"
+  | "dispatch"
   | "permit"
   | "office_task"
   | "property";
@@ -159,6 +164,7 @@ export const operationsQueueCategoryLabels: Record<OperationsQueueCategory, stri
   change_order: "Change order",
   communication: "Communication",
   document: "Document",
+  dispatch: "Dispatch",
   estimate: "Estimate",
   inspection: "Inspection",
   invoice: "Invoice",
@@ -201,6 +207,7 @@ const queueBuilders: OperationsQueueBuilder[] = [
   { id: "inspection-scheduling", build: buildInspectionItems },
   { id: "job-scheduling", build: buildJobSchedulingItems },
   { id: "dispatch-conflicts", build: buildDispatchConflictItems },
+  { id: "scheduling-intelligence", build: buildSchedulingAlertItems },
   { id: "documents-and-permits", build: buildDocumentAndPermitItems },
   { id: "materials", build: buildMaterialItems },
   { id: "invoices", build: buildInvoiceItems },
@@ -583,6 +590,83 @@ function buildDispatchConflictItems(snapshot: CrmSnapshot, context: QueueContext
         detailOverride: conflict.detail,
       }),
     );
+}
+
+function buildSchedulingAlertItems(snapshot: CrmSnapshot, context: QueueContext) {
+  return buildSchedulingIntelligence(snapshot, { now: context.now }).alerts.map((alert) =>
+    createQueueItem(context, {
+      id: `scheduling-alert:${alert.id}`,
+      priority: alert.priority,
+      companyId: alert.companyId,
+      customerId: alert.customerId,
+      customerName: alert.customerName,
+      propertyId: alert.propertyId,
+      propertyLabel: alert.propertyLabel,
+      category: mapSchedulingAlertCategory(alert),
+      assignedOwner: alert.assignedOwner,
+      dueAt: alert.dueAt,
+      createdAt: alert.dueAt,
+      currentWorkflowStage: alert.workflowStage,
+      sourceModule: "Scheduling Intelligence",
+      sourceRecordId: alert.sourceRecordId,
+      status: mapSchedulingAlertStatus(alert.status),
+      suggestedNextAction: alert.suggestedNextAction,
+      title: alert.title,
+      detail: alert.detail,
+      workflow: mapSchedulingAlertWorkflow(alert),
+      targetView: alert.targetView,
+    }),
+  );
+}
+
+function mapSchedulingAlertCategory(alert: SchedulingAlert): OperationsQueueCategory {
+  if (alert.type === "missing_documents") {
+    return "document";
+  }
+
+  if (alert.type === "missing_inspection") {
+    return "inspection";
+  }
+
+  if (alert.type === "material_delay" || alert.type === "material_missing") {
+    return "material";
+  }
+
+  if (alert.type === "missing_crew" || alert.type === "production_conflict") {
+    return "job";
+  }
+
+  return "dispatch";
+}
+
+function mapSchedulingAlertWorkflow(alert: SchedulingAlert): OperationsQueueWorkflow {
+  if (alert.targetView === "documents") {
+    return "documents";
+  }
+
+  if (alert.targetView === "inspections") {
+    return "inspection";
+  }
+
+  if (alert.targetView === "orders" || alert.targetView === "jobs") {
+    return "production";
+  }
+
+  if (alert.targetView === "customers") {
+    return "customer";
+  }
+
+  return "calendar";
+}
+
+function mapSchedulingAlertStatus(
+  status: SchedulingAlert["status"],
+): OperationsQueueStatus {
+  if (status === "today" || status === "upcoming" || status === "overdue") {
+    return status;
+  }
+
+  return "open";
 }
 
 function buildDocumentAndPermitItems(snapshot: CrmSnapshot, context: QueueContext) {
