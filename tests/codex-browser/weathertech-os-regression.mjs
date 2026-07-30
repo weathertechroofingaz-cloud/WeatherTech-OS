@@ -2112,6 +2112,21 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
   const desktopLayout = await tab.playwright.evaluate(() => {
     const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
+    const queue = document.querySelector('[data-testid="operations-intelligence-queue"]');
+    const queueRows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
+    const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 };
+    const prioritySorted = queueRows.every((row, index) => {
+      const next = queueRows[index + 1];
+
+      if (!next) {
+        return true;
+      }
+
+      const currentPriority = row.getAttribute("data-priority") ?? "low";
+      const nextPriority = next.getAttribute("data-priority") ?? "low";
+
+      return priorityRank[currentPriority] <= priorityRank[nextPriority];
+    });
     const requiredQueues = [
       "jobs-starting-today",
       "awaiting-estimate-approval",
@@ -2129,6 +2144,10 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
     return {
       visible: Boolean(workspace),
+      queueVisible: Boolean(queue),
+      queueText: queue?.textContent?.toLowerCase() ?? "",
+      queueRowCount: queueRows.length,
+      prioritySorted,
       queueCount: workspace?.querySelectorAll('[data-testid^="operations-queue-"]').length ?? 0,
       missingQueues: requiredQueues.filter(
         (queue) => !document.querySelector(`[data-testid="operations-queue-${queue}"]`),
@@ -2140,6 +2159,37 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
   if (!desktopLayout.visible) {
     throw new Error("Office Operations workspace is not visible.");
+  }
+
+  if (!desktopLayout.queueVisible) {
+    throw new Error("Operations Queue did not render.");
+  }
+
+  if (desktopLayout.queueRowCount < 1) {
+    throw new Error("Operations Queue rendered no work items.");
+  }
+
+  if (!desktopLayout.prioritySorted) {
+    throw new Error("Operations Queue rows are not sorted by priority.");
+  }
+
+  for (const expected of [
+    "office follow-up engine",
+    "priority",
+    "company",
+    "customer",
+    "property",
+    "category",
+    "assigned owner",
+    "due",
+    "age",
+    "stage",
+    "source module",
+    "suggested next action",
+  ]) {
+    if (!desktopLayout.queueText.includes(expected)) {
+      throw new Error(`Operations Queue missing ${expected}.`);
+    }
   }
 
   if (desktopLayout.missingQueues.length) {
@@ -2158,6 +2208,95 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     throw new Error("Office Operations did not render truthful empty states.");
   }
 
+  await selectUnique(
+    tab.playwright.locator('[data-testid="operations-queue-priority-filter"]'),
+    "high",
+    "operations queue priority filter",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const rows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
+
+      return rows.length > 0 && rows.every((row) => row.getAttribute("data-priority") === "high");
+    },
+    "operations queue high priority filter",
+    8000,
+  );
+  const queueSearchToken = await waitFor(
+    tab,
+    () => {
+      const firstRow = document.querySelector('[data-testid="operations-queue-row"]');
+      const token = firstRow?.textContent?.match(/[A-Za-z]{4,}/)?.[0] ?? null;
+
+      return token;
+    },
+    "operations queue search token",
+    8000,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="operations-queue-search"]'),
+    queueSearchToken,
+    "operations queue search",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const rows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
+
+      return rows.some((row) => row.getAttribute("data-target-view") !== null);
+    },
+    "operations queue routable work item",
+    8000,
+  );
+  const routedQueueItem = await tab.playwright.evaluate(() => {
+    const rows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
+    const targetIndex = Math.max(
+      rows.findIndex((row) => row.getAttribute("data-target-view") === "jobs"),
+      0,
+    );
+    const targetRow = rows[targetIndex] ?? null;
+
+    if (!targetRow) {
+      return { targetView: null, targetIndex: -1 };
+    }
+
+    return {
+      targetView: targetRow.getAttribute("data-target-view"),
+      targetIndex,
+    };
+  });
+  await clickUnique(
+    tab.playwright.locator('[data-testid="operations-queue-row"]').nth(routedQueueItem.targetIndex),
+    "operations queue first work item",
+  );
+  await waitFor(
+    tab,
+    (targetView) => {
+      const text = document.body.innerText;
+      const selectors = {
+        calendar: () => text.includes("Schedule inspections, estimates, jobs, follow-ups, and deliveries."),
+        changeOrders: () => text.includes("Change Orders"),
+        documents: () => text.includes("Document Center"),
+        estimates: () => text.includes("Estimates"),
+        inbox: () => text.includes("Unified Communications Center"),
+        invoices: () => text.includes("Invoices"),
+        jobs: () =>
+          Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+          text.includes("Jobs / Projects"),
+        leads: () => text.includes("CRM Pipeline"),
+        notifications: () => text.includes("Notifications"),
+        orders: () => text.includes("Material Orders"),
+      };
+
+      return selectors[targetView]?.() ?? text.length > 0;
+    },
+    "operations queue routes to originating module",
+    10000,
+    routedQueueItem.targetView,
+  );
+
+  await clickNav(tab, "Operations");
   await clickUnique(
     tab.playwright.locator(
       'xpath=//*[@data-testid="operations-quick-actions"]//button[contains(normalize-space(.), "Open Calendar")]',

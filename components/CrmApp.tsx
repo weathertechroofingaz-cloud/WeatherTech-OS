@@ -251,6 +251,7 @@ import {
   calculateMaterialOrderItemTotal,
   calculateMaterialOrderTotal,
 } from "../lib/crm/operations";
+import type { OperationsQueueItem } from "../lib/crm/operationsQueue";
 import {
   colorSelectionStatusLabel,
   colorSelectionStatuses,
@@ -366,6 +367,7 @@ import type {
   SurfacePrepLevel,
   TimeEntryRecord,
 } from "../lib/crm/types";
+import { OperationsQueuePanel } from "./OperationsQueuePanel";
 import { createDemoCrmSnapshot, isCrmDemoFallbackEnabled } from "../lib/crm/demoSnapshot";
 import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
@@ -9114,6 +9116,12 @@ function OfficeOperationsView({
     () => buildOfficeOperationsData(snapshot, companyMap),
     [companyMap, snapshot],
   );
+  const handleOpenQueueItem = useCallback(
+    (item: OperationsQueueItem) => {
+      onViewChange(item.targetView);
+    },
+    [onViewChange],
+  );
   const visibleScope =
     activeCompanyId === "all"
       ? "All companies"
@@ -9211,6 +9219,13 @@ function OfficeOperationsView({
           ))}
         </div>
       </section>
+
+      <OperationsQueuePanel
+        snapshot={snapshot}
+        companyMap={companyMap}
+        activeCompanyId={activeCompanyId}
+        onOpenItem={handleOpenQueueItem}
+      />
 
       <section className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white shadow-[0_22px_60px_-46px_rgba(15,23,42,0.9)]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
