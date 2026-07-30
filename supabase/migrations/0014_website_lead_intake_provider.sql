@@ -8,9 +8,11 @@ check (
     'google_calendar',
     'gmail',
     'google_maps',
-    'twilio_sms',
     'gohighlevel',
-    'website'
+    'twilio',
+    'twilio_sms',
+    'website',
+    'yelp'
   )
 );
 
@@ -24,8 +26,10 @@ check (
     'google_calendar',
     'gmail',
     'google_maps',
-    'twilio_sms',
     'gohighlevel',
-    'website'
+    'twilio',
+    'twilio_sms',
+    'website',
+    'yelp'
   )
 );

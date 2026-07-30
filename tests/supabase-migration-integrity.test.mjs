@@ -45,7 +45,7 @@ const expectedMigrations = [
   ],
   [
     "0014_website_lead_intake_provider.sql",
-    "3bb3654aa597724aa237e79e6e964213e6b3b3f434f0918dff324d3ec0ba16f2",
+    "e89e0517eb37e71c899c71ec0e215e2a9df3a989dc4ddebcec61ff3b991b6a19",
   ],
   [
     "0015_expand_integration_provider_checks.sql",
@@ -95,6 +95,16 @@ const failures = [];
 const versions = new Map();
 const expectedFiles = expectedMigrations.map(([file]) => file);
 const expectedHashes = new Map(expectedMigrations);
+const supportedIntegrationProviders = [
+  "google_calendar",
+  "gmail",
+  "google_maps",
+  "gohighlevel",
+  "twilio",
+  "twilio_sms",
+  "website",
+  "yelp",
+];
 
 for (const file of files) {
   const match = migrationPattern.exec(file);
@@ -174,6 +184,53 @@ for (const file of files) {
   }
 }
 
+const websiteLeadIntakeMigration = fs.readFileSync(
+  path.join(migrationsDir, "0014_website_lead_intake_provider.sql"),
+  "utf8",
+);
+
+function readProviderCheckValues(constraintName) {
+  const constraintStart = websiteLeadIntakeMigration.indexOf(`add constraint ${constraintName}`);
+
+  if (constraintStart === -1) {
+    failures.push(`0014 is missing ${constraintName}.`);
+    return [];
+  }
+
+  const constraintEnd = websiteLeadIntakeMigration.indexOf(");", constraintStart);
+
+  if (constraintEnd === -1) {
+    failures.push(`0014 ${constraintName} block is not terminated.`);
+    return [];
+  }
+
+  const constraintBlock = websiteLeadIntakeMigration.slice(constraintStart, constraintEnd);
+  return [...constraintBlock.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+}
+
+for (const constraintName of [
+  "integration_connections_provider_check",
+  "integration_sync_logs_provider_check",
+]) {
+  const providers = readProviderCheckValues(constraintName);
+
+  if (JSON.stringify(providers) !== JSON.stringify([...supportedIntegrationProviders].sort())) {
+    failures.push(
+      `0014 ${constraintName} must allow exactly ${supportedIntegrationProviders.join(", ")}.`,
+    );
+  }
+
+  for (const requiredProvider of ["yelp", "website", "twilio", "twilio_sms"]) {
+    if (!providers.includes(requiredProvider)) {
+      failures.push(`0014 ${constraintName} must allow ${requiredProvider}.`);
+    }
+  }
+
+  if (providers.includes("unknown_provider")) {
+    failures.push(`0014 ${constraintName} must reject unknown_provider.`);
+  }
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -190,4 +247,7 @@ console.log(
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
 );
-console.log("Verified all migration SQL SHA-256 hashes remain unchanged.");
+console.log("Verified all migration SQL SHA-256 hashes match expected values.");
+console.log(
+  "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
+);
