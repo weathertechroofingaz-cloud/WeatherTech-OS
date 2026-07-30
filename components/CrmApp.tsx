@@ -367,6 +367,7 @@ import type {
   SurfacePrepLevel,
   TimeEntryRecord,
 } from "../lib/crm/types";
+import { FieldOperationsWorkspace } from "./FieldOperationsWorkspace";
 import { OperationsQueuePanel } from "./OperationsQueuePanel";
 import { SchedulingIntelligencePanel } from "./SchedulingIntelligencePanel";
 import { createDemoCrmSnapshot, isCrmDemoFallbackEnabled } from "../lib/crm/demoSnapshot";
@@ -377,6 +378,7 @@ type ThemeMode = "light" | "dark";
 type WorkspaceView =
   | "dashboard"
   | "operations"
+  | "fieldOperations"
   | "inbox"
   | "leadIntake"
   | "salesPipeline"
@@ -438,6 +440,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     label: "Operations",
     items: [
       { view: "jobs", label: "Jobs", icon: CalendarClock },
+      { view: "fieldOperations", label: "Field Ops", icon: UserRound },
       { view: "inspections", label: "Inspections", icon: ClipboardList },
       { view: "calendar", label: "Calendar", icon: CalendarClock },
       { view: "photos", label: "Photos", icon: Camera },
@@ -5728,6 +5731,20 @@ function CrmWorkspace({
 	              onViewChange={onViewChange}
 	            />
 	          ) : null}
+
+          {view === "fieldOperations" ? (
+            <FieldOperationsWorkspace
+              client={client}
+              isDemoMode={isDemoMode}
+              snapshot={scopedSnapshot}
+              activeCompanyId={selectedCompanyId}
+              onReload={onScrollPreservingReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
+              onViewChange={onViewChange}
+              onNotice={onNotice}
+              onError={onError}
+            />
+          ) : null}
 
           {view === "inbox" ? (
             <UnifiedInboxView

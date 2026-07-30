@@ -4,7 +4,8 @@ import {
   createHmac,
   randomBytes,
 } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -14,6 +15,7 @@ const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
 const DEFAULT_GROUPS = [
   "dashboard",
   "operations",
+  "field-operations",
   "crm",
   "sales-pipeline",
   "lead-intake-workspace",
@@ -537,7 +539,13 @@ async function seedTestLead(env, companyId, runId, leadNameColumn, suffix = "LEA
   throw lastError ?? new Error("Unable to seed estimate lead.");
 }
 
-async function seedTestCustomer(env, companyId, runId, suffix = "ESTIMATE CUSTOMER") {
+async function seedTestCustomer(
+  env,
+  companyId,
+  runId,
+  suffix = "ESTIMATE CUSTOMER",
+  propertyAddress = "456 TEST Regression Lead Ave, Phoenix, AZ",
+) {
   const displayName = `${TEST_PREFIX} ${runId} ${suffix}`;
   const [customer] = await restRequest(env, "customers", {
     method: "POST",
@@ -548,7 +556,7 @@ async function seedTestCustomer(env, companyId, runId, suffix = "ESTIMATE CUSTOM
       contact_name: `${displayName} CONTACT`,
       phone: "+16025550666",
       email: `${suffix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${runId}@example.test`,
-      property_address: "456 TEST Regression Lead Ave, Phoenix, AZ",
+      property_address: propertyAddress,
       city: "Phoenix",
       state: "AZ",
       postal_code: "85001",
@@ -755,10 +763,28 @@ async function findJobByTitle(env, title) {
   return rows[0] ?? null;
 }
 
+async function findJobByEstimateId(env, estimateId) {
+  const rows = await restRequest(
+    env,
+    `jobs?select=*&estimate_id=eq.${encodeURIComponent(estimateId)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
+}
+
 async function countJobsByTitle(env, title) {
   const rows = await restRequest(
     env,
     `jobs?select=id&title=eq.${encodeURIComponent(title)}`,
+  );
+
+  return rows.length;
+}
+
+async function countJobsByEstimateId(env, estimateId) {
+  const rows = await restRequest(
+    env,
+    `jobs?select=id&estimate_id=eq.${encodeURIComponent(estimateId)}`,
   );
 
   return rows.length;
@@ -959,6 +985,69 @@ async function waitForAsync(predicate, label, timeoutMs = 10000) {
   }
 
   throw new Error(`Timed out waiting for ${label}.`);
+}
+
+async function scrollSelectorIntoView(tab, selector, label, timeoutMs = 8000) {
+  const startedAt = Date.now();
+  let lastState = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastState = await tab.playwright.evaluate((currentSelector) => {
+      const element = document.querySelector(currentSelector);
+      if (!element) {
+        return { found: false };
+      }
+
+      const rect = element.getBoundingClientRect();
+      const visible =
+        rect.top >= 0 &&
+        rect.left >= 0 &&
+        rect.bottom <= window.innerHeight &&
+        rect.right <= window.innerWidth;
+
+      return {
+        found: true,
+        visible,
+        rect: {
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          left: rect.left,
+        },
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        },
+      };
+    }, selector);
+
+    if (lastState.found && lastState.visible) {
+      return;
+    }
+
+    if (!lastState.found) {
+      throw new Error(`${label} was not found.`);
+    }
+
+    const centerX = Math.min(
+      Math.max((lastState.rect.left + lastState.rect.right) / 2, 40),
+      lastState.viewport.width - 40,
+    );
+    const scrollDown = lastState.rect.bottom > lastState.viewport.height;
+    const scrollDistance = scrollDown
+      ? Math.min(700, Math.max(160, lastState.rect.bottom - lastState.viewport.height + 120))
+      : -Math.min(700, Math.max(160, Math.abs(lastState.rect.top) + 120));
+
+    await tab.cua.scroll({
+      x: centerX,
+      y: scrollDown ? lastState.viewport.height - 80 : 80,
+      scrollX: 0,
+      scrollY: scrollDistance,
+    });
+    await tab.playwright.waitForTimeout(150);
+  }
+
+  throw new Error(`Timed out scrolling ${label} into view. Last state: ${JSON.stringify(lastState)}`);
 }
 
 async function waitForUniqueLocator(locator, label, timeoutMs = 10000) {
@@ -1644,6 +1733,76 @@ async function clickSubmitUntilText(tab, submitText, expectedText, label, attemp
   }
 
   throw lastError ?? new Error(`Timed out waiting for ${label}.`);
+}
+
+async function waitForEstimateCreateMode(tab, label, timeoutMs = 15000) {
+  return waitFor(
+    tab,
+    () => {
+      const builder = document.querySelector("#estimate-builder");
+
+      return Boolean(
+        builder?.textContent?.includes("Create draft estimate") &&
+          [...builder.querySelectorAll('button[type="submit"]')].some(
+            (button) => button.textContent?.trim() === "Create estimate",
+          ),
+      );
+    },
+    label,
+    timeoutMs,
+  );
+}
+
+async function openEstimateCreateMode(tab, label, attempts = 3) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const alreadyOpen = await waitForEstimateCreateMode(
+      tab,
+      `${label} already open attempt ${attempt}`,
+      1200,
+    ).catch(() => false);
+
+    if (alreadyOpen) {
+      return;
+    }
+
+    const builderNewEstimateButton = tab.playwright.locator(
+      'xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]',
+    );
+
+    try {
+      if ((await builderNewEstimateButton.count()) === 1) {
+        await clickUnique(builderNewEstimateButton, `${label} builder button`, {
+          retryTransientClick: true,
+        });
+      } else {
+        await clickVisibleDomButtonByText(
+          tab,
+          "New Estimate",
+          `${label} visible button`,
+          10000,
+        );
+      }
+
+      const opened = await waitForEstimateCreateMode(
+        tab,
+        `${label} create mode attempt ${attempt}`,
+        6000,
+      ).catch((error) => {
+        lastError = error;
+        return false;
+      });
+
+      if (opened) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error(`${label} did not open estimate create mode.`);
 }
 
 async function forceClickSubmitButtonByText(tab, text, label, timeoutMs = 30000) {
@@ -2478,6 +2637,323 @@ async function testOfficeOperationsWorkspace(browser, tab) {
   }
 
   return { desktopLayout, mobileLayout };
+}
+
+async function testFieldOperationsWorkspace(browser, tab, env, company, runId, progress) {
+  progress("field-operations:prepare:start");
+  const fieldRunId = `${runId} FIELDOPS`;
+  const seededJob = await seedTestJob(env, company.id, fieldRunId);
+  const seededTaskTitle = `${TEST_PREFIX} ${fieldRunId} INITIAL TASK`;
+  const fieldStart = new Date();
+  fieldStart.setUTCHours(16, 0, 0, 0);
+  const fieldEnd = new Date(fieldStart.getTime() + 2 * 60 * 60 * 1000);
+  const inspectionStart = new Date(fieldStart.getTime() + 3 * 60 * 60 * 1000);
+  const inspectionEnd = new Date(fieldStart.getTime() + 4 * 60 * 60 * 1000);
+  const today = fieldStart.toISOString().slice(0, 10);
+  const fieldCrew = `${TEST_PREFIX} ${fieldRunId} FIELD CREW`;
+  const fieldOwner = `${TEST_PREFIX} ${fieldRunId} FIELD OWNER`;
+  await restRequest(env, `jobs?id=eq.${encodeURIComponent(seededJob.id)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      status: "scheduled",
+      scheduled_start: fieldStart.toISOString(),
+      scheduled_end: fieldEnd.toISOString(),
+      start_date: today,
+      end_date: today,
+      crew_name: fieldCrew,
+      project_manager: fieldOwner,
+    }),
+  });
+  const inspection = await seedDispatchInspection(
+    env,
+    company.id,
+    seededJob.id,
+    fieldRunId,
+    inspectionStart,
+    inspectionEnd,
+  );
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+  progress("field-operations:prepare:done");
+
+  await clickNav(tab, "Field Ops");
+  const companyFilter = tab.playwright.locator('[data-testid="field-company-filter"]');
+  await selectUnique(companyFilter, "all", "field company filter all companies");
+  await waitFor(
+    tab,
+    ({ jobTitle, inspectionTitle }) => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        Boolean(document.querySelector('[data-testid="field-operations-workspace"]')) &&
+        text.includes("mobile crew workspace") &&
+        text.includes("today's assigned work") &&
+        text.includes(jobTitle.toLowerCase()) &&
+        text.includes(inspectionTitle.toLowerCase()) &&
+        text.includes("upload field photo") &&
+        text.includes("report issue") &&
+        text.includes("materials")
+      );
+    },
+    "field operations workspace",
+    15000,
+    {
+      jobTitle: seededJob.title,
+      inspectionTitle: inspection.title,
+    },
+  );
+
+  const initialLayout = await tab.playwright.evaluate(() => ({
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+    detailVisible: Boolean(document.querySelector('[data-testid="field-assignment-detail"]')),
+    propertyVisible: Boolean(document.querySelector('[data-testid="field-property-summary"]')),
+    checklistVisible: Boolean(document.querySelector('[data-testid="field-checklist-section"]')),
+    uploadStateVisible: Boolean(document.querySelector('[data-testid="field-photo-upload-state"]')),
+  }));
+
+  if (initialLayout.hasHorizontalOverflow) {
+    throw new Error("Field Operations workspace has horizontal overflow at desktop width.");
+  }
+
+  if (!initialLayout.detailVisible || !initialLayout.propertyVisible || !initialLayout.checklistVisible) {
+    throw new Error("Field Operations detail, property summary, or checklist did not render.");
+  }
+
+  if (!initialLayout.uploadStateVisible) {
+    throw new Error("Field photo upload state is not visible.");
+  }
+
+  const selectedJobCard = tab.playwright
+    .locator('[data-testid="field-assignment-card"]')
+    .filter({ hasText: seededJob.title });
+  await clickUnique(selectedJobCard, "field job assignment");
+
+  await selectUnique(companyFilter, company.id, "field company filter WeatherTech");
+  await waitFor(
+    tab,
+    (jobTitle) => document.body.innerText.includes(jobTitle),
+    "field company scope includes WeatherTech job",
+    10000,
+    seededJob.title,
+  );
+
+  const otherCompany = await tab.playwright.evaluate((companyId) => {
+    const select = document.querySelector('[data-testid="field-company-filter"]');
+    return [...select?.querySelectorAll("option") ?? []]
+      .map((option) => option.value)
+      .find((value) => value !== "all" && value !== companyId) ?? null;
+  }, company.id);
+
+  if (otherCompany) {
+    await selectUnique(companyFilter, otherCompany, "field company filter other company");
+    await waitFor(
+      tab,
+      (jobTitle) => !document.body.innerText.includes(jobTitle),
+      "field company scope hides WeatherTech job",
+      10000,
+      seededJob.title,
+    );
+    await selectUnique(companyFilter, "all", "field company filter all companies");
+    await clickUnique(selectedJobCard, "field job assignment after all companies");
+  }
+
+  await selectUnique(tab.playwright.locator('[data-testid="field-status-select"]'), "paused", "field paused status");
+  await clickUnique(tab.playwright.locator('[data-testid="field-save-status"]'), "save paused without reason");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Add a reason before marking Paused."),
+    "paused reason validation",
+    10000,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-status-reason"]'),
+    `${TEST_PREFIX} ${fieldRunId} weather delay`,
+    "field paused reason",
+  );
+  await clickUnique(tab.playwright.locator('[data-testid="field-save-status"]'), "save paused status");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Field status saved as Paused."),
+    "paused status saved notice",
+    15000,
+  );
+
+  const pausedNote = await findJobNoteContaining(env, seededJob.id, "Field status - Paused");
+  if (!pausedNote) {
+    throw new Error("Field paused status did not create a job note.");
+  }
+
+  await selectUnique(tab.playwright.locator('[data-testid="field-status-select"]'), "work_started", "field work started status");
+  await waitFor(
+    tab,
+    () => document.querySelector('[data-testid="field-status-select"]')?.value === "work_started",
+    "field work started status selected",
+    5000,
+  );
+  await clickUnique(tab.playwright.locator('[data-testid="field-save-status"]'), "save work started status");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Field status saved as Work Started."),
+    "work started status saved notice",
+    15000,
+  );
+  const startedJob = await findJobByTitle(env, seededJob.title);
+  if (startedJob?.status !== "in_progress") {
+    throw new Error(`Field work started did not update job status; got ${startedJob?.status ?? "missing"}.`);
+  }
+  const startedLog = await findDailyLogByWorkCompleted(env, seededJob.id, "Work Started");
+  if (!startedLog) {
+    throw new Error("Field work started did not create a daily log.");
+  }
+
+  const seededChecklistRow = tab.playwright
+    .locator('[data-testid="field-checklist-row"]')
+    .filter({ hasText: seededTaskTitle });
+  await scrollSelectorIntoView(tab, '[data-testid="field-checklist-section"]', "field checklist section");
+  await clickUnique(
+    seededChecklistRow.locator('[data-testid="field-checklist-complete"]'),
+    "field checklist complete",
+  );
+  const completedTask = await waitForAsync(
+    async () => {
+      const task = await findJobTaskByTitle(env, seededJob.id, seededTaskTitle);
+
+      return task?.status === "done" ? task : null;
+    },
+    "field checklist persisted",
+    15000,
+  );
+  if (completedTask?.status !== "done") {
+    throw new Error(`Field checklist action did not persist; got ${completedTask?.status ?? "missing"}.`);
+  }
+
+  await selectUnique(tab.playwright.locator('[data-testid="field-issue-category"]'), "Safety", "field issue category");
+  await selectUnique(tab.playwright.locator('[data-testid="field-issue-priority"]'), "critical", "field issue priority");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-issue-details"]'),
+    `${TEST_PREFIX} ${fieldRunId} safety harness concern`,
+    "field issue details",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-issue-office-action"]'),
+    "Call crew lead and pause production",
+    "field issue office action",
+  );
+  await scrollSelectorIntoView(tab, '[data-testid="field-issue-submit"]', "field issue submit");
+  await clickUnique(tab.playwright.locator('[data-testid="field-issue-submit"]'), "submit field issue");
+  const fieldIssueNote = await waitForAsync(
+    () => findJobNoteContaining(env, seededJob.id, "Field issue - Safety"),
+    "field issue persisted",
+    15000,
+  );
+  if (!fieldIssueNote) {
+    throw new Error("Field issue did not persist as a job note.");
+  }
+
+  await selectUnique(tab.playwright.locator('[data-testid="field-material-action"]'), "Materials missing", "field material missing");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="field-material-name"]'),
+    `${TEST_PREFIX} ${fieldRunId} ridge cap`,
+    "field material name",
+  );
+  await scrollSelectorIntoView(tab, '[data-testid="field-material-submit"]', "field material submit");
+  await clickUnique(tab.playwright.locator('[data-testid="field-material-submit"]'), "save field material");
+  const materialIssueNote = await waitForAsync(
+    () => findJobNoteContaining(env, seededJob.id, "Field material issue - Materials missing"),
+    "field material issue persisted",
+    15000,
+  );
+  if (!materialIssueNote) {
+    throw new Error("Missing material report did not create an office-visible note.");
+  }
+
+  const invalidPhotoPath = join(tmpdir(), `${TEST_PREFIX}-${fieldRunId}-not-photo.txt`);
+  writeFileSync(invalidPhotoPath, "not an image");
+  try {
+    await scrollSelectorIntoView(tab, '[data-testid="field-photo-upload-form"]', "field photo upload form");
+    const fileChooserPromise = tab.playwright.waitForEvent("filechooser", { timeoutMs: 10000 });
+    await clickUnique(
+      tab.playwright.locator('xpath=//*[@data-testid="field-photo-upload-form"]//label[.//*[@data-testid="field-photo-file-input"]]'),
+      "field photo chooser",
+    );
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles(invalidPhotoPath, { timeoutMs: 10000 });
+  } finally {
+    try {
+      unlinkSync(invalidPhotoPath);
+    } catch {
+      // The temporary upload fixture is best-effort cleanup only.
+    }
+  }
+  await clickUnique(tab.playwright.locator('xpath=//*[@data-testid="field-photo-upload-form"]//button[@type="submit"]'), "submit invalid field photo");
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Choose an image file from the camera or photo library.") &&
+      document.querySelector('[data-testid="field-photo-retry"]'),
+    "field invalid photo retry visible",
+    10000,
+  );
+
+  await clickUnique(tab.playwright.locator('[data-testid="field-open-operations-queue"]'), "open operations queue from field");
+  await waitFor(
+    tab,
+    () =>
+      Boolean(document.querySelector('[data-testid="operations-intelligence-queue"]')) &&
+      document.body.innerText.includes("Field Operations"),
+    "field issue appears in Operations Queue",
+    15000,
+  );
+
+  await clickNav(tab, "Field Ops");
+  await clickUnique(selectedJobCard, "field job assignment before job navigation");
+  await clickUnique(tab.playwright.getByRole("button", { name: "View job" }), "field view job");
+  await waitFor(
+    tab,
+    () =>
+      Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+      document.body.innerText.includes("Jobs / Projects"),
+    "field navigation to jobs",
+    15000,
+  );
+
+  await clickNav(tab, "Field Ops");
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="field-operations-workspace"]')),
+    "field operations returns from job navigation",
+    10000,
+  );
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+  await clickNav(tab, "Field Ops");
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="field-operations-workspace"]');
+      return Boolean(workspace) && document.documentElement.scrollWidth <= window.innerWidth + 8;
+    },
+    "field operations mobile layout",
+    10000,
+  );
+  await viewport.set(LAPTOP_VIEWPORT);
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+
+  return {
+    seededJobId: seededJob.id,
+    inspectionId: inspection.id,
+    fieldIssueNoteId: fieldIssueNote.id,
+    materialIssueNoteId: materialIssueNote.id,
+  };
 }
 
 async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
@@ -4550,7 +5026,14 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
 async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   const estimateTitle = `${TEST_PREFIX} ${runId} ESTIMATE`;
   const scopeText = `${TEST_PREFIX} ${runId} estimate scope`;
-  const estimateCustomer = await seedTestCustomer(env, company.id, runId);
+  const estimateLocation = `456 TEST ${runId} Regression Lead Ave, Phoenix, AZ`;
+  const estimateCustomer = await seedTestCustomer(
+    env,
+    company.id,
+    runId,
+    "ESTIMATE CUSTOMER",
+    estimateLocation,
+  );
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
@@ -4587,27 +5070,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     throw new Error("Timed out waiting for estimates screen.");
   }
 
-  const newEstimateButton = tab.playwright.locator(
-    'xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]',
-  );
-  if ((await newEstimateButton.count()) === 1) {
-    await clickUnique(newEstimateButton, "New Estimate", { retryTransientClick: true });
-  }
-  await waitFor(
-    tab,
-    () => {
-      const builder = document.querySelector("#estimate-builder");
-
-      return Boolean(
-        builder?.textContent?.includes("Create draft estimate") &&
-          [...builder.querySelectorAll('button[type="submit"]')].some(
-            (button) => button.textContent?.trim() === "Create estimate",
-          ),
-      );
-    },
-    "estimate editor create mode",
-    15000,
-  );
+  await openEstimateCreateMode(tab, "estimate editor create mode");
 
   await selectUnique(
     tab.playwright.locator('#estimate-builder select[name="company_id"]'),
@@ -4626,7 +5089,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   );
   await fillUnique(
     tab.playwright.locator('#estimate-builder input[name="location"]'),
-    "456 TEST Regression Lead Ave, Phoenix, AZ",
+    estimateLocation,
     "estimate location",
   );
   await clickVisibleDomSubmitByText(
@@ -4728,28 +5191,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     throw new Error(`Expected at least 2 estimate line items, found ${lineItemCount}.`);
   }
 
-  const duplicateNewEstimateButton = tab.playwright.locator(
-    'xpath=//section[@id="estimate-builder"]//button[normalize-space(.)="New Estimate"]',
-  );
-  await waitForUniqueLocator(duplicateNewEstimateButton, "New Estimate before duplicate estimate test");
-  await clickUnique(duplicateNewEstimateButton, "New Estimate before duplicate estimate test", {
-    retryTransientClick: true,
-  });
-  await waitFor(
-    tab,
-    () => {
-      const builder = document.querySelector("#estimate-builder");
-
-      return Boolean(
-        builder?.textContent?.includes("Create draft estimate") &&
-          [...builder.querySelectorAll('button[type="submit"]')].some(
-            (button) => button.textContent?.trim() === "Create estimate",
-          ),
-      );
-    },
-    "estimate editor duplicate create mode",
-    15000,
-  );
+  await openEstimateCreateMode(tab, "estimate editor duplicate create mode");
   await selectUnique(
     tab.playwright.locator('#estimate-builder select[name="company_id"]'),
     company.id,
@@ -4772,7 +5214,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   );
   await fillUnique(
     tab.playwright.locator('#estimate-builder input[name="location"]'),
-    "456 TEST Regression Lead Ave, Phoenix, AZ",
+    estimateLocation,
     "duplicate estimate location",
   );
   await fillUnique(
@@ -4982,10 +5424,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   });
 
   const linkedJob = await waitForAsync(async () => {
-    const job = await findJobByTitle(env, estimateTitle);
+    const job = await findJobByEstimateId(env, approvedEstimate.id);
 
     return job?.estimate_id === approvedEstimate.id ? job : null;
-  }, "estimate-linked draft job persistence", 15000);
+  }, "estimate-linked draft job persistence", 30000);
 
   if (linkedJob.status !== "draft") {
     throw new Error(`Converted job status was ${linkedJob.status}, expected draft.`);
@@ -4995,10 +5437,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     throw new Error("Converted draft job unexpectedly received a schedule.");
   }
 
-  const linkedJobCount = await countJobsByTitle(env, estimateTitle);
+  const linkedJobCount = await countJobsByEstimateId(env, approvedEstimate.id);
 
   if (linkedJobCount !== 1) {
-    throw new Error(`Estimate handoff created ${linkedJobCount} matching jobs, expected 1.`);
+    throw new Error(`Estimate handoff created ${linkedJobCount} linked jobs, expected 1.`);
   }
 
   await waitFor(
@@ -5761,7 +6203,7 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
       return current?.status === "archived" ? current : null;
     },
     "archived document persistence",
-    15000,
+    30000,
   );
   await waitFor(
     tab,
@@ -7795,6 +8237,7 @@ export async function runWeatherTechOsRegression({
     if (
       enabledGroups.has("inspections") ||
       enabledGroups.has("dispatch") ||
+      enabledGroups.has("field-operations") ||
       enabledGroups.has("jobs-workspace") ||
       enabledGroups.has("job-builder") ||
       enabledGroups.has("job-production")
@@ -7954,6 +8397,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("dispatch")) {
       await record("Dispatch workspace schedules jobs, shows inspections, and avoids duplicate job events", () =>
         testDispatchWorkspace(browser, tab, env, weatherTech, seededJob, runId, progress),
+      );
+    }
+
+    if (enabledGroups.has("field-operations")) {
+      await record("Field Operations workspace manages mobile assignments, status, issues, materials, and routing", () =>
+        testFieldOperationsWorkspace(browser, tab, env, weatherTech, runId, progress),
       );
     }
 

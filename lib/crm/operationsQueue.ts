@@ -17,6 +17,7 @@ import {
   getJobScheduledEnd,
   getJobScheduledStart,
 } from "./jobs";
+import { buildFieldOperationsSnapshot } from "./fieldOperations";
 import {
   buildSchedulingIntelligence,
   type SchedulingAlert,
@@ -63,6 +64,7 @@ export type OperationsQueueStatus =
 
 export type OperationsQueueTargetView =
   | "operations"
+  | "fieldOperations"
   | "inbox"
   | "leadIntake"
   | "salesPipeline"
@@ -208,6 +210,7 @@ const queueBuilders: OperationsQueueBuilder[] = [
   { id: "job-scheduling", build: buildJobSchedulingItems },
   { id: "dispatch-conflicts", build: buildDispatchConflictItems },
   { id: "scheduling-intelligence", build: buildSchedulingAlertItems },
+  { id: "field-operations", build: buildFieldOperationsItems },
   { id: "documents-and-permits", build: buildDocumentAndPermitItems },
   { id: "materials", build: buildMaterialItems },
   { id: "invoices", build: buildInvoiceItems },
@@ -616,6 +619,34 @@ function buildSchedulingAlertItems(snapshot: CrmSnapshot, context: QueueContext)
       workflow: mapSchedulingAlertWorkflow(alert),
       targetView: alert.targetView,
     }),
+  );
+}
+
+function buildFieldOperationsItems(snapshot: CrmSnapshot, context: QueueContext) {
+  return buildFieldOperationsSnapshot(snapshot, { now: context.now }).operationsQueueIssues.map(
+    (issue) =>
+      createQueueItem(context, {
+        id: `field-operations:${issue.id}`,
+        priority: issue.priority,
+        companyId: issue.companyId,
+        customerId: null,
+        customerName: issue.customerName,
+        propertyId: null,
+        propertyLabel: issue.propertyLabel,
+        category: issue.category === "Material issue" ? "material" : "office_task",
+        assignedOwner: "Office",
+        dueAt: issue.createdAt,
+        createdAt: issue.createdAt,
+        currentWorkflowStage: issue.category,
+        sourceModule: "Field Operations",
+        sourceRecordId: issue.sourceRecordId,
+        status: "today",
+        suggestedNextAction: issue.suggestedNextAction,
+        title: issue.title,
+        detail: issue.detail,
+        workflow: "production",
+        targetView: "fieldOperations",
+      }),
   );
 }
 
