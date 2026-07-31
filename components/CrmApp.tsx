@@ -251,6 +251,21 @@ import {
   calculateMaterialOrderItemTotal,
   calculateMaterialOrderTotal,
 } from "../lib/crm/operations";
+import {
+  buildFinancialOperationsSummary,
+  buildInvoiceDraftFromChangeOrder,
+  buildInvoiceDraftFromEstimate,
+  buildInvoiceDraftFromJob,
+  financialInvoiceWorkflowStatuses,
+  financialInvoiceWorkflowStatusLabel,
+  financialPaymentWorkflowLabels,
+  financialSyncStateLabels,
+  getFinancialInvoiceWorkflowTone,
+  getFinancialPaymentWorkflowStatus,
+  paymentScheduleTypeLabels,
+  type FinancialOperationsSummary,
+  type FinancialInvoiceWorkflowStatus,
+} from "../lib/crm/financialOperations";
 import type { OperationsQueueItem } from "../lib/crm/operationsQueue";
 import {
   colorSelectionStatusLabel,
@@ -30109,21 +30124,44 @@ function InvoicesView({
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(
     snapshot.invoices[0]?.id ?? "new",
   );
-  const [statusFilter, setStatusFilter] = useState<InvoiceStatus | "all">("all");
+  const [companyFilter, setCompanyFilter] = useState<CompanyScopeId>("all");
+  const [statusFilter, setStatusFilter] = useState<
+    FinancialInvoiceWorkflowStatus | "all"
+  >("all");
   const [search, setSearch] = useState("");
+  const [draftPreset, setDraftPreset] = useState<{
+    key: string;
+    label: string;
+    input: Partial<InvoiceInput>;
+    lineItems: InvoiceLineItemInput[];
+  } | null>(null);
+  const financialSummary = useMemo(
+    () =>
+      buildFinancialOperationsSummary(snapshot, {
+        companyId: companyFilter === "all" ? undefined : companyFilter,
+      }),
+    [companyFilter, snapshot],
+  );
   const selectedInvoice =
     snapshot.invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null;
-  const selectedLineItems = selectedInvoice
-    ? getInvoiceLineItems(snapshot, selectedInvoice.id)
-    : [];
-  const filteredInvoices = snapshot.invoices.filter((invoice) => {
+  const selectedSummary =
+    financialSummary.invoiceSummaries.find(
+      (summary) => summary.invoice.id === selectedInvoiceId,
+    ) ?? null;
+  const selectedLineItems =
+    selectedSummary?.lineItems ??
+    (selectedInvoice ? getInvoiceLineItems(snapshot, selectedInvoice.id) : []);
+  const filteredInvoices = financialSummary.invoiceSummaries.filter((summary) => {
+    const { invoice } = summary;
     const query = search.toLowerCase();
     const matchesSearch =
       !query ||
       invoice.invoice_number.toLowerCase().includes(query) ||
       invoice.title.toLowerCase().includes(query) ||
-      getInvoiceTargetName(snapshot, invoice).toLowerCase().includes(query);
-    const matchesStatus = statusFilter === "all" || invoice.status === statusFilter;
+      getInvoiceTargetName(snapshot, invoice).toLowerCase().includes(query) ||
+      (companyMap.get(invoice.company_id)?.name.toLowerCase().includes(query) ?? false);
+    const matchesStatus =
+      statusFilter === "all" || summary.workflowStatus === statusFilter;
     return matchesSearch && matchesStatus;
   });
   const {
@@ -30142,6 +30180,7 @@ function InvoicesView({
         ? await updateInvoice(client, selectedInvoice.id, input, lineItems)
         : await createInvoice(client, input, lineItems);
       setSelectedInvoiceId(savedInvoice.id);
+      setDraftPreset(null);
       await onReload();
       onNotice(selectedInvoice ? "Invoice updated." : "Invoice created.");
     } catch (currentError) {
@@ -30149,18 +30188,54 @@ function InvoicesView({
     }
   };
 
+  const handleRecordPayment = async (input: PaymentInput) => {
+    try {
+      await createPayment(client, input);
+      await onReload();
+      onNotice("Payment recorded.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to record payment."));
+    }
+  };
+
+  const beginInvoiceDraft = (
+    preset: ReturnType<typeof buildInvoiceDraftFromEstimate>,
+    key: string,
+  ) => {
+    setSelectedInvoiceId("new");
+    setDraftPreset({ key, ...preset });
+  };
+
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_520px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_540px]" data-testid="financial-operations-workspace">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-xl font-bold text-slate-950">Invoices</h2>
+              <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
+                Financial Operations
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950">
+                Invoices, payments, and billing follow-up
+              </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Bill deposits, progress payments, and final balances.
+                Track what was approved, billed, paid, overdue, and ready for QuickBooks later.
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
+              <select
+                value={companyFilter}
+                onChange={(event) => setCompanyFilter(event.target.value as CompanyScopeId)}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="financial-company-filter"
+              >
+                <option value="all">All permitted companies</option>
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
@@ -30168,17 +30243,19 @@ function InvoicesView({
                   onChange={(event) => setSearch(event.target.value)}
                   className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm sm:w-72"
                   placeholder="Search invoices"
+                  data-testid="financial-search"
                 />
               </div>
               <select
                 value={statusFilter}
                 onChange={(event) =>
-                  setStatusFilter(event.target.value as InvoiceStatus | "all")
+                  setStatusFilter(event.target.value as FinancialInvoiceWorkflowStatus | "all")
                 }
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                data-testid="financial-workflow-filter"
               >
-                <option value="all">All statuses</option>
-                {invoiceStatuses.map((status) => (
+                <option value="all">All workflow states</option>
+                {financialInvoiceWorkflowStatuses.map((status) => (
                   <option key={status.value} value={status.value}>
                     {status.label}
                   </option>
@@ -30196,34 +30273,105 @@ function InvoicesView({
           </div>
         </div>
 
+        <div className="grid gap-3 border-b border-slate-200 bg-slate-50/70 p-5 md:grid-cols-2 xl:grid-cols-4">
+          <FinancialMetricCard
+            label="Outstanding balance"
+            value={formatMoney(financialSummary.outstandingBalance)}
+            detail={`${financialSummary.overdueInvoices.length} overdue invoice${financialSummary.overdueInvoices.length === 1 ? "" : "s"}`}
+            tone={financialSummary.overdueInvoices.length ? "amber" : "blue"}
+          />
+          <FinancialMetricCard
+            label="Ready to bill"
+            value={financialSummary.approvedEstimatesAwaitingInvoice.length + financialSummary.jobsCompletedNotInvoiced.length}
+            detail="Approved estimates and completed jobs without invoices"
+            tone="blue"
+          />
+          <FinancialMetricCard
+            label="Deposits"
+            value={formatMoney(financialSummary.depositsReceived)}
+            detail={`${formatMoney(financialSummary.depositsRequired)} required from deposit invoices`}
+            tone={financialSummary.depositsRequired > financialSummary.depositsReceived ? "amber" : "green"}
+          />
+          <FinancialMetricCard
+            label="QuickBooks sync"
+            value={financialSyncStateLabels[financialSummary.quickBooksState]}
+            detail="Provider-independent foundation only; no live sync is active"
+            tone={financialSummary.quickBooksState === "error" ? "amber" : "blue"}
+          />
+        </div>
+
+        <div className="grid gap-5 border-b border-slate-200 p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)]">
+          <FinancialAttentionPanel
+            items={financialSummary.attentionItems}
+            companyMap={companyMap}
+            onSelect={(item) => {
+              if (item.source === "invoice") {
+                setSelectedInvoiceId(item.sourceId);
+              } else if (item.source === "estimate") {
+                const estimate = snapshot.estimates.find((record) => record.id === item.sourceId);
+                if (estimate) {
+                  beginInvoiceDraft(
+                    buildInvoiceDraftFromEstimate(snapshot, estimate),
+                    `estimate:${estimate.id}`,
+                  );
+                }
+              } else if (item.source === "job") {
+                const job = snapshot.jobs.find((record) => record.id === item.sourceId);
+                if (job) {
+                  beginInvoiceDraft(
+                    buildInvoiceDraftFromJob(snapshot, job),
+                    `job:${job.id}`,
+                  );
+                }
+              } else if (item.source === "change_order") {
+                const changeOrder = snapshot.changeOrders.find(
+                  (record) => record.id === item.sourceId,
+                );
+                if (changeOrder) {
+                  beginInvoiceDraft(
+                    buildInvoiceDraftFromChangeOrder(snapshot, changeOrder),
+                    `change-order:${changeOrder.id}`,
+                  );
+                }
+              }
+            }}
+          />
+          <FinancialSourcePanel
+            summary={financialSummary}
+            snapshot={snapshot}
+            onPreset={(preset, key) => beginInvoiceDraft(preset, key)}
+          />
+        </div>
+
         <div className="divide-y divide-slate-100">
-          {pagedInvoices.map((invoice) => (
+          {pagedInvoices.map((summary) => (
             <button
-              key={invoice.id}
+              key={summary.invoice.id}
               type="button"
-              onClick={() => setSelectedInvoiceId(invoice.id)}
+              onClick={() => setSelectedInvoiceId(summary.invoice.id)}
               className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[130px_1fr_120px_130px] xl:items-center ${
-                selectedInvoice?.id === invoice.id ? "bg-sky-50" : "bg-white"
+                selectedInvoice?.id === summary.invoice.id ? "bg-sky-50" : "bg-white"
               }`}
+              data-testid="financial-invoice-row"
             >
-              <span className="font-semibold text-slate-950">{invoice.invoice_number}</span>
+              <span className="font-semibold text-slate-950">{summary.invoice.invoice_number}</span>
               <div>
-                <p className="font-semibold text-slate-950">{invoice.title}</p>
+                <p className="font-semibold text-slate-950">{summary.invoice.title}</p>
                 <p className="mt-1 text-sm text-slate-500">
-                  {getInvoiceTargetName(snapshot, invoice)}
+                  {getInvoiceTargetName(snapshot, summary.invoice)}
                 </p>
               </div>
               <Badge
-                label={invoiceStatusLabel(invoice.status)}
-                tone={invoice.status === "paid" ? "green" : "blue"}
+                label={financialInvoiceWorkflowStatusLabel(summary.workflowStatus)}
+                tone={getFinancialInvoiceWorkflowTone(summary.workflowStatus)}
               />
               <span className="text-sm font-semibold text-slate-950">
-                {formatMoney(invoice.balance_due)}
+                {formatMoney(summary.remainingBalance)}
               </span>
             </button>
           ))}
           {!filteredInvoices.length ? (
-            <EmptyState label="No invoices match this view." />
+            <EmptyState label="No invoices match this financial view." />
           ) : null}
         </div>
         <PaginationControls
@@ -30240,13 +30388,20 @@ function InvoicesView({
             {selectedInvoice ? "Edit invoice" : "Create invoice"}
           </h3>
           <InvoiceEditor
-            key={selectedInvoice?.id ?? "new-invoice"}
+            key={selectedInvoice?.id ?? draftPreset?.key ?? "new-invoice"}
             invoice={selectedInvoice}
             lineItems={selectedLineItems}
             snapshot={snapshot}
+            draftPreset={draftPreset}
             onSave={handleSaveInvoice}
           />
         </section>
+        <InvoicePaymentsPanel
+          invoice={selectedInvoice}
+          summary={selectedSummary}
+          snapshot={snapshot}
+          onRecordPayment={handleRecordPayment}
+        />
         <InvoicePreview
           invoice={selectedInvoice}
           lineItems={selectedLineItems}
@@ -30258,19 +30413,223 @@ function InvoicesView({
   );
 }
 
+function FinancialMetricCard({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  tone: "blue" | "green" | "amber";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-950"
+        : "border-sky-200 bg-sky-50 text-sky-950";
+
+  return (
+    <div className={`rounded-lg border p-4 ${toneClass}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide opacity-75">{label}</p>
+      <p className="mt-2 text-2xl font-bold">{value}</p>
+      <p className="mt-1 text-sm opacity-80">{detail}</p>
+    </div>
+  );
+}
+
+function FinancialAttentionPanel({
+  items,
+  companyMap,
+  onSelect,
+}: {
+  items: ReturnType<typeof buildFinancialOperationsSummary>["attentionItems"];
+  companyMap: Map<string, CompanyRecord>;
+  onSelect: (item: ReturnType<typeof buildFinancialOperationsSummary>["attentionItems"][number]) => void;
+}) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-4"
+      data-testid="financial-attention-list"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-950">Office attention</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Billing work sorted by urgency and value.
+          </p>
+        </div>
+        <Badge label={items.length ? `${items.length} open` : "Clear"} tone={items.length ? "amber" : "green"} />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {items.slice(0, 6).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelect(item)}
+            className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-sky-200 hover:bg-sky-50"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">{item.title}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
+              </div>
+              <span className="text-sm font-bold text-slate-950">
+                {item.amount ? formatMoney(item.amount) : ""}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+              <span>{companyMap.get(item.companyId)?.short_name ?? companyMap.get(item.companyId)?.name ?? "Company"}</span>
+              <span>·</span>
+              <span>{item.suggestedAction}</span>
+            </div>
+          </button>
+        ))}
+        {!items.length ? (
+          <EmptyState label="No financial follow-up needs office attention." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function FinancialSourcePanel({
+  summary,
+  snapshot,
+  onPreset,
+}: {
+  summary: FinancialOperationsSummary;
+  snapshot: CrmSnapshot;
+  onPreset: (
+    preset: ReturnType<typeof buildInvoiceDraftFromEstimate>,
+    key: string,
+  ) => void;
+}) {
+  const approvedEstimate = summary.approvedEstimatesAwaitingInvoice[0] ?? null;
+  const completedJob = summary.jobsCompletedNotInvoiced[0] ?? null;
+  const approvedChangeOrder = summary.changeOrdersAwaitingBilling[0] ?? null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <div>
+        <p className="text-sm font-bold text-slate-950">Create invoice from approved work</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Reuses existing estimates, jobs, and change orders. Totals remain reviewable before saving.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-2">
+        <FinancialSourceButton
+          label="Approved estimate"
+          detail={
+            approvedEstimate
+              ? `${approvedEstimate.title} · ${formatMoney(approvedEstimate.total)}`
+              : "No approved estimate awaiting invoice."
+          }
+          disabled={!approvedEstimate}
+          testId="financial-create-from-estimate"
+          onClick={() => {
+            if (approvedEstimate) {
+              onPreset(
+                buildInvoiceDraftFromEstimate(snapshot, approvedEstimate),
+                `estimate:${approvedEstimate.id}`,
+              );
+            }
+          }}
+        />
+        <FinancialSourceButton
+          label="Completed job"
+          detail={
+            completedJob
+              ? `${completedJob.title} · ${formatMoney(completedJob.total)}`
+              : "No completed job awaiting final invoice."
+          }
+          disabled={!completedJob}
+          testId="financial-create-from-job"
+          onClick={() => {
+            if (completedJob) {
+              onPreset(
+                buildInvoiceDraftFromJob(snapshot, completedJob),
+                `job:${completedJob.id}`,
+              );
+            }
+          }}
+        />
+        <FinancialSourceButton
+          label="Approved change order"
+          detail={
+            approvedChangeOrder
+              ? `${approvedChangeOrder.title} · ${formatMoney(approvedChangeOrder.total)}`
+              : "No approved change order awaiting billing."
+          }
+          disabled={!approvedChangeOrder}
+          testId="financial-create-from-change-order"
+          onClick={() => {
+            if (approvedChangeOrder) {
+              onPreset(
+                buildInvoiceDraftFromChangeOrder(snapshot, approvedChangeOrder),
+                `change-order:${approvedChangeOrder.id}`,
+              );
+            }
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
+function FinancialSourceButton({
+  label,
+  detail,
+  disabled,
+  testId,
+  onClick,
+}: {
+  label: string;
+  detail: string;
+  disabled: boolean;
+  testId: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-55"
+    >
+      <span>
+        <span className="block text-sm font-bold text-slate-950">{label}</span>
+        <span className="mt-1 block text-xs text-slate-500">{detail}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 text-slate-400" />
+    </button>
+  );
+}
+
 function InvoiceEditor({
   invoice,
   lineItems,
   snapshot,
+  draftPreset,
   onSave,
 }: {
   invoice: InvoiceRecord | null;
   lineItems: InvoiceLineItemRecord[];
   snapshot: CrmSnapshot;
+  draftPreset?: {
+    input: Partial<InvoiceInput>;
+    lineItems: InvoiceLineItemInput[];
+  } | null;
   onSave: (input: InvoiceInput, lineItems: InvoiceLineItemInput[]) => Promise<void>;
 }) {
   const [defaultInvoiceNumber] = useState(
-    () => invoice?.invoice_number ?? `INV-${String(snapshot.invoices.length + 1001)}`,
+    () =>
+      invoice?.invoice_number ??
+      draftPreset?.input.invoice_number ??
+      `INV-${String(snapshot.invoices.length + 1001)}`,
   );
   const [draftLineItems, setDraftLineItems] = useState<InvoiceLineItemInput[]>(
     lineItems.length
@@ -30282,6 +30641,8 @@ function InvoiceEditor({
           taxable: item.taxable,
           sort_order: item.sort_order,
         }))
+      : draftPreset?.lineItems.length
+        ? draftPreset.lineItems
       : [
           {
             description: "Project billing item",
@@ -30293,9 +30654,9 @@ function InvoiceEditor({
         ],
   );
   const [controls, setControls] = useState({
-    tax_rate: invoice?.tax_rate ?? 0,
-    discount_total: invoice?.discount_total ?? 0,
-    amount_paid: invoice?.amount_paid ?? 0,
+    tax_rate: invoice?.tax_rate ?? draftPreset?.input.tax_rate ?? 0,
+    discount_total: invoice?.discount_total ?? draftPreset?.input.discount_total ?? 0,
+    amount_paid: invoice?.amount_paid ?? draftPreset?.input.amount_paid ?? 0,
   });
   const [isSaving, setIsSaving] = useState(false);
   const totals = calculateInvoiceTotals(controls, draftLineItems);
@@ -30319,10 +30680,15 @@ function InvoiceEditor({
       setIsSaving(true);
       await onSave(
         {
-          company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
+          company_id: getFormString(
+            formData,
+            "company_id",
+            draftPreset?.input.company_id ?? snapshot.companies[0]?.id,
+          ),
           customer_id: getOptionalRelation(formData, "customer_id"),
           job_id: getOptionalRelation(formData, "job_id"),
           estimate_id: getOptionalRelation(formData, "estimate_id"),
+          property_id: getOptionalRelation(formData, "property_id"),
           invoice_number: getFormString(
             formData,
             "invoice_number",
@@ -30349,7 +30715,9 @@ function InvoiceEditor({
       <div className="grid gap-3 sm:grid-cols-2">
         <select
           name="company_id"
-          defaultValue={invoice?.company_id ?? snapshot.companies[0]?.id}
+          defaultValue={
+            invoice?.company_id ?? draftPreset?.input.company_id ?? snapshot.companies[0]?.id
+          }
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           {snapshot.companies.map((company) => (
@@ -30360,7 +30728,7 @@ function InvoiceEditor({
         </select>
         <select
           name="status"
-          defaultValue={invoice?.status ?? "draft"}
+          defaultValue={invoice?.status ?? draftPreset?.input.status ?? "draft"}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           {invoiceStatuses.map((status) => (
@@ -30381,15 +30749,15 @@ function InvoiceEditor({
         <input
           required
           name="title"
-          defaultValue={invoice?.title ?? ""}
+          defaultValue={invoice?.title ?? draftPreset?.input.title ?? ""}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           placeholder="Invoice title"
         />
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <select
           name="customer_id"
-          defaultValue={invoice?.customer_id ?? "none"}
+          defaultValue={invoice?.customer_id ?? draftPreset?.input.customer_id ?? "none"}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No customer</option>
@@ -30400,8 +30768,20 @@ function InvoiceEditor({
           ))}
         </select>
         <select
+          name="property_id"
+          defaultValue={invoice?.property_id ?? draftPreset?.input.property_id ?? "none"}
+          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+        >
+          <option value="none">No property</option>
+          {snapshot.properties.map((property) => (
+            <option key={property.id} value={property.id}>
+              {property.portfolio_label || property.address}
+            </option>
+          ))}
+        </select>
+        <select
           name="job_id"
-          defaultValue={invoice?.job_id ?? "none"}
+          defaultValue={invoice?.job_id ?? draftPreset?.input.job_id ?? "none"}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No job</option>
@@ -30413,7 +30793,7 @@ function InvoiceEditor({
         </select>
         <select
           name="estimate_id"
-          defaultValue={invoice?.estimate_id ?? "none"}
+          defaultValue={invoice?.estimate_id ?? draftPreset?.input.estimate_id ?? "none"}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="none">No estimate</option>
@@ -30430,7 +30810,7 @@ function InvoiceEditor({
           <input
             name="issue_date"
             type="date"
-            defaultValue={invoice?.issue_date ?? todayIsoDate()}
+            defaultValue={invoice?.issue_date ?? draftPreset?.input.issue_date ?? todayIsoDate()}
             className="rounded-md border border-slate-300 px-3 py-2"
           />
         </label>
@@ -30439,7 +30819,7 @@ function InvoiceEditor({
           <input
             name="due_date"
             type="date"
-            defaultValue={invoice?.due_date ?? addDaysIsoDate(7)}
+            defaultValue={invoice?.due_date ?? draftPreset?.input.due_date ?? addDaysIsoDate(7)}
             className="rounded-md border border-slate-300 px-3 py-2"
           />
         </label>
@@ -30557,19 +30937,203 @@ function InvoiceEditor({
       </div>
       <textarea
         name="notes"
-        defaultValue={invoice?.notes ?? ""}
+        defaultValue={invoice?.notes ?? draftPreset?.input.notes ?? ""}
         className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm"
         placeholder="Invoice notes"
       />
       <button
         type="submit"
         disabled={isSaving}
+        data-testid="financial-save-invoice"
         className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         <ReceiptText className="h-4 w-4" />
         {isSaving ? "Saving" : invoice ? "Save invoice" : "Create invoice"}
       </button>
     </form>
+  );
+}
+
+function InvoicePaymentsPanel({
+  invoice,
+  summary,
+  snapshot,
+  onRecordPayment,
+}: {
+  invoice: InvoiceRecord | null;
+  summary: FinancialOperationsSummary["invoiceSummaries"][number] | null;
+  snapshot: CrmSnapshot;
+  onRecordPayment: (input: PaymentInput) => Promise<void>;
+}) {
+  const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  if (!invoice || !summary) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-950">Payments</h3>
+        <EmptyState label="Select or save an invoice to record payments." />
+      </section>
+    );
+  }
+
+  const customer = invoice.customer_id
+    ? snapshot.customers.find((item) => item.id === invoice.customer_id) ?? null
+    : null;
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const amount = getFormNumber(formData, "amount");
+
+    if (amount > invoice.balance_due) {
+      setFormError("Payment exceeds the remaining invoice balance.");
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      setFormError(null);
+      await onRecordPayment({
+        company_id: invoice.company_id,
+        customer_id: invoice.customer_id,
+        invoice_id: invoice.id,
+        property_id: invoice.property_id ?? null,
+        amount,
+        method: getFormString(formData, "method", "Check"),
+        status: "posted",
+        paid_at: getFormString(formData, "paid_at", todayIsoDate()),
+        reference: getOptionalFormString(formData, "reference"),
+        notes: getOptionalFormString(formData, "notes"),
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Payments</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Record received payments without silently exceeding the balance.
+          </p>
+        </div>
+        <Badge
+          label={financialInvoiceWorkflowStatusLabel(summary.workflowStatus)}
+          tone={getFinancialInvoiceWorkflowTone(summary.workflowStatus)}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+        <ProfileStat label="Total" value={formatMoney(invoice.total)} />
+        <ProfileStat label="Received" value={formatMoney(summary.paymentTotal)} />
+        <ProfileStat label="Balance" value={formatMoney(summary.remainingBalance)} />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {summary.payments.map((payment) => (
+          <div
+            key={payment.id}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold text-slate-950">
+                {formatMoney(payment.amount)}
+              </span>
+              <Badge
+                label={financialPaymentWorkflowLabels[getFinancialPaymentWorkflowStatus(payment)]}
+                tone={getFinancialPaymentWorkflowStatus(payment) === "completed" ? "green" : "amber"}
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              {formatDate(payment.paid_at ?? payment.created_at)} · {payment.method}
+              {payment.reference ? ` · ${payment.reference}` : ""}
+            </p>
+          </div>
+        ))}
+        {!summary.payments.length ? (
+          <EmptyState label="No payments recorded for this invoice." />
+        ) : null}
+      </div>
+      {invoice.balance_due > 0 ? (
+        <form
+          onSubmit={handleSubmit}
+          className="mt-4 grid gap-3 rounded-lg border border-slate-200 p-3"
+          data-testid="financial-payment-form"
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Amount
+              <input
+                required
+                name="amount"
+                type="number"
+                min="0.01"
+                step="0.01"
+                defaultValue={invoice.balance_due}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Method
+              <select
+                name="method"
+                defaultValue="Check"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+              >
+                <option>Cash</option>
+                <option>Check</option>
+                <option>Credit card</option>
+                <option>ACH</option>
+                <option>Financing</option>
+                <option>Other</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Payment date
+              <input
+                name="paid_at"
+                type="date"
+                defaultValue={todayIsoDate()}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+              />
+            </label>
+          </div>
+          <input
+            name="reference"
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Reference number"
+          />
+          <textarea
+            name="notes"
+            className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder={`Office note for ${customer?.display_name ?? "this customer"}`}
+          />
+          {formError ? (
+            <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              {formError}
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            disabled={isSaving}
+            data-testid="financial-record-payment"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+          >
+            <DollarSign className="h-4 w-4" />
+            {isSaving ? "Recording" : "Record payment"}
+          </button>
+        </form>
+      ) : (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
+          This invoice is paid in full.
+        </div>
+      )}
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+        Deposit/progress billing: {paymentScheduleTypeLabels[summary.progressBillingType]}. QuickBooks status:{" "}
+        {financialSyncStateLabels[summary.syncState]}.
+      </div>
+    </section>
   );
 }
 

@@ -22,6 +22,10 @@ import {
   buildSchedulingIntelligence,
   type SchedulingAlert,
 } from "./schedulingIntelligence";
+import {
+  buildFinancialOperationsSummary,
+  financialInvoiceWorkflowStatusLabel,
+} from "./financialOperations";
 
 export type OperationsQueuePriority = "critical" | "high" | "medium" | "low";
 
@@ -867,76 +871,112 @@ function buildMaterialItems(snapshot: CrmSnapshot, context: QueueContext) {
 }
 
 function buildInvoiceItems(snapshot: CrmSnapshot, context: QueueContext) {
-  const draftInvoices = snapshot.invoices
-    .filter((invoice) => invoice.status === "draft")
-    .map((invoice) =>
-      createInvoiceQueueItem(context, invoice, {
-        id: `invoice-not-sent:${invoice.id}`,
-        title: "Invoice not sent",
-        priority: "medium",
-        currentWorkflowStage: "Draft invoice",
-        suggestedNextAction: "Send invoice or archive if no longer needed",
-        dueAt: invoice.due_date ?? invoice.updated_at,
-      }),
-    );
-
-  const overdueInvoices = snapshot.invoices
-    .filter(
-      (invoice) =>
-        invoice.status === "overdue" ||
-        (invoice.balance_due > 0 &&
-          invoice.due_date !== null &&
-          invoice.due_date < context.today &&
-          invoice.status !== "paid" &&
-          invoice.status !== "void"),
+  const financial = buildFinancialOperationsSummary(snapshot, { now: context.now });
+  const invoiceItems = financial.invoiceSummaries
+    .filter((summary) =>
+      ["draft", "ready_to_send", "partially_paid", "overdue"].includes(
+        summary.workflowStatus,
+      ),
     )
-    .map((invoice) =>
-      createInvoiceQueueItem(context, invoice, {
-        id: `invoice-overdue:${invoice.id}`,
-        title: "Invoice overdue",
-        priority: "critical",
-        currentWorkflowStage: "Overdue balance",
-        suggestedNextAction: "Follow up with customer or record payment",
-        dueAt: invoice.due_date ?? invoice.updated_at,
-      }),
-    );
+    .map((summary) => {
+      const isOverdue = summary.workflowStatus === "overdue";
+      const isPartial = summary.workflowStatus === "partially_paid";
 
-  const completedJobsWithoutInvoice = snapshot.jobs
-    .filter(
-      (job) =>
-        (job.status === "completed" || job.status === "closed") &&
-        !snapshot.invoices.some((invoice) => invoice.job_id === job.id),
-    )
-    .map((job) =>
-      createJobQueueItem(context, snapshot, job, {
-        id: `job-invoice:${job.id}`,
-        title: "Invoice not sent",
-        priority: "high",
-        category: "invoice",
-        currentWorkflowStage: "Job complete",
-        suggestedNextAction: "Create final invoice from completed job",
-        dueAt: job.updated_at,
-        workflow: "invoice",
-        targetView: "invoices",
-      }),
-    );
+      return createInvoiceQueueItem(context, summary.invoice, {
+        id: `invoice-${summary.workflowStatus}:${summary.invoice.id}`,
+        title: isOverdue
+          ? "Invoice overdue"
+          : isPartial
+            ? "Invoice partially paid"
+            : "Invoice ready for office review",
+        priority: isOverdue ? "critical" : isPartial ? "high" : "medium",
+        currentWorkflowStage: financialInvoiceWorkflowStatusLabel(summary.workflowStatus),
+        suggestedNextAction: isOverdue
+          ? "Follow up with customer or record payment"
+          : isPartial
+            ? "Confirm the next progress or final payment"
+            : "Review, send, or archive the invoice",
+        dueAt: summary.invoice.due_date ?? summary.invoice.updated_at,
+      });
+    });
 
-  return [...overdueInvoices, ...draftInvoices, ...completedJobsWithoutInvoice];
+  const approvedEstimateItems = financial.approvedEstimatesAwaitingInvoice.map((estimate) =>
+    createQueueItem(context, {
+      id: `estimate-invoice:${estimate.id}`,
+      priority: "high",
+      companyId: estimate.company_id,
+      customerId: estimate.customer_id,
+      customerName: getEstimateCustomerName(context, estimate),
+      propertyId: estimate.property_id ?? null,
+      propertyLabel: getRecordPropertyLabel(
+        context,
+        estimate.property_id ?? null,
+        estimate.customer_id,
+        estimate.location,
+      ),
+      category: "invoice",
+      assignedOwner: "Office",
+      dueAt: estimate.updated_at,
+      createdAt: estimate.created_at,
+      currentWorkflowStage: "Approved estimate",
+      sourceModule: "Estimates",
+      sourceRecordId: estimate.id,
+      suggestedNextAction: "Create deposit, progress, or final invoice",
+      title: "Approved estimate not invoiced",
+      detail: `${estimate.title} is approved for ${estimate.total}.`,
+      workflow: "invoice",
+      targetView: "invoices",
+    }),
+  );
+
+  const completedJobsWithoutInvoice = financial.jobsCompletedNotInvoiced.map((job) =>
+    createJobQueueItem(context, snapshot, job, {
+      id: `job-invoice:${job.id}`,
+      title: "Invoice not sent",
+      priority: "high",
+      category: "invoice",
+      currentWorkflowStage: "Job complete",
+      suggestedNextAction: "Create final invoice from completed job",
+      dueAt: job.updated_at,
+      workflow: "invoice",
+      targetView: "invoices",
+    }),
+  );
+
+  return [...invoiceItems, ...approvedEstimateItems, ...completedJobsWithoutInvoice];
 }
 
 function buildChangeOrderItems(snapshot: CrmSnapshot, context: QueueContext) {
+  const financial = buildFinancialOperationsSummary(snapshot, { now: context.now });
+  const approvedAwaitingBillingIds = new Set(
+    financial.changeOrdersAwaitingBilling.map((changeOrder) => changeOrder.id),
+  );
+
   return snapshot.changeOrders
-    .filter((changeOrder) => changeOrder.status === "draft" || changeOrder.status === "sent")
+    .filter(
+      (changeOrder) =>
+        changeOrder.status === "draft" ||
+        changeOrder.status === "sent" ||
+        approvedAwaitingBillingIds.has(changeOrder.id),
+    )
     .map((changeOrder) =>
       createChangeOrderQueueItem(context, snapshot, changeOrder, {
         id: `change-order:${changeOrder.id}`,
-        title: "Change order pending",
-        priority: changeOrder.status === "sent" ? "high" : "medium",
+        title:
+          changeOrder.status === "approved"
+            ? "Change order awaiting billing"
+            : "Change order pending",
+        priority:
+          changeOrder.status === "approved" || changeOrder.status === "sent"
+            ? "high"
+            : "medium",
         currentWorkflowStage: changeOrderStatusLabel(changeOrder.status),
         suggestedNextAction:
-          changeOrder.status === "sent"
-            ? "Confirm customer decision on change order"
-            : "Finish and send change order",
+          changeOrder.status === "approved"
+            ? "Add approved change order to the next invoice"
+            : changeOrder.status === "sent"
+              ? "Confirm customer decision on change order"
+              : "Finish and send change order",
         dueAt: changeOrder.requested_date,
       }),
     );

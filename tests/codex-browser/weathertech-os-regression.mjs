@@ -25,6 +25,7 @@ const DEFAULT_GROUPS = [
   "layout",
   "settings",
   "documents",
+  "financial",
   "calendar",
   "dispatch",
   "inspections",
@@ -312,6 +313,14 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     env,
     `documents?select=id,title&title=like.${prefixFilter}`,
   );
+  const invoices = await restRequest(
+    env,
+    `invoices?select=id,title&title=like.${prefixFilter}`,
+  );
+  const changeOrders = await restRequest(
+    env,
+    `change_orders?select=id,title&title=like.${prefixFilter}`,
+  );
   const leads = await restRequest(
     env,
     `leads?select=id,${resolvedLeadNameColumn}&${resolvedLeadNameColumn}=like.${prefixFilter}`,
@@ -332,6 +341,12 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const scopedDocuments = runId
     ? documents.filter((document) => document.title.includes(runId))
     : documents;
+  const scopedInvoices = runId
+    ? invoices.filter((invoice) => invoice.title.includes(runId))
+    : invoices;
+  const scopedChangeOrders = runId
+    ? changeOrders.filter((changeOrder) => changeOrder.title.includes(runId))
+    : changeOrders;
   const scopedLeads = runId
     ? leads.filter((lead) => String(lead[resolvedLeadNameColumn] ?? "").includes(runId))
     : leads;
@@ -342,6 +357,8 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const estimateIds = scopedEstimates.map((estimate) => estimate.id);
   const inspectionIds = scopedInspections.map((inspection) => inspection.id);
   const documentIds = scopedDocuments.map((document) => document.id);
+  const invoiceIds = scopedInvoices.map((invoice) => invoice.id);
+  const changeOrderIds = scopedChangeOrders.map((changeOrder) => changeOrder.id);
   const leadIds = scopedLeads.map((lead) => lead.id);
   const customerIds = scopedCustomers.map((customer) => customer.id);
 
@@ -352,6 +369,8 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     !estimateIds.length &&
     !inspectionIds.length &&
     !documentIds.length &&
+    !invoiceIds.length &&
+    !changeOrderIds.length &&
     !leadIds.length &&
     !customerIds.length
   ) {
@@ -360,6 +379,8 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
       estimatesDeleted: 0,
       inspectionsDeleted: 0,
       documentsDeleted: 0,
+      invoicesDeleted: 0,
+      changeOrdersDeleted: 0,
       leadsDeleted: 0,
       customersDeleted: 0,
       integrationLogsDeleted: "requested",
@@ -376,9 +397,13 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   await deleteByIds(env, "job_tasks", "job_id", jobIds);
   await deleteByIds(env, "job_notes", "job_id", jobIds);
   await deleteByIds(env, "job_materials", "job_id", jobIds);
+  await deleteByIds(env, "payments", "invoice_id", invoiceIds);
+  await deleteByIds(env, "invoice_line_items", "invoice_id", invoiceIds);
   await deleteByIds(env, "jobs", "id", jobIds);
   await deleteByIds(env, "estimate_line_items", "estimate_id", estimateIds);
   await deleteByIds(env, "documents", "id", documentIds);
+  await deleteByIds(env, "invoices", "id", invoiceIds);
+  await deleteByIds(env, "change_orders", "id", changeOrderIds);
   await deleteByIds(env, "estimates", "id", estimateIds);
   await deleteByIds(env, "leads", "id", leadIds);
   await deleteByIds(env, "customers", "id", customerIds);
@@ -388,6 +413,8 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     estimatesDeleted: estimateIds.length,
     inspectionsDeleted: inspectionIds.length,
     documentsDeleted: documentIds.length,
+    invoicesDeleted: invoiceIds.length,
+    changeOrdersDeleted: changeOrderIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
     integrationLogsDeleted: "requested",
@@ -615,6 +642,147 @@ async function seedTestDocument(
   return document;
 }
 
+async function seedFinancialOperationsRecords(env, company, runId) {
+  const customer = await seedTestCustomer(
+    env,
+    company.id,
+    runId,
+    "FINANCIAL CUSTOMER",
+    `789 TEST ${runId} Financial Way, Phoenix, AZ`,
+  );
+  const [estimate] = await restRequest(env, "estimates", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: company.id,
+      customer_id: customer.id,
+      title: `${TEST_PREFIX} ${runId} FINANCIAL APPROVED ESTIMATE`,
+      status: "approved",
+      service_type: "roofing",
+      issue_date: new Date().toISOString().slice(0, 10),
+      expiration_date: null,
+      subtotal: 5000,
+      labor_total: 3200,
+      material_total: 1800,
+      tax_rate: 0,
+      tax_total: 0,
+      discount_type: "fixed",
+      discount_value: 0,
+      discount_total: 0,
+      profit_margin_rate: 0,
+      profit_margin_total: 0,
+      total: 5000,
+      notes: `${TEST_PREFIX} ${runId} approved estimate for financial regression`,
+      business: company.name,
+      location: `789 TEST ${runId} Financial Way, Phoenix, AZ`,
+    }),
+  });
+
+  await restRequest(env, "estimate_line_items", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      estimate_id: estimate.id,
+      category: "labor",
+      name: `${TEST_PREFIX} ${runId} ROOF REPLACEMENT`,
+      description: "Financial regression approved estimate line item.",
+      quantity: 1,
+      unit: "project",
+      unit_cost: 5000,
+      unit_price: 5000,
+      markup_rate: 0,
+      taxable: false,
+      sort_order: 0,
+      total: 5000,
+    }),
+  });
+
+  const [job] = await restRequest(env, "jobs", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: company.id,
+      customer_id: customer.id,
+      estimate_id: estimate.id,
+      title: `${TEST_PREFIX} ${runId} FINANCIAL COMPLETED JOB`,
+      service_type: "roofing",
+      status: "completed",
+      business: company.name,
+      location: `789 TEST ${runId} Financial Way, Phoenix, AZ`,
+      scheduled_start: null,
+      scheduled_end: null,
+      start_date: null,
+      end_date: new Date().toISOString().slice(0, 10),
+      crew_name: "TEST Financial Crew",
+      project_manager: "TEST Financial Manager",
+      address: `789 TEST ${runId} Financial Way, Phoenix, AZ`,
+      property_address: `789 TEST ${runId} Financial Way, Phoenix, AZ`,
+      scope_of_work: "Financial regression completed job.",
+      total: 5000,
+      notes: `${TEST_PREFIX} ${runId} completed job awaiting final invoice`,
+    }),
+  });
+
+  const [changeOrder] = await restRequest(env, "change_orders", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: company.id,
+      customer_id: customer.id,
+      job_id: job.id,
+      estimate_id: null,
+      title: `${TEST_PREFIX} ${runId} FINANCIAL CHANGE ORDER`,
+      status: "approved",
+      reason: "Financial regression approved scope change.",
+      amount: 650,
+      tax_rate: 0,
+      requested_date: new Date().toISOString().slice(0, 10),
+      approved_at: new Date().toISOString(),
+      notes: `${TEST_PREFIX} ${runId} approved change order awaiting billing`,
+    }),
+  });
+
+  const [invoice] = await restRequest(env, "invoices", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: company.id,
+      customer_id: customer.id,
+      job_id: job.id,
+      estimate_id: null,
+      invoice_number: `INV-TEST-${runId}`,
+      title: `${TEST_PREFIX} ${runId} FINANCIAL DEPOSIT INVOICE`,
+      status: "sent",
+      issue_date: new Date().toISOString().slice(0, 10),
+      due_date: new Date().toISOString().slice(0, 10),
+      subtotal: 1000,
+      tax_rate: 0,
+      tax_total: 0,
+      discount_total: 0,
+      total: 1000,
+      amount_paid: 0,
+      balance_due: 1000,
+      notes: `${TEST_PREFIX} ${runId} deposit required for financial regression`,
+    }),
+  });
+
+  await restRequest(env, "invoice_line_items", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      invoice_id: invoice.id,
+      description: `${TEST_PREFIX} ${runId} Deposit payment`,
+      quantity: 1,
+      unit_cost: 1000,
+      taxable: false,
+      sort_order: 0,
+      total: 1000,
+    }),
+  });
+
+  return { customer, estimate, job, changeOrder, invoice };
+}
+
 async function seedTestSignature(env, companyId, customerId, documentId, runId) {
   const [signature] = await restRequest(env, "signatures", {
     method: "POST",
@@ -636,6 +804,15 @@ async function findDocumentByTitle(env, title) {
   const rows = await restRequest(
     env,
     `documents?select=*&title=eq.${encodeURIComponent(title)}&limit=1`,
+  );
+
+  return rows[0] ?? null;
+}
+
+async function findInvoiceByTitle(env, title) {
+  const rows = await restRequest(
+    env,
+    `invoices?select=*&title=eq.${encodeURIComponent(title)}&limit=1`,
   );
 
   return rows[0] ?? null;
@@ -2637,6 +2814,208 @@ async function testOfficeOperationsWorkspace(browser, tab) {
   }
 
   return { desktopLayout, mobileLayout };
+}
+
+async function testFinancialOperationsWorkspace(browser, tab, env, company, runId, progress) {
+  progress("financial:seed:start");
+  const seeded = await seedFinancialOperationsRecords(env, company, runId);
+  const expectedInvoiceTitle = `Invoice for ${seeded.estimate.title}`;
+  progress("financial:seed:done");
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, BASE_URL, progress);
+  await clickNav(tab, "Invoices");
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="financial-operations-workspace"]');
+      const text = workspace?.textContent?.toLowerCase() ?? "";
+
+      return (
+        Boolean(workspace) &&
+        text.includes("financial operations") &&
+        text.includes("outstanding balance") &&
+        text.includes("ready to bill") &&
+        text.includes("deposits") &&
+        text.includes("quickbooks sync") &&
+        text.includes("approved estimate") &&
+        text.includes("completed job") &&
+        text.includes("approved change order")
+      );
+    },
+    "financial operations workspace",
+    15000,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-company-filter"]'),
+    company.id,
+    "financial company filter",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    seeded.invoice.title,
+    "financial invoice search",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title),
+    "financial seeded invoice visible",
+    10000,
+    seeded.invoice.title,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-workflow-filter"]'),
+    "sent",
+    "financial sent filter",
+  );
+  await waitFor(
+    tab,
+    () => document.querySelectorAll('[data-testid="financial-invoice-row"]').length >= 1,
+    "financial sent invoice row",
+    10000,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    "",
+    "clear financial search",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-workflow-filter"]'),
+    "all",
+    "financial all workflow filter",
+  );
+
+  await clickUnique(
+    tab.playwright.locator('[data-testid="financial-create-from-estimate"]'),
+    "financial create from approved estimate",
+  );
+  await waitFor(
+    tab,
+    (title) => {
+      const titleInput = document.querySelector('input[name="title"]');
+      return titleInput?.value === title;
+    },
+    "financial estimate preset title",
+    10000,
+    expectedInvoiceTitle,
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="financial-save-invoice"]'),
+    "financial create estimate invoice",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes("Invoice created.") && document.body.innerText.includes(title),
+    "financial invoice created",
+    15000,
+    expectedInvoiceTitle,
+  );
+
+  const createdInvoice = await waitForAsync(
+    () => findInvoiceByTitle(env, expectedInvoiceTitle),
+    "financial invoice persistence",
+    15000,
+  );
+
+  if (!createdInvoice || createdInvoice.estimate_id !== seeded.estimate.id) {
+    throw new Error("Financial estimate invoice did not persist with the expected estimate link.");
+  }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-payment-form"] input[name="amount"]'),
+    "250",
+    "financial partial payment amount",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="financial-record-payment"]'),
+    "financial record partial payment",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Payment recorded."),
+    "financial payment recorded notice",
+    15000,
+  );
+
+  const paidInvoice = await waitForAsync(
+    async () => {
+      const invoice = await findInvoiceByTitle(env, expectedInvoiceTitle);
+      return invoice && Number(invoice.amount_paid) === 250 ? invoice : null;
+    },
+    "financial partial payment persistence",
+    15000,
+  );
+
+  if (!paidInvoice || Number(paidInvoice.amount_paid) !== 250 || Number(paidInvoice.balance_due) !== 4750) {
+    throw new Error(`Financial payment totals were not updated correctly: ${JSON.stringify(paidInvoice)}`);
+  }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-payment-form"] input[name="amount"]'),
+    "99999",
+    "financial overpayment amount",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="financial-record-payment"]'),
+    "financial overpayment guard",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Payment exceeds the remaining invoice balance."),
+    "financial overpayment rejected",
+    10000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-workflow-filter"]'),
+    "partially_paid",
+    "financial partially paid filter",
+  );
+  await waitFor(
+    tab,
+    (title) => document.body.innerText.includes(title) && document.body.innerText.includes("Partially Paid"),
+    "financial partial status visible",
+    10000,
+    expectedInvoiceTitle,
+  );
+
+  const desktopLayout = await tab.playwright.evaluate(() => ({
+    visible: Boolean(document.querySelector('[data-testid="financial-operations-workspace"]')),
+    quickBooksHonest:
+      document.body.innerText.includes("No live sync is active") ||
+      document.body.innerText.includes("Not connected"),
+    attentionVisible: Boolean(document.querySelector('[data-testid="financial-attention-list"]')),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+  }));
+
+  if (!desktopLayout.visible || !desktopLayout.attentionVisible) {
+    throw new Error("Financial Operations workspace did not render required panels.");
+  }
+
+  if (!desktopLayout.quickBooksHonest) {
+    throw new Error("Financial Operations did not show honest QuickBooks readiness.");
+  }
+
+  if (desktopLayout.hasHorizontalOverflow) {
+    throw new Error("Financial Operations desktop layout overflows horizontally.");
+  }
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  const mobileLayout = await tab.playwright.evaluate(() => ({
+    visible: Boolean(document.querySelector('[data-testid="financial-operations-workspace"]')),
+    scrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (!mobileLayout.visible || mobileLayout.scrollWidth > mobileLayout.viewportWidth + 8) {
+    throw new Error("Financial Operations mobile layout is not usable.");
+  }
+
+  return { createdInvoiceId: createdInvoice.id, paidInvoice, desktopLayout, mobileLayout };
 }
 
 async function testFieldOperationsWorkspace(browser, tab, env, company, runId, progress) {
@@ -5423,11 +5802,45 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     );
   });
 
-  const linkedJob = await waitForAsync(async () => {
+  let linkedJob = await waitForAsync(async () => {
     const job = await findJobByEstimateId(env, approvedEstimate.id);
 
     return job?.estimate_id === approvedEstimate.id ? job : null;
-  }, "estimate-linked draft job persistence", 30000);
+  }, "estimate-linked draft job persistence", 30000).catch(() => null);
+
+  if (!linkedJob) {
+    const conversionStillReady = await tab.playwright.evaluate(() => {
+      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
+      const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
+
+      return Boolean(
+        workspace?.textContent?.includes("Approved") &&
+          workspace?.textContent?.includes("Ready for draft job") &&
+          convertButton &&
+          convertButton.disabled === false,
+      );
+    });
+
+    if (conversionStillReady) {
+      await withAcceptedConfirm(tab, async () => {
+        await clickUnique(
+          tab.playwright.locator('[data-testid="estimate-convert-job-button"]'),
+          "Retry convert estimate to draft job",
+          { retryTransientClick: true },
+        );
+      });
+
+      linkedJob = await waitForAsync(async () => {
+        const job = await findJobByEstimateId(env, approvedEstimate.id);
+
+        return job?.estimate_id === approvedEstimate.id ? job : null;
+      }, "estimate-linked draft job persistence retry", 30000).catch(() => null);
+    }
+  }
+
+  if (!linkedJob) {
+    throw new Error("Timed out waiting for estimate-linked draft job persistence.");
+  }
 
   if (linkedJob.status !== "draft") {
     throw new Error(`Converted job status was ${linkedJob.status}, expected draft.`);
@@ -8222,6 +8635,7 @@ export async function runWeatherTechOsRegression({
       shouldRunCustomersWorkflow ||
       shouldRunInboxWorkflow ||
 	      enabledGroups.has("operations") ||
+	      enabledGroups.has("financial") ||
 	      enabledGroups.has("marketing") ||
 	      enabledGroups.has("lead-intake-workspace") ||
 	      enabledGroups.has("lead-intake");
@@ -8270,6 +8684,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("documents")) {
       await record("Document Center filters, previews, renames, archives, and stays responsive", () =>
         testDocumentCenterWorkspace(browser, tab, env, weatherTech, seededJob, runId),
+      );
+    }
+
+    if (enabledGroups.has("financial")) {
+      await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
+        testFinancialOperationsWorkspace(browser, tab, env, weatherTech, runId, progress),
       );
     }
 

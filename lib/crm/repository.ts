@@ -1676,13 +1676,15 @@ function buildInvoicePayload(
   lineItems: InvoiceLineItemInput[],
 ) {
   const totals = calculateInvoiceTotals(input, lineItems);
-
-  return {
-    ...input,
+  const payload = {
+    company_id: input.company_id,
     customer_id: input.customer_id ?? null,
     job_id: input.job_id ?? null,
     estimate_id: input.estimate_id ?? null,
+    invoice_number: input.invoice_number,
+    title: input.title,
     status: input.status ?? "draft",
+    issue_date: input.issue_date,
     due_date: input.due_date ?? null,
     tax_rate: input.tax_rate ?? 0,
     discount_total: totals.discountTotal,
@@ -1693,6 +1695,8 @@ function buildInvoicePayload(
     total: totals.total,
     balance_due: totals.balanceDue,
   };
+
+  return input.property_id ? { ...payload, property_id: input.property_id } : payload;
 }
 
 function buildInvoiceLineItemPayload(
@@ -2461,20 +2465,10 @@ export async function getDocumentFileSignedUrl(
 }
 
 export async function createPayment(client: CrmClient, input: PaymentInput) {
-  
-
-  const { data, error } = await client
-    .from("payments")
-    .insert(input)
-    .select("*")
-    .single();
-
-  if (error) {
-    throw error;
-  }
+  let invoice: InvoiceRecord | null = null;
 
   if (input.invoice_id && (input.status ?? "posted") === "posted") {
-    const { data: invoice, error: invoiceError } = await client
+    const { data, error: invoiceError } = await client
       .from("invoices")
       .select("*")
       .eq("id", input.invoice_id)
@@ -2484,6 +2478,39 @@ export async function createPayment(client: CrmClient, input: PaymentInput) {
       throw invoiceError;
     }
 
+    invoice = data;
+
+    if (input.amount > invoice.balance_due) {
+      throw new Error(
+        `Payment exceeds remaining invoice balance of ${invoice.balance_due.toFixed(2)}.`,
+      );
+    }
+  }
+
+  const paymentPayload = {
+    company_id: input.company_id,
+    customer_id: input.customer_id ?? null,
+    invoice_id: input.invoice_id ?? null,
+    amount: input.amount,
+    method: input.method,
+    status: input.status ?? "posted",
+    paid_at: input.paid_at ?? null,
+    reference: input.reference ?? null,
+    notes: input.notes ?? null,
+    ...(input.property_id ? { property_id: input.property_id } : {}),
+  };
+
+  const { data, error } = await client
+    .from("payments")
+    .insert(paymentPayload)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  if (input.invoice_id && invoice && (input.status ?? "posted") === "posted") {
     const amountPaid = invoice.amount_paid + input.amount;
     const balanceDue = Math.max(invoice.total - amountPaid, 0);
     const { error: updateError } = await client
