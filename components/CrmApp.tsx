@@ -5999,7 +5999,11 @@ function CrmWorkspace({
           ) : null}
 
           {view === "analytics" ? (
-            <AnalyticsView metrics={metrics} snapshot={scopedSnapshot} />
+            <AnalyticsView
+              metrics={metrics}
+              snapshot={scopedSnapshot}
+              onViewChange={onViewChange}
+            />
           ) : null}
 
           {view === "notifications" ? (
@@ -36361,176 +36365,1441 @@ function DocumentPdfPreview({
 function AnalyticsView({
   metrics,
   snapshot,
+  onViewChange,
 }: {
   metrics: ReturnType<typeof calculateDashboardMetrics>;
   snapshot: CrmSnapshot;
+  onViewChange: (view: WorkspaceView) => void;
 }) {
-  const sentEstimateValue = snapshot.estimates
-    .filter((estimate) => estimate.status === "sent")
-    .reduce((total, estimate) => total + estimate.total, 0);
-  const approvedEstimateValue = snapshot.estimates
-    .filter((estimate) => estimate.status === "approved")
-    .reduce((total, estimate) => total + estimate.total, 0);
-  const invoiceTotal = snapshot.invoices.reduce((total, invoice) => total + invoice.total, 0);
-  const materialSpend = snapshot.materialOrders.reduce((total, order) => total + order.total, 0);
-  const companySummaries = snapshot.companies.map((company) =>
-    buildCompanyDashboardSummary(snapshot, company),
-  );
-  const productionKpis = calculateProductionKpis(snapshot);
-  const pendingDocuments = snapshot.documents.filter(
-    (document) => document.status === "draft" || document.status === "ready",
-  );
-  const pendingChangeOrders = snapshot.changeOrders.filter(
-    (changeOrder) => changeOrder.status === "draft" || changeOrder.status === "sent",
-  );
-  const overdueInvoices = snapshot.invoices.filter(
-    (invoice) => invoice.status === "overdue",
-  );
-  const scheduleConflictCount = countScheduleEventConflicts(snapshot.scheduleEvents);
+  const intelligence = buildExecutiveIntelligence(snapshot, metrics);
 
   return (
-    <div className="space-y-5">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-950">Dashboard analytics</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Revenue, close rate, production, and profitability.
-        </p>
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Revenue collected" value={formatMoney(metrics.revenueCollected)} icon={DollarSign} />
-          <MetricCard label="Close rate" value={`${metrics.closeRate}%`} icon={CheckCircle2} />
-          <MetricCard label="Production complete" value={`${metrics.productionCompletion}%`} icon={CalendarClock} />
-          <MetricCard label="Gross profit" value={formatMoney(metrics.grossProfit)} icon={DollarSign} />
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-5" data-testid="executive-intelligence-workspace">
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
+        <div className="grid gap-6 p-5 text-white lg:grid-cols-[minmax(0,1fr)_360px] lg:p-6">
           <div>
-            <h3 className="text-lg font-bold text-slate-950">Company performance</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Side-by-side operating health for WeatherTech Roofing LLC and IHC.
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-300">
+              Executive Intelligence
             </p>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-3xl font-black tracking-tight sm:text-4xl">
+                  What needs action next?
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                  A focused owner view of revenue, sales follow-up, production pressure,
+                  customer experience, and financial risk across the loaded CRM snapshot.
+                </p>
+              </div>
+              <Badge
+                label={`${intelligence.alertCount} alerts`}
+                tone={intelligence.alertCount > 0 ? "amber" : "green"}
+              />
+            </div>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {intelligence.snapshotCards.slice(0, 4).map((card) => (
+                <ExecutiveHeroMetric key={card.label} card={card} />
+              ))}
+            </div>
           </div>
-          <span className="text-sm font-semibold text-slate-500">
-            {companySummaries.length} active workspaces
-          </span>
-        </div>
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          {companySummaries.map((summary) => (
-            <CompanyAnalyticsCard key={summary.company.id} summary={summary} />
-          ))}
+          <aside className="rounded-xl border border-white/10 bg-white/[0.07] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+                  Today&apos;s Business Snapshot
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {intelligence.executiveSummary}
+                </p>
+              </div>
+              <ShieldCheck className="h-5 w-5 text-emerald-300" />
+            </div>
+            <div className="mt-5 grid gap-3">
+              {intelligence.snapshotCards.slice(4).map((card) => (
+                <div
+                  key={card.label}
+                  className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-3 py-2"
+                >
+                  <span className="text-sm font-medium text-slate-300">{card.label}</span>
+                  <span className="text-sm font-bold text-white">{card.value}</span>
+                </div>
+              ))}
+            </div>
+          </aside>
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <AnalyticsPanel
-          title="Revenue pipeline"
-          rows={[
-            { label: "Sent estimates", value: sentEstimateValue },
-            { label: "Approved estimates", value: approvedEstimateValue },
-            { label: "Invoices issued", value: invoiceTotal },
-            { label: "Payments collected", value: metrics.revenueCollected },
-          ]}
+      <section
+        className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]"
+        data-testid="executive-alert-feed"
+      >
+        <ExecutiveAlertFeed alerts={intelligence.alerts} onViewChange={onViewChange} />
+        <ExecutiveTrendPanel trends={intelligence.trends} />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-3">
+        <ExecutiveIntelligencePanel
+          title="Sales Intelligence"
+          description="Pipeline health, follow-up pressure, and close-rate signals."
+          metrics={intelligence.salesMetrics}
+          items={intelligence.salesItems}
         />
-        <AnalyticsPanel
-          title="Profitability"
-          rows={[
-            { label: "Approved revenue", value: approvedEstimateValue },
-            { label: "Material spend", value: materialSpend },
-            { label: "Gross profit", value: metrics.grossProfit },
-          ]}
+        <ExecutiveIntelligencePanel
+          title="Operations Intelligence"
+          description="Production bottlenecks, crew capacity, and inspection load."
+          metrics={intelligence.operationsMetrics}
+          items={intelligence.operationsItems}
         />
-        <AnalyticsPanel
-          title="Operational attention"
-          rows={[
-            { label: "Jobs needing schedule", value: productionKpis.jobsMissingSchedule.length },
-            { label: "Schedule conflicts", value: scheduleConflictCount },
-            { label: "Pending documents", value: pendingDocuments.length },
-            { label: "Pending change orders", value: pendingChangeOrders.length },
-            { label: "Overdue invoices", value: overdueInvoices.length },
-          ]}
-          valueFormat="number"
+        <ExecutiveIntelligencePanel
+          title="Customer Experience"
+          description="Open customer issues and communication responsiveness."
+          metrics={intelligence.customerMetrics}
+          items={intelligence.customerItems}
         />
-      </div>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <ExecutiveIntelligencePanel
+          title="Financial Intelligence"
+          description="Collections, deposits, invoice aging, and cash-flow indicators."
+          metrics={intelligence.financialMetrics}
+          items={intelligence.financialItems}
+        />
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Sales leaderboard</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Lead ownership and estimated pipeline value by assignee.
+              </p>
+            </div>
+            <Users className="h-5 w-5 text-slate-400" />
+          </div>
+          <div className="mt-5 grid gap-3">
+            {intelligence.leaderboard.map((row, index) => (
+              <div
+                key={row.owner}
+                className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="grid h-8 w-8 place-items-center rounded-lg bg-slate-950 text-sm font-black text-white">
+                    {index + 1}
+                  </span>
+                  <div>
+                    <p className="font-semibold text-slate-950">{row.owner}</p>
+                    <p className="text-sm text-slate-500">
+                      {row.count} open {row.count === 1 ? "lead" : "leads"}
+                    </p>
+                  </div>
+                </div>
+                <span className="font-bold text-slate-950">
+                  {formatMoney(row.value)}
+                </span>
+              </div>
+            ))}
+            {!intelligence.leaderboard.length ? (
+              <EmptyState label="No open sales ownership to rank yet." />
+            ) : null}
+          </div>
+        </section>
+      </section>
     </div>
   );
 }
 
-function AnalyticsPanel({
-  title,
-  rows,
-  valueFormat = "money",
-}: {
+type ExecutiveMetric = {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "blue" | "green" | "amber";
+  icon: typeof Home;
+};
+
+type ExecutiveAlertPriority = "High Priority" | "Medium Priority" | "Low Priority";
+
+type ExecutiveAlert = {
+  id: string;
+  priority: ExecutiveAlertPriority;
   title: string;
-  rows: { label: string; value: number }[];
-  valueFormat?: "money" | "number";
-}) {
-  const max = Math.max(...rows.map((row) => row.value), 1);
+  detail: string;
+  recommendedAction: string;
+  companyName: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+};
+
+type ExecutiveTrend = {
+  label: string;
+  value: string;
+  detail: string;
+  current: number;
+  previous: number;
+  tone: "blue" | "green" | "amber";
+};
+
+type ExecutiveListItem = {
+  id: string;
+  title: string;
+  detail: string;
+  meta: string;
+  tone: "blue" | "green" | "amber";
+};
+
+type ExecutiveLeaderboardRow = {
+  owner: string;
+  count: number;
+  value: number;
+};
+
+type ExecutiveIntelligenceData = {
+  alertCount: number;
+  executiveSummary: string;
+  snapshotCards: ExecutiveMetric[];
+  salesMetrics: ExecutiveMetric[];
+  operationsMetrics: ExecutiveMetric[];
+  customerMetrics: ExecutiveMetric[];
+  financialMetrics: ExecutiveMetric[];
+  salesItems: ExecutiveListItem[];
+  operationsItems: ExecutiveListItem[];
+  customerItems: ExecutiveListItem[];
+  financialItems: ExecutiveListItem[];
+  alerts: ExecutiveAlert[];
+  trends: ExecutiveTrend[];
+  leaderboard: ExecutiveLeaderboardRow[];
+};
+
+const executiveOpenLeadStatuses = new Set<LeadStatus>([
+  "new",
+  "contacted",
+  "qualified",
+  "estimate_sent",
+]);
+const executiveOpenEstimateStatuses = new Set<EstimateStatus>(["draft", "sent"]);
+const executiveActiveJobStatuses = new Set<JobStatus>([
+  "scheduled",
+  "in_progress",
+  "blocked",
+]);
+const executiveOpenInvoiceStatuses = new Set<InvoiceStatus>(["sent", "overdue"]);
+const executiveSignatureStatuses = new Set<SignatureStatus>([
+  "pending",
+  "sent",
+  "viewed",
+  "expired",
+]);
+
+function buildExecutiveIntelligence(
+  snapshot: CrmSnapshot,
+  metrics: ReturnType<typeof calculateDashboardMetrics>,
+): ExecutiveIntelligenceData {
+  const today = todayIsoDate();
+  const weekStart = addDaysIsoDate(-6);
+  const monthStart = startOfCurrentMonthIsoDate();
+  const priorWeekStart = addDaysIsoDate(-13);
+  const priorWeekEnd = addDaysIsoDate(-7);
+  const companyMap = new Map(snapshot.companies.map((company) => [company.id, company]));
+  const inboxItems = buildUnifiedInboxItems(snapshot, companyMap);
+  const productionKpis = calculateProductionKpis(snapshot);
+  const financialSummary = buildFinancialOperationsSummary(snapshot);
+  const postedPayments = snapshot.payments.filter((payment) => payment.status === "posted");
+  const revenueToday = sumPaymentsInWindow(postedPayments, today, today);
+  const revenueThisWeek = sumPaymentsInWindow(postedPayments, weekStart, today);
+  const revenueThisMonth = sumPaymentsInWindow(postedPayments, monthStart, today);
+  const revenuePriorWeek = sumPaymentsInWindow(postedPayments, priorWeekStart, priorWeekEnd);
+  const jobsCompletedToday = snapshot.jobs.filter(
+    (job) =>
+      (job.status === "completed" || job.status === "closed") &&
+      isSameIsoDay(job.updated_at, today),
+  );
+  const jobsScheduledToday = getJobsScheduledOn(snapshot, today);
+  const leadsReceivedToday = snapshot.leads.filter((lead) =>
+    isSameIsoDay(lead.created_at, today),
+  );
+  const leadsPriorWeek = snapshot.leads.filter((lead) =>
+    isDateInIsoWindow(lead.created_at, priorWeekStart, priorWeekEnd),
+  );
+  const leadsThisWeek = snapshot.leads.filter((lead) =>
+    isDateInIsoWindow(lead.created_at, weekStart, today),
+  );
+  const estimatesAwaitingApproval = snapshot.estimates.filter(
+    (estimate) => estimate.status === "sent",
+  );
+  const openEstimates = snapshot.estimates.filter((estimate) =>
+    executiveOpenEstimateStatuses.has(estimate.status),
+  );
+  const approvedEstimates = snapshot.estimates.filter(
+    (estimate) => estimate.status === "approved",
+  );
+  const agingEstimates = estimatesAwaitingApproval.filter((estimate) => {
+    const updated = dateKey(estimate.updated_at);
+    return Boolean(updated && updated < addDaysIsoDate(-7));
+  });
+  const openLeads = snapshot.leads.filter((lead) =>
+    executiveOpenLeadStatuses.has(lead.status),
+  );
+  const lostLeads = snapshot.leads.filter((lead) => lead.status === "lost");
+  const wonLeads = snapshot.leads.filter((lead) => lead.status === "won");
+  const urgentLeads = openLeads.filter(
+    (lead) => lead.priority === "urgent" || lead.priority === "high",
+  );
+  const overdueFollowUps = openLeads.filter(
+    (lead) => lead.next_follow_up !== null && lead.next_follow_up < today,
+  );
+  const followUpsDueToday = openLeads.filter((lead) => lead.next_follow_up === today);
+  const followUpHealth = openLeads.length
+    ? Math.max(
+        0,
+        Math.round(((openLeads.length - overdueFollowUps.length) / openLeads.length) * 100),
+      )
+    : 100;
+  const averageEstimateValue = snapshot.estimates.length
+    ? Math.round(
+        snapshot.estimates.reduce((total, estimate) => total + estimate.total, 0) /
+          snapshot.estimates.length,
+      )
+    : 0;
+  const pipelineValue =
+    openLeads.reduce((total, lead) => total + lead.estimated_value, 0) +
+    openEstimates.reduce((total, estimate) => total + estimate.total, 0);
+  const winLossTrend = `${wonLeads.length} won / ${lostLeads.length} lost`;
+  const scheduleConflictCount = countScheduleEventConflicts(snapshot.scheduleEvents);
+  const jobsBehindSchedule = snapshot.jobs.filter((job) => {
+    const scheduledEnd = getJobScheduledEnd(job);
+    const scheduledEndDate = dateKey(scheduledEnd);
+
+    return (
+      executiveActiveJobStatuses.has(job.status) &&
+      ((job.end_date !== null && job.end_date < today) ||
+        Boolean(scheduledEndDate && scheduledEndDate < today))
+    );
+  });
+  const overloadedEmployees = countOverloadedEmployees(snapshot, today);
+  const activeEmployeeCount = snapshot.employees.filter((employee) => employee.is_active)
+    .length;
+  const assignedEmployeeIds = new Set(
+    snapshot.jobAssignments
+      .filter((assignment) => assignment.status === "assigned" || assignment.status === "accepted")
+      .map((assignment) => assignment.employee_id),
+  );
+  const availableCapacity = Math.max(activeEmployeeCount - assignedEmployeeIds.size, 0);
+  const openInspections = snapshot.inspections.filter(
+    (inspection) =>
+      inspection.status !== "completed" && inspection.status !== "canceled",
+  );
+  const materialWarnings = snapshot.materialOrders.filter(
+    (order) =>
+      (order.status === "draft" ||
+        order.status === "ordered" ||
+        order.status === "partial") &&
+      (order.expected_delivery_date === null || order.expected_delivery_date <= today),
+  );
+  const warrantyCallbacks = getWarrantyRelatedItems(snapshot);
+  const productionBottlenecks =
+    productionKpis.blockedJobs.length +
+    productionKpis.jobsMissingCrew.length +
+    productionKpis.jobsMissingSchedule.length +
+    scheduleConflictCount +
+    materialWarnings.length;
+  const unreadCommunications = inboxItems.filter((item) => item.isUnread);
+  const failedCommunications = inboxItems.filter((item) => item.isFailed);
+  const missedCalls = inboxItems.filter((item) => item.isMissedCall);
+  const responseTimeSignals = inboxItems.filter(
+    (item) =>
+      item.responseStatus === "needs_response" ||
+      item.responseStatus === "waiting_on_us" ||
+      item.responseStatus === "overdue" ||
+      item.followUpAt !== null,
+  );
+  const reviewItems = inboxItems.filter((item) =>
+    item.sourceLabel.toLowerCase().includes("yelp") ||
+    item.sourceLabel.toLowerCase().includes("google"),
+  );
+  const warrantyRequests = inboxItems.filter(
+    (item) =>
+      item.summary.toLowerCase().includes("warranty") ||
+      item.notes?.toLowerCase().includes("warranty"),
+  );
+  const customerIssues =
+    failedCommunications.length + missedCalls.length + warrantyRequests.length;
+  const unsignedSignatures = snapshot.signatures.filter((signature) =>
+    executiveSignatureStatuses.has(signature.status),
+  );
+  const collectionsDue = snapshot.invoices.filter(
+    (invoice) =>
+      invoice.balance_due > 0 &&
+      (invoice.status === "overdue" ||
+        (invoice.due_date !== null && invoice.due_date <= today)),
+  );
+  const outstandingInvoices = snapshot.invoices.filter(
+    (invoice) => invoice.balance_due > 0 && executiveOpenInvoiceStatuses.has(invoice.status),
+  );
+  const overdueInvoices = outstandingInvoices.filter(
+    (invoice) =>
+      invoice.status === "overdue" ||
+      (invoice.due_date !== null && invoice.due_date < today),
+  );
+  const outstandingInvoiceValue = outstandingInvoices.reduce(
+    (total, invoice) => total + invoice.balance_due,
+    0,
+  );
+  const overdueInvoiceValue = overdueInvoices.reduce(
+    (total, invoice) => total + invoice.balance_due,
+    0,
+  );
+  const depositsReceived = financialSummary.depositsReceived;
+  const progressBilling = snapshot.invoices.filter(
+    (invoice) => invoice.amount_paid > 0 && invoice.balance_due > 0,
+  );
+  const cashFlowIndicator = revenueThisWeek >= revenuePriorWeek ? "Improving" : "Watch";
+  const requiredDocumentsOpen = snapshot.documents.filter(
+    (document) =>
+      document.requirement_level === "required" &&
+      document.status !== "signed" &&
+      document.status !== "ready" &&
+      document.status !== "archived",
+  );
+  const alerts = buildExecutiveAlerts({
+    companyMap,
+    urgentLeads,
+    overdueFollowUps,
+    agingEstimates,
+    jobsBehindSchedule,
+    blockedJobs: productionKpis.blockedJobs,
+    missingCrewJobs: productionKpis.jobsMissingCrew,
+    missingScheduleJobs: productionKpis.jobsMissingSchedule,
+    materialWarnings,
+    overdueInvoices,
+    failedCommunications,
+    missedCalls,
+    scheduleConflictCount,
+    unsignedSignatures,
+    requiredDocumentsOpen,
+  });
+  const criticalAlerts = alerts.filter((alert) => alert.priority === "High Priority");
+  const executiveSummary =
+    alerts.length > 0
+      ? `${criticalAlerts.length || alerts.length} priority ${criticalAlerts.length === 1 ? "item" : "items"} need owner attention before the day moves forward.`
+      : "No critical exceptions are visible in the current CRM snapshot.";
+
+  return {
+    alertCount: alerts.length,
+    executiveSummary,
+    snapshotCards: [
+      {
+        label: "Revenue today",
+        value: formatMoney(revenueToday),
+        detail: "Posted payments recorded today.",
+        tone: revenueToday > 0 ? "green" : "blue",
+        icon: DollarSign,
+      },
+      {
+        label: "Jobs scheduled",
+        value: String(jobsScheduledToday.length),
+        detail: "Jobs and schedule events on today’s calendar.",
+        tone: jobsScheduledToday.length > 0 ? "green" : "blue",
+        icon: CalendarClock,
+      },
+      {
+        label: "Estimates awaiting approval",
+        value: String(estimatesAwaitingApproval.length),
+        detail: `${formatMoney(
+          estimatesAwaitingApproval.reduce((total, estimate) => total + estimate.total, 0),
+        )} waiting on customer decisions.`,
+        tone: estimatesAwaitingApproval.length > 0 ? "amber" : "green",
+        icon: Calculator,
+      },
+      {
+        label: "Critical alerts",
+        value: String(criticalAlerts.length),
+        detail: "High priority exceptions requiring action.",
+        tone: criticalAlerts.length > 0 ? "amber" : "green",
+        icon: AlertTriangle,
+      },
+      {
+        label: "Revenue this week",
+        value: formatMoney(revenueThisWeek),
+        detail: "Posted payments from the last seven days.",
+        tone: revenueThisWeek >= revenuePriorWeek ? "green" : "amber",
+        icon: Activity,
+      },
+      {
+        label: "Revenue this month",
+        value: formatMoney(revenueThisMonth),
+        detail: "Posted payments since the first of the month.",
+        tone: "blue",
+        icon: DollarSign,
+      },
+      {
+        label: "Jobs completed",
+        value: String(jobsCompletedToday.length),
+        detail: "Completed or closed today.",
+        tone: jobsCompletedToday.length > 0 ? "green" : "blue",
+        icon: CheckCircle2,
+      },
+      {
+        label: "Leads received",
+        value: String(leadsReceivedToday.length),
+        detail: "New inbound opportunities today.",
+        tone: leadsReceivedToday.length > 0 ? "green" : "blue",
+        icon: ClipboardList,
+      },
+      {
+        label: "Collections due",
+        value: formatMoney(
+          collectionsDue.reduce((total, invoice) => total + invoice.balance_due, 0),
+        ),
+        detail: `${collectionsDue.length} invoice${collectionsDue.length === 1 ? "" : "s"} need collection action.`,
+        tone: collectionsDue.length > 0 ? "amber" : "green",
+        icon: ReceiptText,
+      },
+    ],
+    salesMetrics: [
+      {
+        label: "Pipeline value",
+        value: formatMoney(pipelineValue),
+        detail: "Open leads plus open estimates.",
+        tone: "blue",
+        icon: DollarSign,
+      },
+      {
+        label: "Close rate",
+        value: `${metrics.closeRate}%`,
+        detail: winLossTrend,
+        tone: metrics.closeRate >= 45 ? "green" : metrics.closeRate >= 25 ? "blue" : "amber",
+        icon: CheckCircle2,
+      },
+      {
+        label: "Win/Loss trend",
+        value: winLossTrend,
+        detail: "Closed lead outcomes in the loaded snapshot.",
+        tone: wonLeads.length >= lostLeads.length ? "green" : "amber",
+        icon: Activity,
+      },
+      {
+        label: "Average estimate",
+        value: formatMoney(averageEstimateValue),
+        detail: `${snapshot.estimates.length} estimates measured.`,
+        tone: "blue",
+        icon: Calculator,
+      },
+      {
+        label: "Aging estimates",
+        value: String(agingEstimates.length),
+        detail: "Sent estimates older than seven days.",
+        tone: agingEstimates.length > 0 ? "amber" : "green",
+        icon: CalendarClock,
+      },
+      {
+        label: "Follow-up health",
+        value: `${followUpHealth}%`,
+        detail: `${overdueFollowUps.length} overdue, ${followUpsDueToday.length} due today.`,
+        tone: overdueFollowUps.length > 0 ? "amber" : "green",
+        icon: Phone,
+      },
+    ],
+    operationsMetrics: [
+      {
+        label: "Jobs behind schedule",
+        value: String(jobsBehindSchedule.length),
+        detail: "Active jobs past planned end date.",
+        tone: jobsBehindSchedule.length > 0 ? "amber" : "green",
+        icon: AlertTriangle,
+      },
+      {
+        label: "Crew utilization",
+        value: `${productionKpis.crewUtilization}%`,
+        detail: `${availableCapacity} active team member${availableCapacity === 1 ? "" : "s"} appear available.`,
+        tone: productionKpis.crewUtilization > 95 ? "amber" : "green",
+        icon: Users,
+      },
+      {
+        label: "Crews overloaded",
+        value: String(overloadedEmployees),
+        detail: "Team members with more than one assignment today.",
+        tone: overloadedEmployees > 0 ? "amber" : "green",
+        icon: Users,
+      },
+      {
+        label: "Available capacity",
+        value: String(availableCapacity),
+        detail: "Active employees without current assignments.",
+        tone: availableCapacity > 0 ? "green" : "amber",
+        icon: UserRound,
+      },
+      {
+        label: "Open inspections",
+        value: String(openInspections.length),
+        detail: "Draft, scheduled, or in-progress inspections.",
+        tone: openInspections.length > 0 ? "blue" : "green",
+        icon: ClipboardList,
+      },
+      {
+        label: "Material shortages",
+        value: String(materialWarnings.length),
+        detail: "Orders missing a delivery date or due by today.",
+        tone: materialWarnings.length > 0 ? "amber" : "green",
+        icon: Package,
+      },
+      {
+        label: "Production bottlenecks",
+        value: String(productionBottlenecks),
+        detail: "Blocked jobs, missing crew/schedule, conflicts, and material warnings.",
+        tone: productionBottlenecks > 0 ? "amber" : "green",
+        icon: Package,
+      },
+    ],
+    customerMetrics: [
+      {
+        label: "Open customer issues",
+        value: String(customerIssues),
+        detail: "Failures, missed calls, and warranty-related communication.",
+        tone: customerIssues > 0 ? "amber" : "green",
+        icon: MessageSquare,
+      },
+      {
+        label: "Response signals",
+        value: String(responseTimeSignals.length),
+        detail: "Items waiting for response or follow-up.",
+        tone: responseTimeSignals.length > 0 ? "amber" : "green",
+        icon: Mail,
+      },
+      {
+        label: "Reviews awaiting response",
+        value: String(reviewItems.length),
+        detail: "Google/Yelp-linked items visible in the communications snapshot.",
+        tone: reviewItems.length > 0 ? "amber" : "blue",
+        icon: Star,
+      },
+      {
+        label: "Warranty requests",
+        value: String(warrantyRequests.length),
+        detail: "Warranty-related customer messages currently visible.",
+        tone: warrantyRequests.length > 0 ? "amber" : "green",
+        icon: ShieldCheck,
+      },
+      {
+        label: "Satisfaction indicators",
+        value: unreadCommunications.length > 0 ? `${unreadCommunications.length} unread` : "Healthy",
+        detail: "Survey scoring is not connected; unread communication is the current proxy.",
+        tone: unreadCommunications.length > 0 ? "amber" : "green",
+        icon: ShieldCheck,
+      },
+    ],
+    financialMetrics: [
+      {
+        label: "Outstanding invoices",
+        value: formatMoney(outstandingInvoiceValue),
+        detail: `${outstandingInvoices.length} open invoice${outstandingInvoices.length === 1 ? "" : "s"}.`,
+        tone: outstandingInvoices.length > 0 ? "amber" : "green",
+        icon: ReceiptText,
+      },
+      {
+        label: "A/R aging",
+        value: formatMoney(overdueInvoiceValue),
+        detail: `${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? "" : "s"}.`,
+        tone: overdueInvoices.length > 0 ? "amber" : "green",
+        icon: CalendarClock,
+      },
+      {
+        label: "Deposits received",
+        value: formatMoney(depositsReceived),
+        detail: "Posted deposit payments from invoice schedules.",
+        tone: depositsReceived > 0 ? "green" : "blue",
+        icon: DollarSign,
+      },
+      {
+        label: "Progress billing",
+        value: String(progressBilling.length),
+        detail: "Invoices partially collected with balance remaining.",
+        tone: progressBilling.length > 0 ? "blue" : "green",
+        icon: ReceiptText,
+      },
+      {
+        label: "Cash flow",
+        value: cashFlowIndicator,
+        detail: `${formatMoney(revenueThisWeek)} this week vs ${formatMoney(revenuePriorWeek)} prior week.`,
+        tone: revenueThisWeek >= revenuePriorWeek ? "green" : "amber",
+        icon: Activity,
+      },
+    ],
+    salesItems: buildExecutiveSalesItems(agingEstimates, overdueFollowUps, approvedEstimates),
+    operationsItems: buildExecutiveOperationsItems(
+      jobsBehindSchedule,
+      productionKpis.jobsMissingCrew,
+      materialWarnings,
+      warrantyCallbacks,
+      overloadedEmployees,
+    ),
+    customerItems: buildExecutiveCustomerItems(
+      failedCommunications,
+      missedCalls,
+      reviewItems,
+      warrantyRequests,
+    ),
+    financialItems: buildExecutiveFinancialItems(
+      overdueInvoices,
+      progressBilling,
+      collectionsDue,
+      financialSummary.changeOrdersAwaitingBilling,
+    ),
+    alerts,
+    trends: [
+      {
+        label: "Revenue",
+        value: formatMoney(revenueThisWeek),
+        detail: `Prior week ${formatMoney(revenuePriorWeek)}`,
+        current: revenueThisWeek,
+        previous: revenuePriorWeek,
+        tone: revenueThisWeek >= revenuePriorWeek ? "green" : "amber",
+      },
+      {
+        label: "Sales",
+        value: formatMoney(pipelineValue),
+        detail: `${openLeads.length} open leads, ${openEstimates.length} open estimates`,
+        current: openLeads.length + openEstimates.length,
+        previous: Math.max(snapshot.leads.length - openLeads.length, 0),
+        tone: "blue",
+      },
+      {
+        label: "Production",
+        value: `${metrics.productionCompletion}%`,
+        detail: `${productionKpis.completedJobs.length} completed jobs`,
+        current: productionKpis.completedJobs.length,
+        previous: Math.max(snapshot.jobs.length - productionKpis.completedJobs.length, 0),
+        tone: productionBottlenecks > 0 ? "amber" : "green",
+      },
+      {
+        label: "Lead volume",
+        value: String(leadsThisWeek.length),
+        detail: `${leadsPriorWeek.length} in the prior week`,
+        current: leadsThisWeek.length,
+        previous: leadsPriorWeek.length,
+        tone: leadsThisWeek.length >= leadsPriorWeek.length ? "green" : "blue",
+      },
+      {
+        label: "Estimate conversion",
+        value: `${metrics.closeRate}%`,
+        detail: winLossTrend,
+        current: wonLeads.length,
+        previous: lostLeads.length,
+        tone: metrics.closeRate >= 40 ? "green" : "amber",
+      },
+      {
+        label: "Jobs completed",
+        value: String(productionKpis.completedJobs.length),
+        detail: `${productionKpis.activeJobs.length} active jobs remain`,
+        current: productionKpis.completedJobs.length,
+        previous: productionKpis.activeJobs.length,
+        tone: productionKpis.activeJobs.length > productionKpis.completedJobs.length ? "blue" : "green",
+      },
+    ],
+    leaderboard: buildExecutiveLeaderboard(openLeads),
+  };
+}
+
+function startOfCurrentMonthIsoDate() {
+  const date = new Date();
+  date.setDate(1);
+  return date.toISOString().slice(0, 10);
+}
+
+function isSameIsoDay(value: string | null | undefined, target: string) {
+  return dateKey(value) === target;
+}
+
+function isDateInIsoWindow(
+  value: string | null | undefined,
+  start: string,
+  end: string,
+) {
+  const key = dateKey(value);
+  return Boolean(key && key >= start && key <= end);
+}
+
+function sumPaymentsInWindow(payments: PaymentRecord[], start: string, end: string) {
+  return payments
+    .filter((payment) => isDateInIsoWindow(payment.paid_at ?? payment.created_at, start, end))
+    .reduce((total, payment) => total + payment.amount, 0);
+}
+
+function getJobsScheduledOn(snapshot: CrmSnapshot, targetDate: string) {
+  const scheduledJobIds = new Set<string>();
+
+  snapshot.jobs.forEach((job) => {
+    if (
+      (getJobScheduledStart(job) && isSameIsoDay(getJobScheduledStart(job), targetDate)) ||
+      (job.start_date !== null && job.start_date === targetDate)
+    ) {
+      scheduledJobIds.add(job.id);
+    }
+  });
+
+  snapshot.scheduleEvents.forEach((event) => {
+    if (event.job_id && event.status === "scheduled" && isSameIsoDay(event.start_at, targetDate)) {
+      scheduledJobIds.add(event.job_id);
+    }
+  });
+
+  return snapshot.jobs.filter((job) => scheduledJobIds.has(job.id));
+}
+
+function countOverloadedEmployees(snapshot: CrmSnapshot, targetDate: string) {
+  const assignmentsByEmployee = new Map<string, number>();
+
+  snapshot.jobAssignments
+    .filter((assignment) => assignment.status === "assigned" || assignment.status === "accepted")
+    .forEach((assignment) => {
+      const job = assignment.job_id
+        ? snapshot.jobs.find((item) => item.id === assignment.job_id)
+        : null;
+      const event = assignment.schedule_event_id
+        ? snapshot.scheduleEvents.find((item) => item.id === assignment.schedule_event_id)
+        : null;
+      const assignmentDate =
+        event?.start_at ?? job?.scheduled_start ?? job?.start_date ?? assignment.assigned_date;
+
+      if (dateKey(assignmentDate) === targetDate) {
+        assignmentsByEmployee.set(
+          assignment.employee_id,
+          (assignmentsByEmployee.get(assignment.employee_id) ?? 0) + 1,
+        );
+      }
+    });
+
+  return [...assignmentsByEmployee.values()].filter((count) => count > 1).length;
+}
+
+function getWarrantyRelatedItems(snapshot: CrmSnapshot) {
+  const searchTargets = [
+    ...snapshot.jobs.map((job) => ({
+      id: job.id,
+      title: job.title,
+      notes: job.notes,
+      companyId: job.company_id,
+    })),
+    ...snapshot.notifications.map((notification) => ({
+      id: notification.id,
+      title: notification.title,
+      notes: notification.message,
+      companyId: notification.company_id,
+    })),
+  ];
+
+  return searchTargets.filter((item) =>
+    `${item.title} ${item.notes ?? ""}`.toLowerCase().includes("warranty"),
+  );
+}
+
+function buildExecutiveAlerts({
+  companyMap,
+  urgentLeads,
+  overdueFollowUps,
+  agingEstimates,
+  jobsBehindSchedule,
+  blockedJobs,
+  missingCrewJobs,
+  missingScheduleJobs,
+  materialWarnings,
+  overdueInvoices,
+  failedCommunications,
+  missedCalls,
+  scheduleConflictCount,
+  unsignedSignatures,
+  requiredDocumentsOpen,
+}: {
+  companyMap: Map<string, CompanyRecord>;
+  urgentLeads: LeadRecord[];
+  overdueFollowUps: LeadRecord[];
+  agingEstimates: EstimateRecord[];
+  jobsBehindSchedule: JobRecord[];
+  blockedJobs: JobRecord[];
+  missingCrewJobs: JobRecord[];
+  missingScheduleJobs: JobRecord[];
+  materialWarnings: MaterialOrderRecord[];
+  overdueInvoices: InvoiceRecord[];
+  failedCommunications: UnifiedInboxItem[];
+  missedCalls: UnifiedInboxItem[];
+  scheduleConflictCount: number;
+  unsignedSignatures: SignatureRecord[];
+  requiredDocumentsOpen: DocumentRecord[];
+}): ExecutiveAlert[] {
+  const alerts: ExecutiveAlert[] = [];
+  const addAlert = (alert: ExecutiveAlert) => {
+    if (alerts.length < 8 && !alerts.some((item) => item.id === alert.id)) {
+      alerts.push(alert);
+    }
+  };
+  const companyName = (companyId: string | null | undefined) =>
+    (companyId ? companyMap.get(companyId)?.name : null) ?? "Company";
+
+  blockedJobs.slice(0, 2).forEach((job) =>
+    addAlert({
+      id: `blocked-job-${job.id}`,
+      priority: "High Priority",
+      title: job.title,
+      detail: "Production is blocked.",
+      recommendedAction: "Open production and remove the blocker.",
+      companyName: companyName(job.company_id),
+      view: "jobs",
+      icon: AlertTriangle,
+    }),
+  );
+
+  overdueInvoices.slice(0, 2).forEach((invoice) =>
+    addAlert({
+      id: `overdue-invoice-${invoice.id}`,
+      priority: "High Priority",
+      title: invoice.title,
+      detail: `${formatMoney(invoice.balance_due)} overdue.`,
+      recommendedAction: "Open invoices and follow up on collection.",
+      companyName: companyName(invoice.company_id),
+      view: "invoices",
+      icon: ReceiptText,
+    }),
+  );
+
+  failedCommunications.slice(0, 2).forEach((item) =>
+    addAlert({
+      id: `failed-communication-${item.id}`,
+      priority: "High Priority",
+      title: item.customerName,
+      detail: item.failureDetail ?? "Communication needs review.",
+      recommendedAction: "Open communications and resolve the failed item.",
+      companyName: companyName(item.companyId),
+      view: "inbox",
+      icon: MessageSquare,
+    }),
+  );
+
+  urgentLeads.slice(0, 2).forEach((lead) =>
+    addAlert({
+      id: `urgent-lead-${lead.id}`,
+      priority: "High Priority",
+      title: lead.contact_name,
+      detail: `${lead.source} lead marked ${lead.priority}.`,
+      recommendedAction: "Open leads and assign next follow-up.",
+      companyName: companyName(lead.company_id),
+      view: "leads",
+      icon: ClipboardList,
+    }),
+  );
+
+  if (scheduleConflictCount > 0) {
+    addAlert({
+      id: "schedule-conflicts",
+      priority: "High Priority",
+      title: `${scheduleConflictCount} schedule conflict${scheduleConflictCount === 1 ? "" : "s"}`,
+      detail: "One or more scheduled events overlap.",
+      recommendedAction: "Open calendar and resolve dispatch conflicts.",
+      companyName: "All companies",
+      view: "calendar",
+      icon: CalendarClock,
+    });
+  }
+
+  [
+    ...jobsBehindSchedule.slice(0, 1).map((job) => ({
+      id: `behind-${job.id}`,
+      title: job.title,
+      detail: "Job is behind schedule.",
+      view: "jobs" as const,
+      companyId: job.company_id,
+      icon: CalendarClock,
+    })),
+    ...missingCrewJobs.slice(0, 1).map((job) => ({
+      id: `missing-crew-${job.id}`,
+      title: job.title,
+      detail: "Job is missing a crew assignment.",
+      view: "jobs" as const,
+      companyId: job.company_id,
+      icon: Users,
+    })),
+    ...missingScheduleJobs.slice(0, 1).map((job) => ({
+      id: `missing-schedule-${job.id}`,
+      title: job.title,
+      detail: "Job is waiting for production scheduling.",
+      view: "jobs" as const,
+      companyId: job.company_id,
+      icon: CalendarClock,
+    })),
+    ...agingEstimates.slice(0, 1).map((estimate) => ({
+      id: `aging-estimate-${estimate.id}`,
+      title: estimate.title,
+      detail: "Estimate has aged without approval.",
+      view: "estimates" as const,
+      companyId: estimate.company_id,
+      icon: Calculator,
+    })),
+    ...overdueFollowUps.slice(0, 1).map((lead) => ({
+      id: `overdue-follow-up-${lead.id}`,
+      title: lead.contact_name,
+      detail: "Follow-up is overdue.",
+      view: "leads" as const,
+      companyId: lead.company_id,
+      icon: Phone,
+    })),
+    ...materialWarnings.slice(0, 1).map((order) => ({
+      id: `material-warning-${order.id}`,
+      title: order.supplier_name,
+      detail: "Material readiness needs review.",
+      view: "orders" as const,
+      companyId: order.company_id,
+      icon: Package,
+    })),
+    ...missedCalls.slice(0, 1).map((item) => ({
+      id: `missed-call-${item.id}`,
+      title: item.customerName,
+      detail: "Missed customer call.",
+      view: "inbox" as const,
+      companyId: item.companyId,
+      icon: Phone,
+    })),
+    ...unsignedSignatures.slice(0, 1).map((signature) => ({
+      id: `signature-${signature.id}`,
+      title: signature.signer_name,
+      detail: "Signature is still pending.",
+      view: "documents" as const,
+      companyId: signature.company_id,
+      icon: Pencil,
+    })),
+    ...requiredDocumentsOpen.slice(0, 1).map((document) => ({
+      id: `required-document-${document.id}`,
+      title: document.title,
+      detail: "Required document is not complete.",
+      view: "documents" as const,
+      companyId: document.company_id,
+      icon: FileText,
+    })),
+  ].forEach((item) =>
+    addAlert({
+      id: item.id,
+      priority: "Medium Priority",
+      title: item.title,
+      detail: item.detail,
+      recommendedAction: "Open the source workspace and finish the next step.",
+      companyName: companyName(item.companyId),
+      view: item.view,
+      icon: item.icon,
+    }),
+  );
+
+  if (!alerts.length) {
+    return [
+      {
+        id: "healthy-snapshot",
+        priority: "Low Priority",
+        title: "No urgent exceptions in the current snapshot",
+        detail: "Core sales, production, communication, and financial indicators are quiet.",
+        recommendedAction: "Review the schedule and keep follow-ups moving.",
+        companyName: "All companies",
+        view: "dashboard",
+        icon: CheckCircle2,
+      },
+    ];
+  }
+
+  return alerts.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+}
+
+function priorityRank(priority: ExecutiveAlertPriority) {
+  return priority === "High Priority" ? 0 : priority === "Medium Priority" ? 1 : 2;
+}
+
+function buildExecutiveSalesItems(
+  agingEstimates: EstimateRecord[],
+  overdueFollowUps: LeadRecord[],
+  approvedEstimates: EstimateRecord[],
+): ExecutiveListItem[] {
+  const items: ExecutiveListItem[] = [
+    ...agingEstimates.slice(0, 3).map((estimate) => ({
+      id: `aging-estimate-${estimate.id}`,
+      title: estimate.title,
+      detail: "Aging estimate",
+      meta: `${formatMoney(estimate.total)} - updated ${formatDate(estimate.updated_at)}`,
+      tone: "amber" as const,
+    })),
+    ...overdueFollowUps.slice(0, 3).map((lead) => ({
+      id: `follow-up-${lead.id}`,
+      title: lead.contact_name,
+      detail: "Follow-up overdue",
+      meta: lead.next_follow_up ? formatDate(lead.next_follow_up) : "Past due",
+      tone: "amber" as const,
+    })),
+    ...approvedEstimates.slice(0, 2).map((estimate) => ({
+      id: `approved-estimate-${estimate.id}`,
+      title: estimate.title,
+      detail: "Recently approved estimate",
+      meta: formatMoney(estimate.total),
+      tone: "green" as const,
+    })),
+  ];
+
+  return items.length ? items : getHealthyExecutiveItems("Sales queue is current.");
+}
+
+function buildExecutiveOperationsItems(
+  jobsBehindSchedule: JobRecord[],
+  missingCrewJobs: JobRecord[],
+  materialWarnings: MaterialOrderRecord[],
+  warrantyCallbacks: Array<{ id: string; title: string; notes: string | null; companyId: string }>,
+  overloadedEmployees: number,
+): ExecutiveListItem[] {
+  const items: ExecutiveListItem[] = [
+    ...jobsBehindSchedule.slice(0, 3).map((job) => ({
+      id: `behind-${job.id}`,
+      title: job.title,
+      detail: "Behind schedule",
+      meta: job.end_date ? `Ended ${formatDate(job.end_date)}` : "Schedule date passed",
+      tone: "amber" as const,
+    })),
+    ...missingCrewJobs.slice(0, 2).map((job) => ({
+      id: `crew-${job.id}`,
+      title: job.title,
+      detail: "Missing crew",
+      meta: job.property_address,
+      tone: "amber" as const,
+    })),
+    ...materialWarnings.slice(0, 2).map((order) => ({
+      id: `material-${order.id}`,
+      title: order.supplier_name,
+      detail: "Material readiness warning",
+      meta: order.expected_delivery_date
+        ? `Expected ${formatDate(order.expected_delivery_date)}`
+        : "No expected date",
+      tone: "amber" as const,
+    })),
+    ...warrantyCallbacks.slice(0, 2).map((item) => ({
+      id: `warranty-${item.id}`,
+      title: item.title,
+      detail: "Warranty callback",
+      meta: item.notes ?? "Review warranty context",
+      tone: "blue" as const,
+    })),
+  ];
+
+  if (overloadedEmployees > 0) {
+    items.unshift({
+      id: "overloaded-crews",
+      title: `${overloadedEmployees} overloaded crew member${overloadedEmployees === 1 ? "" : "s"}`,
+      detail: "Capacity needs review",
+      meta: "More than one assignment today",
+      tone: "amber",
+    });
+  }
+
+  return items.length ? items : getHealthyExecutiveItems("Production has no visible blockers.");
+}
+
+function buildExecutiveCustomerItems(
+  failedCommunications: UnifiedInboxItem[],
+  missedCalls: UnifiedInboxItem[],
+  reviewItems: UnifiedInboxItem[],
+  warrantyRequests: UnifiedInboxItem[],
+): ExecutiveListItem[] {
+  const items: ExecutiveListItem[] = [
+    ...failedCommunications.slice(0, 2).map((item) => ({
+      id: `failed-${item.id}`,
+      title: item.customerName,
+      detail: "Communication failure",
+      meta: item.failureDetail ?? item.status,
+      tone: "amber" as const,
+    })),
+    ...missedCalls.slice(0, 2).map((item) => ({
+      id: `missed-${item.id}`,
+      title: item.customerName,
+      detail: "Missed call",
+      meta: formatDateTime(item.createdAt),
+      tone: "amber" as const,
+    })),
+    ...reviewItems.slice(0, 2).map((item) => ({
+      id: `review-${item.id}`,
+      title: item.customerName,
+      detail: "Review or lead-source response",
+      meta: item.sourceLabel,
+      tone: "blue" as const,
+    })),
+    ...warrantyRequests.slice(0, 2).map((item) => ({
+      id: `warranty-request-${item.id}`,
+      title: item.customerName,
+      detail: "Warranty request",
+      meta: item.sourceLabel,
+      tone: "amber" as const,
+    })),
+  ];
+
+  return items.length ? items : getHealthyExecutiveItems("Customer communication is clear.");
+}
+
+function buildExecutiveFinancialItems(
+  overdueInvoices: InvoiceRecord[],
+  progressBilling: InvoiceRecord[],
+  collectionsDue: InvoiceRecord[],
+  changeOrdersAwaitingBilling: ChangeOrderRecord[],
+): ExecutiveListItem[] {
+  const items: ExecutiveListItem[] = [
+    ...overdueInvoices.slice(0, 3).map((invoice) => ({
+      id: `overdue-${invoice.id}`,
+      title: invoice.title,
+      detail: "Overdue invoice",
+      meta: `${formatMoney(invoice.balance_due)} due`,
+      tone: "amber" as const,
+    })),
+    ...collectionsDue.slice(0, 2).map((invoice) => ({
+      id: `collection-${invoice.id}`,
+      title: invoice.title,
+      detail: "Collection action due",
+      meta: invoice.due_date ? `Due ${formatDate(invoice.due_date)}` : "Due now",
+      tone: "amber" as const,
+    })),
+    ...progressBilling.slice(0, 2).map((invoice) => ({
+      id: `progress-${invoice.id}`,
+      title: invoice.title,
+      detail: "Progress billing",
+      meta: `${formatMoney(invoice.amount_paid)} collected, ${formatMoney(invoice.balance_due)} remaining`,
+      tone: "blue" as const,
+    })),
+    ...changeOrdersAwaitingBilling.slice(0, 2).map((changeOrder) => ({
+      id: `change-order-${changeOrder.id}`,
+      title: changeOrder.title,
+      detail: "Change order awaiting billing",
+      meta: formatMoney(changeOrder.total),
+      tone: "blue" as const,
+    })),
+  ];
+
+  return items.length ? items : getHealthyExecutiveItems("Financial queue is current.");
+}
+
+function getHealthyExecutiveItems(label: string): ExecutiveListItem[] {
+  return [
+    {
+      id: label,
+      title: label,
+      detail: "No urgent action",
+      meta: "Current snapshot",
+      tone: "green",
+    },
+  ];
+}
+
+function buildExecutiveLeaderboard(openLeads: LeadRecord[]) {
+  const rows = new Map<string, ExecutiveLeaderboardRow>();
+
+  openLeads.forEach((lead) => {
+    const owner = lead.created_by?.trim() || "Unassigned";
+    const row = rows.get(owner) ?? { owner, count: 0, value: 0 };
+    row.count += 1;
+    row.value += lead.estimated_value;
+    rows.set(owner, row);
+  });
+
+  return [...rows.values()]
+    .sort((a, b) => b.value - a.value || b.count - a.count)
+    .slice(0, 5);
+}
+
+function ExecutiveHeroMetric({ card }: { card: ExecutiveMetric }) {
+  const Icon = card.icon;
+  const toneClass = {
+    amber: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    blue: "border-sky-300/20 bg-sky-300/10 text-sky-100",
+    green: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+  }[card.tone];
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+    <article className={`rounded-xl border p-4 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] opacity-80">
+          {card.label}
+        </p>
+        <Icon className="h-5 w-5 opacity-80" />
+      </div>
+      <p className="mt-4 text-3xl font-black tracking-tight text-white">{card.value}</p>
+      <p className="mt-2 text-sm leading-5 opacity-80">{card.detail}</p>
+    </article>
+  );
+}
+
+function ExecutiveAlertFeed({
+  alerts,
+  onViewChange,
+}: {
+  alerts: ExecutiveAlert[];
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Executive Alerts</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Prioritized exceptions with the next owner action.
+          </p>
+        </div>
+        <Badge
+          label={`${alerts.length} active`}
+          tone={alerts.some((alert) => alert.priority === "High Priority") ? "amber" : "green"}
+        />
+      </div>
+      <div className="mt-5 grid gap-3">
+        {alerts.map((alert) => {
+          const Icon = alert.icon;
+          const priorityClass = {
+            "High Priority": "border-amber-300 bg-amber-50 text-amber-950",
+            "Medium Priority": "border-sky-200 bg-sky-50 text-sky-950",
+            "Low Priority": "border-emerald-200 bg-emerald-50 text-emerald-950",
+          }[alert.priority];
+
+          return (
+            <article key={alert.id} className={`rounded-xl border p-4 ${priorityClass}`}>
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Icon className="h-4 w-4" />
+                    <span className="text-xs font-bold uppercase tracking-[0.14em]">
+                      {alert.priority}
+                    </span>
+                    <span className="text-xs font-semibold opacity-70">
+                      {alert.companyName}
+                    </span>
+                  </div>
+                  <h4 className="mt-2 text-lg font-black">{alert.title}</h4>
+                  <p className="mt-1 text-sm opacity-80">{alert.detail}</p>
+                  <p className="mt-3 text-sm font-semibold">
+                    Recommended next action: {alert.recommendedAction}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onViewChange(alert.view)}
+                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-950 focus:ring-offset-2"
+                >
+                  Open workflow
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ExecutiveTrendPanel({ trends }: { trends: ExecutiveTrend[] }) {
+  return (
+    <section
+      className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+      data-testid="executive-trend-panel"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Trends</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Simple directional signals, not a spreadsheet.
+          </p>
+        </div>
+        <Activity className="h-5 w-5 text-slate-400" />
+      </div>
       <div className="mt-5 grid gap-4">
-        {rows.map((row) => (
-          <div key={row.label}>
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-semibold text-slate-700">{row.label}</span>
-              <span className="font-bold text-slate-950">
-                {valueFormat === "money" ? formatMoney(row.value) : row.value}
-              </span>
+        {trends.map((trend) => {
+          const max = Math.max(trend.current, trend.previous, 1);
+          const width = Math.max(8, Math.min(100, (trend.current / max) * 100));
+          const toneClass = {
+            amber: "bg-amber-500",
+            blue: "bg-sky-500",
+            green: "bg-emerald-500",
+          }[trend.tone];
+
+          return (
+            <div key={trend.label}>
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-semibold text-slate-700">{trend.label}</span>
+                <span className="font-black text-slate-950">{trend.value}</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${toneClass}`}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+              <p className="mt-1 text-xs font-medium text-slate-500">{trend.detail}</p>
             </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full wt-progress-fill"
-                style={{ width: `${Math.max((row.value / max) * 100, 4)}%` }}
-              />
-            </div>
-          </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ExecutiveIntelligencePanel({
+  title,
+  description,
+  metrics,
+  items,
+}: {
+  title: string;
+  description: string;
+  metrics: ExecutiveMetric[];
+  items: ExecutiveListItem[];
+}) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div>
+        <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+        <p className="mt-1 text-sm text-slate-500">{description}</p>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        {metrics.map((metric) => (
+          <ExecutiveCompactMetric key={metric.label} metric={metric} />
+        ))}
+      </div>
+      <div className="mt-5 grid gap-3">
+        {items.map((item) => (
+          <ExecutiveListRow key={item.id} item={item} />
         ))}
       </div>
     </section>
   );
 }
 
-function CompanyAnalyticsCard({ summary }: { summary: CompanyDashboardSummary }) {
-  const accent =
-    summary.company.trade === "painting"
-      ? "border-orange-200 bg-orange-50 text-orange-900"
-      : "border-indigo-200 bg-indigo-50 text-indigo-900";
+function ExecutiveCompactMetric({ metric }: { metric: ExecutiveMetric }) {
+  const Icon = metric.icon;
+  const toneClass = {
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    blue: "border-sky-200 bg-sky-50 text-sky-900",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  }[metric.tone];
 
   return (
-    <article className={`rounded-lg border p-4 ${accent}`}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase opacity-70">
-            {summary.company.short_name ?? summary.company.workflow_profile}
-          </p>
-          <h4 className="mt-1 text-lg font-bold">{summary.company.name}</h4>
-        </div>
-        <Badge
-          label={`${summary.metrics.closeRate}% close rate`}
-          tone={summary.metrics.closeRate >= 40 ? "green" : "blue"}
-        />
+    <article className={`rounded-lg border p-3 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] opacity-70">
+          {metric.label}
+        </p>
+        <Icon className="h-4 w-4 opacity-70" />
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <ProfileStat label="Open estimates" value={summary.openEstimates} />
-        <ProfileStat label="Active jobs" value={summary.activeJobs} />
-        <ProfileStat label="Scheduled work" value={summary.scheduledWork} />
-        <ProfileStat label="Pending documents" value={summary.pendingDocuments} />
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div>
-          <p className="text-xs font-semibold uppercase opacity-70">Pipeline</p>
-          <p className="mt-1 text-2xl font-bold">
-            {formatMoney(summary.metrics.pipelineValue)}
-          </p>
+      <p className="mt-3 text-2xl font-black">{metric.value}</p>
+      <p className="mt-1 text-xs font-medium leading-5 opacity-75">{metric.detail}</p>
+    </article>
+  );
+}
+
+function ExecutiveListRow({ item }: { item: ExecutiveListItem }) {
+  const toneClass = {
+    amber: "border-amber-200 bg-amber-50",
+    blue: "border-sky-200 bg-sky-50",
+    green: "border-emerald-200 bg-emerald-50",
+  }[item.tone];
+
+  return (
+    <article className={`rounded-lg border px-3 py-3 ${toneClass}`}>
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="font-semibold text-slate-950">{item.title}</p>
+          <p className="text-sm text-slate-600">{item.detail}</p>
         </div>
-        <div>
-          <p className="text-xs font-semibold uppercase opacity-70">Revenue</p>
-          <p className="mt-1 text-2xl font-bold">
-            {formatMoney(summary.revenue)}
-          </p>
-        </div>
+        <p className="text-sm font-semibold text-slate-700 sm:text-right">{item.meta}</p>
       </div>
     </article>
   );

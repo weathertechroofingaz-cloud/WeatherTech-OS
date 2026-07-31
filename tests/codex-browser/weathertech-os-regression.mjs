@@ -28,6 +28,7 @@ const DEFAULT_GROUPS = [
   "documents",
   "customer-portal",
   "financial",
+  "analytics",
   "calendar",
   "dispatch",
   "inspections",
@@ -3093,6 +3094,140 @@ async function testOfficeOperationsWorkspace(browser, tab) {
   if (mobileLayout.scrollWidth > mobileLayout.viewportWidth + 8) {
     throw new Error(
       `Office Operations mobile layout overflows horizontally: ${mobileLayout.scrollWidth}px > ${mobileLayout.viewportWidth}px.`,
+    );
+  }
+
+  return { desktopLayout, mobileLayout };
+}
+
+async function testExecutiveIntelligenceWorkspace(browser, tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Analytics");
+
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="executive-intelligence-workspace"]');
+      const text = workspace?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("executive intelligence") &&
+        text.includes("what needs action next") &&
+        text.includes("today's business snapshot") &&
+        text.includes("revenue today") &&
+        text.includes("revenue this week") &&
+        text.includes("revenue this month") &&
+        text.includes("jobs completed") &&
+        text.includes("jobs scheduled") &&
+        text.includes("leads received") &&
+        text.includes("estimates awaiting approval") &&
+        text.includes("collections due") &&
+        text.includes("sales intelligence") &&
+        text.includes("pipeline value") &&
+        text.includes("close rate") &&
+        text.includes("win/loss trend") &&
+        text.includes("average estimate") &&
+        text.includes("sales leaderboard") &&
+        text.includes("aging estimate") &&
+        text.includes("follow-up health") &&
+        text.includes("operations intelligence") &&
+        text.includes("jobs behind schedule") &&
+        text.includes("crew utilization") &&
+        text.includes("crews overloaded") &&
+        text.includes("available capacity") &&
+        text.includes("open inspections") &&
+        text.includes("material shortages") &&
+        text.includes("production bottlenecks") &&
+        text.includes("customer experience") &&
+        text.includes("open customer issues") &&
+        text.includes("response signals") &&
+        text.includes("reviews awaiting response") &&
+        text.includes("warranty requests") &&
+        text.includes("satisfaction indicators") &&
+        text.includes("financial intelligence") &&
+        text.includes("outstanding invoices") &&
+        text.includes("a/r aging") &&
+        text.includes("deposits received") &&
+        text.includes("progress billing") &&
+        text.includes("cash flow") &&
+        text.includes("executive alerts") &&
+        text.includes("recommended next action") &&
+        text.includes("trends") &&
+        text.includes("simple directional signals")
+      );
+    },
+    "executive intelligence workspace",
+    15000,
+  );
+
+  const desktopLayout = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="executive-intelligence-workspace"]');
+    const alertFeed = document.querySelector('[data-testid="executive-alert-feed"]');
+    const trendPanel = document.querySelector('[data-testid="executive-trend-panel"]');
+    const openWorkflowButtons = [
+      ...document.querySelectorAll('[data-testid="executive-alert-feed"] button'),
+    ].filter((button) => button.textContent?.includes("Open workflow"));
+
+    return {
+      visible: Boolean(workspace),
+      alertFeedVisible: Boolean(alertFeed),
+      trendPanelVisible: Boolean(trendPanel),
+      openWorkflowButtonCount: openWorkflowButtons.length,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
+    };
+  });
+
+  if (!desktopLayout.visible || !desktopLayout.alertFeedVisible || !desktopLayout.trendPanelVisible) {
+    throw new Error("Executive Intelligence workspace did not render its core regions.");
+  }
+
+  if (desktopLayout.openWorkflowButtonCount < 1) {
+    throw new Error("Executive Intelligence alerts do not expose existing workflow actions.");
+  }
+
+  if (desktopLayout.hasHorizontalOverflow) {
+    throw new Error("Executive Intelligence desktop layout overflows horizontally.");
+  }
+
+  await clickCompanyScope(tab, "IHC Painting");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("IHC Painting"),
+    "executive intelligence IHC scope",
+    8000,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("WeatherTech Roofing LLC"),
+    "executive intelligence WeatherTech scope",
+    8000,
+  );
+  await clickCompanyScope(tab, "All companies");
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await clickNav(tab, "Analytics");
+  const mobileLayout = await tab.playwright.evaluate(() => {
+    const workspace = document.querySelector('[data-testid="executive-intelligence-workspace"]');
+
+    return {
+      visible: Boolean(workspace),
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      alertFeedVisible: Boolean(document.querySelector('[data-testid="executive-alert-feed"]')),
+      trendPanelVisible: Boolean(document.querySelector('[data-testid="executive-trend-panel"]')),
+    };
+  });
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (!mobileLayout.visible || !mobileLayout.alertFeedVisible || !mobileLayout.trendPanelVisible) {
+    throw new Error("Executive Intelligence workspace did not render at mobile width.");
+  }
+
+  if (mobileLayout.scrollWidth > mobileLayout.viewportWidth + 8) {
+    throw new Error(
+      `Executive Intelligence mobile layout overflows horizontally: ${mobileLayout.scrollWidth}px > ${mobileLayout.viewportWidth}px.`,
     );
   }
 
@@ -9631,6 +9766,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("financial")) {
       await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
         testFinancialOperationsWorkspace(browser, tab, env, weatherTech, runId, progress),
+      );
+    }
+
+    if (enabledGroups.has("analytics")) {
+      await record("Executive Intelligence summarizes revenue, sales, operations, customer, financial, alerts, and trends", () =>
+        testExecutiveIntelligenceWorkspace(browser, tab),
       );
     }
 
