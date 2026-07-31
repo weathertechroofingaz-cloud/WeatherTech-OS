@@ -5948,11 +5948,9 @@ function CrmWorkspace({
 
           {view === "customerPortal" ? (
             <CustomerPortalView
-              client={client}
               snapshot={scopedSnapshot}
-              onReload={onReload}
+              companyMap={companyMap}
               onNotice={onNotice}
-              onError={onError}
             />
           ) : null}
 
@@ -32345,221 +32343,1029 @@ function WeatherMeasure({ label, value }: { label: string; value: string | numbe
   );
 }
 
-function CustomerPortalView({
-  client,
-  snapshot,
-  onReload,
-  onNotice,
-  onError,
+type CustomerPortalTab =
+  | "home"
+  | "project"
+  | "documents"
+  | "photos"
+  | "messages"
+  | "schedule"
+  | "payments"
+  | "warranty"
+  | "profile";
+
+type CustomerPortalTimelineStep = {
+  label: string;
+  detail: string;
+  state: "complete" | "current" | "upcoming";
+};
+
+type CustomerPortalDraftMessage = {
+  id: string;
+  body: string;
+  createdAt: string;
+};
+
+type CustomerPortalScheduleItem = {
+  id: string;
+  title: string;
+  detail: string;
+  startAt: string;
+  status: string;
+};
+
+const customerPortalTabs: { value: CustomerPortalTab; label: string }[] = [
+  { value: "home", label: "Home" },
+  { value: "project", label: "My Project" },
+  { value: "documents", label: "Documents" },
+  { value: "photos", label: "Photos" },
+  { value: "messages", label: "Messages" },
+  { value: "schedule", label: "Schedule" },
+  { value: "payments", label: "Payments" },
+  { value: "warranty", label: "Warranty" },
+  { value: "profile", label: "Profile" },
+];
+
+function getCustomerPortalPhotoGroup(photo: JobPhotoRecord) {
+  const text = `${photo.label ?? ""} ${photo.caption ?? ""} ${photo.file_path}`.toLowerCase();
+
+  if (text.includes("inspection")) {
+    return "Inspection";
+  }
+
+  if (text.includes("before") || text.includes("pre-work") || text.includes("pre work")) {
+    return "Before";
+  }
+
+  if (text.includes("after") || text.includes("completed") || text.includes("final")) {
+    return "After";
+  }
+
+  return "Progress";
+}
+
+function buildCustomerPortalTimelineSteps(
+  related: CustomerRelatedRecords,
+  signatures: SignatureRecord[],
+): CustomerPortalTimelineStep[] {
+  const hasLead = related.leads.length > 0;
+  const completedInspection = related.inspections.some(
+    (inspection) => inspection.status === "completed" || inspection.completed_at,
+  );
+  const activeInspection = related.inspections.some(
+    (inspection) => inspection.status !== "completed" && inspection.status !== "canceled",
+  );
+  const hasEstimate = related.estimates.length > 0;
+  const estimateApproved = related.estimates.some((estimate) => estimate.status === "approved");
+  const signatureActive = signatures.some(isActiveSignatureRequest);
+  const scheduled = related.scheduleEvents.some((event) => event.status === "scheduled");
+  const inProduction = related.jobs.some((job) => job.status === "in_progress");
+  const scheduledJob = related.jobs.some((job) => job.status === "scheduled");
+  const completedJob = related.jobs.some(
+    (job) => job.status === "completed" || job.status === "closed",
+  );
+
+  const rawSteps = [
+    {
+      label: "Lead",
+      complete: hasLead || hasEstimate || related.jobs.length > 0,
+      current: !hasLead && !hasEstimate && related.jobs.length === 0,
+      detail: hasLead ? "Request received" : "Project record started",
+    },
+    {
+      label: "Inspection",
+      complete: completedInspection,
+      current: activeInspection,
+      detail: completedInspection
+        ? "Inspection complete"
+        : activeInspection
+          ? "Inspection scheduled"
+          : "Waiting for inspection",
+    },
+    {
+      label: "Estimate",
+      complete: hasEstimate,
+      current: !hasEstimate && (completedInspection || hasLead),
+      detail: hasEstimate ? "Estimate available" : "Estimate will be prepared",
+    },
+    {
+      label: "Approval",
+      complete: estimateApproved || signatures.some((signature) => signature.status === "signed"),
+      current: signatureActive || related.estimates.some((estimate) => estimate.status === "sent"),
+      detail:
+        estimateApproved || signatures.some((signature) => signature.status === "signed")
+          ? "Approved"
+          : signatureActive
+            ? "Signature requested"
+            : "Pending customer approval",
+    },
+    {
+      label: "Scheduling",
+      complete: scheduledJob || inProduction || completedJob,
+      current: scheduled && !scheduledJob && !inProduction && !completedJob,
+      detail: scheduledJob || scheduled ? "Visit scheduled" : "Waiting for scheduling",
+    },
+    {
+      label: "Production",
+      complete: completedJob,
+      current: inProduction,
+      detail: inProduction
+        ? "Crew is working"
+        : completedJob
+          ? "Production complete"
+          : "Not started",
+    },
+    {
+      label: "Final Walkthrough",
+      complete: completedJob,
+      current: related.jobs.some((job) => job.status === "completed"),
+      detail: completedJob ? "Ready for closeout" : "Upcoming after production",
+    },
+    {
+      label: "Completed",
+      complete: related.jobs.some((job) => job.status === "closed"),
+      current: false,
+      detail: related.jobs.some((job) => job.status === "closed")
+        ? "Project closed"
+        : "Final step",
+    },
+  ];
+
+  const firstIncompleteIndex = rawSteps.findIndex((step) => !step.complete);
+
+  return rawSteps.map((step, index) => ({
+    label: step.label,
+    detail: step.detail,
+    state: step.complete
+      ? "complete"
+      : step.current || index === firstIncompleteIndex
+        ? "current"
+        : "upcoming",
+  }));
+}
+
+function getCustomerPortalPrimaryStatus(
+  snapshot: CrmSnapshot,
+  related: CustomerRelatedRecords,
+  signatures: SignatureRecord[],
+) {
+  const activeJob = related.jobs.find((job) => job.status === "in_progress");
+  if (activeJob) {
+    return {
+      label: jobStatusLabel(activeJob.status),
+      detail: activeJob.title,
+      tone: "blue" as const,
+    };
+  }
+
+  const scheduledJob = related.jobs.find((job) => job.status === "scheduled");
+  if (scheduledJob) {
+    return {
+      label: "Scheduled",
+      detail: scheduledJob.title,
+      tone: "blue" as const,
+    };
+  }
+
+  const pendingSignature = signatures.find((signature) => signature.status === "sent" || signature.status === "viewed" || signature.status === "pending");
+  if (pendingSignature) {
+    return {
+      label: signatureStatusLabel(pendingSignature.status),
+      detail: getSignatureTargetName(snapshot, pendingSignature),
+      tone: "amber" as const,
+    };
+  }
+
+  const openEstimate = related.estimates.find(isOpenEstimate);
+  if (openEstimate) {
+    return {
+      label: estimateStatusLabel(openEstimate.status),
+      detail: openEstimate.title,
+      tone: "amber" as const,
+    };
+  }
+
+  const latestInspection = related.inspections[0];
+  if (latestInspection) {
+    return {
+      label: inspectionStatusLabel(latestInspection.status),
+      detail: latestInspection.title,
+      tone: latestInspection.status === "completed" ? "green" as const : "blue" as const,
+    };
+  }
+
+  return {
+    label: "Getting started",
+    detail: "Your project workspace is ready.",
+    tone: "blue" as const,
+  };
+}
+
+function CustomerPortalSection({
+  title,
+  description,
+  children,
+  testId,
 }: {
-  client: CrmClient;
+  title: string;
+  description?: string;
+  children: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+      data-testid={testId}
+    >
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-black text-slate-950 dark:text-white">{title}</h3>
+          {description ? (
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-300">
+              {description}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function CustomerPortalView({
+  snapshot,
+  companyMap,
+  onNotice,
+}: {
   snapshot: CrmSnapshot;
-  onReload: () => Promise<void>;
+  companyMap: Map<string, CompanyRecord>;
   onNotice: (message: string) => void;
-  onError: (message: string) => void;
 }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState(
-    snapshot.customers[0]?.id ?? "",
+    () => snapshot.customers[0]?.id ?? "",
   );
+  const [activeTab, setActiveTab] = useState<CustomerPortalTab>("home");
+  const [documentSearch, setDocumentSearch] = useState("");
+  const [documentCategoryFilter, setDocumentCategoryFilter] = useState("all");
+  const [photoGroupFilter, setPhotoGroupFilter] = useState("all");
+  const [draftMessage, setDraftMessage] = useState("");
+  const [draftMessages, setDraftMessages] = useState<CustomerPortalDraftMessage[]>([]);
+  const [previewDocumentId, setPreviewDocumentId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!snapshot.customers.some((item) => item.id === selectedCustomerId)) {
+      setSelectedCustomerId(snapshot.customers[0]?.id ?? "");
+    }
+  }, [selectedCustomerId, snapshot.customers]);
+
   const customer =
     snapshot.customers.find((item) => item.id === selectedCustomerId) ??
     snapshot.customers[0];
-  const jobs = customer
-    ? snapshot.jobs.filter((job) => job.customer_id === customer.id)
-    : [];
-  const invoices = customer
-    ? snapshot.invoices.filter((invoice) => invoice.customer_id === customer.id)
-    : [];
-  const photos = customer
-    ? snapshot.jobPhotos.filter((photo) => photo.customer_id === customer.id)
-    : [];
-  const documents = customer
-    ? snapshot.documents.filter((document) => document.customer_id === customer.id)
-    : [];
-  const signatures = customer
-    ? snapshot.signatures.filter((signature) => signature.customer_id === customer.id)
-    : [];
 
-  const handlePayment = async (invoice: InvoiceRecord) => {
-    try {
-      await createPayment(client, {
-        company_id: invoice.company_id,
-        customer_id: invoice.customer_id,
-        invoice_id: invoice.id,
-        amount: invoice.balance_due,
-        method: "Portal payment",
-        status: "posted",
-        paid_at: new Date().toISOString(),
-        reference: `PORTAL-${invoice.invoice_number}`,
-        notes: "Customer portal payment.",
-      });
-      await onReload();
-      onNotice("Payment posted.");
-    } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to post payment."));
+  const related = useMemo(
+    () => (customer ? getCustomerRelatedRecords(snapshot, customer) : null),
+    [customer, snapshot],
+  );
+  const company = customer ? companyMap.get(customer.company_id) ?? null : null;
+  const relatedDocumentIds = new Set(related?.documents.map((document) => document.id) ?? []);
+  const relatedInvoiceIds = new Set(related?.invoices.map((invoice) => invoice.id) ?? []);
+  const relatedJobIds = new Set(related?.jobs.map((job) => job.id) ?? []);
+  const signatures = customer
+    ? snapshot.signatures.filter(
+        (signature) =>
+          signature.customer_id === customer.id ||
+          (signature.document_id !== null && relatedDocumentIds.has(signature.document_id)),
+      )
+    : [];
+  const portalStatus = related
+    ? getCustomerPortalPrimaryStatus(snapshot, related, signatures)
+    : {
+        label: "No customer selected",
+        detail: "Create a customer to preview the portal.",
+        tone: "blue" as const,
+      };
+  const timelineSteps = related
+    ? buildCustomerPortalTimelineSteps(related, signatures)
+    : [];
+  const propertySummaries = related && customer
+    ? buildCustomerPropertySummaries(customer, related)
+    : [];
+  const primaryProperty = propertySummaries[0] ?? null;
+  const portalDocuments = (related?.documents ?? [])
+    .filter((document) => document.status !== "archived")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  const documentCategoriesForFilter = [
+    ...new Set(portalDocuments.map((document) => document.category)),
+  ].sort();
+  const filteredDocuments = portalDocuments.filter((document) => {
+    const search = documentSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      [
+        document.title,
+        document.file_name,
+        documentCategoryLabel(document.category),
+        getDocumentAssociationSummary(snapshot, document).property,
+        getDocumentAssociationSummary(snapshot, document).customerName,
+        ...getDocumentTags(document),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
+    const matchesCategory =
+      documentCategoryFilter === "all" || document.category === documentCategoryFilter;
+
+    return matchesSearch && matchesCategory;
+  });
+  const previewDocument =
+    filteredDocuments.find((document) => document.id === previewDocumentId) ??
+    portalDocuments.find((document) => document.id === previewDocumentId) ??
+    null;
+  const customerVisiblePhotos = (related?.photos ?? [])
+    .filter((photo) => photo.is_customer_visible)
+    .sort((left, right) =>
+      (right.taken_at ?? right.created_at).localeCompare(left.taken_at ?? left.created_at),
+    );
+  const photoGroups = ["Before", "Progress", "After", "Inspection"];
+  const filteredPhotos = customerVisiblePhotos.filter(
+    (photo) =>
+      photoGroupFilter === "all" ||
+      getCustomerPortalPhotoGroup(photo) === photoGroupFilter,
+  );
+  const communicationItems = customer && related
+    ? getCustomerCommunicationItems(snapshot, companyMap, customer, related)
+        .filter((item) => item.kind !== "Internal Note")
+        .slice(0, 12)
+    : [];
+  const scheduleItems: CustomerPortalScheduleItem[] = [
+    ...(related?.scheduleEvents ?? []).map((event) => ({
+      id: `event-${event.id}`,
+      title: event.title,
+      detail: `${scheduleEventTypeLabel(event.event_type)} - ${scheduleEventStatusLabel(event.status)}`,
+      startAt: event.start_at,
+      status: scheduleEventStatusLabel(event.status),
+    })),
+    ...(related?.inspections ?? [])
+      .filter((inspection) => inspection.scheduled_start)
+      .map((inspection) => ({
+        id: `inspection-${inspection.id}`,
+        title: inspection.title,
+        detail: `Inspection - ${inspectionStatusLabel(inspection.status)}`,
+        startAt: inspection.scheduled_start ?? inspection.created_at,
+        status: inspectionStatusLabel(inspection.status),
+      })),
+  ].sort((left, right) => left.startAt.localeCompare(right.startAt));
+  const upcomingSchedule = scheduleItems.filter((item) => isFutureDateTime(item.startAt));
+  const completedSchedule = scheduleItems.filter((item) => !isFutureDateTime(item.startAt));
+  const nextScheduleItem = upcomingSchedule[0] ?? null;
+  const invoices = related?.invoices ?? [];
+  const payments = customer
+    ? snapshot.payments
+        .filter(
+          (payment) =>
+            payment.customer_id === customer.id ||
+            (payment.invoice_id !== null && relatedInvoiceIds.has(payment.invoice_id)),
+        )
+        .sort((left, right) =>
+          (right.paid_at ?? right.created_at).localeCompare(left.paid_at ?? left.created_at),
+        )
+    : [];
+  const invoiceBalance = invoices.reduce((total, invoice) => total + invoice.balance_due, 0);
+  const invoiceTotal = invoices.reduce((total, invoice) => total + invoice.total, 0);
+  const warrantyDocuments = portalDocuments.filter((document) =>
+    ["warranty", "manufacturer_warranty", "workmanship_warranty"].includes(document.category),
+  );
+  const activeJobs = (related?.jobs ?? []).filter(isActiveJob);
+  const assignedProjectManager =
+    activeJobs.find((job) => job.project_manager)?.project_manager ??
+    (related?.jobs ?? []).find((job) => job.project_manager)?.project_manager ??
+    "Office team";
+
+  const handleCopyDocumentLink = async (document: DocumentRecord) => {
+    if (!document.file_url) {
+      onNotice("This document does not have a public link yet.");
+      return;
     }
+
+    await navigator.clipboard.writeText(document.file_url);
+    onNotice("Document link copied.");
   };
 
-  if (!customer) {
+  const handleSaveDraftMessage = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const message = draftMessage.trim();
+
+    if (!message) {
+      return;
+    }
+
+    setDraftMessages((current) => [
+      {
+        id: `draft-${Date.now()}`,
+        body: message,
+        createdAt: new Date().toISOString(),
+      },
+      ...current,
+    ]);
+    setDraftMessage("");
+    onNotice("Draft saved. No message was sent.");
+  };
+
+  if (!customer || !related) {
     return <EmptyState label="Create a customer to preview the portal." />;
   }
 
   return (
-    <div className="space-y-5">
-      <section className="rounded-lg border border-slate-200 bg-slate-950 p-5 text-white shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-5" data-testid="customer-portal-workspace">
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950 text-white shadow-sm dark:border-slate-700">
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-end">
           <div>
             <p className="text-sm font-semibold uppercase text-sky-300">
-              Customer portal
+              Customer portal preview
             </p>
-            <h2 className="mt-1 text-2xl font-bold">{customer.display_name}</h2>
-            <p className="mt-1 text-sm text-slate-300">{customer.property_address}</p>
+            <h2 className="mt-2 text-2xl font-black sm:text-3xl">
+              Welcome, {customer.contact_name || customer.display_name}
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+              A simple homeowner view for project status, documents, photos, schedule,
+              messages, payments, warranty, and profile details.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge label={company?.name ?? "Company"} tone={company?.trade === "painting" ? "amber" : "blue"} />
+              <Badge label={portalStatus.label} tone={portalStatus.tone} />
+              <Badge label={customerStatusLabel(customer.status)} tone="green" />
+            </div>
           </div>
-          <select
-            value={selectedCustomerId}
-            onChange={(event) => setSelectedCustomerId(event.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
-          >
-            {snapshot.customers.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.display_name}
-              </option>
+          <label className="grid gap-2 text-sm font-semibold text-slate-200">
+            Preview customer
+            <select
+              value={customer.id}
+              onChange={(event) => {
+                setSelectedCustomerId(event.target.value);
+                setActiveTab("home");
+                setDocumentSearch("");
+                setDocumentCategoryFilter("all");
+                setPhotoGroupFilter("all");
+                setPreviewDocumentId(null);
+              }}
+              data-testid="customer-portal-customer-select"
+              className="min-h-11 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+            >
+              {snapshot.customers.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="border-t border-slate-800 bg-slate-900/80 px-5 py-3">
+          <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Customer portal sections">
+            {customerPortalTabs.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.value}
+                data-testid={`customer-portal-tab-${tab.value}`}
+                onClick={() => setActiveTab(tab.value)}
+                className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-sky-300 ${
+                  activeTab === tab.value
+                    ? "bg-white text-slate-950"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                }`}
+              >
+                {tab.label}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="space-y-5">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Job progress</h3>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {jobs.map((job) => {
-                const steps = ["scheduled", "in_progress", "completed", "closed"];
-                const currentStep = Math.max(steps.indexOf(job.status), 0);
-                const progress = Math.round(((currentStep + 1) / steps.length) * 100);
+      {activeTab === "home" ? (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <CustomerPortalSection
+            title="Home"
+            description="The most important project details in one homeowner-friendly view."
+            testId="customer-portal-home"
+          >
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Current status
+                </p>
+                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                  {portalStatus.label}
+                </p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  {portalStatus.detail}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Next scheduled event
+                </p>
+                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                  {nextScheduleItem ? formatDateTime(nextScheduleItem.startAt) : "Nothing scheduled"}
+                </p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  {nextScheduleItem?.title ?? "The office will schedule the next visit when ready."}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Project manager
+                </p>
+                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                  {assignedProjectManager}
+                </p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  {company?.phone ?? "Use the office contact on your paperwork."}
+                </p>
+              </div>
+            </div>
+          </CustomerPortalSection>
 
-                return (
-                  <div key={job.id} className="rounded-lg border border-slate-200 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-950">{job.title}</p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {formatDate(job.start_date)} - {formatDate(job.end_date)}
-                        </p>
-                      </div>
-                      <Badge label={jobStatusLabel(job.status)} tone="blue" />
-                    </div>
-                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full wt-progress-fill"
-                        style={{ width: `${progress}%` }}
-                      />
+          <aside className="space-y-5">
+            <CustomerPortalSection title="Primary contact">
+              <div className="grid gap-3 text-sm">
+                <CustomerDetail label="Customer" value={customer.display_name} />
+                <CustomerDetail label="Phone" value={customer.phone ?? "No phone on file"} />
+                <CustomerDetail label="Email" value={customer.email ?? "No email on file"} />
+                <CustomerDetail label="Property" value={customer.property_address} />
+              </div>
+            </CustomerPortalSection>
+            <CustomerPortalSection title="What comes next">
+              <div className="space-y-3">
+                {timelineSteps.slice(0, 4).map((step) => (
+                  <div key={step.label} className="flex items-start gap-3">
+                    <span
+                      className={`mt-1 h-3 w-3 rounded-full ${
+                        step.state === "complete"
+                          ? "bg-emerald-500"
+                          : step.state === "current"
+                            ? "bg-orange-500"
+                            : "bg-slate-300"
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-950 dark:text-white">
+                        {step.label}
+                      </p>
+                      <p className="text-sm text-slate-500 dark:text-slate-300">
+                        {step.detail}
+                      </p>
                     </div>
                   </div>
-                );
-              })}
-              {!jobs.length ? <EmptyState label="No portal jobs yet." /> : null}
-            </div>
-          </div>
+                ))}
+              </div>
+            </CustomerPortalSection>
+          </aside>
+        </div>
+      ) : null}
 
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Photos</h3>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {photos.map((photo) => (
-                <article key={photo.id} className="overflow-hidden rounded-lg border border-slate-200">
-                  {photo.file_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={photo.file_url} alt={photo.caption ?? "Job photo"} className="h-36 w-full object-cover" />
-                  ) : (
-                    <div className="grid h-36 place-items-center bg-slate-100">
-                      <Camera className="h-6 w-6 text-slate-400" />
+      {activeTab === "project" ? (
+        <CustomerPortalSection
+          title="My Project"
+          description="A simple status path from first request to completed work."
+          testId="customer-portal-project"
+        >
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {timelineSteps.map((step, index) => (
+              <article
+                key={step.label}
+                className={`rounded-lg border p-4 ${
+                  step.state === "complete"
+                    ? "border-emerald-200 bg-emerald-50"
+                    : step.state === "current"
+                      ? "border-orange-200 bg-orange-50"
+                      : "border-slate-200 bg-slate-50"
+                }`}
+              >
+                <p className="text-xs font-black uppercase text-slate-500">
+                  Step {index + 1}
+                </p>
+                <h4 className="mt-2 font-black text-slate-950">{step.label}</h4>
+                <p className="mt-1 text-sm text-slate-600">{step.detail}</p>
+                <p className="mt-3 text-xs font-bold uppercase text-slate-500">
+                  {step.state}
+                </p>
+              </article>
+            ))}
+          </div>
+        </CustomerPortalSection>
+      ) : null}
+
+      {activeTab === "documents" ? (
+        <CustomerPortalSection
+          title="Documents"
+          description="Customer-visible estimates, contracts, invoices, warranties, photos, and signed documents."
+          testId="customer-portal-documents"
+        >
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="grid gap-1 text-xs font-bold uppercase text-slate-500">
+              Search documents
+              <input
+                value={documentSearch}
+                onChange={(event) => setDocumentSearch(event.target.value)}
+                data-testid="customer-portal-document-search"
+                className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                placeholder="Search by file, category, customer, or address"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-bold uppercase text-slate-500">
+              Category
+              <select
+                value={documentCategoryFilter}
+                onChange={(event) => setDocumentCategoryFilter(event.target.value)}
+                data-testid="customer-portal-document-filter"
+                className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+              >
+                <option value="all">All documents</option>
+                {documentCategoriesForFilter.map((category) => (
+                  <option key={category} value={category}>
+                    {documentCategoryLabel(category)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {filteredDocuments.map((document) => {
+              const summary = getDocumentAssociationSummary(snapshot, document);
+
+              return (
+                <article
+                  key={document.id}
+                  className="rounded-lg border border-slate-200 p-4 dark:border-slate-700"
+                  data-testid="customer-portal-document-card"
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge label={documentCategoryLabel(document.category)} tone="blue" />
+                        <Badge
+                          label={documentStatusLabel(document.status)}
+                          tone={document.status === "signed" ? "green" : "blue"}
+                        />
+                        {getDocumentRequirementLevel(document) === "required" ? (
+                          <Badge label="Required" tone="amber" />
+                        ) : null}
+                      </div>
+                      <h4 className="mt-3 text-lg font-black text-slate-950 dark:text-white">
+                        {document.title}
+                      </h4>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-300">
+                        {document.file_name ?? "Document record"} - {formatFileSize(document.file_size_bytes)}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-300">
+                        {summary.property}
+                      </p>
                     </div>
-                  )}
-                  <p className="p-3 text-sm font-semibold text-slate-700">
-                    {photo.caption ?? "Job photo"}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewDocumentId(document.id)}
+                        className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      >
+                        Preview
+                      </button>
+                      {document.file_url ? (
+                        <a
+                          href={document.file_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex min-h-10 items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        >
+                          Open
+                        </a>
+                      ) : null}
+                      {document.file_url ? (
+                        <a
+                          href={document.file_url}
+                          download={document.file_name ?? document.title}
+                          className="inline-flex min-h-10 items-center rounded-md bg-slate-950 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
+                        >
+                          Download
+                        </a>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyDocumentLink(document)}
+                        className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      >
+                        Copy link
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+            {!filteredDocuments.length ? (
+              <EmptyState label="No customer-visible documents match this view." />
+            ) : null}
+          </div>
+          {previewDocument ? (
+            <div
+              className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"
+              data-testid="customer-portal-document-preview"
+            >
+              <p className="font-black">Preview: {previewDocument.title}</p>
+              <p className="mt-2 whitespace-pre-wrap">
+                {previewDocument.body ??
+                  previewDocument.file_name ??
+                  "Preview is not available for this file type. Use Open or Download when a file link is available."}
+              </p>
+            </div>
+          ) : null}
+        </CustomerPortalSection>
+      ) : null}
+
+      {activeTab === "photos" ? (
+        <CustomerPortalSection
+          title="Photos"
+          description="Only customer-visible photos are shown here. Internal jobsite photos stay inside the office workspace."
+          testId="customer-portal-photos"
+        >
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {["all", ...photoGroups].map((group) => (
+              <button
+                key={group}
+                type="button"
+                onClick={() => setPhotoGroupFilter(group)}
+                data-testid={`customer-portal-photo-filter-${group.toLowerCase()}`}
+                className={`min-h-10 shrink-0 rounded-md px-3 py-2 text-sm font-bold ${
+                  photoGroupFilter === group
+                    ? "bg-slate-950 text-white"
+                    : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {group === "all" ? "All photos" : group}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {filteredPhotos.map((photo) => (
+              <article
+                key={photo.id}
+                className="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950"
+                data-testid="customer-portal-photo-card"
+              >
+                {photo.file_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={photo.file_url}
+                    alt={photo.caption ?? "Project photo"}
+                    className="h-44 w-full object-cover"
+                  />
+                ) : (
+                  <div className="grid h-44 place-items-center bg-slate-100 dark:bg-slate-900">
+                    <Camera className="h-7 w-7 text-slate-400" />
+                  </div>
+                )}
+                <div className="p-3">
+                  <Badge label={getCustomerPortalPhotoGroup(photo)} tone="blue" />
+                  <p className="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">
+                    {photo.caption ?? photo.label ?? "Project photo"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {formatDateTime(photo.taken_at ?? photo.created_at)}
+                  </p>
+                </div>
+              </article>
+            ))}
+            {!filteredPhotos.length ? (
+              <div className="sm:col-span-2 xl:col-span-4">
+                <EmptyState label="No customer-visible photos match this view." />
+              </div>
+            ) : null}
+          </div>
+        </CustomerPortalSection>
+      ) : null}
+
+      {activeTab === "messages" ? (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <CustomerPortalSection
+            title="Messages"
+            description="Customer communications are visible here. Drafts are saved locally only and are never sent."
+            testId="customer-portal-messages"
+          >
+            <div className="grid gap-3">
+              {communicationItems.map((item) => (
+                <article key={item.id} className="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge label={communicationChannelLabels[item.channel]} tone={getCommunicationChannelTone(item.channel)} />
+                    <Badge label={getCommunicationDirectionLabel(item.direction)} tone="blue" />
+                    <Badge label={item.sourceLabel} tone="blue" />
+                  </div>
+                  <p className="mt-3 font-bold text-slate-950 dark:text-white">
+                    {item.customerName}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {item.summary}
+                  </p>
+                  <p className="mt-2 text-xs font-semibold uppercase text-slate-500">
+                    {formatDateTime(item.createdAt)}
                   </p>
                 </article>
               ))}
-              {!photos.length ? <EmptyState label="No portal photos yet." /> : null}
+              {!communicationItems.length ? (
+                <EmptyState label="No customer communications are linked yet." />
+              ) : null}
             </div>
-          </div>
-        </section>
+          </CustomerPortalSection>
 
-        <aside className="space-y-5">
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Invoices and payments</h3>
-            <div className="mt-4 grid gap-3">
-              {invoices.map((invoice) => (
-                <div key={invoice.id} className="rounded-lg border border-slate-200 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-950">
-                        {invoice.invoice_number}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-500">{invoice.title}</p>
-                    </div>
-                    <Badge
-                      label={invoiceStatusLabel(invoice.status)}
-                      tone={invoice.status === "paid" ? "green" : "blue"}
-                    />
+          <CustomerPortalSection title="Draft message">
+            <form onSubmit={handleSaveDraftMessage} className="grid gap-3">
+              <label className="grid gap-1 text-xs font-bold uppercase text-slate-500">
+                Message
+                <textarea
+                  value={draftMessage}
+                  onChange={(event) => setDraftMessage(event.target.value)}
+                  data-testid="customer-portal-message-draft"
+                  className="min-h-32 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  placeholder="Write a draft for the office team. This does not send SMS or email."
+                />
+              </label>
+              <button
+                type="submit"
+                className="min-h-11 rounded-md bg-slate-950 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Save draft only
+              </button>
+              <p className="text-xs font-semibold text-slate-500">
+                Live SMS and email sending are not enabled from the portal.
+              </p>
+            </form>
+            {draftMessages.length ? (
+              <div className="mt-4 space-y-2" data-testid="customer-portal-message-drafts">
+                {draftMessages.map((draft) => (
+                  <div key={draft.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-sm font-semibold text-slate-800">{draft.body}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Draft saved {formatDateTime(draft.createdAt)}
+                    </p>
                   </div>
-                  <div className="mt-3 flex items-center justify-between text-sm">
-                    <span className="text-slate-500">Balance due</span>
-                    <span className="font-bold text-slate-950">
-                      {formatMoney(invoice.balance_due)}
-                    </span>
-                  </div>
-                  {invoice.balance_due > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => void handlePayment(invoice)}
-                      className="mt-3 w-full rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                    >
-                      Pay balance
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-              {!invoices.length ? <EmptyState label="No invoices yet." /> : null}
-            </div>
-          </section>
+                ))}
+              </div>
+            ) : null}
+          </CustomerPortalSection>
+        </div>
+      ) : null}
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Documents</h3>
+      {activeTab === "schedule" ? (
+        <CustomerPortalSection
+          title="Schedule"
+          description="Inspection appointments, production dates, upcoming visits, and completed visits."
+          testId="customer-portal-schedule"
+        >
+          <div className="grid gap-5 lg:grid-cols-2">
             <RelatedList
-              title="Portal documents"
-              emptyLabel="No portal documents yet."
-              items={documents.map((document) => ({
-                id: document.id,
-                title: document.title,
-                meta: documentCategoryLabel(document.category),
+              title="Upcoming visits"
+              emptyLabel="No upcoming visits are scheduled."
+              items={upcomingSchedule.map((item) => ({
+                id: item.id,
+                title: item.title,
+                meta: `${formatDateTime(item.startAt)} - ${item.detail}`,
               }))}
             />
-          </section>
+            <RelatedList
+              title="Completed visits"
+              emptyLabel="No completed visits yet."
+              items={completedSchedule.map((item) => ({
+                id: item.id,
+                title: item.title,
+                meta: `${formatDateTime(item.startAt)} - ${item.status}`,
+              }))}
+            />
+          </div>
+        </CustomerPortalSection>
+      ) : null}
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Signatures</h3>
-            <div className="mt-4 grid gap-3">
-              {signatures.map((signature) => (
-                <div key={signature.id} className="rounded-lg border border-slate-200 p-3">
-                  <p className="font-semibold text-slate-950">
-                    {getSignatureTargetName(snapshot, signature)}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">{signature.signer_name}</p>
-                  <div className="mt-3">
-                    <Badge
-                      label={signatureStatusLabel(signature.status)}
-                      tone={signatureStatusTone(signature.status)}
-                    />
-                  </div>
-                </div>
-              ))}
-              {!signatures.length ? <EmptyState label="No signatures requested." /> : null}
+      {activeTab === "payments" ? (
+        <CustomerPortalSection
+          title="Payments"
+          description="Invoice summary, balances, history, and payment readiness."
+          testId="customer-portal-payments"
+        >
+          <div
+            className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+            data-testid="customer-portal-payment-disconnected"
+          >
+            <p className="font-black">Payment integration not connected</p>
+            <p className="mt-1">
+              Online payments are not enabled yet. The office can share current payment instructions.
+            </p>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 p-4">
+              <p className="text-xs font-bold uppercase text-slate-500">Invoice total</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">
+                {formatMoney(invoiceTotal)}
+              </p>
             </div>
-          </section>
-        </aside>
-      </div>
+            <div className="rounded-lg border border-slate-200 p-4">
+              <p className="text-xs font-bold uppercase text-slate-500">Balance due</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">
+                {formatMoney(invoiceBalance)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-4">
+              <p className="text-xs font-bold uppercase text-slate-500">Payments posted</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">
+                {formatMoney(payments.reduce((total, payment) => total + payment.amount, 0))}
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {invoices.map((invoice) => (
+              <article key={invoice.id} className="rounded-lg border border-slate-200 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4 className="font-black text-slate-950">{invoice.invoice_number}</h4>
+                    <p className="mt-1 text-sm text-slate-500">{invoice.title}</p>
+                  </div>
+                  <Badge
+                    label={invoiceStatusLabel(invoice.status)}
+                    tone={invoice.status === "paid" ? "green" : "amber"}
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                  <CustomerDetail label="Total" value={formatMoney(invoice.total)} />
+                  <CustomerDetail label="Paid" value={formatMoney(invoice.amount_paid)} />
+                  <CustomerDetail label="Balance" value={formatMoney(invoice.balance_due)} />
+                </div>
+              </article>
+            ))}
+            {!invoices.length ? <EmptyState label="No invoices are linked yet." /> : null}
+          </div>
+        </CustomerPortalSection>
+      ) : null}
+
+      {activeTab === "warranty" ? (
+        <CustomerPortalSection
+          title="Warranty"
+          description="Coverage, warranty documents, and closeout status."
+          testId="customer-portal-warranty"
+        >
+          <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-bold uppercase text-slate-500">Warranty status</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">
+                {warrantyDocuments.length ? "Documents on file" : "Not documented yet"}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {warrantyDocuments.length
+                  ? `${warrantyDocuments.length} warranty document${warrantyDocuments.length === 1 ? "" : "s"} linked.`
+                  : "Warranty coverage will appear after closeout documents are uploaded."}
+              </p>
+            </div>
+            <RelatedList
+              title="Warranty documents"
+              emptyLabel="No warranty documents are linked yet."
+              items={warrantyDocuments.map((document) => ({
+                id: document.id,
+                title: document.title,
+                meta: `${documentCategoryLabel(document.category)} - ${documentStatusLabel(document.status)}`,
+              }))}
+            />
+          </div>
+        </CustomerPortalSection>
+      ) : null}
+
+      {activeTab === "profile" ? (
+        <CustomerPortalSection
+          title="Profile"
+          description="Customer information, property information, preferred contact, and emergency contacts."
+          testId="customer-portal-profile"
+        >
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 p-4">
+              <h4 className="font-black text-slate-950">Customer information</h4>
+              <dl className="mt-4 grid gap-3 text-sm">
+                <CustomerDetail label="Name" value={customer.display_name} />
+                <CustomerDetail label="Contact" value={customer.contact_name} />
+                <CustomerDetail label="Preferred communication" value={customer.email ? "Email" : customer.phone ? "Phone" : "Not set"} />
+                <CustomerDetail label="Phone" value={customer.phone ?? "No phone on file"} />
+                <CustomerDetail label="Email" value={customer.email ?? "No email on file"} />
+                <CustomerDetail label="Emergency contact" value="Call the office contact on file" />
+              </dl>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-4">
+              <h4 className="font-black text-slate-950">Property information</h4>
+              <dl className="mt-4 grid gap-3 text-sm">
+                <CustomerDetail label="Address" value={primaryProperty?.address ?? customer.property_address} />
+                <CustomerDetail label="Property type" value={primaryProperty?.type ?? "Not documented"} />
+                <CustomerDetail label="Roof system" value={primaryProperty?.roofSystem ?? "Not documented"} />
+                <CustomerDetail label="Access" value={primaryProperty?.accessInstructions ?? "Not documented"} />
+                <CustomerDetail label="Gate / HOA" value={primaryProperty?.gateCodes ?? primaryProperty?.hoa ?? "Not documented"} />
+                <CustomerDetail label="Pets" value={primaryProperty?.pets ?? "Not documented"} />
+              </dl>
+            </div>
+          </div>
+        </CustomerPortalSection>
+      ) : null}
     </div>
   );
 }
