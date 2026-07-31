@@ -134,12 +134,23 @@ import {
   communicationAttentionFilters,
   communicationChannelLabels,
   communicationDateFilters,
+  communicationDeliveryStateLabels,
+  communicationInboxViewFilters,
   communicationItemIsFollowUpDue,
   communicationItemMatchesAttentionFilter,
   communicationItemMatchesDateFilter,
+  communicationItemMatchesInboxView,
+  communicationMatchStatusLabels,
+  communicationPriorityLabels,
+  communicationResponseStatusLabels,
+  communicationSyncStateLabels,
   getCommunicationChannelTone,
   getCommunicationDirectionLabel,
+  getCommunicationMatchStatus,
+  getCommunicationPriority,
+  getCommunicationResponseStatus,
   getCommunicationStatusTone,
+  getCommunicationWaitingLabel,
   getCompanyLocationLabel,
   getInboxProviderTone,
   getLeadInboxProvider,
@@ -149,6 +160,7 @@ import {
   inboxProviderLabels,
   type CommunicationAttentionFilter,
   type CommunicationDateFilter,
+  type CommunicationInboxView,
   type InboxFilter,
   type InboxKindFilter,
   type UnifiedInboxItem,
@@ -5725,27 +5737,27 @@ function CrmWorkspace({
           {notice ? <Message tone="success" message={notice} /> : null}
           {error ? <Message tone="error" message={error} /> : null}
 
-	          {view === "dashboard" ? (
-	            <DashboardView
-	              metrics={metrics}
-	              snapshot={scopedSnapshot}
+            {view === "dashboard" ? (
+              <DashboardView
+                metrics={metrics}
+                snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
               isDemoMode={isDemoMode}
               onCompanyScopeChange={setSelectedCompanyId}
               onViewChange={onViewChange}
-	              onCreateLead={() => onViewChange("leadIntake")}
-	            />
-	          ) : null}
+                onCreateLead={() => onViewChange("leadIntake")}
+              />
+            ) : null}
 
-	          {view === "operations" ? (
-	            <OfficeOperationsView
-	              snapshot={scopedSnapshot}
-	              companyMap={companyMap}
-	              activeCompanyId={selectedCompanyId}
-	              onViewChange={onViewChange}
-	            />
-	          ) : null}
+            {view === "operations" ? (
+              <OfficeOperationsView
+                snapshot={scopedSnapshot}
+                companyMap={companyMap}
+                activeCompanyId={selectedCompanyId}
+                onViewChange={onViewChange}
+              />
+            ) : null}
 
           {view === "fieldOperations" ? (
             <FieldOperationsWorkspace
@@ -12923,6 +12935,8 @@ function WebsiteMarketingView({
 }
 
 function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxViewProps) {
+  const [inboxView, setInboxView] =
+    useState<CommunicationInboxView>("needs_response");
   const [providerFilter, setProviderFilter] = useState<InboxFilter>("all");
   const [kindFilter, setKindFilter] = useState<InboxKindFilter>("all");
   const [attentionFilter, setAttentionFilter] =
@@ -12962,8 +12976,14 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         item.notes,
         item.participants.join(" "),
         item.attachments.join(" "),
-        item.status,
-        item.kind,
+          item.status,
+          item.responseStatus,
+          item.matchStatus,
+          item.routingStatus,
+          item.deliveryState,
+          item.syncState,
+          item.suggestedNextAction,
+          item.kind,
         item.channel,
         item.direction,
         item.assignedTo,
@@ -12973,8 +12993,9 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         .toLowerCase();
 
       return (
-        (providerFilter === "all" || item.channel === providerFilter) &&
-        (kindFilter === "all" || item.kind === kindFilter) &&
+          (providerFilter === "all" || item.channel === providerFilter) &&
+          communicationItemMatchesInboxView(item, inboxView) &&
+          (kindFilter === "all" || item.kind === kindFilter) &&
         (attentionFilter === "all" ||
           communicationItemMatchesAttentionFilter(item, attentionFilter)) &&
         (companyFilter === "all" || item.companyId === companyFilter) &&
@@ -12986,10 +13007,11 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
       );
     });
   }, [
-    attentionFilter,
-    companyFilter,
-    dateFilter,
-    inboxItems,
+      attentionFilter,
+      companyFilter,
+      dateFilter,
+      inboxItems,
+      inboxView,
     kindFilter,
     locationFilter,
     providerFilter,
@@ -13001,7 +13023,7 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
     setPage: setInboxPage,
     pagedItems: pagedInboxItems,
   } = usePagination(filteredItems);
-  const counts = useMemo(
+    const counts = useMemo(
     () =>
       inboxFilters.reduce(
         (accumulator, filter) => ({
@@ -13014,7 +13036,20 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
         {} as Record<InboxFilter, number>,
       ),
     [inboxItems],
-  );
+    );
+    const viewCounts = useMemo(
+      () =>
+        communicationInboxViewFilters.reduce(
+          (accumulator, filter) => ({
+            ...accumulator,
+            [filter.value]: inboxItems.filter((item) =>
+              communicationItemMatchesInboxView(item, filter.value),
+            ).length,
+          }),
+          {} as Record<CommunicationInboxView, number>,
+        ),
+      [inboxItems],
+    );
   const selectedItem =
     filteredItems.find((item) => item.id === selectedItemId) ??
     filteredItems[0] ??
@@ -13024,10 +13059,11 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
   useEffect(() => {
     setInboxPage(1);
   }, [
-    attentionFilter,
-    companyFilter,
-    dateFilter,
-    kindFilter,
+      attentionFilter,
+      companyFilter,
+      dateFilter,
+      inboxView,
+      kindFilter,
     locationFilter,
     providerFilter,
     search,
@@ -13057,21 +13093,33 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
               Outbound provider sends stay disabled here until real workflows are approved.
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px] xl:grid-cols-4">
-            <ProfileStat label="Inbox items" value={inboxItems.length} />
-            <ProfileStat
-              label="Unread/new"
-              value={inboxItems.filter((item) => item.isUnread).length}
-            />
-            <ProfileStat
-              label="Failed"
-              value={inboxItems.filter((item) => item.isFailed).length}
-            />
-            <ProfileStat
-              label="Follow-ups"
-              value={inboxItems.filter(communicationItemIsFollowUpDue).length}
-            />
-          </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px] xl:grid-cols-4">
+              <ProfileStat label="Inbox items" value={inboxItems.length} />
+              <ProfileStat
+                label="Needs response"
+                value={
+                  inboxItems.filter((item) =>
+                    communicationItemMatchesInboxView(item, "needs_response"),
+                  ).length
+                }
+              />
+              <ProfileStat
+                label="Failed delivery"
+                value={
+                  inboxItems.filter((item) =>
+                    communicationItemMatchesInboxView(item, "failed_delivery"),
+                  ).length
+                }
+              />
+              <ProfileStat
+                label="Unassigned"
+                value={
+                  inboxItems.filter((item) =>
+                    communicationItemMatchesInboxView(item, "unassigned"),
+                  ).length
+                }
+              />
+            </div>
         </div>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -13122,7 +13170,32 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
           inboxItems={inboxItems}
         />
 
-        <div className="mt-5 flex flex-wrap gap-2" aria-label="Communication channels">
+          <div
+            className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6"
+            aria-label="Communication inbox views"
+            data-testid="communication-inbox-views"
+          >
+            {communicationInboxViewFilters.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                onClick={() => setInboxView(filter.value)}
+                aria-pressed={inboxView === filter.value}
+                className={`flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
+                  inboxView === filter.value
+                    ? "border-sky-400 bg-sky-50 text-sky-900 shadow-sm"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                }`}
+              >
+                <span>{filter.label}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                  {viewCounts[filter.value] ?? 0}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2" aria-label="Communication channels">
           {inboxFilters.map((filter) => (
             <button
               key={filter.value}
@@ -13242,8 +13315,9 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
             <button
               type="button"
               onClick={() => {
-                setProviderFilter("all");
-                setKindFilter("all");
+                  setProviderFilter("all");
+                  setInboxView("needs_response");
+                  setKindFilter("all");
                 setAttentionFilter("all");
                 setCompanyFilter("all");
                 setLocationFilter("all");
@@ -13283,21 +13357,41 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
                       tone={getCommunicationChannelTone(item.channel)}
                     />
                     <Badge label={getCommunicationDirectionLabel(item.direction)} tone="blue" />
-                    <Badge label={item.kind} tone="blue" />
-                    <Badge label={item.status} tone={getCommunicationStatusTone(item)} />
-                    {item.isUnread ? <Badge label="Unread/new" tone="amber" /> : null}
-                    {communicationItemIsFollowUpDue(item) ? (
-                      <Badge label="Follow-up due" tone="amber" />
+                      <Badge label={item.kind} tone="blue" />
+                      <Badge label={item.status} tone={getCommunicationStatusTone(item)} />
+                      <Badge
+                        label={communicationResponseStatusLabels[getCommunicationResponseStatus(item)]}
+                        tone={
+                          getCommunicationResponseStatus(item) === "overdue" ||
+                          getCommunicationResponseStatus(item) === "waiting_on_us"
+                            ? "amber"
+                            : getCommunicationResponseStatus(item) === "resolved"
+                              ? "green"
+                              : "blue"
+                        }
+                      />
+                      <Badge
+                        label={communicationPriorityLabels[getCommunicationPriority(item)]}
+                        tone={getCommunicationPriority(item) === "low" ? "blue" : "amber"}
+                      />
+                      {item.isUnread ? <Badge label="Unread/new" tone="amber" /> : null}
+                      {communicationItemIsFollowUpDue(item) ? (
+                        <Badge label="Follow-up due" tone="amber" />
                     ) : null}
                   </div>
                   <h3 className="mt-3 font-bold text-slate-950">
                     {item.customerName}
                   </h3>
                   <p className="mt-1 text-sm text-slate-500">{item.contact}</p>
-                  <p className="mt-2 line-clamp-2 text-sm text-slate-600">
-                    {item.summary}
-                  </p>
-                </div>
+                    <p className="mt-2 line-clamp-2 text-sm text-slate-600">
+                      {item.summary}
+                    </p>
+                    <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {communicationMatchStatusLabels[getCommunicationMatchStatus(item)]} ·{" "}
+                      {item.routingStatus ?? "Routing ready"} ·{" "}
+                      {getCommunicationWaitingLabel(item)}
+                    </p>
+                  </div>
                 <div className="text-sm text-slate-600">
                   <p className="font-semibold text-slate-950">Business/location</p>
                   <p className="mt-1">{item.businessLocation}</p>
@@ -13307,9 +13401,12 @@ function UnifiedInboxView({ snapshot, companyMap, onViewChange }: UnifiedInboxVi
                 <div className="text-sm text-slate-600 lg:text-right">
                   <p className="font-semibold text-slate-950">Received</p>
                   <p className="mt-1">{formatDateTime(item.createdAt)}</p>
-                  <p className="mt-3 font-semibold text-slate-950">Provider</p>
-                  <p className="mt-1">{item.sourceLabel}</p>
-                </div>
+                    <p className="mt-3 font-semibold text-slate-950">Provider</p>
+                    <p className="mt-1">{item.sourceLabel}</p>
+                    <p className="mt-2 text-xs font-semibold text-slate-500">
+                      {item.assignedTo ? `Owner: ${item.assignedTo}` : "No owner assigned"}
+                    </p>
+                  </div>
               </button>
             ))}
 
@@ -13375,10 +13472,15 @@ function CommunicationDetailPanel({
   const relatedRecords = [
     item.leadId ? "Lead linked" : null,
     item.customerId ? "Customer linked" : null,
+    item.propertyId ? "Property linked" : null,
     item.jobId ? "Job linked" : null,
     item.estimateId ? "Estimate linked" : null,
+    item.invoiceId ? "Invoice linked" : null,
     item.scheduleEventId ? "Calendar linked" : null,
   ].filter(Boolean);
+  const responseStatus = getCommunicationResponseStatus(item);
+  const matchStatus = getCommunicationMatchStatus(item);
+  const priority = getCommunicationPriority(item);
 
   return (
     <aside
@@ -13402,9 +13504,31 @@ function CommunicationDetailPanel({
       <dl className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
         <CustomerDetail label="Source" value={item.sourceLabel} />
         <CustomerDetail label="Channel" value={communicationChannelLabels[item.channel]} />
-        <CustomerDetail label="Direction" value={getCommunicationDirectionLabel(item.direction)} />
-        <CustomerDetail label="Status" value={item.status} />
-        <CustomerDetail label="Created" value={formatDateTime(item.createdAt)} />
+          <CustomerDetail label="Direction" value={getCommunicationDirectionLabel(item.direction)} />
+          <CustomerDetail label="Status" value={item.status} />
+          <CustomerDetail
+            label="Response"
+            value={communicationResponseStatusLabels[responseStatus]}
+          />
+          <CustomerDetail label="Priority" value={communicationPriorityLabels[priority]} />
+          <CustomerDetail
+            label="Match"
+            value={communicationMatchStatusLabels[matchStatus]}
+          />
+          <CustomerDetail label="Routing" value={item.routingStatus ?? "Routing ready"} />
+          <CustomerDetail
+            label="Delivery"
+            value={communicationDeliveryStateLabels[item.deliveryState ?? "not_applicable"]}
+          />
+          <CustomerDetail
+            label="Sync"
+            value={communicationSyncStateLabels[item.syncState ?? "not_synced"]}
+          />
+          <CustomerDetail
+            label="Waiting"
+            value={responseStatus === "resolved" ? "Resolved" : getCommunicationWaitingLabel(item)}
+          />
+          <CustomerDetail label="Created" value={formatDateTime(item.createdAt)} />
         <CustomerDetail
           label="Updated"
           value={item.updatedAt ? formatDateTime(item.updatedAt) : "Not updated"}
@@ -13420,7 +13544,14 @@ function CommunicationDetailPanel({
           label="Related records"
           value={relatedRecords.length ? relatedRecords.join(", ") : "No CRM link"}
         />
-      </dl>
+        </dl>
+
+        <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+          <p className="font-bold">Suggested next action</p>
+          <p className="mt-1">
+            {item.suggestedNextAction ?? "Open the related CRM record for context."}
+          </p>
+        </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -13473,10 +13604,18 @@ function CommunicationDetailPanel({
         </p>
       </div>
 
-      <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        {item.leadId ? (
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
           <button
             type="button"
+            onClick={() => onViewChange("inbox")}
+            className="rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100"
+            data-testid="communication-primary-action"
+          >
+            Review conversation
+          </button>
+          {item.leadId ? (
+            <button
+              type="button"
             onClick={() => onViewChange("leads")}
             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
@@ -13505,22 +13644,52 @@ function CommunicationDetailPanel({
         >
           Create estimate
         </button>
-        <button
-          type="button"
-          onClick={() => onViewChange("calendar")}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          Schedule follow-up
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => onViewChange("calendar")}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Schedule follow-up
+          </button>
+          <button
+            type="button"
+            disabled
+            title="Live provider sending is intentionally disabled until credentials and workflows are approved."
+            className="rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-500"
+          >
+            Reply / Call disabled
+          </button>
+        </div>
 
-      <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <p className="text-sm font-bold text-slate-950">Supported actions</p>
         <div className="mt-3 grid gap-2 text-sm text-slate-600">
           <p>Read-only conversation history is available from CRM, lead intake, SMS, email, calendar, internal-note, and sync-log records.</p>
           <p>No outbound call, SMS, email, Yelp, Google Business Profile, or GoHighLevel action is enabled from this panel.</p>
           <p>Live provider writes still require approved credentials, explicit workflow controls, and provider-specific workers.</p>
         </div>
+
+        <details className="mt-5 rounded-lg border border-slate-200 bg-white p-3">
+          <summary className="cursor-pointer text-sm font-bold text-slate-950">
+            Advanced provider details
+          </summary>
+          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+            <CustomerDetail label="Related table" value={item.relatedTable ?? "None"} />
+            <CustomerDetail label="Related record" value={item.relatedRecordId ?? "None"} />
+            <CustomerDetail
+              label="Business phone route"
+              value={item.businessPhoneNumberId ?? "None"}
+            />
+            <CustomerDetail
+              label="Provider event"
+              value={item.providerEventId ?? "None"}
+            />
+            <CustomerDetail
+              label="Failure detail"
+              value={item.failureDetail ?? "No provider error recorded"}
+            />
+          </dl>
+        </details>
       </div>
 
       <div className="mt-5">
@@ -13565,7 +13734,7 @@ function TwilioCommunicationsSetupNotice() {
             Twilio Live Setup Required
           </p>
           <p className="mt-1 text-sm leading-6 text-amber-900">
-            SMS and call history will appear here after migration 0020, business
+              SMS and call history will appear here after migration 0021, business
             number routing, credentials, webhook signatures, and live testing are
             complete. Unknown callers/messages must remain unassigned for review.
           </p>

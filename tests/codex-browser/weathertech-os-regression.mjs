@@ -17,6 +17,7 @@ const DEFAULT_GROUPS = [
   "operations",
   "field-operations",
   "crm",
+  "communications",
   "sales-pipeline",
   "lead-intake-workspace",
   "lead-intake",
@@ -202,6 +203,31 @@ async function deleteByLike(env, table, column, prefix = TEST_PREFIX) {
   await restRequest(env, `${table}?${column}=like.${titleFilter}`, { method: "DELETE" });
 }
 
+function isMissingRelationError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("Could not find") ||
+    message.includes("PGRST205") ||
+    message.includes("42P01")
+  );
+}
+
+async function deleteByLikeIfPresent(env, table, column, prefix = TEST_PREFIX) {
+  try {
+    await deleteByLike(env, table, column, prefix);
+    return "requested";
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return "table_missing";
+    }
+
+    throw error;
+  }
+}
+
 async function detectLeadNameColumn(env) {
   for (const column of ["contact_name", "customer_name", "name"]) {
     try {
@@ -362,7 +388,23 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   const leadIds = scopedLeads.map((lead) => lead.id);
   const customerIds = scopedCustomers.map((customer) => customer.id);
 
-  await deleteByLike(env, "integration_sync_logs", "external_id");
+  const communicationCleanup = {
+    integrationLogsDeleted: await deleteByLikeIfPresent(env, "integration_sync_logs", "external_id"),
+    leadIntakeDeleted: await deleteByLikeIfPresent(env, "lead_intake_records", "correlation_id"),
+    callRecordsDeleted: await deleteByLikeIfPresent(env, "call_records", "correlation_id"),
+    providerEventsDeleted: await deleteByLikeIfPresent(
+      env,
+      "communication_provider_events",
+      "correlation_id",
+    ),
+    smsMessagesDeleted: await deleteByLikeIfPresent(env, "sms_messages", "correlation_id"),
+    emailMessagesDeleted: await deleteByLikeIfPresent(env, "email_messages", "subject"),
+    businessPhoneRoutesDeleted: await deleteByLikeIfPresent(
+      env,
+      "business_phone_numbers",
+      "routing_key",
+    ),
+  };
 
   if (
     !jobIds.length &&
@@ -383,9 +425,9 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
       changeOrdersDeleted: 0,
       leadsDeleted: 0,
       customersDeleted: 0,
-      integrationLogsDeleted: "requested",
-    };
-  }
+        ...communicationCleanup,
+      };
+    }
 
   await deleteByLike(env, "schedule_events", "title");
   await deleteByLike(env, "scopes", "title");
@@ -417,9 +459,9 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     changeOrdersDeleted: changeOrderIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
-    integrationLogsDeleted: "requested",
-  };
-}
+      ...communicationCleanup,
+    };
+  }
 
 async function seedTestJob(env, companyId, runId) {
   const title = `${TEST_PREFIX} ${runId} JOB`;
@@ -564,6 +606,235 @@ async function seedTestLead(env, companyId, runId, leadNameColumn, suffix = "LEA
   }
 
   throw lastError ?? new Error("Unable to seed estimate lead.");
+}
+
+async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) {
+  const now = new Date();
+  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+  const fakeBusinessPhone = `+1602555${runId.slice(-4)}`;
+  const fakeCustomerPhone = `+1480555${runId.slice(-4)}`;
+  const alternateCustomerPhone = `+1480666${runId.slice(-4)}`;
+
+  const [businessPhoneRoute] = await restRequest(env, "business_phone_numbers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      provider: "twilio",
+      phone_number_e164: fakeBusinessPhone,
+      display_name: `${TEST_PREFIX} ${runId} Phoenix Office Line`,
+      routing_key: `${TEST_PREFIX} ${runId} PHOENIX PHONE ROUTE`,
+      business_location: "Phoenix",
+      team_queue: "Office",
+      lead_source: "Phone",
+      communication_channel: "sms_voice",
+      routing_status: "active",
+      settings: { testRunId: runId },
+    }),
+  });
+
+  const [missedCall] = await restRequest(env, "call_records", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      business_phone_number_id: businessPhoneRoute.id,
+      lead_id: leadWorkflow.leadId,
+      provider: "twilio",
+      direction: "inbound",
+      call_status: "missed",
+      from_phone: fakeCustomerPhone,
+      to_phone: fakeBusinessPhone,
+      business_phone: fakeBusinessPhone,
+      customer_phone: fakeCustomerPhone,
+      routing_status: "matched",
+      started_at: twoHoursAgo,
+      ended_at: oneHourAgo,
+      duration_seconds: 0,
+      recording_status: "not_requested",
+      transcript_status: "not_requested",
+      follow_up_required: true,
+      correlation_id: `${TEST_PREFIX} ${runId} MISSED CALL`,
+      metadata: { testRunId: runId },
+    }),
+  });
+
+  const [voicemail] = await restRequest(env, "call_records", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      business_phone_number_id: businessPhoneRoute.id,
+      provider: "twilio",
+      direction: "inbound",
+      call_status: "voicemail",
+      from_phone: alternateCustomerPhone,
+      to_phone: fakeBusinessPhone,
+      business_phone: fakeBusinessPhone,
+      customer_phone: alternateCustomerPhone,
+      routing_status: "unassigned",
+      started_at: twoHoursAgo,
+      ended_at: oneHourAgo,
+      duration_seconds: 38,
+      recording_sid: `${TEST_PREFIX} ${runId} RECORDING`,
+      recording_status: "completed",
+      transcript_status: "queued",
+      follow_up_required: true,
+      correlation_id: `${TEST_PREFIX} ${runId} VOICEMAIL`,
+      metadata: { testRunId: runId },
+    }),
+  });
+
+  const [providerFailure] = await restRequest(env, "communication_provider_events", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      business_phone_number_id: businessPhoneRoute.id,
+      lead_id: leadWorkflow.leadId,
+      provider: "twilio",
+      event_type: "sms_status",
+      channel: "sms",
+      direction: "outbound",
+      status: "undelivered",
+      from_phone: fakeBusinessPhone,
+      to_phone: fakeCustomerPhone,
+      business_phone: fakeBusinessPhone,
+      customer_phone: fakeCustomerPhone,
+      routing_status: "matched",
+      correlation_id: `${TEST_PREFIX} ${runId} PROVIDER FAILURE`,
+      request_fingerprint: `${TEST_PREFIX} ${runId} REQUEST FINGERPRINT`,
+      payload_summary: { event: "delivery_status", testRunId: runId },
+      response_summary: { status: "undelivered" },
+      error_code: "test_undelivered",
+      error_message: "TEST seeded SMS delivery failure.",
+      occurred_at: oneHourAgo,
+    }),
+  });
+
+  const [smsFailure] = await restRequest(env, "sms_messages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      lead_id: leadWorkflow.leadId,
+      business_phone_number_id: businessPhoneRoute.id,
+      provider: "twilio_sms",
+      category: "general",
+      status: "failed",
+      direction: "outbound",
+      delivery_status: "failed",
+      to_phone: fakeCustomerPhone,
+      from_phone: fakeBusinessPhone,
+      body: `${TEST_PREFIX} ${runId} failed SMS body`,
+      queued_at: twoHoursAgo,
+      failed_at: oneHourAgo,
+      correlation_id: `${TEST_PREFIX} ${runId} SMS FAILURE`,
+      metadata: { testRunId: runId },
+      last_error: "TEST seeded SMS failure.",
+    }),
+  });
+
+  const [emailMessage] = await restRequest(env, "email_messages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      provider: "gmail",
+      category: "follow_up",
+      status: "queued",
+      to_email: `communications-${runId}@example.test`,
+      subject: `${TEST_PREFIX} ${runId} EMAIL THREAD`,
+      body: `${TEST_PREFIX} ${runId} queued email thread body`,
+      queued_at: oneHourAgo,
+    }),
+  });
+
+  const [websiteIntake] = await restRequest(env, "lead_intake_records", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      linked_lead_id: leadWorkflow.leadId,
+      provider: "website",
+      provider_event_id: `${TEST_PREFIX} ${runId} WEBSITE EVENT`,
+      source: "Website",
+      source_detail: "WeatherTech Phoenix website",
+      campaign: `${TEST_PREFIX} ${runId} Website Campaign`,
+      correlation_id: `${TEST_PREFIX} ${runId} WEBSITE INBOX`,
+      company_key: "weathertech_roofing",
+      branch_key: "weathertech_phoenix",
+      routing_status: "ready_to_create",
+      status: "new",
+      duplicate_confidence: "possible_match",
+      follow_up_state: "required",
+      urgency: "high",
+      assigned_queue: "Sales",
+      contact_name: `${TEST_PREFIX} ${runId} Website Inbox Lead`,
+      phone: fakeCustomerPhone,
+      email: `website-inbox-${runId}@example.test`,
+      service_address: "555 TEST Communication Roof Rd, Phoenix, AZ",
+      city: "Phoenix",
+      requested_service: "roofing",
+      message: `${TEST_PREFIX} ${runId} website lead needs roof repair follow-up.`,
+      preferred_contact_method: "phone",
+      source_metadata: { testRunId: runId, sourceAccount: "weathertech-phoenix-web" },
+      possible_matches: [{ type: "lead", id: leadWorkflow.leadId, confidence: "possible" }],
+      routing_reasons: ["Test fixture uses WeatherTech Phoenix website source."],
+      review_notes: `${TEST_PREFIX} ${runId} possible duplicate requires review.`,
+      intake_timestamp: twoHoursAgo,
+    }),
+  });
+
+  const [yelpIntake] = await restRequest(env, "lead_intake_records", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.ihc.id,
+      provider: "yelp",
+      provider_event_id: `${TEST_PREFIX} ${runId} YELP EVENT`,
+      source: "Yelp",
+      source_detail: "IHC Yelp account",
+      campaign: `${TEST_PREFIX} ${runId} Yelp Account`,
+      correlation_id: `${TEST_PREFIX} ${runId} YELP INBOX`,
+      company_key: "ihc_painting",
+      branch_key: "ihc",
+      routing_status: "needs_review",
+      status: "needs_review",
+      duplicate_confidence: "likely_match",
+      follow_up_state: "required",
+      urgency: "normal",
+      assigned_queue: "Office",
+      contact_name: `${TEST_PREFIX} ${runId} Yelp Inbox Lead`,
+      phone: alternateCustomerPhone,
+      email: `yelp-inbox-${runId}@example.test`,
+      service_address: "777 TEST Communication Paint Ave, Tempe, AZ",
+      city: "Tempe",
+      requested_service: "painting",
+      message: `${TEST_PREFIX} ${runId} Yelp account source preserved.`,
+      preferred_contact_method: "email",
+      source_metadata: { testRunId: runId, yelpAccount: "ihc-yelp-test" },
+      possible_matches: [{ type: "lead", confidence: "likely" }],
+      routing_reasons: ["Test fixture uses IHC Yelp source."],
+      review_notes: `${TEST_PREFIX} ${runId} Yelp possible duplicate review.`,
+      intake_timestamp: oneHourAgo,
+    }),
+  });
+
+  return {
+    fakeBusinessPhone,
+    fakeCustomerPhone,
+    alternateCustomerPhone,
+    businessPhoneRoute,
+    missedCall,
+    voicemail,
+    providerFailure,
+    smsFailure,
+    emailMessage,
+    websiteIntake,
+    yelpIntake,
+  };
 }
 
 async function seedTestCustomer(
@@ -4521,25 +4792,25 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     (address) => {
       const propertySection = document.querySelector('[data-testid="customer-properties-section"]');
 
-	      return Boolean(
-	        propertySection?.textContent?.includes("Primary service property") &&
-	          propertySection.textContent.includes(address) &&
-	          propertySection.textContent.includes("Property health") &&
-	          propertySection.textContent.includes("Roof condition") &&
-	          propertySection.textContent.includes("Paint condition") &&
-	          propertySection.textContent.includes("Warranty status") &&
-	          propertySection.textContent.includes("Document complete") &&
-	          propertySection.textContent.includes("Property intelligence") &&
-	          propertySection.textContent.includes("Roof system") &&
-	          propertySection.textContent.includes("Roof manufacturer") &&
-	          propertySection.textContent.includes("Roofing material") &&
-	          propertySection.textContent.includes("Exterior paint colors") &&
-	          propertySection.textContent.includes("Gate codes") &&
-	          propertySection.textContent.includes("Inspection history") &&
-	          propertySection.textContent.includes("Property timeline") &&
-	          propertySection.textContent.includes("Operational history") &&
-	          propertySection.textContent.includes("AI-ready summary"),
-	      );
+        return Boolean(
+          propertySection?.textContent?.includes("Primary service property") &&
+            propertySection.textContent.includes(address) &&
+            propertySection.textContent.includes("Property health") &&
+            propertySection.textContent.includes("Roof condition") &&
+            propertySection.textContent.includes("Paint condition") &&
+            propertySection.textContent.includes("Warranty status") &&
+            propertySection.textContent.includes("Document complete") &&
+            propertySection.textContent.includes("Property intelligence") &&
+            propertySection.textContent.includes("Roof system") &&
+            propertySection.textContent.includes("Roof manufacturer") &&
+            propertySection.textContent.includes("Roofing material") &&
+            propertySection.textContent.includes("Exterior paint colors") &&
+            propertySection.textContent.includes("Gate codes") &&
+            propertySection.textContent.includes("Inspection history") &&
+            propertySection.textContent.includes("Property timeline") &&
+            propertySection.textContent.includes("Operational history") &&
+            propertySection.textContent.includes("AI-ready summary"),
+        );
     },
     "customer properties workspace section",
     10000,
@@ -4735,7 +5006,21 @@ async function testCustomersWorkflow(tab, env, company, runId) {
   };
 }
 
-async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
+async function testUnifiedInboxSearchAndFilters(
+  tab,
+  env,
+  companies,
+  leadWorkflow,
+  runId,
+  baseUrl,
+  progress,
+) {
+  progress("communications:seed:start");
+  const communicationsSeed = await seedCommunicationHubRecords(env, companies, leadWorkflow, runId);
+  progress("communications:seed:done");
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await ensureAppShell(tab, baseUrl, progress);
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Inbox");
   await waitFor(
@@ -4744,9 +5029,12 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
       const text = document.body.innerText.toLowerCase();
 
       return (
-        text.includes("communications hub") &&
-        text.includes("lead and communication activity") &&
-        text.includes("twilio") &&
+          text.includes("communications hub") &&
+          text.includes("lead and communication activity") &&
+          text.includes("needs response") &&
+          text.includes("failed delivery") &&
+          text.includes("all conversations") &&
+          text.includes("twilio") &&
         text.includes("gmail") &&
         text.includes("google calendar") &&
         text.includes("google business profile") &&
@@ -4754,9 +5042,10 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
         text.includes("gohighlevel") &&
         text.includes("sync health") &&
         text.includes("last sync") &&
-        text.includes("last activity") &&
-        text.includes("error state") &&
-        text.includes("twilio live setup required") &&
+          text.includes("last activity") &&
+          text.includes("error state") &&
+          text.includes("business phone") &&
+          text.includes("twilio live setup required") &&
         text.includes("no outbound sms or calls") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
@@ -4769,12 +5058,12 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
 
   await fillUnique(
     tab.playwright.locator('[data-testid="inbox-search"]'),
-    leadWorkflow.leadName,
+    communicationsSeed.websiteIntake.contact_name,
     "inbox search",
   );
   await selectUnique(
     tab.playwright.locator('[data-testid="inbox-kind-filter"]'),
-    "Lead",
+    "Lead Intake",
     "inbox activity type filter",
   );
   await clickUnique(
@@ -4785,48 +5074,131 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
   );
   await selectUnique(
     tab.playwright.locator('[data-testid="inbox-attention-filter"]'),
-    "unassigned",
-    "inbox unassigned state filter",
+    "follow_up",
+    "inbox follow-up state filter",
   );
   await waitFor(
     tab,
-    (leadName) => {
+    (expected) => {
       const text = document.body.innerText.toLowerCase();
-      const normalizedLeadName = leadName.toLowerCase();
 
       return (
-        text.includes(normalizedLeadName) &&
+        text.includes(expected.websiteName.toLowerCase()) &&
         text.includes("website") &&
-        text.includes("lead") &&
-        text.includes("unassigned")
+        text.includes("lead intake") &&
+        text.includes("possible duplicate") &&
+        text.includes("needs response")
       );
     },
     "filtered inbox lead",
     10000,
-    leadWorkflow.leadName,
+    {
+      websiteName: communicationsSeed.websiteIntake.contact_name,
+    },
   );
   await waitFor(
     tab,
-    (leadName) => {
+    (expected) => {
       const detail = document.querySelector('[data-testid="communication-detail"]');
       const text = detail?.textContent?.toLowerCase() ?? "";
 
       return (
         text.includes("conversation detail") &&
         text.includes("source") &&
+        text.includes("response") &&
+        text.includes("routing") &&
+        text.includes("delivery") &&
+        text.includes("sync") &&
+        text.includes("suggested next action") &&
         text.includes("participants") &&
         text.includes("attachments") &&
         text.includes("related records") &&
+        text.includes("advanced provider details") &&
         text.includes("supported actions") &&
         text.includes("no outbound call") &&
-        text.includes(leadName.toLowerCase())
+        text.includes(expected.websiteName.toLowerCase())
       );
     },
     "communication detail panel",
     10000,
-    leadWorkflow.leadName,
+    {
+      websiteName: communicationsSeed.websiteIntake.contact_name,
+    },
   );
   await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear inbox filters");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//div[@aria-label="Communication inbox views"]//button[contains(normalize-space(.), "Yelp")]',
+    ),
+    "Yelp inbox view",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inbox-search"]'),
+    communicationsSeed.yelpIntake.contact_name,
+    "Yelp inbox search",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes(expected.yelpName.toLowerCase()) &&
+        text.includes("yelp") &&
+        text.includes("ihc") &&
+        text.includes("manual review")
+      );
+    },
+    "Yelp account source and routing",
+    10000,
+    {
+      yelpName: communicationsSeed.yelpIntake.contact_name,
+    },
+  );
+  await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear Yelp inbox filters");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//div[@aria-label="Communication inbox views"]//button[contains(normalize-space(.), "Calls")]',
+    ),
+    "Calls inbox view",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inbox-search"]'),
+    communicationsSeed.fakeCustomerPhone,
+    "missed call search",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return text.includes("missed") && text.includes("call back or assign");
+    },
+    "missed call inbox item",
+    10000,
+  );
+  await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear call inbox filters");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//div[@aria-label="Communication inbox views"]//button[contains(normalize-space(.), "Failed Delivery")]',
+    ),
+    "Failed delivery inbox view",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes("provider delivery failure") ||
+        text.includes("test seeded sms delivery failure") ||
+        text.includes("failed sms body")
+      );
+    },
+    "failed delivery inbox item",
+    10000,
+  );
+  await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear failed delivery filters");
   await waitFor(
     tab,
     () => {
@@ -4844,14 +5216,35 @@ async function testUnifiedInboxSearchAndFilters(tab, leadWorkflow) {
         attention.value === "all"
       );
     },
-    "cleared inbox filters",
-    10000,
+      "cleared inbox filters",
+      10000,
+    );
+  await clickNav(tab, "Operations");
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+
+      return (
+        text.includes("communications") &&
+        (text.includes("missed call") ||
+          text.includes("new voicemail") ||
+          text.includes("provider delivery failure") ||
+          text.includes("customer waiting for response"))
+      );
+    },
+    "communications surfaced in Operations Queue",
+    15000,
   );
 
   return {
     search: "passed",
-    kindFilter: "Lead",
+    kindFilter: "Lead Intake",
     providerFilter: "Website",
+    yelpAccount: "preserved",
+    missedCall: "queued",
+    failedDelivery: "visible",
+    operationsQueue: "visible",
     detailPanel: "passed",
   };
 }
@@ -8618,7 +9011,8 @@ export async function runWeatherTechOsRegression({
     const shouldRunLeadWorkflow =
       enabledGroups.has("crm") ||
       enabledGroups.has("crm-leads") ||
-      enabledGroups.has("crm-inbox");
+      enabledGroups.has("crm-inbox") ||
+      enabledGroups.has("communications");
     const shouldRunEstimatesWorkflow =
       enabledGroups.has("crm") || enabledGroups.has("crm-estimates");
     const shouldRunSalesPipelineWorkflow = enabledGroups.has("sales-pipeline");
@@ -8627,18 +9021,20 @@ export async function runWeatherTechOsRegression({
     const shouldRunCustomersWorkflow =
       enabledGroups.has("crm") || enabledGroups.has("crm-customers");
     const shouldRunInboxWorkflow =
-      enabledGroups.has("crm") || enabledGroups.has("crm-inbox");
+      enabledGroups.has("crm") ||
+      enabledGroups.has("crm-inbox") ||
+      enabledGroups.has("communications");
     const shouldReloadFreshSnapshot =
       shouldRunLeadWorkflow ||
       shouldRunEstimatesWorkflow ||
       shouldRunSalesPipelineWorkflow ||
       shouldRunCustomersWorkflow ||
       shouldRunInboxWorkflow ||
-	      enabledGroups.has("operations") ||
-	      enabledGroups.has("financial") ||
-	      enabledGroups.has("marketing") ||
-	      enabledGroups.has("lead-intake-workspace") ||
-	      enabledGroups.has("lead-intake");
+        enabledGroups.has("operations") ||
+        enabledGroups.has("financial") ||
+        enabledGroups.has("marketing") ||
+        enabledGroups.has("lead-intake-workspace") ||
+        enabledGroups.has("lead-intake");
 
     if (shouldReloadFreshSnapshot) {
       progress("fresh-snapshot:reload:start");
@@ -8663,17 +9059,17 @@ export async function runWeatherTechOsRegression({
       progress("seeded-job:reload:done");
     }
 
-	    if (enabledGroups.has("dashboard")) {
-	      await record("Dashboard loads in live Supabase mode", () =>
-	        testDashboardLiveMode(tab),
-	      );
-	    }
+      if (enabledGroups.has("dashboard")) {
+        await record("Dashboard loads in live Supabase mode", () =>
+          testDashboardLiveMode(tab),
+        );
+      }
 
-	    if (enabledGroups.has("operations")) {
-	      await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
-	        testOfficeOperationsWorkspace(browser, tab),
-	      );
-	    }
+      if (enabledGroups.has("operations")) {
+        await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
+          testOfficeOperationsWorkspace(browser, tab),
+        );
+      }
 
     if (enabledGroups.has("settings")) {
       await record("Settings Integration Center displays provider readiness", () =>
@@ -8739,15 +9135,23 @@ export async function runWeatherTechOsRegression({
       );
     }
 
-    if (shouldRunInboxWorkflow) {
-      await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
-        if (!leadWorkflow) {
-          throw new Error("Lead workflow did not produce a test lead.");
-        }
+      if (shouldRunInboxWorkflow) {
+        await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
+          if (!leadWorkflow) {
+            throw new Error("Lead workflow did not produce a test lead.");
+          }
 
-        return testUnifiedInboxSearchAndFilters(tab, leadWorkflow);
-      });
-    }
+          return testUnifiedInboxSearchAndFilters(
+            tab,
+            env,
+            companies,
+            leadWorkflow,
+            runId,
+            baseUrl,
+            progress,
+          );
+        });
+      }
 
     if (shouldRunSalesPipelineWorkflow) {
       progress("lead:seed-for-sales-pipeline:start");

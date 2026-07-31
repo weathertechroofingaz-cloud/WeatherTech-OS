@@ -43,8 +43,10 @@ export function scopeCrmSnapshotByCompany(
   const companies = snapshot.companies.filter((company) => company.id === companyId);
   const companyTrade = companies[0]?.workflow_profile ?? companies[0]?.trade ?? "both";
   const leads = byCompany(snapshot.leads, companyId);
+  const leadIds = new Set(leads.map((lead) => lead.id));
   const properties = byCompany(snapshot.properties, companyId);
   const customers = byCompany(snapshot.customers, companyId);
+  const customerIds = new Set(customers.map((customer) => customer.id));
   const estimates = byCompany(snapshot.estimates, companyId);
   const estimateIds = new Set(estimates.map((estimate) => estimate.id));
   const scopes = byCompany(snapshot.scopes, companyId);
@@ -59,6 +61,8 @@ export function scopeCrmSnapshotByCompany(
   const materialOrderIds = new Set(materialOrders.map((order) => order.id));
   const employees = byCompany(snapshot.employees, companyId);
   const employeeIds = new Set(employees.map((employee) => employee.id));
+  const businessPhoneNumbers = byCompany(snapshot.businessPhoneNumbers, companyId);
+  const businessPhoneNumberIds = new Set(businessPhoneNumbers.map((phone) => phone.id));
   const routePlans = byCompany(snapshot.routePlans, companyId);
   const routePlanIds = new Set(routePlans.map((routePlan) => routePlan.id));
 
@@ -110,9 +114,37 @@ export function scopeCrmSnapshotByCompany(
     notifications: byCompany(snapshot.notifications, companyId),
     integrationConnections: byCompany(snapshot.integrationConnections, companyId),
     integrationSyncLogs: byCompany(snapshot.integrationSyncLogs, companyId),
+    leadIntakeRecords: snapshot.leadIntakeRecords.filter(
+      (record) =>
+        record.company_id === companyId ||
+        (record.linked_lead_id !== null && leadIds.has(record.linked_lead_id)) ||
+        (record.linked_customer_id !== null && customerIds.has(record.linked_customer_id)) ||
+        (record.company_id === null &&
+          ((companyTrade === "roofing" && record.company_key === "weathertech_roofing") ||
+            (companyTrade === "painting" && record.company_key === "ihc_painting"))),
+    ),
     calendarEventSyncs: byCompany(snapshot.calendarEventSyncs, companyId),
     emailMessages: byCompany(snapshot.emailMessages, companyId),
     smsMessages: byCompany(snapshot.smsMessages, companyId),
+    businessPhoneNumbers,
+    communicationProviderEvents: snapshot.communicationProviderEvents.filter(
+      (event) =>
+        event.company_id === companyId ||
+        (event.business_phone_number_id !== null &&
+          businessPhoneNumberIds.has(event.business_phone_number_id)) ||
+        (event.lead_id !== null && leadIds.has(event.lead_id)) ||
+        (event.customer_id !== null && customerIds.has(event.customer_id)) ||
+        (event.job_id !== null && jobIds.has(event.job_id)),
+    ),
+    callRecords: snapshot.callRecords.filter(
+      (call) =>
+        call.company_id === companyId ||
+        (call.business_phone_number_id !== null &&
+          businessPhoneNumberIds.has(call.business_phone_number_id)) ||
+        (call.lead_id !== null && leadIds.has(call.lead_id)) ||
+        (call.customer_id !== null && customerIds.has(call.customer_id)) ||
+        (call.job_id !== null && jobIds.has(call.job_id)),
+    ),
     routePlans,
     routePlanStops: snapshot.routePlanStops.filter((stop) =>
       routePlanIds.has(stop.route_plan_id),

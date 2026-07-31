@@ -26,6 +26,13 @@ import {
   buildFinancialOperationsSummary,
   financialInvoiceWorkflowStatusLabel,
 } from "./financialOperations";
+import {
+  buildUnifiedInboxItems,
+  getCommunicationPriority,
+  getCommunicationResponseStatus,
+  getCommunicationWaitingLabel,
+  type UnifiedInboxItem,
+} from "./communications";
 
 export type OperationsQueuePriority = "critical" | "high" | "medium" | "low";
 
@@ -983,57 +990,11 @@ function buildChangeOrderItems(snapshot: CrmSnapshot, context: QueueContext) {
 }
 
 function buildCommunicationItems(snapshot: CrmSnapshot, context: QueueContext) {
-  const failedEmails = snapshot.emailMessages
-    .filter((message) => message.status === "failed")
-    .map((message) =>
-      createQueueItem(context, {
-        id: `email-failed:${message.id}`,
-        priority: "high",
-        companyId: message.company_id,
-        customerId: message.customer_id,
-        customerName: getCustomerName(context, message.customer_id),
-        propertyId: null,
-        propertyLabel: getRecordPropertyLabel(context, null, message.customer_id, null),
-        category: "communication",
-        assignedOwner: "Office",
-        dueAt: message.updated_at,
-        createdAt: message.created_at,
-        currentWorkflowStage: "Email failed",
-        sourceModule: "Communications",
-        sourceRecordId: message.id,
-        suggestedNextAction: "Open communications and resolve email failure",
-        title: "Customer escalation",
-        detail: `${message.subject} failed to send.`,
-        workflow: "communications",
-        targetView: "inbox",
-      }),
-    );
-
-  const failedSms = snapshot.smsMessages
-    .filter((message) => message.status === "failed")
-    .map((message) =>
-      createQueueItem(context, {
-        id: `sms-failed:${message.id}`,
-        priority: "high",
-        companyId: message.company_id,
-        customerId: message.customer_id,
-        customerName: getCustomerName(context, message.customer_id),
-        propertyId: null,
-        propertyLabel: getRecordPropertyLabel(context, null, message.customer_id, null),
-        category: "communication",
-        assignedOwner: "Office",
-        dueAt: message.updated_at,
-        createdAt: message.created_at,
-        currentWorkflowStage: "SMS failed",
-        sourceModule: "Communications",
-        sourceRecordId: message.id,
-        suggestedNextAction: "Open communications and resolve SMS failure",
-        title: "Customer escalation",
-        detail: `${message.category.replace("_", " ")} SMS failed to send.`,
-        workflow: "communications",
-        targetView: "inbox",
-      }),
-    );
+  const companyMap = new Map(snapshot.companies.map((company) => [company.id, company]));
+  const actionableCommunications = buildUnifiedInboxItems(snapshot, companyMap)
+    .filter((item) => communicationNeedsOfficeAction(item))
+    .slice(0, 25)
+    .map((item) => createCommunicationQueueItem(context, item));
 
   const reminders = snapshot.notifications
     .filter(
@@ -1044,7 +1005,67 @@ function buildCommunicationItems(snapshot: CrmSnapshot, context: QueueContext) {
     )
     .map((notification) => createNotificationQueueItem(context, notification));
 
-  return [...failedEmails, ...failedSms, ...reminders];
+  return [...actionableCommunications, ...reminders];
+}
+
+function communicationNeedsOfficeAction(item: UnifiedInboxItem) {
+  const responseStatus = getCommunicationResponseStatus(item);
+
+  return (
+    responseStatus === "needs_response" ||
+    responseStatus === "overdue" ||
+    responseStatus === "waiting_on_us" ||
+    item.isFailed ||
+    item.isMissedCall ||
+    item.isUnassigned
+  );
+}
+
+function createCommunicationQueueItem(
+  context: QueueContext,
+  item: UnifiedInboxItem,
+) {
+  const responseStatus = getCommunicationResponseStatus(item);
+  const dueAt = item.followUpAt ?? item.waitingSince ?? item.createdAt;
+  const priority = getCommunicationPriority(item);
+
+  return createQueueItem(context, {
+    id: `communication:${item.id}`,
+    priority,
+    companyId: item.companyId,
+    customerId: item.customerId,
+    customerName: item.customerName,
+    propertyId: item.propertyId ?? null,
+    propertyLabel: getRecordPropertyLabel(
+      context,
+      item.propertyId ?? null,
+      item.customerId,
+      item.businessLocation,
+    ),
+    category: "communication",
+    assignedOwner: item.assignedTo?.trim() || "Office",
+    dueAt,
+    createdAt: item.createdAt,
+    currentWorkflowStage: item.routingStatus ?? item.status,
+    sourceModule: "Communications",
+    sourceRecordId: item.relatedRecordId ?? item.id,
+    status: responseStatus === "resolved" ? "completed" : undefined,
+    suggestedNextAction:
+      item.suggestedNextAction ?? "Open communications and respond using the existing workflow",
+    title:
+      item.isMissedCall
+        ? item.kind === "Voicemail"
+          ? "New voicemail"
+          : "Missed call"
+        : item.isFailed
+          ? "Provider delivery failure"
+          : item.isUnassigned
+            ? "Unassigned conversation"
+            : "Customer waiting for response",
+    detail: `${item.sourceLabel} · ${item.customerName} · ${getCommunicationWaitingLabel(item)}.`,
+    workflow: "communications",
+    targetView: "inbox",
+  });
 }
 
 function buildRecentCloseoutItems(snapshot: CrmSnapshot, context: QueueContext) {

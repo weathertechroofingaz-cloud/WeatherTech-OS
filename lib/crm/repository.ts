@@ -164,6 +164,7 @@ function isOptionalTableMissingError(error: unknown) {
     message.includes("42p01") ||
     message.includes("pgrst205") ||
     message.includes("could not find the table") ||
+    (message.includes("relation") && message.includes("does not exist")) ||
     message.includes("relation \"public.properties\" does not exist") ||
     message.includes("relation \"properties\" does not exist")
   );
@@ -505,9 +506,13 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     notifications: [],
     integrationConnections: [],
     integrationSyncLogs: [],
+    leadIntakeRecords: [],
     calendarEventSyncs: [],
     emailMessages: [],
     smsMessages: [],
+    businessPhoneNumbers: [],
+    communicationProviderEvents: [],
+    callRecords: [],
     routePlans: [],
     routePlanStops: [],
     companyMemberships: [],
@@ -580,9 +585,13 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications,
     integrationConnections,
     integrationSyncLogs,
+    leadIntakeRecords,
     calendarEventSyncs,
     emailMessages,
     smsMessages,
+    businessPhoneNumbers,
+    communicationProviderEvents,
+    callRecords,
     routePlans,
     routePlanStops,
     companyMemberships,
@@ -652,11 +661,30 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .order("created_at", { ascending: false })
       .limit(100),
     client
+      .from("lead_intake_records")
+      .select("*")
+      .order("intake_timestamp", { ascending: false })
+      .limit(200),
+    client
       .from("calendar_event_syncs")
       .select("*")
       .order("updated_at", { ascending: false }),
     client.from("email_messages").select("*").order("updated_at", { ascending: false }),
     client.from("sms_messages").select("*").order("updated_at", { ascending: false }),
+    client
+      .from("business_phone_numbers")
+      .select("*")
+      .order("display_name", { ascending: true }),
+    client
+      .from("communication_provider_events")
+      .select("*")
+      .order("received_at", { ascending: false })
+      .limit(200),
+    client
+      .from("call_records")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200),
     client.from("route_plans").select("*").order("route_date", { ascending: false }),
     client
       .from("route_plan_stops")
@@ -702,9 +730,21 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["notifications", notifications],
     ["integration_connections", integrationConnections],
     ["integration_sync_logs", integrationSyncLogs],
+    ...(leadIntakeRecords.error && !isOptionalTableMissingError(leadIntakeRecords.error)
+      ? [["lead_intake_records", leadIntakeRecords] as [string, { error: unknown }]]
+      : []),
     ["calendar_event_syncs", calendarEventSyncs],
     ["email_messages", emailMessages],
     ["sms_messages", smsMessages],
+    ...(businessPhoneNumbers.error && !isOptionalTableMissingError(businessPhoneNumbers.error)
+      ? [["business_phone_numbers", businessPhoneNumbers] as [string, { error: unknown }]]
+      : []),
+    ...(communicationProviderEvents.error && !isOptionalTableMissingError(communicationProviderEvents.error)
+      ? [["communication_provider_events", communicationProviderEvents] as [string, { error: unknown }]]
+      : []),
+    ...(callRecords.error && !isOptionalTableMissingError(callRecords.error)
+      ? [["call_records", callRecords] as [string, { error: unknown }]]
+      : []),
     ["route_plans", routePlans],
     ["route_plan_stops", routePlanStops],
     ["company_memberships", companyMemberships],
@@ -742,9 +782,16 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications: requireRows("notifications", notifications),
     integrationConnections: requireRows("integration_connections", integrationConnections),
     integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
+    leadIntakeRecords: optionalRows("lead_intake_records", leadIntakeRecords),
     calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
     emailMessages: requireRows("email_messages", emailMessages),
     smsMessages: requireRows("sms_messages", smsMessages),
+    businessPhoneNumbers: optionalRows("business_phone_numbers", businessPhoneNumbers),
+    communicationProviderEvents: optionalRows(
+      "communication_provider_events",
+      communicationProviderEvents,
+    ),
+    callRecords: optionalRows("call_records", callRecords),
     routePlans: requireRows("route_plans", routePlans),
     routePlanStops: requireRows("route_plan_stops", routePlanStops),
     companyMemberships: requireRows("company_memberships", companyMemberships),
@@ -1075,7 +1122,7 @@ export async function createEstimate(
   input: EstimateInput,
   lineItems: EstimateLineItemInput[],
 ) {
-  
+
 
   const { data: estimate, error } = await client
     .from("estimates")
@@ -1110,7 +1157,7 @@ export async function updateEstimate(
   input: EstimateInput,
   lineItems: EstimateLineItemInput[],
 ) {
-  
+
 
   const { data: estimate, error } = await client
     .from("estimates")
@@ -1169,7 +1216,7 @@ export async function updateEstimateStatus(
 }
 
 export async function createScope(client: CrmClient, input: ScopeInput) {
-  
+
 
   const { data, error } = await client.from("scopes").insert(input).select("*").single();
 
@@ -1181,7 +1228,7 @@ export async function createScope(client: CrmClient, input: ScopeInput) {
 }
 
 export async function updateScope(client: CrmClient, id: string, input: ScopeInput) {
-  
+
 
   const { data, error } = await client
     .from("scopes")
@@ -1240,7 +1287,7 @@ export async function updateScopeTemplate(
 }
 
 export async function createJob(client: CrmClient, input: JobInput) {
-  
+
 
   const { data, error } = await client.from("jobs").insert(input).select("*").single();
 
@@ -1256,7 +1303,7 @@ export async function updateJob(
   id: string,
   input: Partial<JobInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("jobs")
@@ -1433,7 +1480,7 @@ export async function createScheduleEvent(
   client: CrmClient,
   input: ScheduleEventInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("schedule_events")
@@ -1453,7 +1500,7 @@ export async function updateScheduleEvent(
   id: string,
   input: Partial<ScheduleEventInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("schedule_events")
@@ -1602,7 +1649,7 @@ export async function createJobPhoto(
 ) {
   const now = new Date().toISOString();
 
-  
+
 
   if (!file) {
     throw new Error("Choose a photo to upload.");
@@ -1720,7 +1767,7 @@ export async function createInvoice(
   input: InvoiceInput,
   lineItems: InvoiceLineItemInput[],
 ) {
-  
+
 
   const { data: invoice, error } = await client
     .from("invoices")
@@ -1755,7 +1802,7 @@ export async function updateInvoice(
   input: InvoiceInput,
   lineItems: InvoiceLineItemInput[],
 ) {
-  
+
 
   const { data: invoice, error } = await client
     .from("invoices")
@@ -1830,7 +1877,7 @@ export async function createMaterialOrder(
   input: MaterialOrderInput,
   items: MaterialOrderItemInput[],
 ) {
-  
+
 
   const { data: order, error } = await client
     .from("material_orders")
@@ -1865,7 +1912,7 @@ export async function updateMaterialOrder(
   input: MaterialOrderInput,
   items: MaterialOrderItemInput[],
 ) {
-  
+
 
   const { data: order, error } = await client
     .from("material_orders")
@@ -1905,7 +1952,7 @@ export async function updateMaterialOrder(
 }
 
 export async function createEmployee(client: CrmClient, input: EmployeeInput) {
-  
+
 
   const { data, error } = await client
     .from("employees")
@@ -1924,7 +1971,7 @@ export async function createJobAssignment(
   client: CrmClient,
   input: JobAssignmentInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("job_assignments")
@@ -1944,7 +1991,7 @@ export async function updateJobAssignment(
   id: string,
   input: Partial<JobAssignmentInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("job_assignments")
@@ -1961,7 +2008,7 @@ export async function updateJobAssignment(
 }
 
 export async function createTimeEntry(client: CrmClient, input: TimeEntryInput) {
-  
+
 
   const { data, error } = await client
     .from("time_entries")
@@ -1981,7 +2028,7 @@ export async function updateTimeEntry(
   id: string,
   input: Partial<TimeEntryInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("time_entries")
@@ -2091,7 +2138,7 @@ export async function updateInspection(
 }
 
 export async function createDailyLog(client: CrmClient, input: DailyLogInput) {
-  
+
 
   const { data, error } = await client
     .from("daily_logs")
@@ -2125,7 +2172,7 @@ function buildChangeOrderPayload(input: ChangeOrderInput) {
 }
 
 export async function createChangeOrder(client: CrmClient, input: ChangeOrderInput) {
-  
+
 
   const { data, error } = await client
     .from("change_orders")
@@ -2145,7 +2192,7 @@ export async function updateChangeOrder(
   id: string,
   input: ChangeOrderInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("change_orders")
@@ -2534,7 +2581,7 @@ export async function createNotification(
   client: CrmClient,
   input: NotificationInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("notifications")
@@ -2554,7 +2601,7 @@ export async function updateNotification(
   id: string,
   input: Partial<NotificationInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("notifications")
@@ -2574,7 +2621,7 @@ export async function createIntegrationConnection(
   client: CrmClient,
   input: IntegrationConnectionInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("integration_connections")
@@ -2609,7 +2656,7 @@ export async function updateIntegrationConnection(
   id: string,
   input: Partial<IntegrationConnectionInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("integration_connections")
@@ -2683,7 +2730,7 @@ export async function upsertCalendarEventSync(
   client: CrmClient,
   input: CalendarEventSyncInput,
 ) {
-  
+
 
   const { data, error } = await client
     .from("calendar_event_syncs")
@@ -2714,7 +2761,7 @@ export async function upsertCalendarEventSync(
 }
 
 export async function createEmailMessage(client: CrmClient, input: EmailMessageInput) {
-  
+
 
   const now = new Date().toISOString();
   const { data, error } = await client
@@ -2749,7 +2796,7 @@ export async function updateEmailMessage(
   id: string,
   input: Partial<EmailMessageInput>,
 ) {
-  
+
 
   const { data, error } = await client
     .from("email_messages")
@@ -2861,7 +2908,7 @@ export async function createRoutePlan(
   input: RoutePlanInput,
   stops: RoutePlanStopInput[],
 ) {
-  
+
 
   const { data: routePlan, error } = await client
     .from("route_plans")

@@ -2462,9 +2462,13 @@ export type CrmSnapshot = {
   notifications: NotificationRecord[];
   integrationConnections: IntegrationConnectionRecord[];
   integrationSyncLogs: IntegrationSyncLogRecord[];
+  leadIntakeRecords: LeadIntakeRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
   emailMessages: EmailMessageRecord[];
   smsMessages: SmsMessageRecord[];
+  businessPhoneNumbers: BusinessPhoneNumberRecord[];
+  communicationProviderEvents: CommunicationProviderEventRecord[];
+  callRecords: CallRecord[];
   routePlans: RoutePlanRecord[];
   routePlanStops: RoutePlanStopRecord[];
   companyMemberships: CompanyMembershipRecord[];
