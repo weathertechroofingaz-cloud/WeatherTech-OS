@@ -5676,7 +5676,7 @@ function CrmWorkspace({
           </div>
         </aside>
 
-        <section className="min-w-0 max-w-full space-y-4 overflow-hidden">
+        <section className="wt-workspace-content min-w-0 max-w-full space-y-4 overflow-hidden">
           <header className="wt-workspace-header rounded-2xl border border-white/80 bg-white/85 p-4 shadow-[0_18px_50px_-42px_rgba(15,23,42,0.65)] ring-1 ring-slate-950/5 backdrop-blur">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div>
@@ -5697,7 +5697,7 @@ function CrmWorkspace({
                   type="button"
                   onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
                   aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="wt-control-button wt-control-button-secondary inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   {theme === "dark" ? (
                     <Sun className="h-4 w-4" />
@@ -5709,7 +5709,7 @@ function CrmWorkspace({
                 <button
                   type="button"
                   onClick={() => void onReload()}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="wt-control-button wt-control-button-secondary inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   <RefreshCcw className="h-4 w-4" />
                   Refresh
@@ -5717,7 +5717,7 @@ function CrmWorkspace({
                 <button
                   type="button"
                   onClick={() => void onSignOut()}
-                  className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  className="wt-control-button wt-control-button-primary inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold hover:opacity-95"
                 >
                   <LogOut className="h-4 w-4" />
                   Sign out
@@ -6050,15 +6050,17 @@ function NavButton({ icon: Icon, label, isActive, activeColor, onClick }: NavBut
     <button
       type="button"
       onClick={onClick}
+      aria-current={isActive ? "page" : undefined}
+      title={label}
       style={isActive ? { backgroundColor: activeColor } : undefined}
-      className={`flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition ${
+      className={`wt-nav-button flex items-center justify-between rounded-md px-3 py-2.5 text-left text-sm font-semibold focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${
         isActive
           ? "text-white shadow-sm"
           : "text-slate-300 hover:bg-slate-800 hover:text-white"
       }`}
     >
-      <span className="flex items-center gap-2">
-        <Icon className="h-4 w-4" />
+      <span className="flex min-w-0 items-center gap-2">
+        <Icon className="h-4 w-4 shrink-0" />
         {label}
       </span>
       {isActive ? <ChevronRight className="h-4 w-4" /> : null}
@@ -6095,7 +6097,7 @@ function CompanyScopeSwitcher({
           type="button"
           onClick={() => onChange("all")}
           aria-pressed={activeCompanyId === "all"}
-          className={`inline-flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+          className={`wt-control-button inline-flex min-h-10 items-center gap-2 border px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
             activeCompanyId === "all"
               ? "border-slate-950 bg-slate-950 text-white shadow-sm"
               : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
@@ -6115,7 +6117,7 @@ function CompanyScopeSwitcher({
               type="button"
               onClick={() => onChange(summary.company.id)}
               aria-pressed={isActive}
-              className={`inline-flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+              className={`wt-control-button inline-flex min-h-10 items-center gap-2 border px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
                 isActive
                   ? "border-slate-950 bg-slate-950 text-white shadow-sm"
                   : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
@@ -6140,7 +6142,7 @@ function CompanyScopeSwitcher({
         type="button"
         onClick={() => onChange("all")}
         aria-pressed={activeCompanyId === "all"}
-        className={`rounded-lg border p-3 text-left transition sm:p-4 ${
+        className={`wt-choice-card rounded-lg border p-3 text-left transition sm:p-4 ${
           activeCompanyId === "all"
             ? "border-sky-400 bg-sky-50 shadow-sm"
             : "border-slate-200 bg-slate-50 hover:border-sky-200 hover:bg-white"
@@ -6184,7 +6186,7 @@ function CompanyScopeSwitcher({
             type="button"
             onClick={() => onChange(summary.company.id)}
             aria-pressed={isActive}
-            className={`relative overflow-hidden rounded-lg border p-3 text-left transition sm:p-4 ${
+            className={`wt-choice-card relative overflow-hidden rounded-lg border p-3 text-left transition sm:p-4 ${
               isActive
                 ? "border-slate-400 bg-white shadow-sm"
                 : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -11914,7 +11916,7 @@ function JobProductionTimeline({ items }: { items: JobProductionTimelineItem[] }
 
 function MetricCard({ label, value, icon: Icon }: MetricCardProps) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-200 hover:bg-white hover:shadow-sm">
+    <div className="wt-standard-card rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-200 hover:bg-white">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-500">{label}</p>
         <div className="grid h-9 w-9 place-items-center rounded-md bg-white text-sky-700 shadow-sm">
@@ -14701,6 +14703,7 @@ function SalesPipelineView({
                 actionLabel={selectedOpportunityEstimate ? "Open Estimates" : "Create estimate"}
                 onAction={() => void handleCreateOpportunityEstimate()}
                 isBusy={isCreatingEstimate}
+                testId="sales-pipeline-estimate-action"
               />
               <OpportunityRelationRow
                 label="Job"
@@ -14713,6 +14716,7 @@ function SalesPipelineView({
                 actionLabel={selectedOpportunityJob ? "Open Jobs" : "Create job"}
                 onAction={() => void handleCreateOpportunityJob()}
                 isBusy={isCreatingJob}
+                testId="sales-pipeline-job-action"
               />
             </div>
             <div className="mt-5 grid gap-2 sm:grid-cols-2">
@@ -14795,6 +14799,7 @@ function OpportunityRelationRow({
   actionLabel,
   isBusy,
   onAction,
+  testId,
 }: {
   label: string;
   value: string;
@@ -14802,6 +14807,7 @@ function OpportunityRelationRow({
   actionLabel: string;
   isBusy?: boolean;
   onAction: () => void;
+  testId?: string;
 }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -14814,6 +14820,7 @@ function OpportunityRelationRow({
         type="button"
         disabled={isBusy}
         onClick={onAction}
+        data-testid={testId}
         className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
       >
         {isBusy ? "Working" : actionLabel}
@@ -19920,7 +19927,7 @@ function ClockIcon() {
 
 function ProfileStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="wt-standard-card rounded-lg border border-slate-200 bg-slate-50 p-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 text-lg font-bold text-slate-950">{value}</p>
     </div>
@@ -42255,12 +42262,14 @@ function Badge({ label, tone }: { label: string; tone: "blue" | "green" | "amber
     blue: "bg-sky-100 text-sky-800",
     green: "bg-emerald-100 text-emerald-800",
   }[tone];
+  const readableLabel = label.replace(/_/g, " ");
 
   return (
     <span
-      className={`wt-status-badge wt-status-badge-${tone} inline-flex w-fit rounded-md px-2.5 py-1 text-xs font-semibold capitalize ${toneClass}`}
+      aria-label={readableLabel}
+      className={`wt-status-badge wt-status-badge-${tone} inline-flex w-fit rounded-md px-2.5 py-1 text-xs font-bold capitalize leading-none tracking-wide ${toneClass}`}
     >
-      {label.replace("_", " ")}
+      {readableLabel}
     </span>
   );
 }
@@ -42279,14 +42288,27 @@ function Message({ tone, message }: { tone: "success" | "error"; message: string
   );
 }
 
-function EmptyState({ label }: { label: string }) {
+function EmptyState({
+  label,
+  description,
+}: {
+  label: string;
+  description?: string;
+}) {
   return (
-    <div className="grid place-items-center rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-      <div>
-        <div className="mx-auto grid h-10 w-10 place-items-center rounded-md bg-sky-100 text-sky-700">
+    <div
+      role="status"
+      className="wt-empty-state grid place-items-center rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"
+    >
+      <div className="max-w-md">
+        <div className="mx-auto grid h-11 w-11 place-items-center rounded-md bg-sky-100 text-sky-700">
           <Search className="h-5 w-5" />
         </div>
-        <p className="mt-3 text-sm font-semibold text-slate-600">{label}</p>
+        <p className="mt-3 text-sm font-bold text-slate-700">{label}</p>
+        <p className="mt-1 text-sm text-slate-500">
+          {description ??
+            "When records match this workspace, they will appear here with the next action available."}
+        </p>
       </div>
     </div>
   );
@@ -42308,7 +42330,10 @@ function PaginationControls({
   }
 
   return (
-    <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+    <nav
+      aria-label="Pagination"
+      className="flex flex-col gap-3 border-t border-slate-200 px-5 py-4 text-sm sm:flex-row sm:items-center sm:justify-between"
+    >
       <span className="font-medium text-slate-500">
         Page {page} of {pageCount} - {total} records
       </span>
@@ -42317,7 +42342,8 @@ function PaginationControls({
           type="button"
           onClick={() => onPageChange(Math.max(page - 1, 1))}
           disabled={page === 1}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={`Go to page ${Math.max(page - 1, 1)}`}
+          className="wt-control-button wt-control-button-secondary border border-slate-300 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50"
         >
           Previous
         </button>
@@ -42325,12 +42351,13 @@ function PaginationControls({
           type="button"
           onClick={() => onPageChange(Math.min(page + 1, pageCount))}
           disabled={page === pageCount}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={`Go to page ${Math.min(page + 1, pageCount)}`}
+          className="wt-control-button wt-control-button-secondary border border-slate-300 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50"
         >
           Next
         </button>
       </div>
-    </div>
+    </nav>
   );
 }
 

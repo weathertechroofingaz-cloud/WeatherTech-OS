@@ -31,6 +31,8 @@
   --wt-warning: #d97706;
   --wt-danger: #dc2626;
   --wt-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  --wt-card-shadow: 0 16px 42px -34px rgba(15, 23, 42, 0.45);
+  --wt-card-shadow-hover: 0 22px 52px -34px rgba(15, 23, 42, 0.5);
   background-color: var(--wt-page);
   color: var(--wt-ink);
 }
@@ -59,6 +61,8 @@
   --wt-brand: var(--wt-primary);
   --wt-brand-strong: var(--wt-primary-strong);
   --wt-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  --wt-card-shadow: 0 22px 54px -42px rgba(0, 0, 0, 0.85);
+  --wt-card-shadow-hover: 0 28px 64px -42px rgba(0, 0, 0, 0.92);
 }
 
 .wt-company-painting {
@@ -105,12 +109,24 @@ select {
   outline: none;
 }
 
+button,
+a,
+input,
+textarea,
+select,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
-select:focus-visible {
+select:focus-visible,
+[role="button"]:focus-visible {
   box-shadow: 0 0 0 3px var(--wt-primary-ring);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
 
 ::selection {
@@ -208,6 +224,105 @@ select:focus-visible {
   background-color: var(--wt-accent);
 }
 
+.wt-app-shell {
+  overflow-x: clip;
+}
+
+.wt-app-shell :where(button, [role="button"], a, input, textarea, select) {
+  transition-duration: 160ms;
+  transition-property: background-color, border-color, box-shadow, color, opacity, transform;
+  transition-timing-function: ease;
+}
+
+.wt-app-shell :where(button:disabled, [aria-disabled="true"]) {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.wt-workspace-content {
+  contain: inline-size;
+}
+
+.wt-control-button {
+  min-height: 2.75rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+
+.wt-control-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px -24px rgba(15, 23, 42, 0.45);
+}
+
+.wt-control-button-primary {
+  background: linear-gradient(135deg, var(--wt-brand), var(--wt-accent));
+  color: #fffaf5;
+}
+
+.wt-control-button-secondary {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.wt-nav-button {
+  min-height: 2.75rem;
+}
+
+.wt-nav-button:hover {
+  transform: translateX(2px);
+}
+
+.wt-choice-card,
+.wt-standard-card,
+.wt-empty-state {
+  box-shadow: var(--wt-card-shadow);
+}
+
+.wt-choice-card:hover,
+.wt-standard-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--wt-card-shadow-hover);
+}
+
+.wt-empty-state {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 250, 252, 0.92)),
+    radial-gradient(circle at 50% 0, var(--wt-primary-soft), transparent 18rem);
+}
+
+.wt-app-shell :where(table) {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.wt-app-shell :where(thead th) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.wt-app-shell :where(tbody tr) {
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.wt-app-shell :where(tbody tr:hover) {
+  background-color: rgba(99, 102, 241, 0.045);
+}
+
+.wt-app-shell :where(input, textarea, select) {
+  min-height: 2.5rem;
+}
+
+@media (max-width: 640px) {
+  .wt-app-shell :where(button, [role="button"], input, textarea, select) {
+    min-height: 2.75rem;
+  }
+
+  .wt-workspace-header {
+    border-radius: 1rem;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   * {
     scroll-behavior: smooth;
@@ -221,6 +336,29 @@ select:focus-visible {
   .rounded-md {
     transition-duration: 160ms;
     transition-property: background-color, border-color, box-shadow, color, opacity, transform;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  * {
+    scroll-behavior: auto !important;
+  }
+
+  .wt-app-shell :where(button, [role="button"], a, input, textarea, select),
+  .wt-choice-card,
+  .wt-standard-card,
+  .wt-empty-state,
+  .wt-skeleton {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .wt-control-button:hover,
+  .wt-nav-button:hover,
+  .wt-choice-card:hover,
+  .wt-standard-card:hover {
+    transform: none;
   }
 }
 
@@ -320,6 +458,26 @@ select:focus-visible {
 :root[data-theme="dark"] .wt-workspace-header button:hover {
   background: rgba(25, 39, 63, 0.95) !important;
   border-color: rgba(167, 139, 250, 0.58) !important;
+}
+
+:root[data-theme="dark"] .wt-control-button-secondary {
+  background: rgba(9, 17, 31, 0.82);
+}
+
+:root[data-theme="dark"] .wt-choice-card,
+:root[data-theme="dark"] .wt-standard-card {
+  background: linear-gradient(180deg, rgba(16, 29, 49, 0.96), rgba(10, 21, 37, 0.94)) !important;
+}
+
+:root[data-theme="dark"] .wt-empty-state {
+  background:
+    linear-gradient(180deg, rgba(12, 24, 42, 0.9), rgba(8, 18, 33, 0.94)),
+    radial-gradient(circle at 50% 0, rgba(139, 92, 246, 0.18), transparent 18rem) !important;
+  border-color: rgba(115, 134, 166, 0.44) !important;
+}
+
+:root[data-theme="dark"] .wt-app-shell :where(tbody tr:hover) {
+  background-color: rgba(167, 139, 250, 0.09);
 }
 
 :root[data-theme="dark"] .wt-dashboard {

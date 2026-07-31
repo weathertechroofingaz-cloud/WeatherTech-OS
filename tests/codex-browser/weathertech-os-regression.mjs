@@ -4245,10 +4245,13 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   );
 
   progress("sales-pipeline:estimate:start");
+  await scrollSelectorIntoView(
+    tab,
+    '[data-testid="sales-pipeline-estimate-action"]',
+    "Create opportunity estimate",
+  );
   await clickUnique(
-    tab.playwright.locator(
-      'xpath=//section[.//h3[normalize-space(.)="Linked workflow"]]//button[normalize-space(.)="Create estimate"]',
-    ),
+    tab.playwright.locator('[data-testid="sales-pipeline-estimate-action"]'),
     "Create opportunity estimate",
     { retryTransientClick: true },
   );
@@ -4332,10 +4335,13 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   }
 
   progress("sales-pipeline:job:start");
+  await scrollSelectorIntoView(
+    tab,
+    '[data-testid="sales-pipeline-job-action"]',
+    "Create opportunity job",
+  );
   await clickUnique(
-    tab.playwright.locator(
-      'xpath=//section[.//h3[normalize-space(.)="Linked workflow"]]//button[normalize-space(.)="Create job"]',
-    ),
+    tab.playwright.locator('[data-testid="sales-pipeline-job-action"]'),
     "Create opportunity job",
     { retryTransientClick: true },
   );
