@@ -56,6 +56,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -442,6 +443,21 @@ type NavigationGroup = {
   label: string;
   items: NavigationItem[];
 };
+
+type CommandPaletteItem = {
+  id: string;
+  kind: "command" | "record";
+  group: string;
+  label: string;
+  detail: string;
+  keywords: string;
+  view: WorkspaceView;
+  icon: typeof Home;
+  companyId?: string | null;
+  actionLabel?: string;
+};
+
+const commandPaletteRecentStorageKey = "weathertech-command-palette-recent";
 
 const workspaceNavigationGroups: NavigationGroup[] = [
   {
@@ -5504,6 +5520,11 @@ function CrmWorkspace({
 
     return window.localStorage.getItem("weathertech-company-scope") ?? "all";
   });
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
+  const [recentCommandPaletteIds, setRecentCommandPaletteIds] = useState<string[]>(
+    readCommandPaletteRecentIds,
+  );
   const companyMap = useMemo(
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
@@ -5513,6 +5534,10 @@ function CrmWorkspace({
   const scopedSnapshot = useMemo(
     () => scopeCrmSnapshotByCompany(snapshot, selectedCompanyId),
     [selectedCompanyId, snapshot],
+  );
+  const commandPaletteItems = useMemo(
+    () => buildCommandPaletteItems(scopedSnapshot, companyMap),
+    [companyMap, scopedSnapshot],
   );
   const metrics = useMemo(
     () => calculateDashboardMetrics(scopedSnapshot),
@@ -5532,7 +5557,7 @@ function CrmWorkspace({
   const shortcuts = useMemo(
     () =>
       [
-        { key: "1", view: "dashboard", label: "Dashboard" },
+        { key: "1", view: "dashboard", label: "Command Center" },
         { key: "2", view: "inbox", label: "Inbox" },
         { key: "3", view: "leads", label: "Leads" },
         { key: "4", view: "customers", label: "Customers" },
@@ -5542,6 +5567,23 @@ function CrmWorkspace({
         { key: "8", view: "analytics", label: "Analytics" },
       ] satisfies { key: string; view: WorkspaceView; label: string }[],
     [],
+  );
+  const handleCommandPaletteSelect = useCallback(
+    (item: CommandPaletteItem) => {
+      if (item.companyId) {
+        setSelectedCompanyId(item.companyId);
+      }
+
+      onViewChange(item.view);
+      setIsCommandPaletteOpen(false);
+      setCommandPaletteQuery("");
+      setRecentCommandPaletteIds((current) => {
+        const next = [item.id, ...current.filter((id) => id !== item.id)].slice(0, 10);
+        writeCommandPaletteRecentIds(next);
+        return next;
+      });
+    },
+    [onViewChange],
   );
 
   useEffect(() => {
@@ -5559,6 +5601,12 @@ function CrmWorkspace({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setIsCommandPaletteOpen(true);
+        return;
+      }
+
       const target = event.target as HTMLElement | null;
       const isTyping =
         target?.tagName === "INPUT" ||
@@ -5684,10 +5732,12 @@ function CrmWorkspace({
                   WeatherTech OS
                 </p>
                 <h1 className="mt-1 text-2xl font-bold text-slate-950">
-                  {activeCompany?.name ?? "Owner dashboard"}
+                  {view === "dashboard" ? "WeatherTech Command Center" : activeCompany?.name ?? "Owner dashboard"}
                 </h1>
                 <p className="mt-1 text-sm text-slate-500">
-                  {activeCompany
+                  {view === "dashboard"
+                    ? "Action-first owner workspace for daily priorities, crews, sales, cash, and customer response."
+                    : activeCompany
                     ? `${companyTradeLabel(activeCompany)} command center`
                     : "Combined owner view across WeatherTech Roofing and IHC Painting"}
                 </p>
@@ -5737,18 +5787,19 @@ function CrmWorkspace({
           {notice ? <Message tone="success" message={notice} /> : null}
           {error ? <Message tone="error" message={error} /> : null}
 
-            {view === "dashboard" ? (
-              <DashboardView
-                metrics={metrics}
-                snapshot={scopedSnapshot}
+          {view === "dashboard" ? (
+            <DashboardView
+              metrics={metrics}
+              snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
               isDemoMode={isDemoMode}
               onCompanyScopeChange={setSelectedCompanyId}
               onViewChange={onViewChange}
-                onCreateLead={() => onViewChange("leadIntake")}
-              />
-            ) : null}
+              onCreateLead={() => onViewChange("leadIntake")}
+              onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            />
+          ) : null}
 
             {view === "operations" ? (
               <OfficeOperationsView
@@ -6033,7 +6084,267 @@ function CrmWorkspace({
           ) : null}
         </section>
       </div>
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        query={commandPaletteQuery}
+        items={commandPaletteItems}
+        recentIds={recentCommandPaletteIds}
+        onQueryChange={setCommandPaletteQuery}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onSelect={handleCommandPaletteSelect}
+      />
     </main>
+  );
+}
+
+function CommandPalette({
+  isOpen,
+  query,
+  items,
+  recentIds,
+  onQueryChange,
+  onClose,
+  onSelect,
+}: {
+  isOpen: boolean;
+  query: string;
+  items: CommandPaletteItem[];
+  recentIds: string[];
+  onQueryChange: (query: string) => void;
+  onClose: () => void;
+  onSelect: (item: CommandPaletteItem) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const normalizedQuery = query.trim().toLowerCase();
+  const groupedItems = useMemo(() => {
+    const addUnique = (
+      groups: { label: string; items: CommandPaletteItem[] }[],
+      label: string,
+      groupItems: CommandPaletteItem[],
+    ) => {
+      const uniqueItems = groupItems.filter(
+        (item, index, array) => array.findIndex((candidate) => candidate.id === item.id) === index,
+      );
+
+      if (uniqueItems.length) {
+        groups.push({ label, items: uniqueItems });
+      }
+    };
+
+    if (!normalizedQuery) {
+      const groups: { label: string; items: CommandPaletteItem[] }[] = [];
+      const recentItems = recentIds
+        .map((id) => items.find((item) => item.id === id))
+        .filter((item): item is CommandPaletteItem => Boolean(item));
+      const pinnedItems = items.filter((item) => item.group === "Pinned favorites");
+      const recentCommands = recentItems.filter((item) => item.kind === "command");
+      const commonCommands = items.filter((item) => item.group === "Common commands");
+      const recentCustomers = items.filter((item) => item.group === "Recent customers").slice(0, 5);
+
+      addUnique(groups, "Recently opened", recentItems);
+      addUnique(groups, "Pinned favorites", pinnedItems);
+      addUnique(groups, "Recent commands", recentCommands);
+      addUnique(groups, "Common commands", commonCommands);
+      addUnique(groups, "Recent customers", recentCustomers);
+
+      return groups;
+    }
+
+    const matches = items
+      .filter((item) =>
+        `${item.label} ${item.detail} ${item.keywords}`.toLowerCase().includes(normalizedQuery),
+      )
+      .slice(0, 24);
+    const groupOrder = [
+      "Pinned favorites",
+      "Recent commands",
+      "Common commands",
+      "Recent customers",
+      "Customers",
+      "Leads",
+      "Jobs",
+      "Estimates",
+      "Documents",
+      "Communications",
+      "Calendar events",
+      "Financials",
+      "Photos",
+      "Scopes",
+    ];
+
+    return groupOrder
+      .map((label) => ({
+        label,
+        items: matches.filter((item) => item.group === label),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [items, normalizedQuery, recentIds]);
+  const flatItems = groupedItems.flatMap((group) => group.items);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setActiveIndex(0);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [isOpen]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [normalizedQuery]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const activeItem = flatItems[activeIndex] ?? flatItems[0] ?? null;
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) =>
+        flatItems.length ? (current + 1) % flatItems.length : 0,
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) =>
+        flatItems.length ? (current - 1 + flatItems.length) % flatItems.length : 0,
+      );
+      return;
+    }
+
+    if (event.key === "Enter" && activeItem) {
+      event.preventDefault();
+      onSelect(activeItem);
+    }
+  };
+
+  return (
+    <div
+      className="wt-command-palette-backdrop fixed inset-0 z-50 grid place-items-start bg-slate-950/30 px-3 py-16 backdrop-blur-sm sm:px-6"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="command-palette-title"
+        className="wt-command-palette mx-auto w-full max-w-3xl overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_28px_90px_-40px_rgba(15,23,42,0.85)] ring-1 ring-slate-950/10"
+        data-testid="command-palette"
+      >
+        <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50/80 px-4 py-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-950 text-white">
+            <Search className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p id="command-palette-title" className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+              Universal command palette
+            </p>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              onKeyDown={handleKeyDown}
+              data-testid="command-palette-search"
+              className="mt-1 w-full border-0 bg-transparent p-0 text-lg font-bold text-slate-950 outline-none placeholder:text-slate-400 focus:ring-0"
+              placeholder="Search customers, jobs, estimates, documents..."
+              aria-label="Search WeatherTech OS"
+              aria-activedescendant={activeItem ? `command-palette-item-${activeItem.id}` : undefined}
+              aria-controls="command-palette-results"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            aria-label="Close command palette"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div
+          id="command-palette-results"
+          className="max-h-[min(68vh,620px)] overflow-y-auto p-3"
+          role="listbox"
+          aria-label="Command palette results"
+        >
+          {groupedItems.length ? (
+            groupedItems.map((group) => (
+              <div key={group.label} className="py-2">
+                <p className="px-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] text-slate-400">
+                  {group.label}
+                </p>
+                <div className="mt-1 grid gap-1">
+                  {group.items.map((item) => {
+                    const itemIndex = flatItems.findIndex((candidate) => candidate.id === item.id);
+                    const isActive = itemIndex === activeIndex;
+
+                    return (
+                      <button
+                        key={item.id}
+                        id={`command-palette-item-${item.id}`}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        onMouseEnter={() => setActiveIndex(itemIndex)}
+                        onClick={() => onSelect(item)}
+                        className={`wt-command-palette-item grid min-h-16 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 ${
+                          isActive
+                            ? "border-sky-300 bg-sky-50 shadow-sm"
+                            : "border-transparent bg-transparent hover:border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm ring-1 ring-slate-950/5">
+                          <item.icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block break-words text-sm font-bold text-slate-950">
+                            {item.label}
+                          </span>
+                          <span className="mt-0.5 block break-words text-xs font-semibold leading-5 text-slate-500">
+                            {item.detail}
+                          </span>
+                        </span>
+                        <span className="hidden rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-500 ring-1 ring-slate-200 sm:inline">
+                          {item.actionLabel ?? "Open"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+              <p className="text-sm font-bold text-slate-950">No matching command or record</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Try a customer, address, job, estimate, document, communication, or workspace name.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-slate-50/80 px-4 py-3 text-xs font-semibold text-slate-500">
+          <span>Press Enter to open, Esc to close.</span>
+          <span>Shortcut: Ctrl+K or Cmd+K</span>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -6247,6 +6558,7 @@ type DashboardViewProps = {
   onCompanyScopeChange: (companyId: CompanyScopeId) => void;
   onViewChange: (view: WorkspaceView) => void;
   onCreateLead: () => void;
+  onOpenCommandPalette: () => void;
 };
 
 type CompanyDashboardSummary = {
@@ -6464,6 +6776,480 @@ function getDashboardItemCompanyLabel(
   return companyId
     ? companyMap.get(companyId)?.short_name ?? companyMap.get(companyId)?.name ?? "Company"
     : "All companies";
+}
+
+function readCommandPaletteRecentIds() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(commandPaletteRecentStorageKey) ?? "[]",
+    );
+
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string").slice(0, 10)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCommandPaletteRecentIds(ids: string[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(commandPaletteRecentStorageKey, JSON.stringify(ids.slice(0, 10)));
+}
+
+function buildCommandPaletteItems(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+): CommandPaletteItem[] {
+  const inboxItems = buildUnifiedInboxItems(snapshot, companyMap);
+  const companyLabel = (companyId: string | null | undefined) =>
+    getDashboardItemCompanyLabel(companyMap, companyId ?? null);
+  const createKeywords = (values: Array<string | number | null | undefined>) =>
+    values
+      .filter((value) => value !== null && value !== undefined)
+      .join(" ")
+      .toLowerCase();
+  const items: CommandPaletteItem[] = [
+    {
+      id: "command-open-command-center",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Command Center",
+      detail: "Owner morning workspace for priorities, production, sales, and cash.",
+      keywords: "dashboard command center owner morning priorities operations",
+      view: "dashboard",
+      icon: Home,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-customers",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Customer Search",
+      detail: "Find customers and open Customer 360.",
+      keywords: "customers customer 360 search homeowner property",
+      view: "customers",
+      icon: Users,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-calendar",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Calendar",
+      detail: "Review inspections, dispatch, and scheduled production.",
+      keywords: "calendar schedule inspections dispatch production",
+      view: "calendar",
+      icon: CalendarClock,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-jobs",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Jobs",
+      detail: "Review production, dispatch status, crews, and job details.",
+      keywords: "jobs production dispatch crews work orders field operations",
+      view: "jobs",
+      icon: CalendarClock,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-estimates",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Estimates",
+      detail: "Review proposals, estimate approvals, and customer handoff.",
+      keywords: "estimates proposals approvals sales pricing",
+      view: "estimates",
+      icon: Calculator,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-communications",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Communications",
+      detail: "Review calls, SMS, emails, website leads, and Yelp activity.",
+      keywords: "communications inbox calls sms email website yelp messages",
+      view: "inbox",
+      icon: MessageSquare,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-field-operations",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Field Operations",
+      detail: "Open the mobile production workflow for crews and jobs.",
+      keywords: "field operations production crews mobile jobs",
+      view: "fieldOperations",
+      icon: UserRound,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-financials",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Financials",
+      detail: "Review invoices, balances, and collections.",
+      keywords: "financials invoices payments collections accounting",
+      view: "invoices",
+      icon: ReceiptText,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-documents",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Documents",
+      detail: "Review contracts, reports, warranties, permits, and uploads.",
+      keywords: "documents files contracts reports warranties permits uploads",
+      view: "documents",
+      icon: FileText,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-settings",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Settings",
+      detail: "Manage company settings and the Integration Center.",
+      keywords: "settings integrations providers company configuration",
+      view: "settings",
+      icon: Building2,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-new-lead",
+      kind: "command",
+      group: "Common commands",
+      label: "New Lead",
+      detail: "Open the existing Lead Intake workflow.",
+      keywords: "new lead create lead intake website yelp phone",
+      view: "leadIntake",
+      icon: Plus,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-new-customer",
+      kind: "command",
+      group: "Common commands",
+      label: "New Customer",
+      detail: "Open Customers to create or manage customer records.",
+      keywords: "new customer create homeowner customer 360",
+      view: "customers",
+      icon: Users,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-new-estimate",
+      kind: "command",
+      group: "Common commands",
+      label: "New Estimate",
+      detail: "Open Estimates and reuse the existing estimating workflow.",
+      keywords: "new estimate create proposal scope price",
+      view: "estimates",
+      icon: Calculator,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-schedule-inspection",
+      kind: "command",
+      group: "Common commands",
+      label: "Schedule Inspection",
+      detail: "Open Inspections for roof, paint, and property visits.",
+      keywords: "schedule inspection roof inspection paint inspection",
+      view: "inspections",
+      icon: ClipboardList,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-schedule-job",
+      kind: "command",
+      group: "Common commands",
+      label: "Schedule Job",
+      detail: "Open Calendar to schedule production with existing dispatch tools.",
+      keywords: "schedule job dispatch production calendar",
+      view: "calendar",
+      icon: CalendarClock,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-create-invoice",
+      kind: "command",
+      group: "Common commands",
+      label: "Create Invoice",
+      detail: "Open Invoices and use the existing invoice workflow.",
+      keywords: "create invoice financials billing collections",
+      view: "invoices",
+      icon: ReceiptText,
+      actionLabel: "Open",
+    },
+  ];
+
+  sortByNewest(snapshot.customers)
+    .slice(0, 10)
+    .forEach((customer) => {
+      const detailParts = [
+        companyLabel(customer.company_id),
+        customer.property_address,
+        customer.phone,
+        customer.email,
+      ].filter(Boolean);
+
+      items.push({
+        id: `customer-${customer.id}`,
+        kind: "record",
+        group: "Recent customers",
+        label: customer.display_name,
+        detail: detailParts.join(" - "),
+        keywords: createKeywords([
+          customer.display_name,
+          customer.contact_name,
+          customer.property_address,
+          customer.city,
+          customer.state,
+          customer.postal_code,
+          customer.phone,
+          customer.email,
+          companyLabel(customer.company_id),
+        ]),
+        view: "customers",
+        icon: Users,
+        companyId: customer.company_id,
+        actionLabel: "Open Customer 360",
+      });
+    });
+
+  sortByNewest(snapshot.leads)
+    .slice(0, 8)
+    .forEach((lead) => {
+      items.push({
+        id: `lead-${lead.id}`,
+        kind: "record",
+        group: "Leads",
+        label: lead.contact_name,
+        detail: `${statusLabel(lead.status)} - ${lead.source} - ${formatMoney(lead.estimated_value)}`,
+        keywords: createKeywords([
+          lead.contact_name,
+          lead.phone,
+          lead.email,
+          lead.property_address,
+          lead.city,
+          lead.source,
+          lead.status,
+          lead.pipeline_stage,
+          companyLabel(lead.company_id),
+        ]),
+        view: "leads",
+        icon: ClipboardList,
+        companyId: lead.company_id,
+        actionLabel: "Open Lead",
+      });
+    });
+
+  sortByNewest(snapshot.jobs)
+    .slice(0, 8)
+    .forEach((job) => {
+      items.push({
+        id: `job-${job.id}`,
+        kind: "record",
+        group: "Jobs",
+        label: job.title,
+        detail: `${jobStatusLabel(job.status)} - ${job.property_address || job.address || "No address"}`,
+        keywords: createKeywords([
+          job.title,
+          job.status,
+          job.service_type,
+          job.crew_name,
+          job.project_manager,
+          job.property_address,
+          job.address,
+          companyLabel(job.company_id),
+        ]),
+        view: "jobs",
+        icon: CalendarClock,
+        companyId: job.company_id,
+        actionLabel: "Open Job",
+      });
+    });
+
+  sortByNewest(snapshot.estimates)
+    .slice(0, 8)
+    .forEach((estimate) => {
+      items.push({
+        id: `estimate-${estimate.id}`,
+        kind: "record",
+        group: "Estimates",
+        label: estimate.title,
+        detail: `${estimateStatusLabel(estimate.status)} - ${formatMoney(estimate.total)}`,
+        keywords: createKeywords([
+          estimate.title,
+          estimate.status,
+          estimate.service_type,
+          estimate.business,
+          estimate.location,
+          estimate.scope_of_work,
+          companyLabel(estimate.company_id),
+        ]),
+        view: "estimates",
+        icon: Calculator,
+        companyId: estimate.company_id,
+        actionLabel: "Open Estimate",
+      });
+    });
+
+  sortByNewest(snapshot.documents)
+    .slice(0, 8)
+    .forEach((document) => {
+      items.push({
+        id: `document-${document.id}`,
+        kind: "record",
+        group: "Documents",
+        label: document.file_name ?? document.title,
+        detail: `${documentCategoryLabel(document.category)} - ${documentStatusLabel(document.status)}`,
+        keywords: createKeywords([
+          document.title,
+          document.file_name,
+          document.category,
+          document.status,
+          document.property_address,
+          (document.tags ?? []).join(" "),
+          companyLabel(document.company_id),
+        ]),
+        view: "documents",
+        icon: FileText,
+        companyId: document.company_id,
+        actionLabel: "Open Document",
+      });
+    });
+
+  inboxItems.slice(0, 8).forEach((item) => {
+    items.push({
+      id: `communication-${item.id}`,
+      kind: "record",
+      group: "Communications",
+      label: item.customerName || item.sourceLabel,
+      detail: `${item.kind} - ${item.summary}`,
+      keywords: createKeywords([
+        item.customerName,
+        item.contact,
+        item.phone,
+        item.email,
+        item.sourceLabel,
+        item.summary,
+        item.notes,
+        item.status,
+        companyLabel(item.companyId),
+      ]),
+      view: "inbox",
+      icon: MessageSquare,
+      companyId: item.companyId,
+      actionLabel: "Open Communication",
+    });
+  });
+
+  sortByDateField(snapshot.scheduleEvents, (event) => event.start_at)
+    .slice(0, 8)
+    .forEach((event) => {
+      items.push({
+        id: `calendar-${event.id}`,
+        kind: "record",
+        group: "Calendar events",
+        label: event.title,
+        detail: `${scheduleEventStatusLabel(event.status)} - ${formatDateTime(event.start_at)}`,
+        keywords: createKeywords([
+          event.title,
+          event.event_type,
+          event.status,
+          event.location,
+          event.notes,
+          companyLabel(event.company_id),
+        ]),
+        view: "calendar",
+        icon: CalendarClock,
+        companyId: event.company_id,
+        actionLabel: "Open Calendar",
+      });
+    });
+
+  sortByNewest(snapshot.invoices)
+    .slice(0, 8)
+    .forEach((invoice) => {
+      items.push({
+        id: `invoice-${invoice.id}`,
+        kind: "record",
+        group: "Financials",
+        label: invoice.invoice_number,
+        detail: `${invoiceStatusLabel(invoice.status)} - ${formatMoney(invoice.balance_due)} balance`,
+        keywords: createKeywords([
+          invoice.invoice_number,
+          invoice.title,
+          invoice.status,
+          invoice.notes,
+          companyLabel(invoice.company_id),
+        ]),
+        view: "invoices",
+        icon: ReceiptText,
+        companyId: invoice.company_id,
+        actionLabel: "Open Invoice",
+      });
+    });
+
+  sortByNewest(snapshot.jobPhotos)
+    .slice(0, 6)
+    .forEach((photo) => {
+      items.push({
+        id: `photo-${photo.id}`,
+        kind: "record",
+        group: "Photos",
+        label: photo.label ?? photo.caption ?? "Jobsite photo",
+        detail: photo.caption ?? photo.file_path,
+        keywords: createKeywords([
+          photo.label,
+          photo.caption,
+          photo.file_path,
+          companyLabel(photo.company_id),
+        ]),
+        view: "photos",
+        icon: Camera,
+        companyId: photo.company_id,
+        actionLabel: "Open Photos",
+      });
+    });
+
+  sortByNewest(snapshot.scopes)
+    .slice(0, 6)
+    .forEach((scope) => {
+      items.push({
+        id: `scope-${scope.id}`,
+        kind: "record",
+        group: "Scopes",
+        label: scope.title,
+        detail: `${scopeCategoryLabels[scope.category] ?? scope.category} - ${scope.status}`,
+        keywords: createKeywords([
+          scope.title,
+          scope.category,
+          scope.status,
+          scope.scope_body,
+          companyLabel(scope.company_id),
+        ]),
+        view: "scopes",
+        icon: WandSparkles,
+        companyId: scope.company_id,
+        actionLabel: "Open Scope",
+      });
+    });
+
+  return items;
 }
 
 function dashboardLocationText(...values: Array<string | null | undefined>) {
@@ -8295,6 +9081,7 @@ function OperationsCommandCenter({
   productionSnapshot,
   documentHealthSnapshot,
   tradeHighlights,
+  executiveSnapshot,
   pipelineStages,
   pipelineFilter,
   onPipelineFilterChange,
@@ -8304,6 +9091,7 @@ function OperationsCommandCenter({
   onCompanyScopeChange,
   onViewChange,
   onCreateLead,
+  onOpenCommandPalette,
 }: {
   data: DashboardOperationData;
   revenueSnapshot: DashboardOperatingMetric[];
@@ -8312,6 +9100,7 @@ function OperationsCommandCenter({
   productionSnapshot: DashboardOperatingMetric[];
   documentHealthSnapshot: DashboardOperatingMetric[];
   tradeHighlights: DashboardOperatingMetric[];
+  executiveSnapshot: DashboardOperatingMetric[];
   pipelineStages: DashboardPipelineStage[];
   pipelineFilter: DashboardPipelineFilter;
   onPipelineFilterChange: (filter: DashboardPipelineFilter) => void;
@@ -8321,6 +9110,7 @@ function OperationsCommandCenter({
   onCompanyScopeChange: (companyId: CompanyScopeId) => void;
   onViewChange: (view: WorkspaceView) => void;
   onCreateLead: () => void;
+  onOpenCommandPalette: () => void;
 }) {
   const openView = (view: WorkspaceView, companyId: string | null = null) => {
     if (companyId) {
@@ -8409,6 +9199,13 @@ function OperationsCommandCenter({
     ),
   ].slice(0, 5);
   const warrantyHighlight = tradeHighlights.find((metric) => metric.id === "warranty-callbacks");
+  const customerExperienceMetrics = [
+    ...leadEstimateSnapshot.filter((metric) => metric.id === "missed-calls"),
+    ...documentHealthSnapshot.filter((metric) => metric.id === "awaiting-document-signatures"),
+    ...tradeHighlights.filter((metric) =>
+      metric.id === "warranty-callbacks" || metric.id === "emergency-leak-repairs",
+    ),
+  ].slice(0, 4);
 
   return (
     <section
@@ -8421,39 +9218,45 @@ function OperationsCommandCenter({
         activeCompanyId={activeCompanyId}
         companies={companies}
         onCompanyScopeChange={onCompanyScopeChange}
-        onSearch={() => openView("customers")}
+        onSearch={onOpenCommandPalette}
         onNotifications={() => openView("inbox")}
         onCreate={onCreateLead}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.2fr)_minmax(0,0.85fr)_minmax(0,0.85fr)]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.15fr)_minmax(0,0.9fr)]">
         <DashboardPriorityList
-          title="Urgent attention"
-          detail="Only items that should change the owner’s day."
+          title="Immediate Action"
+          detail="Overdue work, customers waiting, emergencies, and priorities that should change today."
           items={urgentItems}
           companyMap={companyMap}
           onOpen={openView}
         />
 
         <DashboardTodayPanel
+          title="Today's Operations"
+          detail="Crews, inspections, production, dispatch, and schedule conflicts."
           summaries={todayPrimarySummaries}
           companyMap={companyMap}
           onOpen={openView}
         />
 
-        <DashboardMetricCluster
-          title="Crew activity"
-          detail="Coverage and production readiness."
-          metrics={crewStatus.slice(0, 4)}
-          onOpen={openView}
-        />
-        <DashboardMetricCluster
-          title="Revenue requiring action"
-          detail="Cash, estimates, and unpaid work."
-          metrics={revenueActionMetrics}
-          onOpen={openView}
-          accent="orange"
-        />
+        <div className="grid gap-4">
+          <DashboardMetricCluster
+            eyebrow="Today's Operations"
+            title="Crew Activity"
+            detail="Crews working, crew gaps, roof inspections, and coverage."
+            metrics={crewStatus.slice(0, 4)}
+            onOpen={openView}
+          />
+          <DashboardMetricCluster
+            eyebrow="Financial"
+            title="Financial"
+            detail="Invoices, overdue balances, collections, and projected revenue."
+            metrics={revenueActionMetrics}
+            onOpen={openView}
+            accent="orange"
+          />
+        </div>
       </div>
 
       <DashboardPipeline
@@ -8464,15 +9267,42 @@ function OperationsCommandCenter({
         onOpen={openView}
       />
 
-      <QuickActionPanel actions={quickActions} />
+      <div className="grid gap-4 xl:grid-cols-3">
+        <DashboardMetricCluster
+          eyebrow="Sales"
+          title="Sales"
+          detail="Leads, pending estimates, follow-ups, and opportunities to close."
+          metrics={leadEstimateSnapshot}
+          onOpen={openView}
+        />
+        <DashboardMetricCluster
+          eyebrow="Customer Experience"
+          title="Customer Experience"
+          detail="Waiting communications, warranty requests, open issues, and signature follow-up."
+          metrics={customerExperienceMetrics.length ? customerExperienceMetrics : documentHealthSnapshot.slice(0, 4)}
+          onOpen={openView}
+          accent="orange"
+        />
+        <DashboardMetricCluster
+          eyebrow="Executive Snapshot"
+          title="Executive Snapshot"
+          detail="Today’s revenue, production value, close rate, active jobs, and cash outstanding."
+          metrics={executiveSnapshot}
+          onOpen={openView}
+        />
+      </div>
 
-      <DashboardMetricCluster
-        title="Document readiness"
-        detail="Required packets, signatures, uploads, and warranty paperwork."
-        metrics={documentHealthSnapshot}
-        onOpen={openView}
-        accent="orange"
-      />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
+        <QuickActionPanel actions={quickActions} />
+        <DashboardMetricCluster
+          eyebrow="Documents"
+          title="Document Readiness"
+          detail="Required packets, signatures, uploads, and warranty paperwork."
+          metrics={documentHealthSnapshot}
+          onOpen={openView}
+          accent="orange"
+        />
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
         <DashboardLowerPriorityPanel
@@ -8515,11 +9345,11 @@ function DashboardCommandBar({
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)] xl:items-center">
         <div className="min-w-0 space-y-3">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
-            Executive Command Center
+            WeatherTech Command Center
           </p>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <h2 className="text-xl font-bold leading-tight text-slate-950 sm:text-2xl">
-              Today’s operating cockpit
+              Owner morning brief
             </h2>
             <span className="text-sm font-semibold text-slate-500">{currentDateLabel}</span>
           </div>
@@ -8547,10 +9377,13 @@ function DashboardCommandBar({
             type="button"
             onClick={onSearch}
             className="wt-dashboard-search inline-flex min-h-11 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-slate-500 transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
-            aria-label="Open customer search"
+            aria-label="Open universal command palette"
           >
             <Search className="h-4 w-4 shrink-0 text-sky-700" />
-            <span className="min-w-0 break-words">Search customers, jobs, estimates</span>
+            <span className="min-w-0 break-words">Search everything</span>
+            <span className="ml-auto hidden rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs font-bold text-slate-400 sm:inline">
+              Ctrl K
+            </span>
           </button>
           <button
             type="button"
@@ -8659,10 +9492,14 @@ function DashboardPriorityList({
 }
 
 function DashboardTodayPanel({
+  title = "Field work and sales visits",
+  detail = "Inspections, appointments, scheduled jobs, and estimates.",
   summaries,
   companyMap,
   onOpen,
 }: {
+  title?: string;
+  detail?: string;
   summaries: OperationsDashboardSummary[];
   companyMap: Map<string, CompanyRecord>;
   onOpen: (view: WorkspaceView, companyId?: string | null) => void;
@@ -8671,8 +9508,8 @@ function DashboardTodayPanel({
     <section className="wt-dashboard-panel wt-dashboard-panel-schedule rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5">
       <DashboardCompactHeader
         eyebrow="Today’s schedule"
-        title="Field work and sales visits"
-        detail="Inspections, appointments, scheduled jobs, and estimates."
+        title={title}
+        detail={detail}
         badge={String(summaries.reduce((total, summary) => total + Number(summary.value || 0), 0))}
         tone="blue"
       />
@@ -8718,12 +9555,14 @@ function DashboardTodayPanel({
 }
 
 function DashboardMetricCluster({
+  eyebrow,
   title,
   detail,
   metrics,
   onOpen,
   accent = "blue",
 }: {
+  eyebrow?: string;
   title: string;
   detail: string;
   metrics: DashboardOperatingMetric[];
@@ -8733,7 +9572,7 @@ function DashboardMetricCluster({
   return (
     <section className={`wt-dashboard-panel wt-dashboard-panel-metrics ${accent === "orange" ? "wt-dashboard-panel-financial" : "wt-dashboard-panel-production"} rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5`}>
       <DashboardCompactHeader
-        eyebrow={accent === "orange" ? "Financial" : "Production"}
+        eyebrow={eyebrow ?? (accent === "orange" ? "Financial" : "Production")}
         title={title}
         detail={detail}
         tone={accent === "orange" ? "amber" : "blue"}
@@ -9480,6 +10319,7 @@ function DashboardView({
   onCompanyScopeChange,
   onViewChange,
   onCreateLead,
+  onOpenCommandPalette,
 }: DashboardViewProps) {
   const [pipelineFilter, setPipelineFilter] =
     useState<DashboardPipelineFilter>("all");
@@ -9847,6 +10687,63 @@ function DashboardView({
       tone: expiringWarrantyDocuments.length ? "amber" : "green",
     },
   ];
+  const executiveSnapshot: DashboardOperatingMetric[] = [
+    {
+      id: "executive-today-revenue",
+      label: "Today's Revenue",
+      value: formatMoney(todaysRevenue),
+      detail: "Posted payments collected today",
+      view: "invoices",
+      icon: DollarSign,
+      tone: todaysRevenue ? "green" : "blue",
+      emphasis: true,
+    },
+    {
+      id: "executive-production-value",
+      label: "Production Value",
+      value: formatMoney(scheduledRevenueToday),
+      detail: `${jobsScheduledToday.length} scheduled job${jobsScheduledToday.length === 1 ? "" : "s"} dated today`,
+      view: "calendar",
+      icon: Home,
+      tone: scheduledRevenueToday ? "green" : "blue",
+    },
+    {
+      id: "executive-estimates-sent",
+      label: "Estimates Sent",
+      value: estimatesNeedingFollowUp.length,
+      detail: `${formatMoney(estimatesNeedingFollowUp.reduce((total, estimate) => total + estimate.total, 0))} waiting on approval`,
+      view: "estimates",
+      icon: Calculator,
+      tone: estimatesNeedingFollowUp.length ? "amber" : "green",
+    },
+    {
+      id: "executive-close-rate",
+      label: "Close Rate",
+      value: `${metrics.closeRate}%`,
+      detail: "Won lead rate from the current CRM snapshot",
+      view: "salesPipeline",
+      icon: CheckCircle2,
+      tone: metrics.closeRate >= 45 ? "green" : metrics.closeRate >= 25 ? "blue" : "amber",
+    },
+    {
+      id: "executive-active-jobs",
+      label: "Active Jobs",
+      value: productionKpis.activeJobs.length,
+      detail: `${productionKpis.atRiskJobs.length} job${productionKpis.atRiskJobs.length === 1 ? "" : "s"} at risk`,
+      view: "jobs",
+      icon: CalendarClock,
+      tone: productionKpis.atRiskJobs.length ? "amber" : "green",
+    },
+    {
+      id: "executive-cash-outstanding",
+      label: "Cash Outstanding",
+      value: formatMoney(metrics.unpaidInvoices),
+      detail: `${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? "" : "s"}`,
+      view: "invoices",
+      icon: ReceiptText,
+      tone: metrics.unpaidInvoices > 0 ? "amber" : "green",
+    },
+  ];
   const pipelineStages: DashboardPipelineStage[] = [
     {
       id: "pipeline-leads",
@@ -9913,6 +10810,7 @@ function DashboardView({
       productionSnapshot={productionSnapshot}
       documentHealthSnapshot={documentHealthSnapshot}
       tradeHighlights={tradeHighlights}
+      executiveSnapshot={executiveSnapshot}
       pipelineStages={pipelineStages}
       pipelineFilter={pipelineFilter}
       onPipelineFilterChange={setPipelineFilter}
@@ -9922,6 +10820,7 @@ function DashboardView({
       onCompanyScopeChange={onCompanyScopeChange}
       onViewChange={onViewChange}
       onCreateLead={onCreateLead}
+      onOpenCommandPalette={onOpenCommandPalette}
     />
   );
 }

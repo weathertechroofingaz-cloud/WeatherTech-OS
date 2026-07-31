@@ -2591,20 +2591,27 @@ async function testDashboardLiveMode(tab) {
       hasDemoBanner: text.includes("Using local demo CRM data"),
       hasLiveDataError: text.includes("LIVE DATA ERROR"),
       hasOperationsDashboard:
-        normalizedText.includes("executive command center") &&
-        normalizedText.includes("today’s operating cockpit") &&
-        normalizedText.includes("search customers, jobs, estimates") &&
+        normalizedText.includes("weathertech command center") &&
+        normalizedText.includes("owner morning brief") &&
+        normalizedText.includes("search everything") &&
         normalizedText.includes("create"),
       hasOperationsSections:
-        normalizedText.includes("urgent attention") &&
-        normalizedText.includes("today’s schedule") &&
+        normalizedText.includes("immediate action") &&
+        normalizedText.includes("today's operations") &&
         normalizedText.includes("crew activity") &&
-        normalizedText.includes("revenue requiring action") &&
+        normalizedText.includes("financial") &&
         normalizedText.includes("operational pipeline") &&
         normalizedText.includes("leads → estimates → scheduled → in production → completed → unpaid") &&
         normalizedText.includes("all companies") &&
         normalizedText.includes("weathertech roofing") &&
         normalizedText.includes("ihc painting") &&
+        normalizedText.includes("sales") &&
+        normalizedText.includes("customer experience") &&
+        normalizedText.includes("executive snapshot") &&
+        normalizedText.includes("today's revenue") &&
+        normalizedText.includes("production value") &&
+        normalizedText.includes("close rate") &&
+        normalizedText.includes("cash outstanding") &&
         normalizedText.includes("leads") &&
         normalizedText.includes("estimates") &&
         normalizedText.includes("scheduled") &&
@@ -2685,6 +2692,46 @@ async function testDashboardLiveMode(tab) {
     ),
     "dashboard pipeline all",
   );
+
+  await tab.cua.keypress({ keys: ["CTRL", "K"] });
+  await waitFor(
+    tab,
+    () => {
+      const palette = document.querySelector('[data-testid="command-palette"]');
+      const text = palette?.textContent?.toLowerCase() ?? "";
+
+      return (
+        Boolean(palette) &&
+        text.includes("universal command palette") &&
+        text.includes("open jobs") &&
+        text.includes("open estimates") &&
+        text.includes("open documents") &&
+        text.includes("open communications")
+      );
+    },
+    "command palette opens with Ctrl+K",
+    8000,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="command-palette-search"]'),
+    "open jobs",
+    "command palette search",
+  );
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//*[@data-testid="command-palette"]//button[.//*[normalize-space(.)="Open Jobs"]]',
+    ),
+    "command palette Open Jobs result",
+  );
+  await waitFor(
+    tab,
+    () =>
+      !document.querySelector('[data-testid="command-palette"]') &&
+      Boolean(document.querySelector('[data-testid="jobs-search"]')),
+    "command palette navigates to jobs",
+    8000,
+  );
+  await clickNav(tab, "Dashboard");
 
   return state;
 }

@@ -259,6 +259,38 @@ select:focus-visible,
   color: #fffaf5;
 }
 
+.wt-command-palette-backdrop {
+  animation: wt-fade-in 140ms ease-out;
+}
+
+.wt-command-palette {
+  animation: wt-command-pop 160ms ease-out;
+}
+
+.wt-command-palette-item[aria-selected="true"] {
+  transform: translateY(-1px);
+}
+
+@keyframes wt-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes wt-command-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .wt-control-button-secondary {
   background: rgba(255, 255, 255, 0.92);
 }
@@ -458,6 +490,30 @@ select:focus-visible,
 :root[data-theme="dark"] .wt-workspace-header button:hover {
   background: rgba(25, 39, 63, 0.95) !important;
   border-color: rgba(167, 139, 250, 0.58) !important;
+}
+
+:root[data-theme="dark"] .wt-command-palette-backdrop {
+  background: rgba(2, 6, 23, 0.62) !important;
+}
+
+:root[data-theme="dark"] .wt-command-palette {
+  background: linear-gradient(180deg, rgba(18, 31, 52, 0.98), rgba(9, 19, 35, 0.98)) !important;
+  border-color: rgba(128, 146, 180, 0.46) !important;
+  box-shadow: 0 30px 90px -42px rgba(0, 0, 0, 0.98), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme="dark"] .wt-command-palette-item {
+  color: #edf4ff !important;
+}
+
+:root[data-theme="dark"] .wt-command-palette-item[aria-selected="true"] {
+  background: rgba(124, 58, 237, 0.18) !important;
+  border-color: rgba(167, 139, 250, 0.56) !important;
+}
+
+:root[data-theme="dark"] .wt-command-palette-item:hover {
+  background: rgba(24, 41, 68, 0.96) !important;
+  border-color: rgba(167, 139, 250, 0.44) !important;
 }
 
 :root[data-theme="dark"] .wt-control-button-secondary {
