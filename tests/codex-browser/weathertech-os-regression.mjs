@@ -8343,9 +8343,17 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
     "all",
     "production board all inspection filter",
   );
+  await tab.playwright.evaluate(() => {
+    const clearButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Clear board filters",
+    );
+    clearButton?.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+  });
+  await tab.playwright.waitForTimeout(300);
   await clickUnique(
     tab.playwright.getByRole("button", { name: "Clear board filters" }),
     "Clear production board filters",
+    { retryTransientClick: true },
   );
   await waitFor(
     tab,
