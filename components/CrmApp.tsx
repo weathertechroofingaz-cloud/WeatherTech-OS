@@ -5840,6 +5840,7 @@ function CrmWorkspace({
               companyMap={companyMap}
               onReload={onScrollPreservingReload}
               onDemoSnapshotChange={onDemoSnapshotChange}
+              onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -5866,6 +5867,7 @@ function CrmWorkspace({
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onScrollPreservingReload}
+              onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -6653,6 +6655,27 @@ type OperationsDashboardItem = {
   tone: "blue" | "green" | "amber";
 };
 
+type DailyWorkflowAction = {
+  id: string;
+  stage: string;
+  title: string;
+  detail: string;
+  meta: string;
+  companyId: string | null;
+  customerId?: string | null;
+  leadId?: string | null;
+  estimateId?: string | null;
+  inspectionId?: string | null;
+  jobId?: string | null;
+  invoiceId?: string | null;
+  view: WorkspaceView;
+  icon: typeof Home;
+  tone: "blue" | "green" | "amber";
+  actionLabel: string;
+  sortOrder: number;
+  updatedAt: string;
+};
+
 type OperationsDashboardSummary = {
   id: string;
   label: string;
@@ -6766,6 +6789,412 @@ function sortByDateField<T>(
     const left = getValue(a) ?? "";
     const right = getValue(b) ?? "";
     return left.localeCompare(right);
+  });
+}
+
+function buildDailyWorkflowActions(
+  snapshot: CrmSnapshot,
+  companyMap: Map<string, CompanyRecord>,
+): DailyWorkflowAction[] {
+  const actions = new Map<string, DailyWorkflowAction>();
+  const addAction = (action: DailyWorkflowAction) => {
+    if (!actions.has(action.id)) {
+      actions.set(action.id, action);
+    }
+  };
+  const companyLabel = (companyId: string | null) =>
+    companyId
+      ? companyMap.get(companyId)?.short_name ?? companyMap.get(companyId)?.name ?? "Company"
+      : "Company";
+  const hasCustomerInspection = (lead: LeadRecord) =>
+    snapshot.inspections.some(
+      (inspection) =>
+        inspection.status !== "canceled" &&
+        (inspection.lead_id === lead.id ||
+          (lead.customer_id !== null && inspection.customer_id === lead.customer_id)),
+    );
+  const hasInspectionEstimate = (inspection: InspectionRecord) =>
+    snapshot.estimates.some(
+      (estimate) =>
+        (inspection.estimate_id !== null && estimate.id === inspection.estimate_id) ||
+        (inspection.lead_id !== null && estimate.lead_id === inspection.lead_id) ||
+        (inspection.customer_id !== null && estimate.customer_id === inspection.customer_id),
+    );
+  const hasJobInvoice = (job: JobRecord) =>
+    snapshot.invoices.some((invoice) => invoice.job_id === job.id);
+  const hasJobWarrantyDocument = (job: JobRecord) =>
+    getJobDocuments(snapshot, job).some((document) =>
+      [
+        "warranty",
+        "manufacturer_warranty",
+        "workmanship_warranty",
+        "completion_certificate",
+      ].includes(document.category),
+    );
+  const customerLabelForLead = (lead: LeadRecord) => lead.contact_name;
+  const customerLabelForEstimate = (estimate: EstimateRecord) =>
+    getEstimateTargetName(snapshot, estimate);
+  const customerLabelForJob = (job: JobRecord) => getJobTargetName(snapshot, job);
+
+  sortByNewest(snapshot.leads)
+    .filter((lead) => !["lost", "paid", "completed"].includes(lead.pipeline_stage))
+    .forEach((lead) => {
+      const hasInspection = hasCustomerInspection(lead);
+
+      if (!hasInspection && ["new", "contacted", "qualified"].includes(lead.status)) {
+        addAction({
+          id: `lead-schedule-inspection-${lead.id}`,
+          stage: "Create Lead -> Schedule Inspection",
+          title: "Schedule inspection",
+          detail: `${customerLabelForLead(lead)} needs a roof or paint inspection booked.`,
+          meta: `${companyLabel(lead.company_id)} · ${lead.source} · ${formatMoney(lead.estimated_value)}`,
+          companyId: lead.company_id,
+          customerId: lead.customer_id,
+          leadId: lead.id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: lead.priority === "urgent" || lead.priority === "high" ? "amber" : "blue",
+          actionLabel: "Open Inspections",
+          sortOrder: 10,
+          updatedAt: lead.updated_at,
+        });
+      }
+
+      if (lead.pipeline_stage === "estimate_scheduled" && hasInspection) {
+        addAction({
+          id: `lead-perform-inspection-${lead.id}`,
+          stage: "Schedule Inspection -> Perform Inspection",
+          title: "Perform inspection",
+          detail: `${customerLabelForLead(lead)} has inspection activity ready for field follow-through.`,
+          meta: `${companyLabel(lead.company_id)} · ${lead.property_address}`,
+          companyId: lead.company_id,
+          customerId: lead.customer_id,
+          leadId: lead.id,
+          view: "inspections",
+          icon: ClipboardList,
+          tone: "blue",
+          actionLabel: "Open Inspections",
+          sortOrder: 20,
+          updatedAt: lead.updated_at,
+        });
+      }
+    });
+
+  sortByNewest(snapshot.inspections)
+    .filter((inspection) =>
+      ["completed", "follow_up_required", "passed", "failed", "needs_review"].includes(
+        inspection.status,
+      ),
+    )
+    .filter((inspection) => !hasInspectionEstimate(inspection))
+    .forEach((inspection) => {
+      addAction({
+        id: `inspection-create-estimate-${inspection.id}`,
+        stage: "Perform Inspection -> Create Estimate",
+        title: "Create estimate",
+        detail: `${inspection.title} is complete and ready to become a priced estimate.`,
+        meta: `${companyLabel(inspection.company_id)} · ${inspection.property_address ?? "No address"}`,
+        companyId: inspection.company_id,
+        customerId: inspection.customer_id,
+        leadId: inspection.lead_id,
+        inspectionId: inspection.id,
+        view: "estimates",
+        icon: Calculator,
+        tone: inspection.priority === "urgent" || inspection.priority === "high" ? "amber" : "blue",
+        actionLabel: "Open Estimates",
+        sortOrder: 30,
+        updatedAt: inspection.updated_at,
+      });
+    });
+
+  sortByNewest(snapshot.estimates).forEach((estimate) => {
+    const linkedJob = snapshot.jobs.find((job) => job.estimate_id === estimate.id) ?? null;
+    const activeSignature = snapshot.signatures.find((signature) => {
+      if (!isActiveSignatureRequest(signature)) {
+        return false;
+      }
+
+      const document = snapshot.documents.find(
+        (item) => item.id === signature.document_id,
+      );
+
+      return document?.estimate_id === estimate.id;
+    });
+
+    if (estimate.status === "draft") {
+      addAction({
+        id: `estimate-send-${estimate.id}`,
+        stage: "Create Estimate -> Send Estimate",
+        title: "Send estimate",
+        detail: `${estimate.title} is still a draft and needs customer-facing delivery.`,
+        meta: `${companyLabel(estimate.company_id)} · ${customerLabelForEstimate(estimate)} · ${formatMoney(estimate.total)}`,
+        companyId: estimate.company_id,
+        customerId: estimate.customer_id,
+        leadId: estimate.lead_id,
+        estimateId: estimate.id,
+        view: "estimates",
+        icon: FileText,
+        tone: "blue",
+        actionLabel: "Open Estimate",
+        sortOrder: 40,
+        updatedAt: estimate.updated_at,
+      });
+    } else if (estimate.status === "sent" && !activeSignature) {
+      addAction({
+        id: `estimate-signature-${estimate.id}`,
+        stage: "Send Estimate -> Customer Approves",
+        title: "Request customer signature",
+        detail: `${estimate.title} was sent and needs an approval path.`,
+        meta: `${companyLabel(estimate.company_id)} · ${customerLabelForEstimate(estimate)} · ${formatMoney(estimate.total)}`,
+        companyId: estimate.company_id,
+        customerId: estimate.customer_id,
+        leadId: estimate.lead_id,
+        estimateId: estimate.id,
+        view: "estimates",
+        icon: Save,
+        tone: "amber",
+        actionLabel: "Open Estimate",
+        sortOrder: 50,
+        updatedAt: estimate.updated_at,
+      });
+    } else if (estimate.status === "approved" && !linkedJob) {
+      addAction({
+        id: `estimate-convert-job-${estimate.id}`,
+        stage: "Customer Approves -> Convert to Job",
+        title: "Convert to job",
+        detail: `${estimate.title} is approved and ready for production handoff.`,
+        meta: `${companyLabel(estimate.company_id)} · ${customerLabelForEstimate(estimate)} · ${formatMoney(estimate.total)}`,
+        companyId: estimate.company_id,
+        customerId: estimate.customer_id,
+        leadId: estimate.lead_id,
+        estimateId: estimate.id,
+        view: "estimates",
+        icon: CalendarClock,
+        tone: "green",
+        actionLabel: "Open Handoff",
+        sortOrder: 60,
+        updatedAt: estimate.updated_at,
+      });
+    } else if (estimate.status === "approved" && linkedJob) {
+      const jobEvents = getJobScheduleEvents(snapshot, linkedJob.id);
+
+      if (!hasSavedJobSchedule(linkedJob) && !hasUpcomingScheduledEvent(jobEvents)) {
+        addAction({
+          id: `job-schedule-production-${linkedJob.id}`,
+          stage: "Convert to Job -> Schedule Production",
+          title: "Schedule production",
+          detail: `${linkedJob.title} is approved but not on the production calendar.`,
+          meta: `${companyLabel(linkedJob.company_id)} · ${customerLabelForJob(linkedJob)}`,
+          companyId: linkedJob.company_id,
+          customerId: linkedJob.customer_id,
+          leadId: linkedJob.lead_id,
+          estimateId: linkedJob.estimate_id,
+          jobId: linkedJob.id,
+          view: "calendar",
+          icon: CalendarClock,
+          tone: "amber",
+          actionLabel: "Open Calendar",
+          sortOrder: 70,
+          updatedAt: linkedJob.updated_at,
+        });
+      }
+    }
+  });
+
+  sortByNewest(snapshot.jobs).forEach((job) => {
+    const events = getJobScheduleEvents(snapshot, job.id);
+    const isActiveJob = ["draft", "scheduled", "in_progress", "blocked"].includes(job.status);
+    const documents = getJobDocuments(snapshot, job);
+    const photos = getJobPhotos(snapshot, job.id);
+    const invoices = getJobInvoices(snapshot, job.id);
+
+    if (isActiveJob && !hasSavedJobSchedule(job) && !hasUpcomingScheduledEvent(events)) {
+      addAction({
+        id: `job-schedule-${job.id}`,
+        stage: "Convert to Job -> Schedule Production",
+        title: "Schedule production",
+        detail: `${job.title} needs production dates before the office can dispatch it.`,
+        meta: `${companyLabel(job.company_id)} · ${customerLabelForJob(job)}`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: "calendar",
+        icon: CalendarClock,
+        tone: "amber",
+        actionLabel: "Open Calendar",
+        sortOrder: 70,
+        updatedAt: job.updated_at,
+      });
+    } else if (isActiveJob && !jobHasCrew(snapshot, job)) {
+      addAction({
+        id: `job-assign-crew-${job.id}`,
+        stage: "Schedule Production -> Assign Crew",
+        title: "Assign crew",
+        detail: `${job.title} is scheduled or active but still needs crew coverage.`,
+        meta: `${companyLabel(job.company_id)} · ${formatJobSchedule(job)}`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: "jobs",
+        icon: UserRound,
+        tone: "amber",
+        actionLabel: "Open Jobs",
+        sortOrder: 80,
+        updatedAt: job.updated_at,
+      });
+    } else if (isActiveJob && (!documents.length || !photos.length)) {
+      addAction({
+        id: `job-documents-photos-${job.id}`,
+        stage: "Assign Crew -> Upload Photos/Documents",
+        title: "Upload photos and documents",
+        detail: `${job.title} needs jobsite documentation before closeout.`,
+        meta: `${companyLabel(job.company_id)} · ${photos.length} photos · ${documents.length} documents`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: photos.length ? "documents" : "photos",
+        icon: photos.length ? FileText : Camera,
+        tone: "blue",
+        actionLabel: photos.length ? "Open Documents" : "Open Photos",
+        sortOrder: 90,
+        updatedAt: job.updated_at,
+      });
+    } else if (job.status === "in_progress" || job.status === "blocked") {
+      addAction({
+        id: `job-track-progress-${job.id}`,
+        stage: "Upload Photos/Documents -> Track Job Progress",
+        title: "Track job progress",
+        detail: `${job.title} is in production and should be worked from Field Ops.`,
+        meta: `${companyLabel(job.company_id)} · ${jobStatusLabel(job.status)}`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: "fieldOperations",
+        icon: Activity,
+        tone: job.status === "blocked" ? "amber" : "blue",
+        actionLabel: "Open Field Ops",
+        sortOrder: 100,
+        updatedAt: job.updated_at,
+      });
+    } else if ((job.status === "completed" || job.status === "closed") && !hasJobInvoice(job)) {
+      addAction({
+        id: `job-create-invoice-${job.id}`,
+        stage: "Complete Job -> Create Invoice",
+        title: "Create invoice",
+        detail: `${job.title} is complete and ready for billing.`,
+        meta: `${companyLabel(job.company_id)} · ${formatMoney(job.total)}`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: "invoices",
+        icon: ReceiptText,
+        tone: "green",
+        actionLabel: "Open Invoices",
+        sortOrder: 110,
+        updatedAt: job.updated_at,
+      });
+    } else if (
+      (job.status === "completed" || job.status === "closed") &&
+      invoices.every((invoice) => invoice.balance_due <= 0) &&
+      !hasJobWarrantyDocument(job)
+    ) {
+      addAction({
+        id: `job-start-warranty-${job.id}`,
+        stage: "Complete Job -> Start Warranty",
+        title: "Start warranty",
+        detail: `${job.title} is paid or closed and needs warranty documentation.`,
+        meta: `${companyLabel(job.company_id)} · ${documents.length} linked documents`,
+        companyId: job.company_id,
+        customerId: job.customer_id,
+        leadId: job.lead_id,
+        estimateId: job.estimate_id,
+        jobId: job.id,
+        view: "documents",
+        icon: ShieldCheck,
+        tone: "blue",
+        actionLabel: "Open Documents",
+        sortOrder: 130,
+        updatedAt: job.updated_at,
+      });
+    }
+  });
+
+  sortByNewest(snapshot.invoices)
+    .filter((invoice) => invoice.balance_due > 0 && invoice.status !== "draft" && invoice.status !== "void")
+    .forEach((invoice) => {
+      addAction({
+        id: `invoice-record-payment-${invoice.id}`,
+        stage: "Create Invoice -> Record Payment",
+        title: "Record payment",
+        detail: `${invoice.invoice_number} has an open balance for ${getInvoiceTargetName(snapshot, invoice)}.`,
+        meta: `${companyLabel(invoice.company_id)} · ${formatMoney(invoice.balance_due)} due`,
+        companyId: invoice.company_id,
+        customerId: invoice.customer_id,
+        jobId: invoice.job_id,
+        estimateId: invoice.estimate_id,
+        invoiceId: invoice.id,
+        view: "invoices",
+        icon: DollarSign,
+        tone: invoice.status === "overdue" ? "amber" : "blue",
+        actionLabel: "Open Invoice",
+        sortOrder: 120,
+        updatedAt: invoice.updated_at,
+      });
+    });
+
+  return [...actions.values()].sort((first, second) => {
+    if (first.sortOrder !== second.sortOrder) {
+      return first.sortOrder - second.sortOrder;
+    }
+
+    return second.updatedAt.localeCompare(first.updatedAt);
+  });
+}
+
+function filterDailyWorkflowActions(
+  actions: DailyWorkflowAction[],
+  {
+    customerId,
+    leadId,
+    estimateId,
+    jobId,
+    invoiceId,
+  }: {
+    customerId?: string | null;
+    leadId?: string | null;
+    estimateId?: string | null;
+    jobId?: string | null;
+    invoiceId?: string | null;
+  },
+) {
+  return actions.filter((action) => {
+    if (customerId && action.customerId === customerId) {
+      return true;
+    }
+
+    if (leadId && action.leadId === leadId) {
+      return true;
+    }
+
+    if (estimateId && action.estimateId === estimateId) {
+      return true;
+    }
+
+    if (jobId && action.jobId === jobId) {
+      return true;
+    }
+
+    return Boolean(invoiceId && action.invoiceId === invoiceId);
   });
 }
 
@@ -9075,6 +9504,7 @@ type DashboardPipelineStage = {
 
 function OperationsCommandCenter({
   data,
+  workflowActions,
   revenueSnapshot,
   crewStatus,
   leadEstimateSnapshot,
@@ -9094,6 +9524,7 @@ function OperationsCommandCenter({
   onOpenCommandPalette,
 }: {
   data: DashboardOperationData;
+  workflowActions: DailyWorkflowAction[];
   revenueSnapshot: DashboardOperatingMetric[];
   crewStatus: DashboardOperatingMetric[];
   leadEstimateSnapshot: DashboardOperatingMetric[];
@@ -9117,7 +9548,7 @@ function OperationsCommandCenter({
       onCompanyScopeChange(companyId);
     }
 
-      onViewChange(view);
+    onViewChange(view);
   };
   const quickActions = [
     {
@@ -9221,6 +9652,13 @@ function OperationsCommandCenter({
         onSearch={onOpenCommandPalette}
         onNotifications={() => openView("inbox")}
         onCreate={onCreateLead}
+      />
+
+      <DailyWorkflowHandoffPanel
+        title="Owner daily workflow"
+        detail="The live handoff path from lead intake through production, billing, payment, and warranty."
+        actions={workflowActions.slice(0, 6)}
+        onOpen={openView}
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1.2fr)_minmax(0,0.82fr)]">
@@ -9810,6 +10248,92 @@ function DashboardDenseMetricButton({
   );
 }
 
+function DailyWorkflowHandoffPanel({
+  title,
+  detail,
+  actions,
+  onOpen,
+  compact = false,
+}: {
+  title: string;
+  detail: string;
+  actions: DailyWorkflowAction[];
+  onOpen: (view: WorkspaceView, companyId?: string | null) => void;
+  compact?: boolean;
+}) {
+  return (
+    <section
+      className={`rounded-2xl border border-white/80 bg-white/90 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5 ${
+        compact ? "p-3" : "p-4"
+      }`}
+      data-testid="daily-workflow-handoff"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <DashboardCompactHeader
+          eyebrow="Workflow Handoff"
+          title={title}
+          detail={detail}
+          tone="blue"
+        />
+        <Badge
+          label={actions.length ? `${actions.length} next action${actions.length === 1 ? "" : "s"}` : "Clear"}
+          tone={actions.length ? "amber" : "green"}
+        />
+      </div>
+
+      <div className={`mt-3 grid gap-2 ${compact ? "" : "lg:grid-cols-2 xl:grid-cols-3"}`}>
+        {actions.length ? (
+          actions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => onOpen(action.view, action.companyId)}
+              className="group flex min-h-20 items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_18px_42px_-30px_rgba(14,116,144,0.45)] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
+              data-testid="daily-workflow-action"
+              data-workflow-stage={action.stage}
+            >
+              <span
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${
+                  action.tone === "amber"
+                    ? "bg-orange-100 text-orange-700"
+                    : action.tone === "green"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-sky-100 text-sky-700"
+                }`}
+              >
+                <action.icon className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-bold uppercase tracking-[0.12em] text-slate-400">
+                  {action.stage}
+                </span>
+                <span className="mt-1 block break-words text-sm font-black text-slate-950">
+                  {action.title}
+                </span>
+                <span className="mt-1 block break-words text-sm leading-5 text-slate-600">
+                  {action.detail}
+                </span>
+                <span className="mt-2 block break-words text-xs font-semibold text-slate-400">
+                  {action.meta}
+                </span>
+              </span>
+              <span className="mt-1 inline-flex shrink-0 items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-sky-700">
+                {action.actionLabel}
+                <ChevronRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              </span>
+            </button>
+          ))
+        ) : (
+          <DashboardInlineEmptyState
+            label="No workflow handoff needs attention."
+            detail="Leads, inspections, estimates, jobs, invoices, payments, and warranties are clear for this scope."
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
 function QuickActionPanel({
   actions,
 }: {
@@ -10004,6 +10528,10 @@ function OfficeOperationsView({
     () => buildOfficeOperationsData(snapshot, companyMap),
     [companyMap, snapshot],
   );
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
   const handleOpenQueueItem = useCallback(
     (item: OperationsQueueItem) => {
       onViewChange(item.targetView);
@@ -10107,6 +10635,14 @@ function OfficeOperationsView({
           ))}
         </div>
       </section>
+
+      <DailyWorkflowHandoffPanel
+        title="Daily workflow handoff"
+        detail="The next live step across lead intake, inspections, estimates, production, billing, and warranty."
+        actions={workflowActions.slice(0, 5)}
+        onOpen={(view) => onViewChange(view)}
+        compact
+      />
 
       <OperationsQueuePanel
         snapshot={snapshot}
@@ -10334,8 +10870,12 @@ function DashboardView({
         isDemoMode,
         focusFilter,
         pipelineFilter,
-      }),
+    }),
     [companyMap, focusFilter, isDemoMode, pipelineFilter, snapshot],
+  );
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
   );
   const overdueInvoices = snapshot.invoices.filter(
     (invoice) =>
@@ -10804,6 +11344,7 @@ function DashboardView({
   return (
     <OperationsCommandCenter
       data={operationsDashboard}
+      workflowActions={workflowActions}
       revenueSnapshot={revenueSnapshot}
       crewStatus={crewStatus}
       leadEstimateSnapshot={leadEstimateSnapshot}
@@ -12877,6 +13418,7 @@ type LeadsViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
+  onViewChange: (view: WorkspaceView) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
@@ -15960,6 +16502,7 @@ function LeadsView({
   snapshot,
   companyMap,
   onReload,
+  onViewChange,
   onNotice,
   onError,
 }: LeadsViewProps) {
@@ -16047,6 +16590,16 @@ function LeadsView({
         selectedLead.city || selectedLead.property_address,
       )
     : "";
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const selectedLeadWorkflowActions = selectedLead
+    ? filterDailyWorkflowActions(workflowActions, {
+        leadId: selectedLead.id,
+        customerId: selectedLead.customer_id,
+      }).slice(0, 3)
+    : [];
 
   const handleSelectLead = (leadId: string) => {
     updateUiPreservingScrollPosition(() => setSelectedLeadId(leadId));
@@ -16348,6 +16901,16 @@ function LeadsView({
                   {getLeadMessageSummary(selectedLead)}
                 </p>
               </div>
+            </div>
+
+            <div className="mt-5">
+              <DailyWorkflowHandoffPanel
+                title="Lead next action"
+                detail="Keep this lead moving into inspection, estimate, approval, and production."
+                actions={selectedLeadWorkflowActions}
+                onOpen={(view) => onViewChange(view)}
+                compact
+              />
             </div>
 
             <form onSubmit={handleUpdateLead} className="mt-5 grid gap-3">
@@ -19524,6 +20087,13 @@ function CustomerProfilePanel({
     maintenance: 0,
     communications: communicationItems.length,
   };
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const customerWorkflowActions = filterDailyWorkflowActions(workflowActions, {
+    customerId: customer.id,
+  }).slice(0, 4);
 
   return (
     <div
@@ -19715,6 +20285,16 @@ function CustomerProfilePanel({
           detail="View scheduled visits and production dates."
           icon={CalendarClock}
           onClick={() => onViewChange("calendar")}
+        />
+      </div>
+
+      <div className="mt-4">
+        <DailyWorkflowHandoffPanel
+          title="Customer next action"
+          detail="The next live handoff for this customer across sales, production, billing, and warranty."
+          actions={customerWorkflowActions}
+          onOpen={(view) => onViewChange(view)}
+          compact
         />
       </div>
 
@@ -21133,6 +21713,17 @@ function EstimatesView({
       signature.document_id !== null && selectedEstimateDocumentIds.has(signature.document_id),
   );
   const isCreatingEstimate = selectedEstimateId === "new" || selectedEstimate === null;
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const selectedEstimateWorkflowActions = selectedEstimate
+    ? filterDailyWorkflowActions(workflowActions, {
+        estimateId: selectedEstimate.id,
+        customerId: selectedEstimate.customer_id,
+        leadId: selectedEstimate.lead_id,
+      }).slice(0, 3)
+    : [];
 
   const handleStartNewEstimate = () => {
     updateUiPreservingScrollPosition(() => {
@@ -21589,6 +22180,15 @@ function EstimatesView({
         </section>
 
         <aside className="space-y-5">
+          {selectedEstimate ? (
+            <DailyWorkflowHandoffPanel
+              title="Estimate next action"
+              detail="Move this estimate through signature, approval, job handoff, and production."
+              actions={selectedEstimateWorkflowActions}
+              onOpen={(view) => onViewChange(view)}
+              compact
+            />
+          ) : null}
           <EstimatePdfPreview
             estimate={selectedEstimate}
             lineItems={selectedLineItems}
@@ -24470,6 +25070,18 @@ function JobsView({
       0,
     ),
   };
+  const workflowActions = useMemo(
+    () => buildDailyWorkflowActions(snapshot, companyMap),
+    [companyMap, snapshot],
+  );
+  const selectedJobWorkflowActions = selectedJob
+    ? filterDailyWorkflowActions(workflowActions, {
+        jobId: selectedJob.id,
+        estimateId: selectedJob.estimate_id,
+        customerId: selectedJob.customer_id,
+        leadId: selectedJob.lead_id,
+      }).slice(0, 3)
+    : [];
   const selectedJobReadiness = selectedJob
     ? [
         {
@@ -26493,6 +27105,14 @@ function JobsView({
                   value={formatMoney(selectedJobProductionTotal)}
                 />
               </div>
+
+              <DailyWorkflowHandoffPanel
+                title="Job next action"
+                detail="Schedule, crew, documentation, progress, invoice, payment, and warranty handoff for this job."
+                actions={selectedJobWorkflowActions}
+                onOpen={(view) => onViewChange(view)}
+                compact
+              />
 
               <FieldProductionMobileWorkspace
                 snapshot={snapshot}

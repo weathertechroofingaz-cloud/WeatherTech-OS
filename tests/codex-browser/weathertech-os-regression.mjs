@@ -2392,7 +2392,12 @@ async function moveDispatchDateTo(tab, targetDate) {
   );
 
   for (let index = 0; index < Math.abs(distance); index += 1) {
-    await clickUnique(button, `dispatch ${buttonName.toLowerCase()} date`);
+    await button.evaluate((element) =>
+      element.scrollIntoView({ block: "center", behavior: "auto" }),
+    );
+    await clickUnique(button, `dispatch ${buttonName.toLowerCase()} date`, {
+      retryTransientClick: true,
+    });
     await tab.playwright.waitForTimeout(80);
   }
 
@@ -2597,6 +2602,8 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("create"),
       hasOperationsSections:
         normalizedText.includes("immediate action") &&
+        normalizedText.includes("owner daily workflow") &&
+        normalizedText.includes("lead intake through production, billing, payment, and warranty") &&
         normalizedText.includes("today's operations") &&
         normalizedText.includes("crew activity") &&
         normalizedText.includes("financial") &&
@@ -2640,6 +2647,7 @@ async function testDashboardLiveMode(tab) {
         normalizedText.includes("production snapshot") &&
         normalizedText.includes("weather delays") &&
         normalizedText.includes("warranty callbacks"),
+      hasWorkflowHandoff: Boolean(document.querySelector('[data-testid="daily-workflow-handoff"]')),
       visibleEmail: text.split("\n").find((line) => line.includes("@")) ?? null,
       companyShellClass: main?.className ?? "",
     };
@@ -2657,7 +2665,7 @@ async function testDashboardLiveMode(tab) {
     throw new Error("No signed-in account email is visible.");
   }
 
-  if (!state.hasOperationsDashboard || !state.hasOperationsSections) {
+  if (!state.hasOperationsDashboard || !state.hasOperationsSections || !state.hasWorkflowHandoff) {
     throw new Error("CRM operations dashboard sections are not visible.");
   }
 
@@ -2748,6 +2756,8 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
       return (
         text.includes("daily operations command center") &&
+        text.includes("daily workflow handoff") &&
+        text.includes("lead intake, inspections, estimates, production, billing, and warranty") &&
         text.includes("jobs starting today") &&
         text.includes("jobs in progress") &&
         text.includes("jobs awaiting scheduling") &&
@@ -2791,6 +2801,7 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     const workspace = document.querySelector('[data-testid="office-operations-command-center"]');
     const queue = document.querySelector('[data-testid="operations-intelligence-queue"]');
     const scheduling = document.querySelector('[data-testid="scheduling-intelligence-dispatch"]');
+    const workflowHandoff = workspace?.querySelector('[data-testid="daily-workflow-handoff"]');
     const queueRows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
     const schedulingAlerts = [...document.querySelectorAll('[data-testid="scheduling-alert-row"]')];
     const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -2834,6 +2845,7 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
     return {
       visible: Boolean(workspace),
+      workflowVisible: Boolean(workflowHandoff),
       queueVisible: Boolean(queue),
       schedulingVisible: Boolean(scheduling),
       schedulingText: scheduling?.textContent?.toLowerCase() ?? "",
@@ -2858,6 +2870,10 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
   if (!desktopLayout.visible) {
     throw new Error("Office Operations workspace is not visible.");
+  }
+
+  if (!desktopLayout.workflowVisible) {
+    throw new Error("Office Operations daily workflow handoff did not render.");
   }
 
   if (!desktopLayout.queueVisible) {
@@ -3928,6 +3944,16 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     `selected lead detail ${leadName}`,
     10000,
     leadName,
+  );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="daily-workflow-handoff"]')?.textContent ?? "";
+
+      return text.includes("Lead next action") && text.includes("inspection, estimate, approval, and production");
+    },
+    "lead workflow handoff",
+    10000,
   );
 
   await selectUnique(
@@ -5016,6 +5042,8 @@ async function testCustomersWorkflow(tab, env, company, runId) {
         workspaceText.includes("Assigned salesperson") &&
         workspaceText.includes("Tags") &&
         workspaceText.includes("Internal notes") &&
+        workspaceText.includes("Customer next action") &&
+        workspaceText.includes("sales, production, billing, and warranty") &&
         workspaceText.includes("Open Estimates") &&
         workspaceText.includes("Scheduled Jobs") &&
         workspaceText.includes("Upcoming Inspections") &&
@@ -6280,6 +6308,17 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     "Estimates",
     estimateTitle,
     `existing estimate row ${estimateTitle}`,
+  );
+
+  await waitFor(
+    tab,
+    () => {
+      const text = document.querySelector('[data-testid="daily-workflow-handoff"]')?.textContent ?? "";
+
+      return text.includes("Estimate next action") && text.includes("signature, approval, job handoff");
+    },
+    "estimate workflow handoff",
+    10000,
   );
 
   await waitFor(
@@ -7853,6 +7892,15 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
     "dispatch company filter",
   );
   await moveDispatchDateTo(tab, dispatchStartInput.slice(0, 10));
+  if (inspection) {
+    await waitFor(
+      tab,
+      (title) => document.querySelector('[data-testid="dispatch-list"]')?.textContent?.includes(title),
+      "dispatch linked inspection",
+      15000,
+      inspection.title,
+    );
+  }
   await fillUnique(
     tab.playwright.locator('[data-testid="dispatch-search"]'),
     testJob.title,
@@ -7865,16 +7913,6 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
     15000,
     testJob.title,
   );
-
-  if (inspection) {
-    await waitFor(
-      tab,
-      (title) => document.querySelector('[data-testid="dispatch-list"]')?.textContent?.includes(title),
-      "dispatch linked inspection",
-      15000,
-      inspection.title,
-    );
-  }
 
   progress("dispatch:save:start");
   await selectUnique(
@@ -8176,10 +8214,15 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
         "crew-scheduler",
         "daily-production-log",
         "photo-progress-panel",
+        "daily-workflow-handoff",
       ];
 
       return {
         missingPanels: panelIds.filter((id) => !byTestId(id)),
+        missingWorkflowHandoffLabels: [
+          "Job next action",
+          "invoice, payment, and warranty handoff",
+        ].filter((label) => !textFor("daily-workflow-handoff").includes(label)),
         missingCommandLabels: commandCenterLabels.filter(
           (label) => !textFor("job-production-command-center").includes(label),
         ),
