@@ -4,17 +4,17 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved.
+Completed.
 
-Codex may begin development only after completing the approval gate in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
+This sprint was explicitly owner-approved in the Codex task request and completed using the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
 ## Sprint Name
 
-Document Center
+Twilio Phase 1 - Production Communications Foundation
 
 ## Objective
 
-Build a production-ready, company-aware Document Center for WeatherTech Roofing LLC and IHC Painting using the existing WeatherTech OS CRM architecture and document relationships.
+Build the production-ready server-side foundation for Twilio SMS and call activity inside the existing WeatherTech OS CRM without enabling real outbound customer messaging by default.
 
 ## Owner
 
@@ -22,43 +22,48 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-07-28.
+2026-08-02.
 
 ## Owner-Approved Scope
 
-- Build the company-aware Document Center.
-- Reuse existing CRM architecture.
-- Reuse existing document relationships.
-- Support WeatherTech Roofing LLC and IHC Painting.
-- Preserve existing navigation and design language.
-- Include browser regression coverage where document workflows are affected.
+- Add typed server-side Twilio configuration support.
+- Support WeatherTech Roofing LLC Phoenix, WeatherTech Roofing LLC Tucson, and IHC business-number routing.
+- Validate signed Twilio inbound SMS, voice, status, and recording webhooks.
+- Normalize phone numbers and match existing customers or leads before creating new lead-intake records.
+- Use existing CRM communications, Customer 360, lead-intake, and integration logging architecture.
+- Keep outbound SMS disabled unless explicitly enabled by server configuration and owner approval.
+- Add focused Twilio foundation regression coverage and setup documentation.
 
 ## Explicit Exclusions
 
 - Do not redesign the application.
-- No schema changes unless absolutely required and separately explained.
-- No RLS changes unless absolutely required and separately explained.
-- No fake integrations.
-- No provider activation.
-- No authentication changes.
-- No package or lockfile changes unless absolutely required.
-- No `.env.local` changes.
+- Do not create a placeholder Twilio dashboard.
+- Do not create fake customer communications.
+- Do not send messages to real customers during development or validation.
+- Do not purchase or port phone numbers.
+- Do not create destructive migrations.
+- Do not weaken authentication, RLS, or company access controls.
+- Do not begin Gmail, Google Calendar, Yelp, QuickBooks, website-form, e-signature, or AI call-summary work.
+- Do not modify `.env.local`.
 
 ## Completion Criteria
 
-- The Document Center workspace is implemented using existing WeatherTech OS architecture.
-- Document relationships reuse existing CRM, customer, lead, opportunity, estimate, job, and inspection context wherever practical.
-- Company scoping works for WeatherTech Roofing LLC, IHC Painting, and all-company views.
-- Search, filtering, categories, tags, upload status, preview/download, rename, archive, recent documents, and activity history work where supported by existing data.
-- Existing Customer 360, Leads, Opportunities, Estimates, Jobs, Inspections, Communications, Calendar, Dashboard, and navigation workflows remain intact.
-- Browser regression coverage is added for Document Center workflows.
+- Twilio configuration values are server-side only and documented with safe placeholders.
+- Inbound webhook handlers validate Twilio signatures and reject invalid requests.
+- Twilio SMS and call activity routes by receiving business number where configured.
+- Existing customers and leads are matched by normalized phone before lead creation.
+- Unmatched senders flow through the existing lead-intake workflow.
+- Webhook retries are idempotent by Twilio Message SID or Call SID.
+- Integration summaries remain masked or sanitized.
+- Existing Customer 360, Communications, Lead Intake, CRM, Dashboard, and navigation workflows remain intact.
+- Browser regression coverage is retained for affected CRM and communications workflows.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Relevant browser regression passes.
+- Relevant automated and browser regression passes.
 - Final scope audit confirms no excluded work or unrelated files were changed.
-- One focused conventional commit is created and pushed after implementation approval.
+- One focused conventional commit is created and pushed.
 - Local `main` equals `origin/main`.
 - Working tree is clean.
 
@@ -69,26 +74,27 @@ Joe Harris
 - Confirm the working tree is clean before development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before development begins.
-- Inspect the existing CRM, Document Center, Customers, Leads, Opportunities, Estimates, Jobs, Inspections, Communications, Calendar, Dashboard, and navigation implementation before editing.
+- Inspect the existing CRM, Customer 360, Lead Intake, Communications, Integration Center, Twilio routes, provider setup, and integration logging implementation before editing.
+- Run `node tests/twilio-communications-foundation.test.mjs`.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Document Center and directly related CRM workflows.
-- Run broader browser regression where the sprint changes shared navigation or CRM behavior.
+- Run targeted signed-in browser regression for Communications, Customer 360, Lead Intake, Integration Center, Dashboard, and navigation.
+- Run full signed-in browser regression if supported.
 - Clean all disposable regression records.
 
 ## Planned Commit Message
 
-To be selected after implementation with an accurate conventional commit message.
+`feat: add Twilio communications foundation`
 
 ## Blockers
 
-- None recorded.
+- Live Twilio account configuration, business-number purchase or porting, production webhook configuration, and controlled live tests still require owner access.
 
 ## Final Status
 
-Approved for implementation.
+Completed pending the sprint commit and push recorded in Git history.
 
 ## Notes
 

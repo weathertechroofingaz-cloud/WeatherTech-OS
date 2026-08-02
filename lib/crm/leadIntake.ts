@@ -21,6 +21,8 @@ import {
 import {
   detectLeadIntakeDuplicates,
   getStrongestLeadIntakeDuplicateConfidence,
+  normalizeTwilioCallLeadIntake,
+  normalizeTwilioSmsLeadIntake,
   normalizeWebsiteLeadIntake,
   normalizeYelpLeadIntake,
   routeCanonicalLeadIntake,
@@ -52,7 +54,10 @@ import type {
 
 type CrmClient = SupabaseClient<Database>;
 type BusinessKey = "IHC" | "WeatherTech" | "Unassigned";
-export type LeadIntakeProvider = Extract<IntegrationProvider, "website" | "yelp">;
+export type LeadIntakeProvider = Extract<
+  IntegrationProvider,
+  "website" | "yelp" | "twilio" | "twilio_sms"
+>;
 
 export type WebsiteLeadRequestBody = {
   business?: unknown;
@@ -179,6 +184,46 @@ export type YelpLeadRequestBody = {
   verifiedSourceMetadata?: unknown;
 };
 
+export type TwilioLeadRequestBody = {
+  accountSid?: unknown;
+  messagingServiceSid?: unknown;
+  messageSid?: unknown;
+  smsSid?: unknown;
+  callSid?: unknown;
+  providerEventSid?: unknown;
+  from?: unknown;
+  to?: unknown;
+  phone?: unknown;
+  name?: unknown;
+  callerName?: unknown;
+  senderName?: unknown;
+  body?: unknown;
+  message?: unknown;
+  notes?: unknown;
+  transcriptSummary?: unknown;
+  address?: unknown;
+  serviceAddress?: unknown;
+  city?: unknown;
+  location?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  postalCode?: unknown;
+  serviceType?: unknown;
+  requestedService?: unknown;
+  source?: unknown;
+  business?: unknown;
+  company?: unknown;
+  campaign?: unknown;
+  occurredAt?: unknown;
+  timestamp?: unknown;
+  receivingBusinessPhoneNumber?: unknown;
+  verifiedCompanyKey?: unknown;
+  verifiedBranchKey?: unknown;
+  forceUnassignedRouting?: unknown;
+  forceReviewReason?: unknown;
+  verifiedSourceMetadata?: unknown;
+};
+
 export type LeadIntakeResponseStatus =
   | "healthy"
   | "created"
@@ -228,7 +273,7 @@ type LeadIntakeResponseRouting = {
   assignedQueue: string | null;
 };
 
-type NormalizedLeadIntake = {
+export type NormalizedLeadIntake = {
   provider: LeadIntakeProvider;
   business: BusinessKey;
   companyKey: CanonicalLeadCompanyKey;
@@ -312,10 +357,13 @@ type RetryPayloadEncryptionEnvelope = {
 export const LEAD_INTAKE_EVENT_TYPES: Record<LeadIntakeProvider, string> = {
   website: "website.lead.created",
   yelp: "yelp.lead.created",
+  twilio: "twilio.call.lead.created",
+  twilio_sms: "twilio.sms.lead.created",
 };
 
 const DEFAULT_WEBSITE_ADDRESS = "Website lead - address pending";
 const DEFAULT_YELP_ADDRESS = "Yelp lead - address pending";
+const DEFAULT_TWILIO_ADDRESS = "Phone lead - address pending";
 const LEAD_INTAKE_MAX_ATTEMPTS = 3;
 
 function businessFromCompanyKey(companyKey: CanonicalLeadCompanyKey): BusinessKey {
@@ -420,8 +468,24 @@ function normalizeEmail(value: unknown) {
   };
 }
 
+function getDefaultSourceForProvider(provider: LeadIntakeProvider) {
+  if (provider === "website") {
+    return "Website";
+  }
+
+  if (provider === "yelp") {
+    return "Yelp";
+  }
+
+  if (provider === "twilio_sms") {
+    return "SMS";
+  }
+
+  return "Phone";
+}
+
 function normalizeSource(value: unknown, fallback: LeadIntakeProvider) {
-  return getText(value, 80) ?? (fallback === "website" ? "Website" : "Yelp");
+  return getText(value, 80) ?? getDefaultSourceForProvider(fallback);
 }
 
 function normalizeTimestamp(...values: unknown[]) {
@@ -942,6 +1006,133 @@ export function normalizeYelpLeadBody(
   };
 }
 
+function normalizeTwilioExternalLeadId(body: TwilioLeadRequestBody) {
+  return (
+    getText(body.messageSid, 160) ??
+    getText(body.smsSid, 160) ??
+    getText(body.callSid, 160) ??
+    getText(body.providerEventSid, 160)
+  );
+}
+
+function normalizeTwilioSourceAccount(body: TwilioLeadRequestBody) {
+  return getText(
+    body.to ??
+      body.receivingBusinessPhoneNumber ??
+      body.messagingServiceSid ??
+      body.accountSid,
+    240,
+  );
+}
+
+function normalizeTwilioCommonLeadBody(
+  body: TwilioLeadRequestBody,
+  provider: Extract<LeadIntakeProvider, "twilio" | "twilio_sms">,
+): NormalizeSuccess | NormalizeFailure {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const canonical =
+    provider === "twilio_sms"
+      ? normalizeTwilioSmsLeadIntake(body as Record<string, unknown>)
+      : normalizeTwilioCallLeadIntake(body as Record<string, unknown>);
+  const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
+  const phone = canonical.phone ?? normalizePhone(body.from ?? body.phone);
+  const message =
+    canonical.message ??
+    getText(
+      body.body ?? body.message ?? body.transcriptSummary ?? body.notes,
+      1500,
+    );
+  const business = businessFromCompanyKey(canonical.companyKey);
+  const location = canonical.city ?? getText(body.city ?? body.location, 160);
+  const { serviceType, warning: serviceWarning } = normalizeServiceType(
+    canonical.requestedService ?? body.serviceType ?? body.requestedService ?? message,
+    business === "Unassigned" ? "WeatherTech" : business,
+  );
+
+  warnings.push(...canonical.warnings);
+
+  if (!rawName && !phone && !message) {
+    errors.push("At least one contact field is required: name, phone, or message.");
+  }
+
+  if (errors.length > 0) {
+    return { lead: null, errors, warnings };
+  }
+
+  if (!canonical.serviceAddress && !location) {
+    warnings.push("address was blank, so a placeholder phone lead address was used.");
+  }
+
+  if (serviceWarning) {
+    warnings.push(serviceWarning);
+  }
+
+  return {
+    lead: {
+      provider,
+      business,
+      companyKey: canonical.companyKey,
+      branchKey: canonical.branchKey,
+      routingStatus: canonical.routing.status,
+      routingConfidence: canonical.routing.confidence,
+      routingReasons: canonical.routing.reasons,
+      assignedQueue: canonical.assignedQueue,
+      source: normalizeSource(body.source, provider),
+      contactName:
+        rawName ??
+        phone ??
+        (provider === "twilio_sms" ? "SMS lead" : "Phone lead"),
+      firstName: canonical.firstName,
+      lastName: canonical.lastName,
+      companyName: canonical.companyName,
+      phone,
+      email: null,
+      propertyAddress: canonical.serviceAddress ?? location ?? DEFAULT_TWILIO_ADDRESS,
+      location,
+      state: canonical.state,
+      postalCode: canonical.postalCode,
+      serviceType,
+      message,
+      externalLeadId: normalizeTwilioExternalLeadId(body),
+      submittedAt: normalizeTimestamp(body.occurredAt, body.timestamp),
+      sourceAccount: normalizeTwilioSourceAccount(body),
+      campaign: canonical.campaign,
+      receivingBusinessPhoneNumber: canonical.receivingBusinessPhoneNumber,
+      assignedUserId: canonical.assignedUserId,
+      urgency: canonical.urgency,
+      preferredContactMethod: canonical.preferredContactMethod,
+      websiteUrl: null,
+      yelpBusinessId: null,
+      yelpConversationId: null,
+      yelpLeadId: null,
+      utmSource: null,
+      utmCampaign: null,
+      utmMedium: null,
+      sourceMappingId: null,
+      sourceMappingDisplayName: null,
+      sourceMappingMatchType: null,
+      sourceMetadata: getSafeSourceMetadata(body.verifiedSourceMetadata),
+      correlationId: getText(body.callSid ?? body.messageSid ?? body.smsSid, 120),
+      duplicateConfidence: "no_match",
+      warnings,
+    },
+    errors: [],
+  };
+}
+
+export function normalizeTwilioSmsLeadBody(
+  body: TwilioLeadRequestBody,
+): NormalizeSuccess | NormalizeFailure {
+  return normalizeTwilioCommonLeadBody(body, "twilio_sms");
+}
+
+export function normalizeTwilioCallLeadBody(
+  body: TwilioLeadRequestBody,
+): NormalizeSuccess | NormalizeFailure {
+  return normalizeTwilioCommonLeadBody(body, "twilio");
+}
+
 function getCompanyText(company: CompanyRecord) {
   return `${company.name} ${company.short_name ?? ""} ${company.trade}`.toLowerCase();
 }
@@ -1124,7 +1315,7 @@ function normalizeFingerprintValue(value: string | null | undefined) {
 
 function buildLeadIntakeFingerprint(lead: NormalizedLeadIntake) {
   const payload = {
-    provider: lead.provider,
+    provider: lead.provider === "twilio" ? "twilio_call" : lead.provider,
     business: lead.business,
     sourceAccount: normalizeFingerprintValue(lead.sourceAccount),
     externalLeadId: normalizeFingerprintValue(lead.externalLeadId),
@@ -1348,7 +1539,14 @@ function buildRequestSummary(lead: NormalizedLeadIntake) {
 }
 
 function buildLeadNotes(lead: NormalizedLeadIntake) {
-  const label = lead.provider === "website" ? "Website" : "Yelp";
+  const label =
+    lead.provider === "website"
+      ? "Website"
+      : lead.provider === "yelp"
+        ? "Yelp"
+        : lead.provider === "twilio_sms"
+          ? "Twilio SMS"
+          : "Twilio call";
   const campaignValues = [
     lead.utmSource ? `source=${lead.utmSource}` : null,
     lead.utmMedium ? `medium=${lead.utmMedium}` : null,
@@ -1407,7 +1605,11 @@ function buildLeadInput(company: CompanyRecord, lead: NormalizedLeadIntake): Lea
 
 async function resolveSourceMapping(client: CrmClient, lead: NormalizedLeadIntake) {
   const externalSourceId =
-    lead.provider === "website" ? lead.websiteUrl : lead.yelpBusinessId;
+    lead.provider === "website"
+      ? lead.websiteUrl
+      : lead.provider === "yelp"
+        ? lead.yelpBusinessId
+        : lead.receivingBusinessPhoneNumber ?? lead.sourceAccount;
 
   return resolveLeadSourceMapping(client, {
     provider: lead.provider,
@@ -1541,7 +1743,7 @@ function toCanonicalForDuplicateCheck(
     preferredContactMethod: lead.preferredContactMethod,
     leadSource: lead.source,
     sourceDetail: lead.sourceAccount,
-    provider: lead.provider,
+    provider: lead.provider === "twilio" ? "twilio_call" : lead.provider,
     providerExternalId: lead.externalLeadId,
     campaign: lead.campaign,
     companyKey: lead.companyKey,

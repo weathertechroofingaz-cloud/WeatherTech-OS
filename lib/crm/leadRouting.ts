@@ -707,7 +707,12 @@ export function normalizeManualLeadIntake(payload: GenericPayload) {
     city: getText(payload.city ?? payload.location, 120),
     state: getText(payload.state, 40) ?? "AZ",
     postalCode: getText(payload.zip ?? payload.postalCode, 20),
-    requestedService: normalizeService(payload.serviceType ?? payload.requestedService),
+    requestedService: normalizeService(
+      payload.serviceType ??
+        payload.requestedService ??
+        payload.transcriptSummary ??
+        payload.notes,
+    ),
     message: getText(payload.notes ?? payload.message, 1500),
     preferredContactMethod:
       getToken(getText(payload.preferredContactMethod, 40)).includes("email")
@@ -901,7 +906,9 @@ export function normalizeTwilioCallLeadIntake(payload: GenericPayload) {
     city: getText(payload.city ?? payload.location, 120),
     state: getText(payload.state, 40) ?? "AZ",
     postalCode: getText(payload.zip ?? payload.postalCode, 20),
-    requestedService: normalizeService(payload.serviceType ?? payload.requestedService),
+    requestedService: normalizeService(
+      payload.serviceType ?? payload.requestedService ?? payload.body ?? payload.message,
+    ),
     message: getText(payload.transcriptSummary ?? payload.notes, 1500),
     preferredContactMethod: "phone",
     leadSource: "Phone",
@@ -909,6 +916,10 @@ export function normalizeTwilioCallLeadIntake(payload: GenericPayload) {
     providerExternalId: getExternalId(payload, ["callSid", "providerEventSid", "id"]),
     campaign: getText(payload.campaign, 160),
     explicitCompany: getText(payload.business ?? payload.company, 120),
+    verifiedCompanyKey: getVerifiedCompanyKey(payload.verifiedCompanyKey),
+    verifiedBranchKey: getVerifiedBranchKey(payload.verifiedBranchKey),
+    forceUnassignedRouting: payload.forceUnassignedRouting === true,
+    forceReviewReason: getText(payload.forceReviewReason, 240),
     receivingBusinessPhoneNumber: normalizeLeadIntakePhone(
       payload.to ?? payload.receivingBusinessPhoneNumber,
     ),
@@ -925,7 +936,9 @@ export function normalizeTwilioSmsLeadIntake(payload: GenericPayload) {
     city: getText(payload.city ?? payload.location, 120),
     state: getText(payload.state, 40) ?? "AZ",
     postalCode: getText(payload.zip ?? payload.postalCode, 20),
-    requestedService: normalizeService(payload.serviceType ?? payload.requestedService),
+    requestedService: normalizeService(
+      payload.serviceType ?? payload.requestedService ?? payload.body ?? payload.message,
+    ),
     message: getText(payload.body ?? payload.message, 1500),
     preferredContactMethod: "sms",
     leadSource: "SMS",
@@ -938,6 +951,10 @@ export function normalizeTwilioSmsLeadIntake(payload: GenericPayload) {
     ]),
     campaign: getText(payload.campaign, 160),
     explicitCompany: getText(payload.business ?? payload.company, 120),
+    verifiedCompanyKey: getVerifiedCompanyKey(payload.verifiedCompanyKey),
+    verifiedBranchKey: getVerifiedBranchKey(payload.verifiedBranchKey),
+    forceUnassignedRouting: payload.forceUnassignedRouting === true,
+    forceReviewReason: getText(payload.forceReviewReason, 240),
     receivingBusinessPhoneNumber: normalizeLeadIntakePhone(
       payload.to ?? payload.receivingBusinessPhoneNumber,
     ),

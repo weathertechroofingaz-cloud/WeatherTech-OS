@@ -66,6 +66,25 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Reused existing WeatherTech OS CRM records, company scoping, estimates, jobs, and browser regression coverage.
   - Did not modify authentication, RLS, provider integrations, packages, or environment files.
 
+### Twilio Phase 1 - Production Communications Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Twilio communications foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added server-side Twilio configuration readiness, signed inbound webhook handling, business-number routing, CRM matching, lead-intake fallback, and safe outbound-send gating.
+  - Added setup documentation for WeatherTech Phoenix, WeatherTech Tucson, and IHC business-number mapping.
+  - Did not add migrations, modify `.env.local`, expose secrets, or send real SMS/call traffic.
+
 ## Recording Template
 
 ### Sprint Name

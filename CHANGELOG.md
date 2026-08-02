@@ -4,6 +4,14 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Twilio Phase 1 - Production Communications Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Twilio communications foundation`
+- Summary:
+  - Added the server-side Twilio SMS and voice foundation with signed webhook validation, business-number routing, CRM matching, lead-intake fallback, and safe outbound gating.
+  - Preserved existing CRM workflows and kept live sending disabled until owner-controlled provider configuration.
+
 ### Owner Approval Workflow
 
 - Commit: `a7569d6638ecc6849723ba3f760d658e4209a8e6`

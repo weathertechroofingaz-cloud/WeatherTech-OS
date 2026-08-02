@@ -3,7 +3,10 @@ import { twilioEnvVars } from "../crm/integrations";
 const DEFAULT_TEST_MESSAGE =
   "WeatherTech OS Twilio integration test. No customer message was sent.";
 
-export type TwilioConfigWarningCode = "missing_from_number";
+export type TwilioConfigWarningCode =
+  | "missing_from_number"
+  | "missing_public_base_url"
+  | "outbound_sms_disabled";
 
 export type TwilioConfigWarning = {
   code: TwilioConfigWarningCode;
@@ -13,8 +16,20 @@ export type TwilioConfigWarning = {
 export type TwilioMaskedConfig = {
   accountSid: string | null;
   authToken: string | null;
+  apiKeySid: string | null;
+  apiKeySecret: string | null;
   messagingServiceSid: string | null;
   fromNumber: string | null;
+  publicBaseUrl: string | null;
+};
+
+export type TwilioBusinessNumberConfig = {
+  key: "weathertech_phoenix" | "weathertech_tucson" | "ihc";
+  label: string;
+  company: "WeatherTech Roofing LLC" | "IHC Painting";
+  envVar: string;
+  configured: boolean;
+  phoneNumber: string | null;
 };
 
 export type TwilioConfigStatus =
@@ -30,6 +45,7 @@ export type TwilioConfigCheckResult = {
   missing: string[];
   warnings: TwilioConfigWarning[];
   credentials: TwilioMaskedConfig;
+  businessNumbers: TwilioBusinessNumberConfig[];
   messagesEndpoint: string;
 };
 
@@ -58,8 +74,13 @@ export type TwilioTestSmsResult =
 type TwilioServerConfig = {
   accountSid: string | null;
   authToken: string | null;
+  apiKeySid: string | null;
+  apiKeySecret: string | null;
   messagingServiceSid: string | null;
   fromNumber: string | null;
+  publicBaseUrl: string | null;
+  outboundSmsEnabled: boolean;
+  businessNumbers: TwilioBusinessNumberConfig[];
 };
 
 type TwilioMessageResponse = {
@@ -100,12 +121,84 @@ function maskPhoneNumber(value: string | null) {
   return `****${digits.slice(-4)}`;
 }
 
+function normalizeEnvPhoneNumber(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+
+  if (value.trim().startsWith("+") && digits.length >= 8 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+
+  return null;
+}
+
+function getBooleanEnvValue(name: string) {
+  const value = getEnvValue(name)?.toLowerCase();
+
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function getBusinessNumberConfig(): TwilioBusinessNumberConfig[] {
+  return [
+    {
+      key: "weathertech_phoenix",
+      label: "WeatherTech Phoenix",
+      company: "WeatherTech Roofing LLC",
+      envVar: twilioEnvVars.weatherTechPhoenixNumber,
+      configured: Boolean(
+        normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.weatherTechPhoenixNumber)),
+      ),
+      phoneNumber: maskPhoneNumber(
+        normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.weatherTechPhoenixNumber)),
+      ),
+    },
+    {
+      key: "weathertech_tucson",
+      label: "WeatherTech Tucson",
+      company: "WeatherTech Roofing LLC",
+      envVar: twilioEnvVars.weatherTechTucsonNumber,
+      configured: Boolean(
+        normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.weatherTechTucsonNumber)),
+      ),
+      phoneNumber: maskPhoneNumber(
+        normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.weatherTechTucsonNumber)),
+      ),
+    },
+    {
+      key: "ihc",
+      label: "IHC",
+      company: "IHC Painting",
+      envVar: twilioEnvVars.ihcNumber,
+      configured: Boolean(normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.ihcNumber))),
+      phoneNumber: maskPhoneNumber(
+        normalizeEnvPhoneNumber(getEnvValue(twilioEnvVars.ihcNumber)),
+      ),
+    },
+  ];
+}
+
 function getTwilioServerConfig(): TwilioServerConfig {
   return {
     accountSid: getEnvValue(twilioEnvVars.accountSid),
     authToken: getEnvValue(twilioEnvVars.authToken),
+    apiKeySid: getEnvValue(twilioEnvVars.apiKeySid),
+    apiKeySecret: getEnvValue(twilioEnvVars.apiKeySecret),
     messagingServiceSid: getEnvValue(twilioEnvVars.messagingServiceSid),
     fromNumber: getEnvValue(twilioEnvVars.fromNumber),
+    publicBaseUrl: getEnvValue(twilioEnvVars.publicBaseUrl),
+    outboundSmsEnabled: getBooleanEnvValue(twilioEnvVars.outboundSmsEnabled),
+    businessNumbers: getBusinessNumberConfig(),
   };
 }
 
@@ -118,25 +211,40 @@ function getMissingConfig(config: TwilioServerConfig) {
 }
 
 function getConfigWarnings(config: TwilioServerConfig): TwilioConfigWarning[] {
-  if (config.fromNumber) {
-    return [];
-  }
-
   return [
-    {
-      code: "missing_from_number",
-      message:
-        "TWILIO_FROM_NUMBER is blank. Outbound sending requires a sender number after buying one or porting an existing business number.",
-    },
-  ];
+    !config.fromNumber
+      ? {
+          code: "missing_from_number",
+          message:
+            "TWILIO_FROM_NUMBER is blank. Outbound sending requires a sender number after buying one or porting an existing business number.",
+        }
+      : null,
+    !config.publicBaseUrl
+      ? {
+          code: "missing_public_base_url",
+          message:
+            "TWILIO_PUBLIC_BASE_URL is blank. Twilio webhooks need the deployed WeatherTech OS base URL.",
+        }
+      : null,
+    !config.outboundSmsEnabled
+      ? {
+          code: "outbound_sms_disabled",
+          message:
+            "TWILIO_OUTBOUND_SMS_ENABLED is not true. Outbound SMS remains disabled for safety.",
+        }
+      : null,
+  ].filter((warning): warning is TwilioConfigWarning => Boolean(warning));
 }
 
 function getMaskedConfig(config: TwilioServerConfig): TwilioMaskedConfig {
   return {
     accountSid: maskSid(config.accountSid, "AC"),
     authToken: config.authToken ? "****" : null,
+    apiKeySid: maskSid(config.apiKeySid, "SK"),
+    apiKeySecret: config.apiKeySecret ? "****" : null,
     messagingServiceSid: maskSid(config.messagingServiceSid, "MG"),
     fromNumber: maskPhoneNumber(config.fromNumber),
+    publicBaseUrl: config.publicBaseUrl,
   };
 }
 
@@ -188,6 +296,8 @@ function redactConfigValues(message: string, config: TwilioServerConfig) {
   const valuesToRedact = [
     config.accountSid,
     config.authToken,
+    config.apiKeySid,
+    config.apiKeySecret,
     config.messagingServiceSid,
     config.fromNumber,
   ].filter((value): value is string => Boolean(value));
@@ -221,10 +331,11 @@ export function getTwilioConfigCheckResult(): TwilioConfigCheckResult {
         : "configured"
       : "missing_config",
     checkedAt: new Date().toISOString(),
-    outboundReady: ok && Boolean(config.fromNumber),
+    outboundReady: ok && Boolean(config.fromNumber) && config.outboundSmsEnabled,
     missing,
     warnings,
     credentials: getMaskedConfig(config),
+    businessNumbers: config.businessNumbers,
     messagesEndpoint: getMessagesEndpoint(config),
   };
 }
@@ -246,6 +357,17 @@ export async function sendTwilioTestSms({
       to: recipient,
       message: "Twilio test SMS was not sent because server configuration is incomplete.",
       error: `Missing ${missing.join(", ")}.`,
+    };
+  }
+
+  if (!config.outboundSmsEnabled) {
+    return {
+      attempted: true,
+      sent: false,
+      to: recipient,
+      message:
+        "Twilio test SMS was not sent because outbound SMS is disabled by server configuration.",
+      error: `${twilioEnvVars.outboundSmsEnabled} must be set to true for controlled test sends.`,
     };
   }
 

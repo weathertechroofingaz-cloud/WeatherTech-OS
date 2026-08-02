@@ -42562,10 +42562,10 @@ function TwilioLiveFoundationPanel() {
             Calls and SMS routing setup
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-            Backend webhook handlers are prepared for signed Twilio events, but
-            production calling and SMS remain disabled until migration 0020,
-            credentials, phone ownership, Twilio Console webhooks, and live tests
-            are complete.
+            Signed inbound webhook handlers can record routed calls and SMS
+            after migration 0021, credentials, phone ownership, business-number
+            mapping, Twilio Console webhooks, and controlled live tests are
+            complete. Outbound SMS remains disabled until explicitly enabled.
           </p>
         </div>
         <ProviderStatusBadge label="No Production Messaging" tone="red" />
@@ -42584,8 +42584,8 @@ function TwilioLiveFoundationPanel() {
       <div className="mt-5 grid gap-3 md:grid-cols-4">
         <ProfileStat label="Required numbers" value={twilioBusinessNumberRouteTemplates.length} />
         <ProfileStat label="Production SMS" value="Disabled" />
-        <ProfileStat label="Production calls" value="Disabled" />
-        <ProfileStat label="Database" value="Migration Required" />
+        <ProfileStat label="Inbound webhooks" value="Ready after setup" />
+        <ProfileStat label="Database" value="Migration 0021" />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">

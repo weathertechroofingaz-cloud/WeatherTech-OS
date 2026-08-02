@@ -6,6 +6,12 @@ import {
   sanitizeIntegrationSyncLogText,
 } from "../crm/integrations";
 import {
+  normalizeTwilioCallLeadBody,
+  normalizeTwilioSmsLeadBody,
+  processLeadIntake,
+  type TwilioLeadRequestBody,
+} from "../crm/leadIntake";
+import {
   createIntegrationSyncLog,
   createSmsMessage,
 } from "../crm/repository";
@@ -13,6 +19,8 @@ import type {
   Database,
   IntegrationConnectionRecord,
   CallRecordInsert,
+  CustomerRecord,
+  LeadRecord,
   SmsMessageRecord,
   SmsMessageInsert,
 } from "../crm/types";
@@ -50,6 +58,21 @@ type BusinessPhoneRouteResult =
   | { status: "matched"; row: BusinessPhoneRouteRow }
   | { status: "needs_review"; row: null }
   | { status: "migration_required"; row: null };
+
+type TwilioCrmTarget = {
+  customerId: string | null;
+  leadId: string | null;
+  intakeRecordId: string | null;
+  syncLogId: string | null;
+  matchStatus:
+    | "matched_customer"
+    | "matched_lead"
+    | "created_lead"
+    | "accepted_for_review"
+    | "unmatched"
+    | "skipped";
+  warnings: string[];
+};
 
 export type TwilioWebhookPayload = {
   kind: TwilioWebhookKind;
@@ -110,6 +133,24 @@ export function createTwilioTwiMLResponse() {
     status: 200,
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
+    },
+  });
+}
+
+function createTwilioWebhookRejectedResponse(
+  signatureStatus: Exclude<TwilioSignatureStatus, "valid">,
+) {
+  const status =
+    signatureStatus === "unsupported_content_type"
+      ? 415
+      : signatureStatus === "missing_auth_token"
+        ? 503
+        : 403;
+
+  return new Response("Twilio webhook rejected.", {
+    status,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
     },
   });
 }
@@ -203,6 +244,10 @@ function inferWebhookKind(
   record: Record<string, unknown>,
   expectedKind: TwilioWebhookKind,
 ): TwilioWebhookKind {
+  if (expectedKind === "voice_inbound" && getRecordValue(record, ["CallStatus", "callStatus"])) {
+    return "voice_status";
+  }
+
   if (expectedKind !== "sms_inbound") {
     return expectedKind;
   }
@@ -321,6 +366,20 @@ function isSamePhone(left: string | null, right: string | null) {
 
 function isSameSid(left: string | null, right: string | null) {
   return Boolean(left && right && left.trim() === right.trim());
+}
+
+function emptyTwilioCrmTarget(
+  matchStatus: TwilioCrmTarget["matchStatus"] = "unmatched",
+  warnings: string[] = [],
+): TwilioCrmTarget {
+  return {
+    customerId: null,
+    leadId: null,
+    intakeRecordId: null,
+    syncLogId: null,
+    matchStatus,
+    warnings,
+  };
 }
 
 function maskPhone(value: string | null) {
@@ -454,22 +513,26 @@ function isMissingRelationError(error: unknown) {
 
 function getMissingPayloadFields(payload: TwilioWebhookPayload) {
   const required = [
-    payload.from ? null : "From",
-    payload.to ? null : "To",
     payload.accountSid ? null : "AccountSid",
   ];
 
   if (payload.kind === "sms_inbound") {
+    required.push(payload.from ? null : "From");
+    required.push(payload.to ? null : "To");
     required.push(payload.body !== null ? null : "Body");
     required.push(payload.messageSid ? null : "MessageSid");
   }
 
   if (payload.kind === "sms_status") {
+    required.push(payload.from ? null : "From");
+    required.push(payload.to ? null : "To");
     required.push(payload.messageSid ? null : "MessageSid");
     required.push(payload.messageStatus ? null : "MessageStatus");
   }
 
   if (payload.kind === "voice_inbound" || payload.kind === "voice_status") {
+    required.push(payload.from ? null : "From");
+    required.push(payload.to ? null : "To");
     required.push(payload.callSid ? null : "CallSid");
   }
 
@@ -495,6 +558,266 @@ function getCustomerPhoneCandidate(payload: TwilioWebhookPayload) {
   }
 
   return payload.from;
+}
+
+function getRouteToken(row: BusinessPhoneRouteRow | null) {
+  return [
+    row?.routing_key,
+    row?.display_name,
+    row?.business_location,
+    row?.team_queue,
+    row?.lead_source,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function getVerifiedCompanyKeyForRoute(row: BusinessPhoneRouteRow | null) {
+  const token = getRouteToken(row);
+
+  if (token.includes("ihc") || token.includes("paint")) {
+    return "ihc_painting" as const;
+  }
+
+  if (token.includes("weathertech") || token.includes("roof")) {
+    return "weathertech_roofing" as const;
+  }
+
+  return undefined;
+}
+
+function getVerifiedBranchKeyForRoute(row: BusinessPhoneRouteRow | null) {
+  const token = getRouteToken(row);
+
+  if (token.includes("ihc") || token.includes("paint")) {
+    return "ihc" as const;
+  }
+
+  if (token.includes("tucson")) {
+    return "weathertech_tucson" as const;
+  }
+
+  if (token.includes("phoenix") || token.includes("weathertech") || token.includes("roof")) {
+    return "weathertech_phoenix" as const;
+  }
+
+  return undefined;
+}
+
+function getCompanyIdForPayload(
+  route: BusinessPhoneRouteResult,
+  connection: IntegrationConnectionRecord | null,
+) {
+  return route.row?.company_id ?? connection?.company_id ?? null;
+}
+
+function crmPhoneMatches(recordPhone: string | null | undefined, candidatePhone: string | null) {
+  const recordDigits = normalizePhoneDigits(recordPhone ?? null);
+  const candidateDigits = normalizePhoneDigits(candidatePhone);
+
+  if (!recordDigits || !candidateDigits) {
+    return false;
+  }
+
+  if (recordDigits === candidateDigits) {
+    return true;
+  }
+
+  return (
+    recordDigits.length >= 7 &&
+    candidateDigits.length >= 7 &&
+    recordDigits.endsWith(candidateDigits.slice(-7))
+  );
+}
+
+async function findCustomerByPhone(
+  client: CrmClient,
+  companyId: string,
+  phone: string | null,
+) {
+  if (!phone) {
+    return null;
+  }
+
+  const { data, error } = await client
+    .from("customers")
+    .select("id, phone")
+    .eq("company_id", companyId)
+    .limit(500);
+
+  if (error) {
+    throw error;
+  }
+
+  return (
+    ((data ?? []) as Pick<CustomerRecord, "id" | "phone">[]).find((customer) =>
+      crmPhoneMatches(customer.phone, phone),
+    ) ?? null
+  );
+}
+
+async function findLeadByPhone(
+  client: CrmClient,
+  companyId: string,
+  phone: string | null,
+) {
+  if (!phone) {
+    return null;
+  }
+
+  const { data, error } = await client
+    .from("leads")
+    .select("id, phone")
+    .eq("company_id", companyId)
+    .limit(500);
+
+  if (error) {
+    throw error;
+  }
+
+  return (
+    ((data ?? []) as Pick<LeadRecord, "id" | "phone">[]).find((lead) =>
+      crmPhoneMatches(lead.phone, phone),
+    ) ?? null
+  );
+}
+
+function buildTwilioLeadRequestBody(
+  payload: TwilioWebhookPayload,
+  route: BusinessPhoneRouteResult,
+): TwilioLeadRequestBody {
+  const routeRow = route.row;
+
+  return {
+    accountSid: payload.accountSid,
+    messagingServiceSid: payload.messagingServiceSid,
+    messageSid: payload.messageSid,
+    smsSid: payload.messageSid,
+    callSid: payload.callSid,
+    providerEventSid: getTwilioProviderEventSid(payload),
+    from: normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload)),
+    to: normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload)),
+    body: payload.body,
+    message: payload.body,
+    transcriptSummary:
+      payload.kind === "voice_inbound" || payload.kind === "voice_status"
+        ? `Inbound call ${payload.callStatus ?? "received"}.`
+        : null,
+    source: payload.kind === "sms_inbound" ? "SMS" : "Phone",
+    serviceType: routeRow?.lead_source,
+    business: routeRow?.display_name ?? routeRow?.lead_source,
+    location: routeRow?.business_location,
+    receivingBusinessPhoneNumber: normalizeTwilioPhoneNumber(
+      getBusinessPhoneCandidate(payload),
+    ),
+    verifiedCompanyKey: getVerifiedCompanyKeyForRoute(routeRow),
+    verifiedBranchKey: getVerifiedBranchKeyForRoute(routeRow),
+    forceUnassignedRouting: route.status !== "matched",
+    forceReviewReason:
+      route.status === "matched"
+        ? null
+        : "Twilio business number is not yet mapped to an active WeatherTech OS company route.",
+    verifiedSourceMetadata: {
+      routeStatus: route.status,
+      businessPhoneNumberId: routeRow?.id ?? null,
+      routingKey: routeRow?.routing_key ?? null,
+      businessLocation: routeRow?.business_location ?? null,
+      teamQueue: routeRow?.team_queue ?? null,
+    },
+    occurredAt: payload.occurredAt,
+  };
+}
+
+async function createLeadForUnmatchedTwilioSender({
+  client,
+  payload,
+  route,
+}: {
+  client: CrmClient;
+  payload: TwilioWebhookPayload;
+  route: BusinessPhoneRouteResult;
+}): Promise<TwilioCrmTarget> {
+  if (
+    payload.kind !== "sms_inbound" &&
+    payload.kind !== "voice_inbound" &&
+    payload.kind !== "voice_status"
+  ) {
+    return emptyTwilioCrmTarget("skipped");
+  }
+
+  const body = buildTwilioLeadRequestBody(payload, route);
+  const normalized =
+    payload.kind === "sms_inbound"
+      ? normalizeTwilioSmsLeadBody(body)
+      : normalizeTwilioCallLeadBody(body);
+
+  if (!normalized.lead) {
+    return emptyTwilioCrmTarget("unmatched", normalized.errors);
+  }
+
+  const result = await processLeadIntake(client, normalized.lead);
+  const leadId = result.leadId ?? result.duplicateOfLeadId ?? null;
+
+  return {
+    customerId: null,
+    leadId,
+    intakeRecordId: result.intakeRecordId ?? null,
+    syncLogId: result.syncLogId ?? null,
+    matchStatus: leadId
+      ? result.status.includes("duplicate")
+        ? "matched_lead"
+        : "created_lead"
+      : result.status === "accepted_for_review"
+        ? "accepted_for_review"
+        : "unmatched",
+    warnings: result.warnings,
+  };
+}
+
+async function resolveTwilioCrmTarget({
+  client,
+  payload,
+  route,
+  connection,
+  shouldCreateLead,
+}: {
+  client: CrmClient;
+  payload: TwilioWebhookPayload;
+  route: BusinessPhoneRouteResult;
+  connection: IntegrationConnectionRecord | null;
+  shouldCreateLead: boolean;
+}): Promise<TwilioCrmTarget> {
+  const companyId = getCompanyIdForPayload(route, connection);
+  const customerPhone = normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload));
+
+  if (!companyId) {
+    return emptyTwilioCrmTarget("unmatched", [
+      "No company route was matched for the receiving Twilio number.",
+    ]);
+  }
+
+  const customer = await findCustomerByPhone(client, companyId, customerPhone);
+
+  if (customer) {
+    return {
+      ...emptyTwilioCrmTarget("matched_customer"),
+      customerId: customer.id,
+    };
+  }
+
+  const lead = await findLeadByPhone(client, companyId, customerPhone);
+
+  if (lead) {
+    return {
+      ...emptyTwilioCrmTarget("matched_lead"),
+      leadId: lead.id,
+    };
+  }
+
+  return shouldCreateLead
+    ? createLeadForUnmatchedTwilioSender({ client, payload, route })
+    : emptyTwilioCrmTarget("unmatched");
 }
 
 async function findBusinessPhoneRoute(
@@ -539,6 +862,28 @@ async function getExistingSmsMessage(
   return data;
 }
 
+async function getExistingCallRecordId(client: CrmClient, callSid: string | null) {
+  if (!callSid) {
+    return null;
+  }
+
+  const { data, error } = await client
+    .from("call_records")
+    .select("id")
+    .eq("provider_call_sid", callSid)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+
+  return data?.id ?? null;
+}
+
 async function createInboundSyncLog({
   client,
   connection,
@@ -580,7 +925,15 @@ async function createInboundSyncLog({
   });
 }
 
-function getProviderEventSid(payload: TwilioWebhookPayload) {
+export function getTwilioProviderEventSid(payload: TwilioWebhookPayload) {
+  if (payload.kind === "sms_status" && payload.messageSid && payload.messageStatus) {
+    return `${payload.messageSid}:${payload.messageStatus}`;
+  }
+
+  if (payload.kind === "voice_status" && payload.callSid && payload.callStatus) {
+    return `${payload.callSid}:${payload.callStatus}`;
+  }
+
   return payload.recordingSid ?? payload.messageSid ?? payload.callSid;
 }
 
@@ -633,12 +986,14 @@ async function storeProviderEvent({
   client,
   payload,
   route,
+  target,
   smsMessageId,
   callRecordId,
 }: {
   client: CrmClient;
   payload: TwilioWebhookPayload;
   route: BusinessPhoneRouteResult;
+  target: TwilioCrmTarget;
   smsMessageId: string | null;
   callRecordId: string | null;
 }) {
@@ -657,10 +1012,12 @@ async function storeProviderEvent({
       company_id: routeRow?.company_id ?? null,
       business_phone_number_id: routeRow?.id ?? null,
       integration_connection_id: routeRow?.integration_connection_id ?? null,
+      customer_id: target.customerId,
+      lead_id: target.leadId,
       sms_message_id: smsMessageId,
       provider: getProvider(payload),
       provider_account_sid: payload.accountSid,
-      provider_event_sid: getProviderEventSid(payload),
+      provider_event_sid: getTwilioProviderEventSid(payload),
       provider_parent_sid: getProviderParentSid(payload),
       event_type: payload.kind,
       channel: getChannel(payload),
@@ -675,6 +1032,10 @@ async function storeProviderEvent({
       response_summary: sanitizeIntegrationSyncLogSummary({
         smsMessageId,
         callRecordId,
+        leadId: target.leadId,
+        customerId: target.customerId,
+        intakeRecordId: target.intakeRecordId,
+        matchStatus: target.matchStatus,
         routingStatus: route.status,
       }),
       error_code: payload.errorCode,
@@ -711,7 +1072,7 @@ async function storeProviderEvent({
   };
 }
 
-function normalizeSmsDeliveryStatus(status: string | null) {
+export function normalizeTwilioSmsDeliveryStatus(status: string | null) {
   const normalized = status?.toLowerCase().replace(/[^a-z]+/g, "_") ?? null;
 
   if (
@@ -735,7 +1096,7 @@ async function updateSmsStatusFromCallback(client: CrmClient, payload: TwilioWeb
     return null;
   }
 
-  const deliveryStatus = normalizeSmsDeliveryStatus(payload.messageStatus);
+  const deliveryStatus = normalizeTwilioSmsDeliveryStatus(payload.messageStatus);
   const now = new Date().toISOString();
   const update: Partial<SmsMessageInsert> = {
     delivery_status: deliveryStatus,
@@ -772,7 +1133,7 @@ async function updateSmsStatusFromCallback(client: CrmClient, payload: TwilioWeb
   return data?.id ?? null;
 }
 
-function normalizeCallStatus(status: string | null) {
+export function normalizeTwilioCallStatus(status: string | null) {
   const normalized = status?.toLowerCase().replace(/[^a-z]+/g, "_") ?? null;
 
   if (normalized === "in_progress") {
@@ -828,10 +1189,12 @@ async function upsertCallRecord({
   client,
   payload,
   route,
+  target,
 }: {
   client: CrmClient;
   payload: TwilioWebhookPayload;
   route: BusinessPhoneRouteResult;
+  target: TwilioCrmTarget;
 }) {
   if (
     (payload.kind !== "voice_inbound" &&
@@ -862,12 +1225,14 @@ async function upsertCallRecord({
     company_id: routeRow?.company_id ?? null,
     business_phone_number_id: routeRow?.id ?? null,
     integration_connection_id: routeRow?.integration_connection_id ?? null,
+    customer_id: target.customerId,
+    lead_id: target.leadId,
     provider: "twilio",
     provider_account_sid: payload.accountSid,
     provider_call_sid: payload.callSid,
     provider_parent_call_sid: payload.parentCallSid,
     direction: "inbound",
-    call_status: normalizeCallStatus(payload.callStatus),
+    call_status: normalizeTwilioCallStatus(payload.callStatus),
     from_phone: normalizeTwilioPhoneNumber(payload.from),
     to_phone: normalizeTwilioPhoneNumber(payload.to),
     business_phone: normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload)),
@@ -884,9 +1249,17 @@ async function upsertCallRecord({
     recording_duration_seconds: payload.recordingDurationSeconds,
     transcript_status: "not_requested",
     follow_up_required:
-      normalizeCallStatus(payload.callStatus) === "missed" ||
-      normalizeCallStatus(payload.callStatus) === "failed",
-    metadata: sanitizeIntegrationSyncLogSummary(getSafePayloadSummary(payload)),
+      normalizeTwilioCallStatus(payload.callStatus) === "missed" ||
+      normalizeTwilioCallStatus(payload.callStatus) === "busy" ||
+      normalizeTwilioCallStatus(payload.callStatus) === "failed",
+    metadata: sanitizeIntegrationSyncLogSummary({
+      ...getSafePayloadSummary(payload),
+      leadId: target.leadId,
+      customerId: target.customerId,
+      intakeRecordId: target.intakeRecordId,
+      matchStatus: target.matchStatus,
+      warnings: target.warnings,
+    }),
   };
 
   if (existing?.id) {
@@ -939,10 +1312,14 @@ async function storeInboundSmsWithExistingModel({
   client,
   payload,
   route,
+  connection,
+  target,
 }: {
   client: CrmClient;
   payload: TwilioWebhookPayload;
   route: BusinessPhoneRouteResult;
+  connection: IntegrationConnectionRecord | null;
+  target: TwilioCrmTarget;
 }) {
   if (payload.kind !== "sms_inbound") {
     return {
@@ -952,8 +1329,6 @@ async function storeInboundSmsWithExistingModel({
     };
   }
 
-  const connections = await getTwilioConnections(client);
-  const connection = findInboundConnection(connections, payload);
   const routeCompanyId = route.row?.company_id ?? null;
   const companyId = routeCompanyId ?? connection?.company_id ?? null;
 
@@ -989,15 +1364,33 @@ async function storeInboundSmsWithExistingModel({
   const now = new Date().toISOString();
   const smsMessage = await createSmsMessage(client, {
     company_id: companyId,
+    customer_id: target.customerId,
+    lead_id: target.leadId,
     integration_connection_id: route.row?.integration_connection_id ?? connection?.id ?? null,
     provider: "twilio_sms",
     category: "general",
     status: "sent",
-    to_phone: payload.to ?? "",
-    from_phone: payload.from,
+    business_phone_number_id: route.row?.id ?? null,
+    direction: "inbound",
+    delivery_status: "received",
+    provider_account_sid: payload.accountSid,
+    provider_messaging_service_sid: payload.messagingServiceSid,
+    to_phone: normalizeTwilioPhoneNumber(payload.to) ?? payload.to ?? "",
+    from_phone: normalizeTwilioPhoneNumber(payload.from),
     body: payload.body ?? "",
     twilio_message_sid: payload.messageSid,
     sent_at: now,
+    delivered_at: now,
+    correlation_id: payload.messageSid ?? undefined,
+    provider_payload_fingerprint: payload.messageSid ?? undefined,
+    metadata: sanitizeIntegrationSyncLogSummary({
+      leadId: target.leadId,
+      customerId: target.customerId,
+      intakeRecordId: target.intakeRecordId,
+      matchStatus: target.matchStatus,
+      warnings: target.warnings,
+      routingStatus: route.status,
+    }),
   });
 
   if (connection) {
@@ -1053,19 +1446,51 @@ export async function storeTwilioWebhookPayload(
 
   try {
     const route = await findBusinessPhoneRoute(client, payload);
+    const connections = await getTwilioConnections(client);
+    const connection = findInboundConnection(connections, payload);
+    const existingSmsMessage =
+      payload.kind === "sms_inbound" && payload.messageSid
+        ? await getExistingSmsMessage(client, payload.messageSid)
+        : null;
+    const existingCallRecordId =
+      payload.kind === "voice_inbound" ||
+      payload.kind === "voice_status" ||
+      payload.kind === "recording_status"
+        ? await getExistingCallRecordId(client, payload.callSid)
+        : null;
+    const shouldCreateLead =
+      !existingSmsMessage &&
+      !existingCallRecordId &&
+      (payload.kind === "sms_inbound" ||
+        payload.kind === "voice_inbound" ||
+        payload.kind === "voice_status");
+    const target = await resolveTwilioCrmTarget({
+      client,
+      payload,
+      route,
+      connection,
+      shouldCreateLead,
+    });
     const smsStorage =
       payload.kind === "sms_inbound"
-        ? await storeInboundSmsWithExistingModel({ client, payload, route })
+        ? await storeInboundSmsWithExistingModel({
+            client,
+            payload,
+            route,
+            connection,
+            target,
+          })
         : {
             smsMessageId: await updateSmsStatusFromCallback(client, payload),
             duplicate: false,
             skippedReason: null,
           };
-    const callRecordId = await upsertCallRecord({ client, payload, route });
+    const callRecordId = await upsertCallRecord({ client, payload, route, target });
     const providerEvent = await storeProviderEvent({
       client,
       payload,
       route,
+      target,
       smsMessageId: smsStorage.smsMessageId,
       callRecordId,
     });
@@ -1113,23 +1538,23 @@ export async function handleTwilioWebhook(
       request,
       expectedKind,
     );
-    const storage =
-      signatureStatus === "valid"
-        ? await storeTwilioWebhookPayload(payload)
-        : {
-            stored: false,
-            duplicate: false,
-            migrationRequired: false,
-            providerEventId: null,
-            smsMessageId: null,
-            callRecordId: null,
-            routingStatus: "needs_review" as const,
-            skippedReason: `Twilio signature status: ${signatureStatus}.`,
-          };
+
+    if (signatureStatus !== "valid") {
+      console.warn("[Twilio] Webhook rejected", {
+        kind: payload.kind,
+        providerEventSid: maskSid(getTwilioProviderEventSid(payload)),
+        accountSid: maskSid(payload.accountSid),
+        signatureStatus,
+      });
+
+      return createTwilioWebhookRejectedResponse(signatureStatus);
+    }
+
+    const storage = await storeTwilioWebhookPayload(payload);
 
     console.info("[Twilio] Webhook handled", {
       kind: payload.kind,
-      providerEventSid: maskSid(getProviderEventSid(payload)),
+      providerEventSid: maskSid(getTwilioProviderEventSid(payload)),
       accountSid: maskSid(payload.accountSid),
       signatureStatus,
       stored: storage.stored,
