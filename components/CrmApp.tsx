@@ -9223,7 +9223,7 @@ function OperationsCommandCenter({
         onCreate={onCreateLead}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.15fr)_minmax(0,0.9fr)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1.2fr)_minmax(0,0.82fr)]">
         <DashboardPriorityList
           title="Immediate Action"
           detail="Overdue work, customers waiting, emergencies, and priorities that should change today."
@@ -9240,7 +9240,7 @@ function OperationsCommandCenter({
           onOpen={openView}
         />
 
-        <div className="grid gap-4">
+        <div className="grid gap-5">
           <DashboardMetricCluster
             eyebrow="Today's Operations"
             title="Crew Activity"
@@ -9267,7 +9267,7 @@ function OperationsCommandCenter({
         onOpen={openView}
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid gap-5 xl:grid-cols-3">
         <DashboardMetricCluster
           eyebrow="Sales"
           title="Sales"
@@ -9292,7 +9292,7 @@ function OperationsCommandCenter({
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
         <QuickActionPanel actions={quickActions} />
         <DashboardMetricCluster
           eyebrow="Documents"
@@ -9304,7 +9304,7 @@ function OperationsCommandCenter({
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)]">
         <DashboardLowerPriorityPanel
           summaries={lowerPrioritySummaries}
           companyMap={companyMap}
@@ -9342,18 +9342,18 @@ function DashboardCommandBar({
 }) {
   return (
     <section className="wt-dashboard-command rounded-2xl border border-white/80 bg-white/90 p-3 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5 backdrop-blur sm:p-4">
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)] xl:items-center">
-        <div className="min-w-0 space-y-3">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(390px,0.7fr)] xl:items-center">
+        <div className="min-w-0 space-y-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">
             WeatherTech Command Center
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h2 className="text-xl font-bold leading-tight text-slate-950 sm:text-2xl">
+          <div className="mt-1 flex flex-wrap items-end gap-x-4 gap-y-1">
+            <h2 className="text-2xl font-black leading-none tracking-tight text-slate-950 sm:text-4xl">
               Owner morning brief
             </h2>
-            <span className="text-sm font-semibold text-slate-500">{currentDateLabel}</span>
+            <span className="pb-1 text-sm font-bold text-slate-500">{currentDateLabel}</span>
           </div>
-          <div className="flex flex-wrap gap-2" aria-label="Dashboard company scope">
+          <div className="flex flex-wrap gap-2.5" aria-label="Dashboard company scope">
             <DashboardScopeChip
               label="All companies"
               active={activeCompanyId === "all"}
@@ -9372,11 +9372,11 @@ function DashboardCommandBar({
           </div>
         </div>
 
-        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
+        <div className="grid min-w-0 gap-2.5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
           <button
             type="button"
             onClick={onSearch}
-            className="wt-dashboard-search inline-flex min-h-11 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-slate-500 transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            className="wt-dashboard-search inline-flex min-h-12 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-2 text-left text-sm font-bold text-slate-500 transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
             aria-label="Open universal command palette"
           >
             <Search className="h-4 w-4 shrink-0 text-sky-700" />
@@ -9388,7 +9388,7 @@ function DashboardCommandBar({
           <button
             type="button"
             onClick={onNotifications}
-            className={`wt-dashboard-notification inline-flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+            className={`wt-dashboard-notification inline-flex min-h-12 items-center justify-center gap-2 rounded-md border px-4 py-2 text-sm font-black transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
               attentionCount
                 ? "border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100"
                 : "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
@@ -9401,7 +9401,7 @@ function DashboardCommandBar({
           <button
             type="button"
             onClick={onCreate}
-            className="wt-dashboard-create inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
+            className="wt-dashboard-create inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-slate-950 px-5 py-2 text-sm font-black text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2"
           >
             <Plus className="h-4 w-4" />
             Create
@@ -9435,7 +9435,7 @@ function DashboardScopeChip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`wt-dashboard-scope-chip inline-flex min-h-10 max-w-full items-center gap-2 rounded-full border px-3 py-2 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+      className={`wt-dashboard-scope-chip inline-flex min-h-10 max-w-full items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-black transition focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
         active
           ? "border-slate-950 bg-slate-950 text-white shadow-[0_12px_28px_-20px_rgba(15,23,42,0.75)]"
           : "border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:bg-white"
@@ -9469,7 +9469,7 @@ function DashboardPriorityList({
         badge={String(items.length)}
         tone={items.length ? "amber" : "green"}
       />
-      <div className="wt-dashboard-list-surface mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/60">
+      <div className="wt-dashboard-list-surface mt-4 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/60">
         {items.length ? (
           items.map((item) => (
             <DashboardListButton
@@ -9513,13 +9513,13 @@ function DashboardTodayPanel({
         badge={String(summaries.reduce((total, summary) => total + Number(summary.value || 0), 0))}
         tone="blue"
       />
-      <div className="wt-dashboard-list-surface mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-white/80">
+      <div className="wt-dashboard-list-surface mt-4 overflow-hidden rounded-xl border border-slate-200/80 bg-white/80">
         {summaries.map((summary, index) => (
           <button
             key={summary.id}
             type="button"
             onClick={() => onOpen(summary.view)}
-            className={`wt-dashboard-table-row grid w-full gap-3 px-3 py-2.5 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-inset sm:grid-cols-[minmax(150px,0.7fr)_minmax(0,1fr)_auto] ${
+            className={`wt-dashboard-table-row grid w-full gap-4 px-3.5 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-inset sm:grid-cols-[minmax(150px,0.68fr)_minmax(0,1fr)_auto] ${
               index === 0 ? "" : "border-t border-slate-200"
             }`}
           >
@@ -9577,7 +9577,7 @@ function DashboardMetricCluster({
         detail={detail}
         tone={accent === "orange" ? "amber" : "blue"}
       />
-      <div className="mt-3 grid gap-2">
+      <div className="mt-4 grid gap-2.5">
         {metrics.map((metric) => (
           <DashboardDenseMetricButton
             key={metric.id}
@@ -9629,13 +9629,13 @@ function DashboardPipeline({
           ))}
         </div>
       </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-3 2xl:grid-cols-6">
+      <div className="mt-5 grid gap-3 md:grid-cols-3 2xl:grid-cols-6">
         {stages.map((stage) => (
           <button
             key={stage.id}
             type="button"
             onClick={() => onOpen(stage.view)}
-            className="wt-dashboard-stage-card group min-h-28 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_16px_36px_-28px_rgba(15,23,42,0.5)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            className="wt-dashboard-stage-card group min-h-32 rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:-translate-y-0.5 hover:border-sky-200 hover:bg-white hover:shadow-[0_16px_36px_-28px_rgba(15,23,42,0.5)] focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
           >
             <div className="flex items-start justify-between gap-2">
               <span className="wt-dashboard-icon grid h-8 w-8 shrink-0 place-items-center rounded-md bg-white text-slate-700 shadow-sm">
@@ -9643,20 +9643,20 @@ function DashboardPipeline({
               </span>
               <Badge label={String(stage.value)} tone={stage.tone} />
             </div>
-            <p className="mt-3 break-words text-sm font-bold text-slate-950">{stage.label}</p>
-            <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+            <p className="mt-4 break-words text-sm font-black text-slate-950">{stage.label}</p>
+            <p className="mt-1.5 break-words text-xs font-semibold leading-5 text-slate-500">
               {stage.detail}
             </p>
           </button>
         ))}
       </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
         {pipelineGroups.map((group) => (
           <button
             key={group.key}
             type="button"
             onClick={() => onOpen("leads")}
-            className="wt-dashboard-pipeline-card rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-sky-200 hover:bg-sky-50/40 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+            className="wt-dashboard-pipeline-card rounded-lg border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-sky-200 hover:bg-sky-50/40 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
           >
             <div className="flex items-start justify-between gap-2">
               <p className="break-words text-sm font-bold text-slate-950">{group.label}</p>
@@ -9687,7 +9687,7 @@ function DashboardLowerPriorityPanel({
         detail="Inspections, callbacks, material needs, warranty callbacks, and calendar conflicts."
         tone="blue"
       />
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
+      <div className="mt-4 grid gap-2.5 md:grid-cols-2">
         {summaries.map((summary) => (
           <DashboardMiniSummary
             key={summary.id}
@@ -9716,7 +9716,7 @@ function DashboardMiniSummary({
     <button
       type="button"
       onClick={() => onOpen(summary.view)}
-      className="wt-dashboard-mini-card rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
+      className="wt-dashboard-mini-card rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-sky-200 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
@@ -9765,10 +9765,10 @@ function DashboardCompactHeader({
         >
           {eyebrow}
         </p>
-        <h3 className="wt-dashboard-title mt-1 break-words text-base font-bold leading-tight text-slate-950">
+        <h3 className="wt-dashboard-title mt-1.5 break-words text-base font-black leading-tight text-slate-950">
           {title}
         </h3>
-        <p className="wt-dashboard-detail mt-1 break-words text-sm leading-5 text-slate-500">{detail}</p>
+        <p className="wt-dashboard-detail mt-1.5 break-words text-sm leading-5 text-slate-500">{detail}</p>
       </div>
       {badge ? <Badge label={badge} tone={tone} /> : null}
     </div>
@@ -9792,15 +9792,15 @@ function DashboardDenseMetricButton({
     <button
       type="button"
       onClick={() => onOpen(metric.view)}
-      className={`wt-dashboard-metric-card wt-dashboard-metric-${metric.tone} grid min-h-16 grid-cols-[auto_minmax(0,1fr)] gap-2.5 rounded-lg border p-2.5 text-left transition hover:-translate-y-0.5 hover:bg-white focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${toneClass}`}
+      className={`wt-dashboard-metric-card wt-dashboard-metric-${metric.tone} grid min-h-16 grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border p-2.5 text-left transition hover:-translate-y-0.5 hover:bg-white focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${toneClass}`}
     >
       <span className="wt-dashboard-icon grid h-8 w-8 place-items-center rounded-md bg-white/80 text-slate-700 shadow-sm">
         <metric.icon className="h-4 w-4" />
       </span>
       <span className="min-w-0">
         <span className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="break-words text-sm font-bold text-slate-950">{metric.label}</span>
-          <span className="text-lg font-bold leading-none text-slate-950">{metric.value}</span>
+          <span className="break-words text-sm font-black text-slate-950">{metric.label}</span>
+          <span className="text-xl font-black leading-none text-slate-950">{metric.value}</span>
         </span>
         <span className="mt-1 block break-words text-xs font-semibold leading-5 text-slate-600">
           {metric.detail}
@@ -9832,13 +9832,13 @@ function QuickActionPanel({
         />
         <Badge label="No outbound messages" tone="blue" />
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {actions.map((action) => (
           <button
             key={action.label}
             type="button"
             onClick={action.onClick}
-            className={`wt-dashboard-action-card ${action.primary ? "wt-dashboard-action-primary" : ""} flex min-h-14 items-center gap-2 rounded-lg border px-3 py-2 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
+            className={`wt-dashboard-action-card ${action.primary ? "wt-dashboard-action-primary" : ""} flex min-h-16 items-center gap-3 rounded-lg border px-4 py-3 text-left transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:ring-offset-2 ${
               action.primary
                 ? "border-orange-300 bg-[linear-gradient(135deg,#f97316,#ea580c)] text-white shadow-[0_20px_44px_-28px_rgba(234,88,12,0.9)] hover:bg-orange-400 focus:ring-offset-white"
                 : "border-slate-200/80 bg-slate-50/80 text-slate-950 hover:border-orange-200 hover:bg-white hover:shadow-[0_18px_42px_-28px_rgba(234,88,12,0.45)] focus:ring-offset-white"
@@ -9852,7 +9852,7 @@ function QuickActionPanel({
               <action.icon className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <p className="break-words text-sm font-bold">{action.label}</p>
+              <p className="break-words text-sm font-black">{action.label}</p>
               <p className={`mt-0.5 break-words text-xs font-semibold leading-4 ${action.primary ? "text-orange-50" : "text-slate-500"}`}>
                 {action.detail}
               </p>
@@ -9884,7 +9884,7 @@ function ProductionSnapshotPanel({
         tone="amber"
       />
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
         {productionMetrics.map((metric) => (
           <DashboardDenseMetricButton
             key={metric.id}
@@ -9894,7 +9894,7 @@ function ProductionSnapshotPanel({
         ))}
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
         {[...tradeHighlights.slice(0, 3), ...(warrantyHighlight ? [warrantyHighlight] : [])].map((metric) => (
           <DashboardDenseMetricButton
             key={metric.id}
@@ -9932,7 +9932,7 @@ function DashboardListButton({
           : dark
           ? "wt-dashboard-row border-white/10 bg-white text-slate-950 hover:border-orange-200 hover:bg-orange-50 hover:shadow-[0_14px_34px_-24px_rgba(15,23,42,0.45)] focus:ring-offset-slate-950"
           : "wt-dashboard-row border-slate-200/80 bg-white hover:border-sky-200 hover:bg-sky-50/40 hover:shadow-[0_14px_34px_-24px_rgba(14,116,144,0.45)] focus:ring-offset-white"
-      } ${compact ? "p-2.5" : "p-3"}`}
+      } ${compact ? "p-3" : "p-4"}`}
     >
       <div className="wt-dashboard-icon grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
         <item.icon className="h-4 w-4" />

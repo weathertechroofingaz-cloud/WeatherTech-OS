@@ -10,7 +10,7 @@
   --wt-surface-muted: #f8fafc;
   --wt-ink: #0f172a;
   --wt-muted: #64748b;
-  --wt-border: #dbe4ee;
+  --wt-border: #e3eaf3;
   /* WeatherTech Roofing LLC: purple primary with orange accent. */
   --wt-roofing-purple: #6d28d9;
   --wt-roofing-orange: #f97316;
@@ -30,12 +30,12 @@
   --wt-success: #059669;
   --wt-warning: #d97706;
   --wt-danger: #dc2626;
-  --wt-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
-  --wt-card-shadow: 0 16px 42px -34px rgba(15, 23, 42, 0.45);
-  --wt-card-shadow-hover: 0 22px 52px -34px rgba(15, 23, 42, 0.5);
+  --wt-shadow: 0 26px 70px -48px rgba(15, 23, 42, 0.5);
+  --wt-card-shadow: 0 18px 46px -38px rgba(15, 23, 42, 0.42);
+  --wt-card-shadow-hover: 0 26px 64px -42px rgba(15, 23, 42, 0.52);
   --wt-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --wt-panel-border: rgba(148, 163, 184, 0.32);
-  --wt-panel-highlight: rgba(255, 255, 255, 0.86);
+  --wt-panel-border: rgba(148, 163, 184, 0.2);
+  --wt-panel-highlight: rgba(255, 255, 255, 0.9);
   --wt-control-shadow: 0 1px 0 rgba(15, 23, 42, 0.05), 0 10px 26px -24px rgba(15, 23, 42, 0.5);
   --wt-control-shadow-hover: 0 15px 34px -25px rgba(15, 23, 42, 0.58);
   --wt-focus-glow: 0 0 0 4px var(--wt-primary-ring);
@@ -45,12 +45,12 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --wt-page: #07111f;
-  --wt-surface: #0f1b2d;
-  --wt-surface-muted: #152238;
+  --wt-page: #050b16;
+  --wt-surface: #101b2d;
+  --wt-surface-muted: #16233a;
   --wt-ink: #e5eefb;
   --wt-muted: #9fb0c7;
-  --wt-border: #28405e;
+  --wt-border: #263a56;
   --wt-roofing-purple: #8b5cf6;
   --wt-roofing-orange: #fb923c;
   --wt-painting-orange: #fb923c;
@@ -66,7 +66,7 @@
   --wt-accent-ring: rgba(251, 146, 60, 0.28);
   --wt-brand: var(--wt-primary);
   --wt-brand-strong: var(--wt-primary-strong);
-  --wt-panel-border: rgba(115, 134, 166, 0.42);
+  --wt-panel-border: rgba(115, 134, 166, 0.3);
   --wt-panel-highlight: rgba(255, 255, 255, 0.055);
   --wt-control-shadow: 0 1px 0 rgba(255, 255, 255, 0.035), 0 15px 34px -28px rgba(0, 0, 0, 0.82);
   --wt-control-shadow-hover: 0 20px 46px -30px rgba(0, 0, 0, 0.92);
@@ -93,9 +93,9 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at top left, rgba(109, 40, 217, 0.1), transparent 34rem),
-    radial-gradient(circle at top right, rgba(249, 115, 22, 0.06), transparent 30rem),
-    linear-gradient(180deg, var(--wt-page), var(--wt-page));
+    radial-gradient(circle at 8% 0, rgba(109, 40, 217, 0.12), transparent 34rem),
+    radial-gradient(circle at 88% 4%, rgba(249, 115, 22, 0.07), transparent 32rem),
+    linear-gradient(180deg, #f7f9fd 0%, #edf2f8 48%, #f7f9fc 100%);
   color: var(--wt-ink);
   font-feature-settings: "cv02", "cv03", "cv04", "ss01";
   text-rendering: optimizeLegibility;
@@ -266,6 +266,21 @@ select:focus-visible,
   text-wrap: balance;
 }
 
+.wt-workspace-header :where(h1) {
+  font-size: clamp(1.45rem, 1rem + 1vw, 2.1rem) !important;
+  font-weight: 900 !important;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+
+.wt-app-shell :where(h2) {
+  font-weight: 900;
+}
+
+.wt-app-shell :where(h3) {
+  font-weight: 850;
+}
+
 .wt-app-shell :where(p, li, td, th, button, input, textarea, select) {
   letter-spacing: 0;
 }
@@ -279,9 +294,16 @@ select:focus-visible,
   isolation: isolate;
 }
 
+.wt-app-shell {
+  background:
+    radial-gradient(circle at 10% 0, rgba(109, 40, 217, 0.11), transparent 32rem),
+    radial-gradient(circle at 88% 2%, rgba(249, 115, 22, 0.08), transparent 28rem),
+    linear-gradient(180deg, #f8fafc 0%, #eef3f9 45%, #f8fafc 100%) !important;
+}
+
 .wt-control-button {
   min-height: 2.75rem;
-  border-radius: 0.875rem;
+  border-radius: 999px;
   box-shadow: var(--wt-control-shadow);
 }
 
@@ -297,13 +319,13 @@ select:focus-visible,
 
 .wt-app-shell :where(button.rounded-md, button.rounded-lg, button.rounded-xl),
 .wt-app-shell :where(a.rounded-md, a.rounded-lg, a.rounded-xl) {
-  border-radius: 0.875rem;
+  border-radius: 1rem;
 }
 
 .wt-app-shell :where(input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
-  border-color: rgba(148, 163, 184, 0.42);
-  border-radius: 0.875rem;
-  background-color: rgba(255, 255, 255, 0.94);
+  border-color: rgba(148, 163, 184, 0.26);
+  border-radius: 1rem;
+  background-color: rgba(255, 255, 255, 0.78);
   box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.035), 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 
@@ -316,12 +338,25 @@ select:focus-visible,
   box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.035), var(--wt-focus-glow);
 }
 
+.wt-app-shell :where(.border-slate-100, .border-slate-200, .border-wt-border) {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+.wt-app-shell :where(.bg-slate-50, .bg-wt-surface-muted) {
+  background-color: rgba(255, 255, 255, 0.58) !important;
+}
+
+.wt-app-shell :where(.shadow-sm) {
+  box-shadow: 0 14px 34px -30px rgba(15, 23, 42, 0.44) !important;
+}
+
 .wt-command-palette-backdrop {
   animation: wt-fade-in 140ms ease-out;
 }
 
 .wt-command-palette {
   animation: wt-command-pop 160ms ease-out;
+  border-radius: 1.6rem !important;
 }
 
 .wt-command-palette-item[aria-selected="true"] {
@@ -366,11 +401,13 @@ select:focus-visible,
 
 .wt-workspace-header {
   border-color: var(--wt-panel-border) !important;
+  border-radius: 1.65rem !important;
+  padding: clamp(1rem, 0.8rem + 0.55vw, 1.45rem) !important;
 }
 
 .wt-nav-button {
   min-height: 2.75rem;
-  border-radius: 0.875rem;
+  border-radius: 1rem;
   position: relative;
   overflow: hidden;
 }
@@ -380,7 +417,7 @@ select:focus-visible,
 }
 
 .wt-nav-button[aria-current="page"] {
-  box-shadow: 0 15px 34px -24px rgba(109, 40, 217, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  box-shadow: 0 18px 42px -26px rgba(109, 40, 217, 0.76), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .wt-nav-button[aria-current="page"]::before {
@@ -395,6 +432,7 @@ select:focus-visible,
 .wt-app-sidebar {
   scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
   scrollbar-width: thin;
+  border-radius: 1.7rem !important;
 }
 
 .wt-app-sidebar::-webkit-scrollbar {
@@ -427,7 +465,7 @@ select:focus-visible,
 
 .wt-empty-state {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 250, 252, 0.92)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 250, 252, 0.86)),
     radial-gradient(circle at 50% 0, var(--wt-primary-soft), transparent 18rem);
 }
 
@@ -440,6 +478,10 @@ select:focus-visible,
 .wt-app-shell :where(thead th) {
   background: rgba(248, 250, 252, 0.92);
   backdrop-filter: blur(12px);
+  color: var(--wt-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   position: sticky;
   top: 0;
   z-index: 1;
@@ -452,6 +494,11 @@ select:focus-visible,
 .wt-app-shell :where(tbody tr:hover) {
   background-color: rgba(99, 102, 241, 0.045);
   box-shadow: inset 3px 0 0 var(--wt-primary-muted);
+}
+
+.wt-app-shell .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+.wt-app-shell .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(148, 163, 184, 0.14) !important;
 }
 
 .wt-app-shell :where(input, textarea, select) {
@@ -472,6 +519,9 @@ select:focus-visible,
 
 .wt-dashboard-panel {
   position: relative;
+  border-radius: 1.65rem !important;
+  overflow: hidden;
+  padding: clamp(1.05rem, 0.85rem + 0.6vw, 1.55rem) !important;
 }
 
 .wt-dashboard-panel::before,
@@ -502,9 +552,82 @@ select:focus-visible,
   transform: translateY(-1px);
 }
 
+.wt-dashboard {
+  gap: 1.35rem;
+}
+
+.wt-dashboard-command {
+  border-radius: 1.75rem !important;
+  padding: clamp(1rem, 0.75rem + 1vw, 1.75rem) !important;
+}
+
+.wt-dashboard-list-surface {
+  border-radius: 1.25rem !important;
+}
+
+.wt-dashboard-row,
+.wt-dashboard-table-row,
+.wt-dashboard-stage-card,
+.wt-dashboard-pipeline-card,
+.wt-dashboard-mini-card,
+.wt-dashboard-action-card,
+.wt-dashboard-metric-card {
+  border-radius: 1.15rem !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow: 0 12px 34px -30px rgba(15, 23, 42, 0.38);
+}
+
+.wt-dashboard-row,
+.wt-dashboard-table-row {
+  background: rgba(255, 255, 255, 0.72) !important;
+}
+
+.wt-dashboard-stage-card,
+.wt-dashboard-pipeline-card,
+.wt-dashboard-mini-card {
+  background: rgba(255, 255, 255, 0.66) !important;
+}
+
+.wt-dashboard-metric-card {
+  min-height: 4.65rem;
+  padding: 0.9rem !important;
+}
+
+.wt-dashboard-metric-card .wt-dashboard-icon,
+.wt-dashboard-stage-card .wt-dashboard-icon,
+.wt-dashboard-mini-card .wt-dashboard-icon,
+.wt-dashboard-row .wt-dashboard-icon {
+  border-radius: 0.95rem !important;
+}
+
+.wt-dashboard-title {
+  font-size: clamp(1.05rem, 0.98rem + 0.25vw, 1.3rem) !important;
+  letter-spacing: 0;
+}
+
+.wt-dashboard-detail {
+  line-height: 1.55 !important;
+}
+
+.wt-dashboard-eyebrow {
+  font-size: 0.66rem !important;
+  letter-spacing: 0.14em !important;
+}
+
+.wt-status-badge {
+  border-radius: 999px !important;
+}
+
 .wt-dashboard-empty,
 .wt-empty-state {
   color: var(--wt-muted);
+}
+
+.wt-app-shell :where(.border-dashed) {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(248, 250, 252, 0.62)),
+    radial-gradient(circle at 50% 0, rgba(109, 40, 217, 0.08), transparent 16rem) !important;
+  border-color: rgba(148, 163, 184, 0.34) !important;
 }
 
 @media (max-width: 640px) {
@@ -617,7 +740,7 @@ select:focus-visible,
 :root[data-theme="dark"] input,
 :root[data-theme="dark"] textarea,
 :root[data-theme="dark"] select {
-  background-color: #0b1628;
+  background-color: rgba(8, 18, 33, 0.86);
   border-color: var(--wt-border);
   color: var(--wt-ink);
 }
@@ -708,6 +831,14 @@ select:focus-visible,
   background: rgba(9, 17, 31, 0.82);
 }
 
+:root[data-theme="dark"] .wt-app-shell :where(.bg-slate-50, .bg-wt-surface-muted) {
+  background-color: rgba(19, 34, 57, 0.66) !important;
+}
+
+:root[data-theme="dark"] .wt-app-shell :where(.border-slate-100, .border-slate-200, .border-wt-border) {
+  border-color: rgba(115, 134, 166, 0.28) !important;
+}
+
 :root[data-theme="dark"] .wt-choice-card,
 :root[data-theme="dark"] .wt-standard-card {
   background: linear-gradient(180deg, rgba(16, 29, 49, 0.96), rgba(10, 21, 37, 0.94)) !important;
@@ -786,6 +917,18 @@ select:focus-visible,
   background: rgba(13, 26, 45, 0.84) !important;
   border-color: rgba(94, 113, 148, 0.48) !important;
   color: #edf4ff !important;
+}
+
+:root[data-theme="dark"] .wt-app-shell :where(thead th) {
+  background: rgba(11, 23, 40, 0.92);
+  color: #aebdd2;
+}
+
+:root[data-theme="dark"] .wt-app-shell :where(.border-dashed) {
+  background:
+    linear-gradient(180deg, rgba(12, 24, 42, 0.7), rgba(8, 18, 33, 0.7)),
+    radial-gradient(circle at 50% 0, rgba(139, 92, 246, 0.14), transparent 16rem) !important;
+  border-color: rgba(115, 134, 166, 0.42) !important;
 }
 
 :root[data-theme="dark"] .wt-dashboard-row:hover,
@@ -976,9 +1119,15 @@ select:focus-visible,
 }
 
 .wt-skeleton {
-  background: linear-gradient(90deg, rgba(148, 163, 184, 0.18), rgba(148, 163, 184, 0.32), rgba(148, 163, 184, 0.18));
+  border-radius: 1rem;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.14), rgba(148, 163, 184, 0.28), rgba(148, 163, 184, 0.14));
   background-size: 220% 100%;
   animation: wt-shimmer 1.2s ease-in-out infinite;
+}
+
+:root[data-theme="dark"] .wt-skeleton {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.1), rgba(148, 163, 184, 0.22), rgba(148, 163, 184, 0.1));
+  background-size: 220% 100%;
 }
 
 @keyframes wt-shimmer {
