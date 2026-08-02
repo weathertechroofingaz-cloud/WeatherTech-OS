@@ -85,6 +85,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added setup documentation for WeatherTech Phoenix, WeatherTech Tucson, and IHC business-number mapping.
   - Did not add migrations, modify `.env.local`, expose secrets, or send real SMS/call traffic.
 
+### Gmail / Google Workspace Phase 1 - Production Email Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Gmail workspace email foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added server-side Google OAuth readiness, company-aware Gmail mailbox records, encrypted token storage, manual sync/import, CRM matching, attachment metadata, and integration log coverage.
+  - Added safe outbound send boundaries that require explicit server-side enablement before Gmail sends any customer email.
+  - Added Google Workspace setup documentation and safe environment placeholders.
+  - Did not modify `.env.local`, expose credentials, send real email, or activate live Google Workspace connectivity.
+
 ## Recording Template
 
 ### Sprint Name

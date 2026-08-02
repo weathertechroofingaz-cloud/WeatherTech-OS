@@ -92,6 +92,10 @@ const expectedMigrations = [
     "0026_property_intelligence_foundation.sql",
     "38d70de853c3fff13a41fcc3d8810dc9b9ced78d6fc64a7e73a5cd606cf0862a",
   ],
+  [
+    "0027_gmail_workspace_email_foundation.sql",
+    "ac5dc160e5e6ee717588546f7c36d360646f79abdd716ae587006206fbbdaf85",
+  ],
 ];
 
 const files = fs
@@ -144,7 +148,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0026 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0027 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -162,6 +166,7 @@ const websiteLeadIntakeIndex = files.indexOf("0014_website_lead_intake_provider.
 const securityHardeningIndex = files.indexOf("0024_security_company_access_hardening.sql");
 const documentStorageIndex = files.indexOf("0025_document_storage_signature_workflow.sql");
 const propertyIntelligenceIndex = files.indexOf("0026_property_intelligence_foundation.sql");
+const gmailWorkspaceIndex = files.indexOf("0027_gmail_workspace_email_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -190,8 +195,16 @@ if (
   failures.push("Property intelligence migration must order after document storage.");
 }
 
-if (propertyIntelligenceIndex !== files.length - 1) {
-  failures.push("Property intelligence foundation migration must remain last.");
+if (
+  propertyIntelligenceIndex === -1 ||
+  gmailWorkspaceIndex === -1 ||
+  !(propertyIntelligenceIndex < gmailWorkspaceIndex)
+) {
+  failures.push("Gmail Workspace migration must order after property intelligence.");
+}
+
+if (gmailWorkspaceIndex !== files.length - 1) {
+  failures.push("Gmail Workspace foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -400,6 +413,105 @@ if (!propertyIntelligenceMigration.trim().startsWith("begin;") ||
   failures.push("0026 must remain transactionally wrapped.");
 }
 
+const gmailWorkspaceMigration = fs.readFileSync(
+  path.join(migrationsDir, "0027_gmail_workspace_email_foundation.sql"),
+  "utf8",
+);
+
+for (const requiredEmailColumn of [
+  "lead_id",
+  "job_id",
+  "property_id",
+  "direction",
+  "from_email",
+  "to_emails",
+  "gmail_thread_id",
+  "provider_account_id",
+  "message_preview",
+  "has_attachments",
+  "attachment_count",
+  "sync_status",
+  "provider_payload_hash",
+]) {
+  if (!gmailWorkspaceMigration.includes(requiredEmailColumn)) {
+    failures.push(`0027 email_messages table must include ${requiredEmailColumn}.`);
+  }
+}
+
+for (const requiredTable of [
+  "gmail_oauth_states",
+  "gmail_mailbox_credentials",
+  "gmail_email_threads",
+  "gmail_email_attachments",
+]) {
+  if (!gmailWorkspaceMigration.includes(`public.${requiredTable}`)) {
+    failures.push(`0027 must create or configure ${requiredTable}.`);
+  }
+}
+
+for (const serviceOnlyTable of ["gmail_oauth_states", "gmail_mailbox_credentials"]) {
+  for (const revokedRole of ["anon", "public", "authenticated"]) {
+    if (
+      !gmailWorkspaceMigration.includes(
+        `revoke all on table public.${serviceOnlyTable} from ${revokedRole}`,
+      )
+    ) {
+      failures.push(`0027 must revoke ${revokedRole} access to ${serviceOnlyTable}.`);
+    }
+  }
+
+  if (
+    !gmailWorkspaceMigration.includes(
+      `grant select, insert, update, delete on table public.${serviceOnlyTable} to service_role`,
+    )
+  ) {
+    failures.push(`0027 must grant service_role full access to ${serviceOnlyTable}.`);
+  }
+}
+
+for (const metadataTable of ["gmail_email_threads", "gmail_email_attachments"]) {
+  if (
+    !gmailWorkspaceMigration.includes(
+      `revoke delete on table public.${metadataTable} from authenticated`,
+    )
+  ) {
+    failures.push(`0027 must revoke authenticated delete access to ${metadataTable}.`);
+  }
+
+  if (
+    !gmailWorkspaceMigration.includes(
+      `grant select, insert, update on table public.${metadataTable} to authenticated`,
+    )
+  ) {
+    failures.push(`0027 must only grant authenticated read/write metadata access to ${metadataTable}.`);
+  }
+}
+
+for (const requiredConstraint of [
+  "email_messages_direction_check",
+  "email_messages_sync_status_check",
+  "email_messages_attachment_count_check",
+  "gmail_email_threads_match_status_check",
+  "gmail_email_attachments_size_check",
+]) {
+  if (!gmailWorkspaceMigration.includes(requiredConstraint)) {
+    failures.push(`0027 must include ${requiredConstraint}.`);
+  }
+}
+
+if (!gmailWorkspaceMigration.includes("email_messages_gmail_message_unique_idx")) {
+  failures.push("0027 must prevent duplicate Gmail message imports per mailbox.");
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(gmailWorkspaceMigration)) {
+  failures.push("0027 must not use broad USING (true) RLS policies.");
+}
+
+if (!gmailWorkspaceMigration.trim().startsWith("begin;") ||
+    !gmailWorkspaceMigration.trim().endsWith("commit;")) {
+  failures.push("0027 must remain transactionally wrapped.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -411,7 +523,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0026.",
+  "Verified raw filename order matches numeric order from 0001 through 0027.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -422,6 +534,9 @@ console.log(
 console.log(
   "Verified 0025_document_storage_signature_workflow.sql precedes 0026_property_intelligence_foundation.sql.",
 );
+console.log(
+  "Verified 0026_property_intelligence_foundation.sql precedes 0027_gmail_workspace_email_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -431,4 +546,7 @@ console.log(
 );
 console.log(
   "Verified 0026 property intelligence schema, property links, RLS policies, and transactional wrapper.",
+);
+console.log(
+  "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",
 );

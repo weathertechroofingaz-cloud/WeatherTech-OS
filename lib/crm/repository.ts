@@ -509,6 +509,8 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     leadIntakeRecords: [],
     calendarEventSyncs: [],
     emailMessages: [],
+    gmailEmailThreads: [],
+    gmailEmailAttachments: [],
     smsMessages: [],
     businessPhoneNumbers: [],
     communicationProviderEvents: [],
@@ -588,6 +590,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     leadIntakeRecords,
     calendarEventSyncs,
     emailMessages,
+    gmailEmailThreads,
+    gmailEmailAttachments,
     smsMessages,
     businessPhoneNumbers,
     communicationProviderEvents,
@@ -670,6 +674,14 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("updated_at", { ascending: false }),
     client.from("email_messages").select("*").order("updated_at", { ascending: false }),
+    client
+      .from("gmail_email_threads")
+      .select("*")
+      .order("last_message_at", { ascending: false }),
+    client
+      .from("gmail_email_attachments")
+      .select("*")
+      .order("created_at", { ascending: false }),
     client.from("sms_messages").select("*").order("updated_at", { ascending: false }),
     client
       .from("business_phone_numbers")
@@ -735,6 +747,15 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       : []),
     ["calendar_event_syncs", calendarEventSyncs],
     ["email_messages", emailMessages],
+    ...(gmailEmailThreads.error && !isOptionalTableMissingError(gmailEmailThreads.error)
+      ? [["gmail_email_threads", gmailEmailThreads] as [string, { error: unknown }]]
+      : []),
+    ...(gmailEmailAttachments.error && !isOptionalTableMissingError(gmailEmailAttachments.error)
+      ? [["gmail_email_attachments", gmailEmailAttachments] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
     ["sms_messages", smsMessages],
     ...(businessPhoneNumbers.error && !isOptionalTableMissingError(businessPhoneNumbers.error)
       ? [["business_phone_numbers", businessPhoneNumbers] as [string, { error: unknown }]]
@@ -785,6 +806,11 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     leadIntakeRecords: optionalRows("lead_intake_records", leadIntakeRecords),
     calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
     emailMessages: requireRows("email_messages", emailMessages),
+    gmailEmailThreads: optionalRows("gmail_email_threads", gmailEmailThreads),
+    gmailEmailAttachments: optionalRows(
+      "gmail_email_attachments",
+      gmailEmailAttachments,
+    ),
     smsMessages: requireRows("sms_messages", smsMessages),
     businessPhoneNumbers: optionalRows("business_phone_numbers", businessPhoneNumbers),
     communicationProviderEvents: optionalRows(
@@ -2630,6 +2656,7 @@ export async function createIntegrationConnection(
       status: input.status ?? "connected",
       account_email: input.account_email ?? null,
       external_account_id: input.external_account_id ?? null,
+      provider_account_id: input.provider_account_id ?? input.external_account_id ?? null,
       default_calendar_id: input.default_calendar_id ?? null,
       scopes: input.scopes ?? [],
       sync_direction: input.sync_direction ?? "two_way",
@@ -2637,7 +2664,11 @@ export async function createIntegrationConnection(
       webhook_channel_id: input.webhook_channel_id ?? null,
       webhook_resource_id: input.webhook_resource_id ?? null,
       sync_token: input.sync_token ?? null,
+      token_expires_at: input.token_expires_at ?? null,
       last_sync_at: input.last_sync_at ?? null,
+      last_successful_sync_at: input.last_successful_sync_at ?? null,
+      last_failure_at: input.last_failure_at ?? null,
+      disabled_at: input.disabled_at ?? null,
       last_error: input.last_error ?? null,
       settings: input.settings ?? {},
     })
@@ -2769,16 +2800,44 @@ export async function createEmailMessage(client: CrmClient, input: EmailMessageI
     .insert({
       ...input,
       customer_id: input.customer_id ?? null,
+      lead_id: input.lead_id ?? null,
+      job_id: input.job_id ?? null,
+      property_id: input.property_id ?? null,
       estimate_id: input.estimate_id ?? null,
       invoice_id: input.invoice_id ?? null,
       document_id: input.document_id ?? null,
       integration_connection_id: input.integration_connection_id ?? null,
       provider: input.provider ?? "gmail",
       status: input.status ?? "draft",
+      direction: input.direction ?? "outbound",
+      from_email: input.from_email ?? null,
       cc_email: input.cc_email ?? null,
+      to_emails: input.to_emails ?? [input.to_email],
+      cc_emails: input.cc_emails ?? (input.cc_email ? [input.cc_email] : []),
+      bcc_emails: input.bcc_emails ?? [],
+      reply_to_emails: input.reply_to_emails ?? [],
       gmail_message_id: input.gmail_message_id ?? null,
+      gmail_thread_id: input.gmail_thread_id ?? null,
+      provider_account_id: input.provider_account_id ?? null,
       queued_at: input.queued_at ?? (input.status === "queued" ? now : null),
       sent_at: input.sent_at ?? null,
+      received_at: input.received_at ?? null,
+      message_preview:
+        input.message_preview ?? input.body.replace(/\s+/g, " ").trim().slice(0, 500),
+      has_attachments: input.has_attachments ?? false,
+      attachment_count: input.attachment_count ?? 0,
+      sync_status:
+        input.sync_status ??
+        (input.status === "queued"
+          ? "queued"
+          : input.status === "sent"
+            ? "sent"
+            : input.status === "failed"
+              ? "failed"
+              : "local"),
+      imported_at: input.imported_at ?? null,
+      provider_payload_hash: input.provider_payload_hash ?? null,
+      metadata: input.metadata ?? {},
       last_error: input.last_error ?? null,
     })
     .select("*")

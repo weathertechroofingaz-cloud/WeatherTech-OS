@@ -926,6 +926,10 @@ function getSmsDeliveryState(message: SmsMessageRecord): CommunicationDeliverySt
 }
 
 function getEmailDeliveryState(message: EmailMessageRecord): CommunicationDeliveryState {
+  if (message.direction === "inbound") {
+    return message.status === "failed" ? "failed" : "received";
+  }
+
   if (message.status === "draft") {
     return "draft";
   }
@@ -1084,11 +1088,29 @@ function getEmailTarget(snapshot: CrmSnapshot, message: EmailMessageRecord) {
   const customer = message.customer_id
     ? snapshot.customers.find((item) => item.id === message.customer_id)
     : null;
+  const lead = message.lead_id
+    ? snapshot.leads.find((item) => item.id === message.lead_id)
+    : null;
+  const job = message.job_id
+    ? snapshot.jobs.find((item) => item.id === message.job_id)
+    : null;
   const estimateTitle = getEstimateTitle(snapshot, message.estimate_id);
 
   return {
-    name: customer?.display_name ?? customer?.contact_name ?? estimateTitle ?? message.to_email,
-    location: customer?.city ?? customer?.property_address ?? null,
+    name:
+      customer?.display_name ??
+      customer?.contact_name ??
+      lead?.contact_name ??
+      job?.title ??
+      estimateTitle ??
+      message.to_email,
+    location:
+      customer?.city ??
+      customer?.property_address ??
+      lead?.city ??
+      lead?.property_address ??
+      job?.property_address ??
+      null,
   };
 }
 
@@ -1850,34 +1872,50 @@ export function buildUnifiedInboxItems(
 
   const emailItems: UnifiedInboxItem[] = snapshot.emailMessages.map((message) => {
     const target = getEmailTarget(snapshot, message);
+    const direction = message.direction ?? "outbound";
+    const primaryContact =
+      direction === "inbound"
+        ? message.from_email ?? message.to_email
+        : message.to_email;
 
     return {
       id: `email-${message.id}`,
       provider: "gmail",
       channel: "email",
-      direction: "outbound",
+      direction,
       kind: "Email",
       companyId: message.company_id,
-      leadId: null,
+      leadId: message.lead_id ?? null,
       customerId: message.customer_id,
-      jobId: null,
+      jobId: message.job_id ?? null,
       estimateId: message.estimate_id,
       scheduleEventId: null,
       relatedTable: "email_messages",
       relatedRecordId: message.id,
       customerName: target.name,
-      contact: message.to_email,
+      contact: primaryContact,
       phone: null,
-      email: message.to_email,
+      email: primaryContact,
       businessLocation: getCompanyLocationLabel(companyMap.get(message.company_id), target.location),
-      sourceAccount: message.cc_email,
+      sourceAccount: message.from_email ?? message.cc_email,
       sourceLabel: "Gmail",
       serviceType: emailCategoryLabel(message.category),
-      summary: message.subject || message.body,
-      notes: message.body,
-      participants: compactParticipants([message.to_email, message.cc_email]),
+      summary: message.subject || message.message_preview || message.body,
+      notes: message.message_preview ?? message.body,
+      participants: compactParticipants([
+        message.from_email,
+        message.to_email,
+        ...(message.to_emails ?? []),
+        message.cc_email,
+        ...(message.cc_emails ?? []),
+      ]),
       attachments: compactAttachments([
         getEstimateTitle(snapshot, message.estimate_id),
+        message.has_attachments
+          ? `${message.attachment_count ?? 0} Gmail attachment${
+              (message.attachment_count ?? 0) === 1 ? "" : "s"
+            }`
+          : null,
         message.invoice_id
           ? snapshot.invoices.find((invoice) => invoice.id === message.invoice_id)?.invoice_number
           : null,
@@ -1885,24 +1923,44 @@ export function buildUnifiedInboxItems(
           ? snapshot.documents.find((document) => document.id === message.document_id)?.title
           : null,
       ]),
-      createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
+      createdAt:
+        message.received_at ?? message.sent_at ?? message.queued_at ?? message.created_at,
       updatedAt: message.updated_at,
       status: emailMessageStatusLabel(message.status),
-      priority: message.status === "failed" ? "high" : "low",
-      responseStatus: message.status === "failed" ? "waiting_on_us" : "resolved",
-      matchStatus: message.customer_id ? "matched_customer" : "manual_review_required",
-      routingStatus: message.customer_id ? "Matched" : "Needs review",
+      priority:
+        message.status === "failed" ? "high" : direction === "inbound" ? "medium" : "low",
+      responseStatus:
+        message.status === "failed"
+          ? "waiting_on_us"
+          : direction === "inbound"
+            ? "needs_response"
+            : "resolved",
+      matchStatus: message.customer_id
+        ? "matched_customer"
+        : message.lead_id
+          ? "matched_lead"
+          : "manual_review_required",
+      routingStatus: message.customer_id || message.lead_id ? "Matched" : "Needs review",
       deliveryState: getEmailDeliveryState(message),
-      syncState: message.status === "failed" ? "failed" : message.gmail_message_id ? "synced" : "queued",
+      syncState:
+        message.status === "failed"
+          ? "failed"
+          : message.sync_status === "imported" || message.sync_status === "synced"
+            ? "synced"
+            : message.gmail_message_id
+              ? "synced"
+              : "queued",
       waitingSince: null,
       suggestedNextAction: message.status === "failed"
         ? "Review delivery failure before sending again"
-        : "Open the related customer or estimate record",
-      isUnread: false,
+        : direction === "inbound"
+          ? "Review and respond from the customer record"
+          : "Open the related customer or estimate record",
+      isUnread: direction === "inbound",
       isArchived: false,
       isFailed: message.status === "failed",
       isMissedCall: false,
-      isUnassigned: !message.customer_id,
+      isUnassigned: !message.customer_id && !message.lead_id,
       followUpAt: null,
       assignedTo: null,
       failureDetail: sanitizeIntegrationSyncLogText(message.last_error),

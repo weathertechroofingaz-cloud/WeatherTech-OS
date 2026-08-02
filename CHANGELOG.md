@@ -4,6 +4,14 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Gmail / Google Workspace Phase 1 - Production Email Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Gmail workspace email foundation`
+- Summary:
+  - Added the server-side Google OAuth and Gmail API foundation with company-aware mailbox records, encrypted token storage, safe sync/import boundaries, CRM email matching, attachment metadata, and outbound send gating.
+  - Preserved existing CRM workflows and kept live Gmail sending disabled until owner-controlled Google Workspace configuration and approval.
+
 ### Twilio Phase 1 - Production Communications Foundation
 
 - Commit: `<this sprint commit>`

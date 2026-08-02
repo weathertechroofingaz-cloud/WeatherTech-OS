@@ -304,9 +304,14 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     oauthReadiness: {
       enabled: true,
       label: "OAuth required",
-      callbackPath: null,
-      scopes: ["gmail.readonly", "gmail.send"],
-      summary: "OAuth is required. The live callback route and consent screen must be configured before connection.",
+      callbackPath: "/api/integrations/google-workspace/oauth/callback",
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.compose",
+      ],
+      summary:
+        "OAuth callback, mailbox sync, and safe send boundaries exist; owner Google Cloud configuration is required before live mailbox access.",
     },
     connectionSteps: [
       "Register the Google OAuth app and approved redirect URI.",

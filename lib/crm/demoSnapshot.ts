@@ -711,6 +711,8 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
     leadIntakeRecords: [],
     calendarEventSyncs: [],
     emailMessages: [],
+    gmailEmailThreads: [],
+    gmailEmailAttachments: [],
     smsMessages: [],
     businessPhoneNumbers: [],
     communicationProviderEvents: [],

@@ -6811,6 +6811,8 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("configuration page") &&
         text.includes("disconnect flow") &&
         text.includes("reconnect flow") &&
+        text.includes("oauth ready") &&
+        text.includes("connect gmail oauth later before enabling live send or mailbox sync") &&
         text.includes("twilio live integration foundation") &&
         text.includes("calls and sms routing setup") &&
         text.includes("backend ready") &&
@@ -7038,7 +7040,15 @@ async function testWebsiteMarketingFoundation(browser, tab) {
       const text = document.body.innerText.toLowerCase();
       return (
         text.includes("integration hub") &&
-        text.includes("real-world service connections")
+        text.includes("real-world service connections") &&
+        text.includes("gmail / google workspace email foundation") &&
+        text.includes("production google workspace foundation") &&
+        text.includes("server-side oauth") &&
+        text.includes("live send disabled") &&
+        text.includes("/api/integrations/google-workspace/oauth/callback") &&
+        text.includes("check readiness") &&
+        text.includes("connect with google") &&
+        text.includes("gmail activity")
       );
     },
     "marketing provider setup navigation",

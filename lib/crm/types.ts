@@ -276,6 +276,29 @@ export type EmailMessageCategory =
   | "job_update"
   | "general";
 export type EmailMessageStatus = "draft" | "queued" | "sent" | "failed";
+export type EmailMessageDirection = "inbound" | "outbound";
+export type EmailMessageSyncStatus =
+  | "local"
+  | "queued"
+  | "syncing"
+  | "synced"
+  | "imported"
+  | "sent"
+  | "failed"
+  | "skipped";
+export type GmailThreadMatchStatus =
+  | "matched_customer"
+  | "matched_lead"
+  | "matched_job"
+  | "matched_estimate"
+  | "unmatched"
+  | "manual_review";
+export type GmailThreadSyncStatus =
+  | "imported"
+  | "syncing"
+  | "synced"
+  | "failed"
+  | "skipped";
 export type SmsMessageCategory =
   | "appointment_reminder"
   | "estimate_follow_up"
@@ -985,6 +1008,7 @@ export type IntegrationConnectionRecord = {
   account_email: string | null;
   display_name: string;
   external_account_id: string | null;
+  provider_account_id?: string | null;
   default_calendar_id: string | null;
   scopes: string[];
   sync_direction: IntegrationSyncDirection;
@@ -992,7 +1016,11 @@ export type IntegrationConnectionRecord = {
   webhook_channel_id: string | null;
   webhook_resource_id: string | null;
   sync_token: string | null;
+  token_expires_at?: string | null;
   last_sync_at: string | null;
+  last_successful_sync_at?: string | null;
+  last_failure_at?: string | null;
+  disabled_at?: string | null;
   last_error: string | null;
   settings: Record<string, unknown>;
   created_at: string;
@@ -1102,6 +1130,9 @@ export type EmailMessageRecord = {
   id: string;
   company_id: string;
   customer_id: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  property_id?: string | null;
   estimate_id: string | null;
   invoice_id: string | null;
   document_id: string | null;
@@ -1109,14 +1140,98 @@ export type EmailMessageRecord = {
   provider: Extract<IntegrationProvider, "gmail">;
   category: EmailMessageCategory;
   status: EmailMessageStatus;
+  direction?: EmailMessageDirection;
+  from_email?: string | null;
   to_email: string;
+  to_emails?: string[];
   cc_email: string | null;
+  cc_emails?: string[];
+  bcc_emails?: string[];
+  reply_to_emails?: string[];
   subject: string;
   body: string;
   gmail_message_id: string | null;
+  gmail_thread_id?: string | null;
+  provider_account_id?: string | null;
   queued_at: string | null;
   sent_at: string | null;
+  received_at?: string | null;
+  message_preview?: string | null;
+  has_attachments?: boolean;
+  attachment_count?: number;
+  sync_status?: EmailMessageSyncStatus;
+  imported_at?: string | null;
+  provider_payload_hash?: string | null;
+  metadata?: Record<string, unknown>;
   last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GmailOauthStateRecord = {
+  id: string;
+  company_id: string;
+  initiated_by: string | null;
+  state_hash: string;
+  code_verifier: string;
+  redirect_path: string;
+  requested_scopes: string[];
+  mailbox_label: string | null;
+  expires_at: string;
+  consumed_at: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GmailMailboxCredentialRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  account_email: string;
+  provider_account_id: string | null;
+  encrypted_access_token: string | null;
+  encrypted_refresh_token: string | null;
+  token_type: string | null;
+  scopes: string[];
+  token_expires_at: string | null;
+  last_refreshed_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GmailEmailThreadRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  customer_id: string | null;
+  lead_id: string | null;
+  job_id: string | null;
+  estimate_id: string | null;
+  gmail_thread_id: string;
+  subject: string;
+  last_message_at: string | null;
+  message_count: number;
+  last_direction: EmailMessageDirection;
+  match_status: GmailThreadMatchStatus;
+  sync_status: GmailThreadSyncStatus;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GmailEmailAttachmentRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string | null;
+  email_message_id: string;
+  gmail_attachment_id: string | null;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  content_disposition: string | null;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -1841,6 +1956,7 @@ export type IntegrationConnectionInput = {
   account_email?: string | null;
   display_name: string;
   external_account_id?: string | null;
+  provider_account_id?: string | null;
   default_calendar_id?: string | null;
   scopes?: string[];
   sync_direction?: IntegrationSyncDirection;
@@ -1848,7 +1964,11 @@ export type IntegrationConnectionInput = {
   webhook_channel_id?: string | null;
   webhook_resource_id?: string | null;
   sync_token?: string | null;
+  token_expires_at?: string | null;
   last_sync_at?: string | null;
+  last_successful_sync_at?: string | null;
+  last_failure_at?: string | null;
+  disabled_at?: string | null;
   last_error?: string | null;
   settings?: Record<string, unknown>;
 };
@@ -1940,6 +2060,9 @@ export type CalendarEventSyncInput = {
 export type EmailMessageInput = {
   company_id: string;
   customer_id?: string | null;
+  lead_id?: string | null;
+  job_id?: string | null;
+  property_id?: string | null;
   estimate_id?: string | null;
   invoice_id?: string | null;
   document_id?: string | null;
@@ -1947,15 +2070,55 @@ export type EmailMessageInput = {
   provider?: Extract<IntegrationProvider, "gmail">;
   category: EmailMessageCategory;
   status?: EmailMessageStatus;
+  direction?: EmailMessageDirection;
+  from_email?: string | null;
   to_email: string;
+  to_emails?: string[];
   cc_email?: string | null;
+  cc_emails?: string[];
+  bcc_emails?: string[];
+  reply_to_emails?: string[];
   subject: string;
   body: string;
   gmail_message_id?: string | null;
+  gmail_thread_id?: string | null;
+  provider_account_id?: string | null;
   queued_at?: string | null;
   sent_at?: string | null;
+  received_at?: string | null;
+  message_preview?: string | null;
+  has_attachments?: boolean;
+  attachment_count?: number;
+  sync_status?: EmailMessageSyncStatus;
+  imported_at?: string | null;
+  provider_payload_hash?: string | null;
+  metadata?: Record<string, unknown>;
   last_error?: string | null;
 };
+
+export type GmailOauthStateInsert = Omit<
+  GmailOauthStateRecord,
+  "id" | "created_at" | "updated_at" | "consumed_at" | "failure_reason"
+> &
+  Partial<Pick<GmailOauthStateRecord, "id" | "consumed_at" | "failure_reason">>;
+
+export type GmailMailboxCredentialInsert = Omit<
+  GmailMailboxCredentialRecord,
+  "id" | "created_at" | "updated_at"
+> &
+  Partial<Pick<GmailMailboxCredentialRecord, "id">>;
+
+export type GmailEmailThreadInsert = Omit<
+  GmailEmailThreadRecord,
+  "id" | "created_at" | "updated_at" | "message_count" | "metadata"
+> &
+  Partial<Pick<GmailEmailThreadRecord, "id" | "message_count" | "metadata">>;
+
+export type GmailEmailAttachmentInsert = Omit<
+  GmailEmailAttachmentRecord,
+  "id" | "created_at" | "updated_at" | "metadata"
+> &
+  Partial<Pick<GmailEmailAttachmentRecord, "id" | "metadata">>;
 
 export type SmsMessageInput = {
   company_id: string;
@@ -2465,6 +2628,8 @@ export type CrmSnapshot = {
   leadIntakeRecords: LeadIntakeRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
   emailMessages: EmailMessageRecord[];
+  gmailEmailThreads: GmailEmailThreadRecord[];
+  gmailEmailAttachments: GmailEmailAttachmentRecord[];
   smsMessages: SmsMessageRecord[];
   businessPhoneNumbers: BusinessPhoneNumberRecord[];
   communicationProviderEvents: CommunicationProviderEventRecord[];
@@ -2682,6 +2847,38 @@ export type Database = {
         Insert: IntegrationSyncLogInsert;
         Update: Partial<
           Database["public"]["Tables"]["integration_sync_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gmail_oauth_states: {
+        Row: GmailOauthStateRecord;
+        Insert: GmailOauthStateInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gmail_oauth_states"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gmail_mailbox_credentials: {
+        Row: GmailMailboxCredentialRecord;
+        Insert: GmailMailboxCredentialInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gmail_mailbox_credentials"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gmail_email_threads: {
+        Row: GmailEmailThreadRecord;
+        Insert: GmailEmailThreadInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gmail_email_threads"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      gmail_email_attachments: {
+        Row: GmailEmailAttachmentRecord;
+        Insert: GmailEmailAttachmentInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["gmail_email_attachments"]["Insert"]
         >;
         Relationships: [];
       };

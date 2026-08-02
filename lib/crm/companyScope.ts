@@ -125,6 +125,8 @@ export function scopeCrmSnapshotByCompany(
     ),
     calendarEventSyncs: byCompany(snapshot.calendarEventSyncs, companyId),
     emailMessages: byCompany(snapshot.emailMessages, companyId),
+    gmailEmailThreads: byCompany(snapshot.gmailEmailThreads, companyId),
+    gmailEmailAttachments: byCompany(snapshot.gmailEmailAttachments, companyId),
     smsMessages: byCompany(snapshot.smsMessages, companyId),
     businessPhoneNumbers,
     communicationProviderEvents: snapshot.communicationProviderEvents.filter(

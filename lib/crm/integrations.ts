@@ -24,7 +24,28 @@ export const googleCalendarScopes = [
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
 ];
 
-export const gmailScopes = ["https://www.googleapis.com/auth/gmail.send"];
+export const gmailScopes = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.compose",
+];
+
+export const gmailIdentityScopes = ["openid", "email", "profile"];
+
+export const googleWorkspaceEnvVars = {
+  clientId: "GOOGLE_CLIENT_ID",
+  clientSecret: "GOOGLE_CLIENT_SECRET",
+  redirectUri: "GOOGLE_REDIRECT_URI",
+  workspaceDomain: "GOOGLE_WORKSPACE_DOMAIN",
+  publicBaseUrl: "GOOGLE_PUBLIC_BASE_URL",
+  tokenEncryptionKey: "GOOGLE_TOKEN_ENCRYPTION_KEY",
+  gmailSendEnabled: "GOOGLE_GMAIL_SEND_ENABLED",
+  oauthStartEndpoint: "/api/integrations/google-workspace/oauth/start",
+  oauthCallbackPath: "/api/integrations/google-workspace/oauth/callback",
+  readinessEndpoint: "/api/integrations/google-workspace/readiness",
+  syncEndpoint: "/api/integrations/google-workspace/sync",
+  sendEndpoint: "/api/integrations/google-workspace/send",
+};
 
 export const googleMapsEnvVars = {
   browserApiKey: "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY",
@@ -543,9 +564,16 @@ export function buildGmailSendPreview(message: EmailMessageRecord) {
       weathertechCompanyId: message.company_id,
       weathertechEmailMessageId: message.id,
       customerId: message.customer_id ?? undefined,
+      leadId: message.lead_id ?? undefined,
+      jobId: message.job_id ?? undefined,
+      propertyId: message.property_id ?? undefined,
       estimateId: message.estimate_id ?? undefined,
       invoiceId: message.invoice_id ?? undefined,
       documentId: message.document_id ?? undefined,
+      direction: message.direction ?? "outbound",
+      gmailThreadId: message.gmail_thread_id ?? undefined,
+      attachmentCount: message.attachment_count ?? 0,
+      syncStatus: message.sync_status ?? "local",
     },
   };
 }

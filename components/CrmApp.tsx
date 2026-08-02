@@ -246,6 +246,7 @@ import {
   getSmsOutboxSummary,
   goHighLevelEnvVars,
   googleMapsEnvVars,
+  googleWorkspaceEnvVars,
   gmailScopes,
   googleCalendarScopes,
   hasGoogleMapsBrowserKey,
@@ -39695,6 +39696,72 @@ type TwilioConnectionTestResult = {
   };
 };
 
+type GoogleWorkspaceReadinessResult = {
+  ok: boolean;
+  status:
+    | "not_configured"
+    | "configuration_required"
+    | "backend_ready"
+    | "connected"
+    | "sync_disabled"
+    | "send_disabled"
+    | "error";
+  statusLabel: string;
+  checkedAt: string;
+  message: string;
+  config: {
+    ok: boolean;
+    status: "ready" | "missing_config";
+    missing: string[];
+    credentials: {
+      clientId: string | null;
+      clientSecret: string | null;
+      redirectUri: string | null;
+      publicBaseUrl: string | null;
+      workspaceDomain: string | null;
+      tokenEncryptionKey: string | null;
+      gmailSendEnabled: boolean;
+    };
+    scopes: string[];
+  };
+  schema: {
+    migration: string;
+    applied: boolean | null;
+    message: string;
+  };
+  connectedMailboxCount: number;
+  mailboxes: Array<{
+    id: string;
+    companyId: string;
+    status: IntegrationConnectionStatus;
+    mailbox: string;
+    providerAccountId: string | null;
+    lastSyncAt: string | null;
+    lastFailureAt: string | null;
+    tokenExpiresAt: string | null;
+    disabled: boolean;
+  }>;
+  endpoints: Array<{
+    id: string;
+    label: string;
+    path: string;
+    method: "GET" | "POST";
+    liveEnabled: boolean;
+    summary: string;
+  }>;
+  guardrails: string[];
+};
+
+type GmailSendApiResult = {
+  ok: boolean;
+  sent: boolean;
+  result?: {
+    status: string;
+    message: string;
+    sent?: boolean;
+  };
+};
+
 const TWILIO_TEST_ENDPOINT = "/api/integrations/twilio/test";
 const TWILIO_FROM_NUMBER_WARNING =
   "TWILIO_FROM_NUMBER is blank. Outbound sending requires a sender number after buying one or porting an existing business number.";
@@ -39989,6 +40056,14 @@ function IntegrationsView({
     useState<TwilioConnectionTestResult | null>(null);
   const [twilioTestError, setTwilioTestError] = useState("");
   const [isTestingTwilio, setIsTestingTwilio] = useState(false);
+  const [googleWorkspaceReadinessResult, setGoogleWorkspaceReadinessResult] =
+    useState<GoogleWorkspaceReadinessResult | null>(null);
+  const [isCheckingGoogleWorkspace, setIsCheckingGoogleWorkspace] = useState(false);
+  const [isStartingGmailOAuth, setIsStartingGmailOAuth] = useState(false);
+  const [isSyncingGmail, setIsSyncingGmail] = useState(false);
+  const [sendingGmailMessageId, setSendingGmailMessageId] = useState<string | null>(
+    null,
+  );
   const selectedGoHighLevelLead =
     snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
     snapshot.leads[0] ??
@@ -40069,6 +40144,23 @@ function IntegrationsView({
   const twilioAdditionalWarningMessages = twilioWarningMessages.filter(
     (message) => message !== TWILIO_FROM_NUMBER_WARNING,
   );
+  const googleWorkspaceStatusLabel =
+    googleWorkspaceReadinessResult?.statusLabel ??
+    (primaryGmailConnection
+      ? integrationStatusLabel(primaryGmailConnection.status)
+      : "Not Connected");
+  const googleWorkspaceStatusTone: "green" | "amber" | "blue" =
+    googleWorkspaceReadinessResult?.status === "connected" ||
+    primaryGmailConnection?.status === "connected"
+      ? "green"
+      : googleWorkspaceReadinessResult?.status === "backend_ready"
+        ? "blue"
+        : "amber";
+  const googleWorkspaceSchemaLabel = googleWorkspaceReadinessResult
+    ? googleWorkspaceReadinessResult.schema.applied
+      ? "Applied"
+      : "Required"
+    : "0027";
 
   useEffect(() => {
     if (!snapshot.leads.length) {
@@ -40142,6 +40234,129 @@ function IntegrationsView({
   useEffect(() => {
     void handleTestTwilioConnection({ showNotice: false });
   }, [handleTestTwilioConnection]);
+
+  const handleCheckGoogleWorkspaceReadiness = async () => {
+    setIsCheckingGoogleWorkspace(true);
+    setGoogleWorkspaceReadinessResult(null);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.readinessEndpoint, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      const result = (await response.json()) as GoogleWorkspaceReadinessResult;
+      setGoogleWorkspaceReadinessResult(result);
+
+      if (response.ok && result.ok) {
+        onNotice("Google Workspace readiness checked. No email was sent.");
+      } else {
+        onError(result.message ?? "Google Workspace configuration needs attention.");
+      }
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not check Google Workspace readiness.",
+      );
+    } finally {
+      setIsCheckingGoogleWorkspace(false);
+    }
+  };
+
+  const handleStartGmailOAuth = async () => {
+    const companyId =
+      primaryGmailConnection?.company_id ?? snapshot.companies[0]?.id ?? "";
+
+    if (!companyId) {
+      onError("Create a company before connecting Gmail.");
+      return;
+    }
+
+    setIsStartingGmailOAuth(true);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.oauthStartEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyId,
+          redirectPath: "/?view=integrations",
+          mailboxLabel:
+            primaryGmailConnection?.display_name ??
+            `${companyMap.get(companyId)?.name ?? "Company"} Gmail mailbox`,
+          loginHint: primaryGmailConnection?.account_email ?? undefined,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        authorizationUrl?: string | null;
+        message?: string;
+      };
+
+      if (!response.ok || !result.ok || !result.authorizationUrl) {
+        onError(result.message ?? "Google OAuth could not be started.");
+        return;
+      }
+
+      window.location.assign(result.authorizationUrl);
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : "Could not start Google OAuth.",
+      );
+    } finally {
+      setIsStartingGmailOAuth(false);
+    }
+  };
+
+  const handleRunGmailSync = async () => {
+    if (!primaryGmailConnection) {
+      onError("Connect or prepare a Gmail mailbox before syncing.");
+      return;
+    }
+
+    setIsSyncingGmail(true);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.syncEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          integrationConnectionId: primaryGmailConnection.id,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        imported?: number;
+        duplicates?: number;
+        failed?: number;
+        message?: string;
+      };
+
+      if (!response.ok || !result.ok) {
+        onError(result.message ?? "Gmail sync could not run.");
+      } else {
+        onNotice(
+          `Gmail sync completed: ${result.imported ?? 0} imported, ${
+            result.duplicates ?? 0
+          } duplicates skipped.`,
+        );
+      }
+
+      await onReload();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not run Gmail sync.");
+    } finally {
+      setIsSyncingGmail(false);
+    }
+  };
 
   const handleTestGoHighLevelConnection = async () => {
     setIsTestingGoHighLevel(true);
@@ -40289,18 +40504,20 @@ function IntegrationsView({
       await createIntegrationConnection(client, {
         company_id: companyId,
         provider: "gmail",
-        status: "connected",
+        status: "needs_reauth",
         display_name: displayName,
         account_email: accountEmail,
         scopes: gmailScopes,
-        sync_direction: "weathertech_to_provider",
-        credential_reference: `vault://gmail/${accountEmail ?? "company-sender"}`,
+        sync_direction: "two_way",
+        credential_reference: null,
         settings: {
           senderName: companyMap.get(companyId)?.name ?? "WeatherTech OS",
           includePortalLinks: true,
+          oauthRequired: true,
+          sendEnabled: false,
         },
       });
-      onNotice("Gmail connection saved.");
+      onNotice("Gmail mailbox prepared. Complete Google OAuth before live sync or send.");
       await onReload();
       form.reset();
     } catch (error) {
@@ -40652,20 +40869,31 @@ function IntegrationsView({
     }
   };
 
-  const markEmailSent = async (message: EmailMessageRecord) => {
-    const now = new Date().toISOString();
+  const sendEmailWithGmail = async (message: EmailMessageRecord) => {
+    setSendingGmailMessageId(message.id);
 
     try {
-      await updateEmailMessage(client, message.id, {
-        status: "sent",
-        sent_at: now,
-        gmail_message_id: message.gmail_message_id ?? `gmail-${message.id}`,
-        last_error: null,
+      const response = await fetch(googleWorkspaceEnvVars.sendEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ emailMessageId: message.id }),
       });
-      onNotice("Email marked sent.");
+      const result = (await response.json()) as GmailSendApiResult;
+
+      if (response.ok && result.sent) {
+        onNotice("Gmail confirmed the email was sent.");
+      } else {
+        onError(result.result?.message ?? "Gmail send is not available yet.");
+      }
+
       await onReload();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update email.");
+      onError(error instanceof Error ? error.message : "Could not send email with Gmail.");
+    } finally {
+      setSendingGmailMessageId(null);
     }
   };
 
@@ -40934,11 +41162,11 @@ function IntegrationsView({
                 Phase 5 - Gmail
               </p>
               <h3 className="mt-1 text-xl font-bold text-slate-950">
-                Estimate, invoice, and follow-up outbox
+                Gmail / Google Workspace email foundation
               </h3>
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
-                Draft and queue customer emails from CRM records while the secure Gmail
-                worker sends through the connected company mailbox.
+                Draft, queue, sync, and safely associate customer email through
+                company mailboxes without exposing Google credentials in the browser.
               </p>
             </div>
             {primaryGmailConnection ? (
@@ -40954,6 +41182,15 @@ function IntegrationsView({
                 >
                   {primaryGmailConnection.status === "paused" ? "Resume" : "Pause"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRunGmailSync()}
+                  disabled={isSyncingGmail || primaryGmailConnection.status !== "connected"}
+                  className="inline-flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  {isSyncingGmail ? "Syncing" : "Manual sync"}
+                </button>
               </div>
             ) : null}
           </div>
@@ -40965,9 +41202,139 @@ function IntegrationsView({
             <ProfileStat label="Failed" value={emailSummary.failed} />
           </div>
 
+          <div
+            className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4"
+            data-testid="google-workspace-email-foundation"
+          >
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-slate-950">
+                    Production Google Workspace foundation
+                  </p>
+                  <Badge
+                    label={googleWorkspaceStatusLabel}
+                    tone={googleWorkspaceStatusTone}
+                  />
+                  <Badge label="Server-side OAuth" tone="blue" />
+                  <Badge
+                    label={
+                      googleWorkspaceReadinessResult?.config.credentials.gmailSendEnabled
+                        ? "Live send enabled"
+                        : "Live send disabled"
+                    }
+                    tone={
+                      googleWorkspaceReadinessResult?.config.credentials.gmailSendEnabled
+                        ? "green"
+                        : "amber"
+                    }
+                  />
+                </div>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  Gmail sync and send run through server routes, encrypted token
+                  storage, company-scoped mailbox records, and sanitized integration logs.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleCheckGoogleWorkspaceReadiness()}
+                  disabled={isCheckingGoogleWorkspace}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  {isCheckingGoogleWorkspace ? "Checking" : "Check readiness"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleStartGmailOAuth()}
+                  disabled={isStartingGmailOAuth}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Mail className="h-4 w-4" />
+                  {isStartingGmailOAuth ? "Opening Google" : "Connect with Google"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <ProfileStat label="Migration" value={googleWorkspaceSchemaLabel} />
+              <ProfileStat
+                label="Mailboxes"
+                value={
+                  googleWorkspaceReadinessResult?.connectedMailboxCount ??
+                  gmailConnections.length
+                }
+              />
+              <ProfileStat
+                label="Last sync"
+                value={
+                  primaryGmailConnection?.last_successful_sync_at
+                    ? formatDateTime(primaryGmailConnection.last_successful_sync_at)
+                    : primaryGmailConnection?.last_sync_at
+                      ? formatDateTime(primaryGmailConnection.last_sync_at)
+                      : "Not synced yet"
+                }
+              />
+              <ProfileStat
+                label="OAuth callback"
+                value={googleWorkspaceEnvVars.oauthCallbackPath}
+              />
+            </div>
+
+            {googleWorkspaceReadinessResult ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.45fr)]">
+                <div className="rounded-lg border border-sky-200 bg-white p-4">
+                  <p className="text-sm font-bold text-slate-950">
+                    Connected mailbox records
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {googleWorkspaceReadinessResult.mailboxes.length ? (
+                      googleWorkspaceReadinessResult.mailboxes.map((mailbox) => (
+                        <div
+                          key={mailbox.id}
+                          className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-slate-950">
+                              {mailbox.mailbox}
+                            </p>
+                            <Badge
+                              label={integrationStatusLabel(mailbox.status)}
+                              tone={getIntegrationStatusTone(mailbox.status)}
+                            />
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {companyMap.get(mailbox.companyId)?.name ?? "Company"} ·{" "}
+                            {mailbox.lastSyncAt
+                              ? `Last sync ${formatDateTime(mailbox.lastSyncAt)}`
+                              : "No sync yet"}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <EmptyState label="No Google Workspace mailbox has been connected yet." />
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-sky-200 bg-white p-4">
+                  <p className="text-sm font-bold text-slate-950">Guardrails</p>
+                  <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                    {googleWorkspaceReadinessResult.guardrails.slice(0, 4).map((guardrail) => (
+                      <div key={guardrail} className="flex items-start gap-2">
+                        <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
+                        <p>{guardrail}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-sm font-bold text-slate-950">Gmail outbox</p>
+              <p className="text-sm font-bold text-slate-950">Gmail activity</p>
             </div>
             <div className="divide-y divide-slate-200">
               {snapshot.emailMessages.map((message) => (
@@ -40989,14 +41356,30 @@ function IntegrationsView({
                         }
                       />
                       <Badge label={emailCategoryLabel(message.category)} tone="blue" />
+                      <Badge
+                        label={message.direction === "inbound" ? "Inbound" : "Outbound"}
+                        tone={message.direction === "inbound" ? "green" : "blue"}
+                      />
+                      {message.sync_status ? (
+                        <Badge label={message.sync_status} tone="blue" />
+                      ) : null}
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      To {message.to_email} ·{" "}
+                      {message.direction === "inbound" ? "From" : "To"}{" "}
+                      {message.direction === "inbound"
+                        ? message.from_email ?? message.to_email
+                        : message.to_email} ·{" "}
                       {companyMap.get(message.company_id)?.name ?? "Company"}
                     </p>
                     <p className="mt-2 line-clamp-2 text-sm text-slate-500">
-                      {message.body}
+                      {message.message_preview ?? message.body}
                     </p>
+                    {message.has_attachments ? (
+                      <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                        {message.attachment_count ?? 0} attachment
+                        {(message.attachment_count ?? 0) === 1 ? "" : "s"} indexed
+                      </p>
+                    ) : null}
                     {message.last_error ? (
                       <p className="mt-2 text-sm font-semibold text-amber-700">
                         {message.last_error}
@@ -41017,11 +41400,12 @@ function IntegrationsView({
                     {message.status !== "sent" ? (
                       <button
                         type="button"
-                        onClick={() => void markEmailSent(message)}
+                        onClick={() => void sendEmailWithGmail(message)}
+                        disabled={sendingGmailMessageId === message.id}
                         className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                       >
                         <CheckCircle2 className="h-4 w-4" />
-                        Mark sent
+                        {sendingGmailMessageId === message.id ? "Sending" : "Send with Gmail"}
                       </button>
                     ) : null}
                   </div>
@@ -41050,13 +41434,15 @@ function IntegrationsView({
                   value={syncDirectionLabel(primaryGmailConnection.sync_direction)}
                 />
                 <ProfileStat
-                  label="Last send sync"
-                  value={
-                    primaryGmailConnection.last_sync_at
-                      ? formatDateTime(primaryGmailConnection.last_sync_at)
-                      : "Not synced yet"
-                  }
-                />
+	                  label="Last send sync"
+	                  value={
+	                    primaryGmailConnection.last_successful_sync_at
+	                      ? formatDateTime(primaryGmailConnection.last_successful_sync_at)
+	                      : primaryGmailConnection.last_sync_at
+	                      ? formatDateTime(primaryGmailConnection.last_sync_at)
+	                      : "Not synced yet"
+	                  }
+	                />
               </div>
             ) : (
               <form onSubmit={handleCreateGmailConnection} className="mt-4 grid gap-3">
@@ -41086,10 +41472,10 @@ function IntegrationsView({
                   type="submit"
                   className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                 >
-                  Save Gmail connection
-                </button>
-              </form>
-            )}
+	                  Prepare Gmail mailbox
+	                </button>
+	              </form>
+	            )}
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
