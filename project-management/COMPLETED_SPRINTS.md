@@ -149,6 +149,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added service-level and browser regression coverage for duplicate detection, provider routing, lead creation, customer matching, malformed payloads, provider failures, logging, and UI surfacing.
   - Did not add migrations, modify `.env.local`, activate live Yelp/Google Business Profile/Facebook connectivity, send real customer communications, or weaken authentication/RLS.
 
+### Website Integration Phase 1 - Multi-Brand Live Lead Capture Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add website integration lead capture foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Hardened the signed website lead endpoint for WeatherTech Roofing LLC, WeatherTech Phoenix/Tucson attribution, IHC Painting, and future approved landing pages.
+  - Added form-type routing, origin allow-list support, production-disabled gating, attribution and consent preservation, rate-limit/spam controls, and safe integration logging.
+  - Added safe environment placeholders and owner setup documentation for server-side HMAC configuration and production activation.
+  - Did not modify `.env.local`, activate live public website forms, send customer communications, weaken authentication/RLS, or add destructive migrations.
+
 ## Recording Template
 
 ### Sprint Name

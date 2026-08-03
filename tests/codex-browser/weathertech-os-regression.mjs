@@ -5592,12 +5592,15 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   progress("lead-intake:website:dry-run:start");
   const websitePayload = {
     sourceId: "weathertech-phoenix",
-    formIdentifier: "weathertech-phoenix-contact",
+    formType: "roof_inspection_request",
     websiteUrl: "https://weathertechroofingaz.com/test-intake",
+    landingPage: "https://weathertechroofingaz.com/phoenix-roof-inspection",
     source: "Website",
     utmSource: "test-suite",
     utmMedium: "form",
     utmCampaign: `${TEST_PREFIX} ${runId} CAMPAIGN`,
+    utmTerm: "roof inspection phoenix",
+    utmContent: "regression-form",
     externalLeadId: websiteExternalId,
     submittedAt,
     name: websiteLeadName,
@@ -5605,7 +5608,10 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     email: `website-${runId}@example.test`,
     address: "111 TEST Website Intake Way, Phoenix, AZ",
     location: "Phoenix",
-    serviceType: "roofing",
+    requestedService: "roofing",
+    textConsent: true,
+    callConsent: true,
+    privacyPolicyAccepted: true,
     message: `${TEST_PREFIX} ${runId} website intake message`,
   };
   const websiteDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", websitePayload);
@@ -5626,10 +5632,18 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     throw new Error(`Website dry run source was ${JSON.stringify(websiteDryRun.body.source)}.`);
   }
 
+  if (websiteDryRun.body.form?.key !== "roof_inspection_request") {
+    throw new Error(`Website dry run form was ${JSON.stringify(websiteDryRun.body.form)}.`);
+  }
+
+  if (websiteDryRun.body.production?.status !== "disabled") {
+    throw new Error(`Website dry run did not report disabled production state: ${JSON.stringify(websiteDryRun.body.production)}`);
+  }
+
   const tucsonDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
     ...websitePayload,
     sourceId: "weathertech-tucson",
-    formIdentifier: "weathertech-tucson-contact",
+    formType: "roofing_estimate_request",
     externalLeadId: `${websiteExternalId} TUCSON`,
     name: `${websiteLeadName} TUCSON`,
     location: "Tucson",
@@ -5644,7 +5658,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   const ihcDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
     ...websitePayload,
     sourceId: "ihc",
-    formIdentifier: "ihc-contact",
+    formType: "exterior_painting_request",
     externalLeadId: `${websiteExternalId} IHC`,
     name: `${websiteLeadName} IHC`,
     location: "Tempe",
@@ -5657,10 +5671,26 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     throw new Error(`IHC website dry run failed: ${ihcDryRun.status} ${JSON.stringify(ihcDryRun.body)}`);
   }
 
+  if (ihcDryRun.body.form?.key !== "exterior_painting_request") {
+    throw new Error(`IHC website form was ${JSON.stringify(ihcDryRun.body.form)}.`);
+  }
+
+  const unsupportedForm = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
+    ...websitePayload,
+    sourceId: "weathertech-phoenix",
+    formType: "painting_estimate_request",
+    externalLeadId: `${websiteExternalId} UNSUPPORTED`,
+    name: `${websiteLeadName} UNSUPPORTED`,
+  });
+
+  if (unsupportedForm.status !== 422 || unsupportedForm.body?.status !== "unsupported_form_type") {
+    throw new Error(`Unsupported website form was not rejected: ${unsupportedForm.status} ${JSON.stringify(unsupportedForm.body)}`);
+  }
+
   const unknownDryRun = await postAppJson(baseUrl, "/api/leads/website?dryRun=1", {
     ...websitePayload,
     sourceId: "unknown-website-source",
-    formIdentifier: "unknown-form",
+    formType: "general_service_inquiry",
     websiteUrl: "https://unknown.example/form",
     externalLeadId: `${websiteExternalId} UNKNOWN`,
     name: `${websiteLeadName} UNKNOWN`,
@@ -6853,9 +6883,15 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("?dryrun=1") &&
         text.includes("source registry ready") &&
         text.includes("verification required") &&
+        text.includes("production disabled") &&
+        text.includes("supported form types") &&
+        text.includes("allowed origins") &&
+        text.includes("website_intake_enabled") &&
+        text.includes("roof_inspection_request") &&
+        text.includes("painting_estimate_request") &&
         text.includes("weathertech-phoenix") &&
         text.includes("weathertech-tucson") &&
-        text.includes("ihc-contact") &&
+        text.includes("ihc") &&
         text.includes("yelp lead integration") &&
         text.includes("secure yelp intake foundation") &&
         text.includes("/api/leads/yelp") &&

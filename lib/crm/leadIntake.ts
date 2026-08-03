@@ -73,6 +73,10 @@ export type WebsiteLeadRequestBody = {
   sourceDetail?: unknown;
   sourceId?: unknown;
   websiteSource?: unknown;
+  website?: unknown;
+  domain?: unknown;
+  formType?: unknown;
+  formCategory?: unknown;
   formId?: unknown;
   formIdentifier?: unknown;
   name?: unknown;
@@ -92,13 +96,24 @@ export type WebsiteLeadRequestBody = {
   notes?: unknown;
   preferredContactMethod?: unknown;
   preferredContact?: unknown;
+  preferredAppointmentTime?: unknown;
+  projectType?: unknown;
+  projectDescription?: unknown;
+  referralSource?: unknown;
+  referringPage?: unknown;
   yelpBusinessId?: unknown;
   websiteUrl?: unknown;
   pageUrl?: unknown;
+  landingPage?: unknown;
   referrer?: unknown;
   utmSource?: unknown;
   utmCampaign?: unknown;
   utmMedium?: unknown;
+  utmTerm?: unknown;
+  utmContent?: unknown;
+  gclid?: unknown;
+  googleClickId?: unknown;
+  campaignId?: unknown;
   campaign?: unknown;
   externalLeadId?: unknown;
   leadId?: unknown;
@@ -112,9 +127,14 @@ export type WebsiteLeadRequestBody = {
   timestamp?: unknown;
   receivedAt?: unknown;
   smsConsent?: unknown;
+  textConsent?: unknown;
+  callConsent?: unknown;
   emailConsent?: unknown;
+  privacyPolicyAccepted?: unknown;
   consentSource?: unknown;
   consentCapturedAt?: unknown;
+  captchaResult?: unknown;
+  spamVerificationResult?: unknown;
   verifiedCompanyKey?: unknown;
   verifiedBranchKey?: unknown;
   forceUnassignedRouting?: unknown;
@@ -286,6 +306,10 @@ export type LeadIntakeResponseStatus =
   | "verification_required"
   | "missing_signature"
   | "invalid_signature"
+  | "invalid_origin"
+  | "unsupported_form_type"
+  | "production_disabled"
+  | "rate_limited"
   | "source_disabled"
   | "dry_run"
   | "crm_not_configured"
@@ -3058,15 +3082,27 @@ export function getLeadIntakeHttpStatus(result: LeadIntakeResponse) {
     return 401;
   }
 
-  if (result.status === "source_disabled") {
+  if (
+    result.status === "source_disabled" ||
+    result.status === "invalid_origin"
+  ) {
     return 403;
+  }
+
+  if (result.status === "rate_limited") {
+    return 429;
+  }
+
+  if (result.status === "unsupported_form_type") {
+    return 422;
   }
 
   if (
     result.status === "crm_not_configured" ||
     result.status === "company_not_found" ||
     result.status === "migration_required" ||
-    result.status === "verification_required"
+    result.status === "verification_required" ||
+    result.status === "production_disabled"
   ) {
     return 503;
   }

@@ -566,7 +566,7 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     label: "Website Lead Capture",
     shortLabel: "Website",
     family: "lead_intake",
-    description: "Secure intake endpoint, source registry, campaign metadata, review routing, retries, and inbox visibility for WeatherTech and IHC website forms.",
+    description: "Secure multi-brand website intake endpoint, source registry, form-category routing, campaign attribution, production gating, review routing, retries, and inbox visibility for WeatherTech and IHC website forms.",
     connectionProviders: ["website"],
     capabilities: ["website_leads", "crm_sync", "webhooks"],
     iconKey: "website",
@@ -585,7 +585,7 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "source_registry",
         label: "Website source registry",
-        description: "Maps WeatherTech Phoenix, WeatherTech Tucson, and IHC form identifiers to the correct company, branch, campaign, and review queue.",
+        description: "Maps WeatherTech Phoenix, WeatherTech Tucson, and IHC source IDs and form types to the correct company, branch, campaign, service line, urgency, and review queue.",
         required: true,
         sensitive: false,
         kind: "text",
@@ -597,6 +597,22 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
         required: true,
         sensitive: true,
         kind: "secret",
+      },
+      {
+        id: "allowed_origins",
+        label: "Allowed origins",
+        description: "Secondary origin allow-list for approved domains. HMAC remains required because browser Origin alone is not sufficient.",
+        required: true,
+        sensitive: false,
+        kind: "url",
+      },
+      {
+        id: "production_enablement",
+        label: "Production enablement",
+        description: "WEBSITE_INTAKE_ENABLED plus source-specific production flags must remain disabled until owner-approved signed tests pass.",
+        required: true,
+        sensitive: false,
+        kind: "text",
       },
       {
         id: "abuse_review",
@@ -611,7 +627,7 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "payload_schema",
         label: "Payload schema check",
-        description: "Validate supported website form fields before creating CRM leads.",
+        description: "Validate supported website form fields, categories, attribution, consent, and required contact data before creating CRM leads.",
       },
       {
         id: "company_routing",
@@ -622,6 +638,11 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
         id: "signature",
         label: "Signed request check",
         description: "Validate HMAC timestamp and signature headers before accepting live production submissions.",
+      },
+      {
+        id: "origin_and_enablement",
+        label: "Origin and enablement check",
+        description: "Confirm allowed-origin checks and production-disabled status before connecting a live public form.",
       },
       {
         id: "safe_logging",
@@ -639,8 +660,9 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     connectionSteps: [
       "Keep the source registry aligned with WeatherTech Phoenix, WeatherTech Tucson, and IHC forms.",
       "Configure server-side HMAC secrets in hosting without exposing them to browser code.",
-      "Add hidden sourceId or formIdentifier values to each production website form.",
-      "Run dry-run previews, then signed live test submissions, before marking the provider connected.",
+      "Add hidden sourceId and formType values to each production website form backend.",
+      "Configure allowed origins as a secondary control for approved website domains.",
+      "Run dry-run previews, then signed test submissions, before enabling WEBSITE_INTAKE_ENABLED and source-specific production flags.",
       "Monitor accepted, reviewed, rejected, duplicate, and retry outcomes before enabling automated follow-up.",
     ],
     disconnectSummary:

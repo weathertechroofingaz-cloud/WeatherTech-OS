@@ -43512,23 +43512,29 @@ function WebsiteLeadCaptureFoundationPanel() {
     {
       label: "WeatherTech Roofing LLC - Phoenix",
       sourceId: "weathertech-phoenix",
-      formId: "weathertech-phoenix-contact",
+      formId: "contact_request",
       queue: "weathertech-roofing-phoenix",
-      status: "Registry ready",
+      status: "Production disabled",
+      forms: "Contact, estimate, inspection, repair, urgent, commercial",
+      origins: "weathertechroofingaz.com",
     },
     {
       label: "WeatherTech Roofing LLC - Tucson",
       sourceId: "weathertech-tucson",
-      formId: "weathertech-tucson-contact",
+      formId: "roof_inspection_request",
       queue: "weathertech-roofing-tucson",
-      status: "Registry ready",
+      status: "Production disabled",
+      forms: "Contact, estimate, inspection, repair, urgent, commercial",
+      origins: "weathertechroofingaz.com",
     },
     {
       label: "IHC",
       sourceId: "ihc",
-      formId: "ihc-contact",
+      formId: "painting_estimate_request",
       queue: "ihc-painting",
-      status: "Domain required",
+      status: "Configuration required",
+      forms: "Contact, painting estimate, interior, exterior, commercial",
+      origins: "Owner domain required",
     },
   ];
 
@@ -43547,12 +43553,12 @@ function WebsiteLeadCaptureFoundationPanel() {
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
             Production websites are not connected yet. The server endpoint,
-            source registry, signed-request model, review routing, dry-run
-            preview, duplicate checks, and safe logging path are prepared for
-            owner-approved website setup.
+            source registry, signed-request model, allowed-origin checks,
+            production activation gate, dry-run preview, duplicate checks, and
+            safe logging path are prepared for owner-approved website setup.
           </p>
         </div>
-        <ProviderStatusBadge label="Verification Required" tone="amber" />
+        <ProviderStatusBadge label="Production Disabled" tone="amber" />
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
@@ -43586,13 +43592,25 @@ function WebsiteLeadCaptureFoundationPanel() {
                 <div>
                   <p className="font-bold text-slate-950">{source.label}</p>
                   <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Source {source.sourceId}; form {source.formId}; queue{" "}
-                    {source.queue}.
+                    Source {source.sourceId}; default form {source.formId};
+                    queue {source.queue}.
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Supported form types
+                  </p>
+                  <p className="mt-0.5 text-sm leading-6 text-slate-500">
+                    {source.forms}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Allowed origins
+                  </p>
+                  <p className="mt-0.5 text-sm leading-6 text-slate-500">
+                    {source.origins}
                   </p>
                 </div>
                 <ProviderStatusBadge
                   label={source.status}
-                  tone={source.status === "Registry ready" ? "green" : "amber"}
+                  tone={source.status === "Production disabled" ? "amber" : "blue"}
                 />
               </div>
             </div>
@@ -43604,10 +43622,10 @@ function WebsiteLeadCaptureFoundationPanel() {
             Owner Setup Required
           </p>
           {[
-            "Configure server-side HMAC secrets in hosting.",
-            "Add sourceId or formIdentifier to each approved website form.",
-            "Run synthetic dry-run previews before live tests.",
-            "Run signed test submissions before marking any source connected.",
+            "Configure WEBSITE_INTAKE_SIGNING_SECRET or source-specific HMAC secrets in hosting.",
+            "Add sourceId and formType to each approved website form backend.",
+            "Configure allowed origins as a secondary control; never rely on Origin alone.",
+            "Run dry-run previews, then signed tests, before setting WEBSITE_INTAKE_ENABLED.",
           ].map((item) => (
             <div key={item} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />

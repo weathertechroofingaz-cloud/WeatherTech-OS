@@ -73,11 +73,16 @@ try {
 
   const rawWebsiteBody = JSON.stringify({
     sourceId: "weathertech-phoenix",
-    formIdentifier: "weathertech-phoenix-contact",
+    formType: "roof_inspection_request",
     name: "TEST Website Capture",
     phone: "6025550108",
     email: "capture@example.test",
-    serviceType: "roofing",
+    landingPage: "https://weathertechroofingaz.com/inspection",
+    utmTerm: "roof inspection phoenix",
+    utmContent: "hero-form",
+    textConsent: true,
+    callConsent: true,
+    privacyPolicyAccepted: true,
     message: "Need a roofing estimate",
     websiteUrl: "https://weathertechroofingaz.com/contact",
     submittedAt: new Date().toISOString(),
@@ -97,6 +102,16 @@ try {
     phoenixResolution.source?.branchKey,
     "weathertech_phoenix",
     "Phoenix website source resolves to Phoenix branch",
+  );
+  const phoenixForm = websiteCapture.resolveWebsiteLeadCaptureForm(
+    JSON.parse(rawWebsiteBody),
+    phoenixResolution.source,
+  );
+  assertEqual(phoenixForm.status, "matched", "Phoenix roof inspection form resolves");
+  assertEqual(
+    phoenixForm.form?.suggestedNextAction,
+    "Schedule roof inspection",
+    "Phoenix roof inspection form keeps next action",
   );
 
   const verifiedCapture = websiteCapture.verifyWebsiteLeadCaptureRequest({
@@ -154,6 +169,10 @@ try {
       serviceType: "roofing",
     },
     resolution: tucsonResolution,
+    formResolution: websiteCapture.resolveWebsiteLeadCaptureForm(
+      { formType: "roofing_estimate_request" },
+      tucsonResolution.source,
+    ),
     verification: verifiedCapture,
     abuse: websiteCapture.evaluateWebsiteLeadCaptureAbuse(
       { sourceId: "weathertech-tucson" },
@@ -166,6 +185,21 @@ try {
     tucsonCanonical.branchKey,
     "weathertech_tucson",
     "Tucson source registry routes to Tucson branch",
+  );
+  assertEqual(
+    tucsonCanonical.leadSource,
+    "Website roofing estimate request",
+    "Tucson estimate form uses form-specific lead source",
+  );
+
+  const unsupportedWebsiteForm = websiteCapture.resolveWebsiteLeadCaptureForm(
+    { formType: "painting_estimate_request" },
+    tucsonResolution.source,
+  );
+  assertEqual(
+    unsupportedWebsiteForm.status,
+    "unsupported",
+    "WeatherTech source rejects painting-only form types",
   );
 
   const ihcResolution = websiteCapture.resolveWebsiteLeadCaptureSource({
@@ -181,6 +215,10 @@ try {
       serviceType: "painting",
     },
     resolution: ihcResolution,
+    formResolution: websiteCapture.resolveWebsiteLeadCaptureForm(
+      { formType: "exterior_painting_request" },
+      ihcResolution.source,
+    ),
     verification: verifiedCapture,
     abuse: websiteCapture.evaluateWebsiteLeadCaptureAbuse(
       { sourceId: "ihc" },
@@ -191,6 +229,7 @@ try {
   const ihcCanonical = routing.normalizeWebsiteLeadIntake(ihcCaptureBody);
   assertEqual(ihcCanonical.companyKey, "ihc_painting", "IHC source registry routes to IHC");
   assertEqual(ihcCanonical.branchKey, "ihc", "IHC source registry routes to IHC branch");
+  assertEqual(ihcCanonical.requestedService, "painting", "IHC form routes to painting service");
 
   const unknownResolution = websiteCapture.resolveWebsiteLeadCaptureSource({
     sourceId: "unknown-source",

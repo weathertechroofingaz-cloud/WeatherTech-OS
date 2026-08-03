@@ -4,6 +4,14 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Website Integration Phase 1 - Multi-Brand Live Lead Capture Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add website integration lead capture foundation`
+- Summary:
+  - Added the disabled-by-default multi-brand website lead capture foundation with source/form routing, HMAC validation, allowed-origin checks, production activation gates, attribution and consent preservation, safe failure logging, and setup documentation.
+  - Preserved the Unified Lead Intake Hub as the canonical pipeline and did not activate live production website forms.
+
 ### Google Calendar Phase 1 - Production Scheduling Foundation
 
 - Commit: `<this sprint commit>`
