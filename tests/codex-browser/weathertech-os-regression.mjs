@@ -6032,11 +6032,16 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
         text.includes("yelp") &&
         text.includes("twilio calls") &&
         text.includes("twilio sms") &&
+        text.includes("gmail") &&
+        text.includes("google business profile") &&
+        text.includes("facebook") &&
         text.includes("gohighlevel") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
         text.includes("ihc painting") &&
         text.includes("unassigned review queue") &&
+        text.includes("customer 360 matching") &&
+        text.includes("existing customer matches attach to customer 360") &&
         text.includes("auto-merge is disabled")
       );
     },

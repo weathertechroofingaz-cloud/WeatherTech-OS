@@ -57,6 +57,8 @@ try {
       "lib/googleWorkspace/serverClient.ts",
       "lib/googleWorkspace/foundation.ts",
       "lib/crm/integrations.ts",
+      "lib/crm/leadRouting.ts",
+      "lib/crm/leadIntake.ts",
       "--target",
       "ES2022",
       "--module",
@@ -87,6 +89,7 @@ try {
     pathToFileURL(join(outDir, "googleWorkspace", "foundation.js"))
   );
   const integrations = await import(pathToFileURL(join(outDir, "crm", "integrations.js")));
+  const leadIntake = await import(pathToFileURL(join(outDir, "crm", "leadIntake.js")));
   const originalEnv = { ...process.env };
 
   restoreEnv({});
@@ -277,6 +280,24 @@ try {
   );
   assertEqual(importPlan.attachments.length, 1, "Gmail attachment metadata is captured");
   assertEqual(importPlan.attachments[0].file_name, "roof-leak.jpg", "Attachment filename is preserved as metadata");
+
+  const unmatchedGmailLead = leadIntake.normalizeGmailLeadBody({
+    gmailMessageId: "gmail-message-unmatched",
+    gmailThreadId: "gmail-thread-unmatched",
+    fromEmail: "new-owner@example.test",
+    mailboxEmail: mailbox.accountEmail,
+    subject: "Need a roof estimate",
+    body: "I need a roof inspection and estimate.",
+    business: "WeatherTech Roofing LLC",
+    city: "Phoenix",
+  });
+  assert(unmatchedGmailLead.lead, "Unmatched inbound Gmail can become a lead-intake candidate");
+  assertEqual(unmatchedGmailLead.lead.provider, "gmail", "Gmail intake candidate preserves provider");
+  assertEqual(
+    unmatchedGmailLead.lead.email,
+    "new-owner@example.test",
+    "Gmail intake candidate normalizes contact email",
+  );
 
   const duplicatePlan = serverClient.buildGmailMessageImportPlan({
     mailbox,

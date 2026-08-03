@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
+  normalizeGmailLeadBody,
+  processLeadIntake,
+} from "../../../../../lib/crm/leadIntake";
+import {
   buildGmailMessageImportPlan,
   createServiceSupabaseClient,
   decryptGoogleToken,
@@ -34,8 +38,9 @@ function getRequestString(value: unknown) {
 
 async function loadSyncSnapshot(
   serviceClient: NonNullable<ReturnType<typeof createServiceSupabaseClient>>,
-): Promise<Pick<CrmSnapshot, "customers" | "leads" | "jobs" | "estimates" | "emailMessages">> {
-  const [customers, leads, jobs, estimates, emailMessages] = await Promise.all([
+): Promise<Pick<CrmSnapshot, "companies" | "customers" | "leads" | "jobs" | "estimates" | "emailMessages">> {
+  const [companies, customers, leads, jobs, estimates, emailMessages] = await Promise.all([
+    serviceClient.from("companies").select("*"),
     serviceClient.from("customers").select("*"),
     serviceClient.from("leads").select("*"),
     serviceClient.from("jobs").select("*"),
@@ -44,12 +49,33 @@ async function loadSyncSnapshot(
   ]);
 
   return {
+    companies: companies.data ?? [],
     customers: customers.data ?? [],
     leads: leads.data ?? [],
     jobs: jobs.data ?? [],
     estimates: estimates.data ?? [],
     emailMessages: emailMessages.data ?? [],
   };
+}
+
+function getCompanyLeadIntakeRouting(company: CrmSnapshot["companies"][number] | null) {
+  const companyText = `${company?.name ?? ""} ${company?.short_name ?? ""} ${company?.trade ?? ""}`.toLowerCase();
+  const isPainting = companyText.includes("ihc") || company?.trade === "painting";
+  const isTucson = companyText.includes("tucson");
+
+  if (isPainting) {
+    return {
+      business: "IHC",
+      verifiedCompanyKey: "ihc_painting",
+      verifiedBranchKey: "ihc",
+    } as const;
+  }
+
+  return {
+    business: "WeatherTech",
+    verifiedCompanyKey: "weathertech_roofing",
+    verifiedBranchKey: isTucson ? "weathertech_tucson" : "weathertech_phoenix",
+  } as const;
 }
 
 export async function POST(request: NextRequest) {
@@ -181,6 +207,8 @@ export async function POST(request: NextRequest) {
   let imported = 0;
   let duplicates = 0;
   let failed = 0;
+  let leadIntakeCreated = 0;
+  let leadIntakeReviewed = 0;
 
   for (const messageId of messageRefs) {
     const loadedMessage = await getGmailMessage({
@@ -234,6 +262,45 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    if (plan.direction === "inbound" && plan.match.matchStatus === "unmatched") {
+      const company = snapshot.companies.find(
+        (candidate) => candidate.id === connection.company_id,
+      ) ?? null;
+      const routing = getCompanyLeadIntakeRouting(company);
+      const normalizedLead = normalizeGmailLeadBody({
+        gmailMessageId: plan.messageId,
+        gmailThreadId: plan.threadId,
+        fromEmail: plan.emailMessage.from_email,
+        mailboxEmail: connection.account_email ?? credential.account_email,
+        subject: plan.emailMessage.subject,
+        body: plan.sanitizedPreview,
+        source: "Gmail",
+        sourceDetail: connection.display_name,
+        business: routing.business,
+        company: company?.name ?? routing.business,
+        verifiedCompanyKey: routing.verifiedCompanyKey,
+        verifiedBranchKey: routing.verifiedBranchKey,
+        receivedAt: plan.emailMessage.received_at,
+      });
+
+      if (normalizedLead.lead) {
+        const intakeResult = await processLeadIntake(serviceClient, normalizedLead.lead);
+
+        if (intakeResult.leadId || intakeResult.customerId) {
+          await serviceClient
+            .from("email_messages")
+            .update({
+              lead_id: intakeResult.leadId ?? null,
+              customer_id: intakeResult.customerId ?? null,
+            })
+            .eq("id", createdEmail.id);
+          leadIntakeCreated += 1;
+        } else if (intakeResult.status === "accepted_for_review") {
+          leadIntakeReviewed += 1;
+        }
+      }
+    }
+
     snapshot.emailMessages.push(createdEmail);
     imported += 1;
   }
@@ -267,6 +334,8 @@ export async function POST(request: NextRequest) {
       imported,
       duplicates,
       failed,
+      leadIntakeCreated,
+      leadIntakeReviewed,
     },
     completed_at: now,
   });
@@ -276,6 +345,8 @@ export async function POST(request: NextRequest) {
     imported,
     duplicates,
     failed,
+    leadIntakeCreated,
+    leadIntakeReviewed,
     message:
       failed === 0
         ? "Gmail sync completed."

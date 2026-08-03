@@ -13824,9 +13824,9 @@ function LeadIntakeRoutingEnginePanel({
             Lead Intake & Routing Engine
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Normalizes manual entry, website, Yelp, Twilio, and GoHighLevel
-            leads into one reviewable queue. Uncertain company or branch routing
-            stays unassigned for review instead of being guessed.
+            Normalizes manual entry, website, Twilio, Gmail, Yelp, and future
+            provider leads into one reviewable queue. Uncertain company or branch
+            routing stays unassigned for review instead of being guessed.
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[420px]">
@@ -13916,7 +13916,8 @@ function LeadIntakeRoutingEnginePanel({
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
               Website posts use the source registry, HMAC verification, duplicate
-              checks, and review queues before production records are created.
+              checks, Customer 360 matching, and review queues before production
+              records are created.
             </p>
           </div>
 
@@ -13941,7 +13942,7 @@ function LeadIntakeRoutingEnginePanel({
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
               Yelp posts use account registry routing, signed request checks,
-              duplicate detection, and review queues before CRM leads are
+              duplicate detection, Customer 360 matching, and review queues before CRM leads are
               created.
             </p>
           </div>
@@ -13957,8 +13958,9 @@ function LeadIntakeRoutingEnginePanel({
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
               Auto-merge is {leadIntakeDuplicatePolicy.autoMerge ? "enabled" : "disabled"}.
-              Exact provider duplicates skip new lead creation; possible customer
-              matches remain manual-review only.
+              Existing customer matches attach to Customer 360 instead of creating
+              duplicate leads. Exact provider duplicates skip new lead creation;
+              possible matches remain manual-review only.
             </p>
           </div>
         </div>

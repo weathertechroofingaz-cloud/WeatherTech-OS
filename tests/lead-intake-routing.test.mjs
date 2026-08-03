@@ -460,6 +460,19 @@ try {
   assertEqual(sms.provider, "twilio_sms", "Twilio SMS adapter identifies provider");
   assertEqual(sms.companyKey, "ihc_painting", "Twilio painting SMS routes to IHC");
 
+  const gmail = routing.normalizeGmailLeadIntake({
+    gmailMessageId: "GM_TEST",
+    fromEmail: "homeowner@example.test",
+    subject: "Need roof inspection",
+    body: "Can someone look at a leak near the patio?",
+    company: "WeatherTech Roofing LLC",
+    city: "Phoenix",
+  });
+  assertEqual(gmail.provider, "gmail", "Gmail adapter identifies provider");
+  assertEqual(gmail.companyKey, "weathertech_roofing", "Gmail company routes to WeatherTech");
+  assertEqual(gmail.branchKey, "weathertech_phoenix", "Gmail Phoenix signal routes branch");
+  assertEqual(gmail.preferredContactMethod, "email", "Gmail lead prefers email follow-up");
+
   const ghl = routing.normalizeGoHighLevelLeadIntake({
     contactId: "GHL_TEST_CONTACT",
     firstName: "TEST",
@@ -469,6 +482,17 @@ try {
   });
   assertEqual(ghl.provider, "gohighlevel", "GoHighLevel adapter identifies provider");
   assertEqual(ghl.branchKey, "weathertech_phoenix", "GoHighLevel location routes branch");
+
+  const futureProviderAdapters = routing.leadIntakeAdapterDefinitions.filter(
+    (adapter) =>
+      adapter.provider === "google_business_profile" ||
+      adapter.provider === "facebook",
+  );
+  assertEqual(futureProviderAdapters.length, 2, "Future provider adapter contracts are registered");
+  assert(
+    futureProviderAdapters.every((adapter) => adapter.status === "setup_required"),
+    "Future provider adapters remain setup-required and do not imply live connectivity",
+  );
 
   const exactMatches = routing.detectLeadIntakeDuplicates(website, [
     {

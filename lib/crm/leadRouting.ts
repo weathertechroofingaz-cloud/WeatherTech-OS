@@ -6,6 +6,9 @@ export type CanonicalLeadIntakeProvider =
   | "yelp"
   | "twilio_call"
   | "twilio_sms"
+  | "gmail"
+  | "google_business_profile"
+  | "facebook"
   | "gohighlevel";
 
 export type CanonicalLeadCompanyKey =
@@ -164,6 +167,24 @@ export const leadIntakeAdapterDefinitions: LeadIntakeAdapterDefinition[] = [
     summary: "Prepared for inbound SMS events after signed webhooks are enabled.",
   },
   {
+    provider: "gmail",
+    label: "Gmail",
+    status: "ready",
+    summary: "Normalizes unmatched inbound Gmail messages during approved mailbox sync.",
+  },
+  {
+    provider: "google_business_profile",
+    label: "Google Business Profile",
+    status: "setup_required",
+    summary: "Reusable adapter contract only; live Google Business Profile intake is not enabled.",
+  },
+  {
+    provider: "facebook",
+    label: "Facebook",
+    status: "setup_required",
+    summary: "Reusable adapter contract only; live Facebook intake is not enabled.",
+  },
+  {
     provider: "gohighlevel",
     label: "GoHighLevel",
     status: "ready",
@@ -218,6 +239,9 @@ const providerLabels: Record<CanonicalLeadIntakeProvider, string> = {
   yelp: "Yelp",
   twilio_call: "Twilio call",
   twilio_sms: "Twilio SMS",
+  gmail: "Gmail",
+  google_business_profile: "Google Business Profile",
+  facebook: "Facebook",
   gohighlevel: "GoHighLevel",
 };
 
@@ -959,6 +983,61 @@ export function normalizeTwilioSmsLeadIntake(payload: GenericPayload) {
       payload.to ?? payload.receivingBusinessPhoneNumber,
     ),
     originalSubmissionTimestamp: normalizeTimestamp(payload.occurredAt, payload.timestamp),
+  });
+}
+
+export function normalizeGmailLeadIntake(payload: GenericPayload) {
+  const fromEmail = normalizeLeadIntakeEmail(
+    payload.fromEmail ?? payload.email ?? payload.from,
+  );
+  const name =
+    getText(payload.name ?? payload.contactName ?? payload.fromName, 160) ??
+    (fromEmail ? fromEmail.split("@")[0]?.replace(/[._-]+/g, " ") ?? null : null);
+  const subject = getText(payload.subject, 240);
+  const body = getText(payload.body ?? payload.message ?? payload.preview, 1500);
+
+  return createCanonicalLeadIntake({
+    provider: "gmail",
+    fullName: name,
+    companyName: getText(payload.companyName, 160),
+    phone: normalizeLeadIntakePhone(payload.phone),
+    email: fromEmail,
+    serviceAddress: getText(payload.address ?? payload.serviceAddress, 240),
+    city: getText(payload.city ?? payload.location, 120),
+    state: getText(payload.state, 40) ?? "AZ",
+    postalCode: getText(payload.zip ?? payload.postalCode, 20),
+    requestedService: normalizeService(
+      payload.serviceType ?? payload.requestedService ?? subject ?? body,
+    ),
+    message: [subject, body].filter(Boolean).join("\n\n") || null,
+    preferredContactMethod: "email",
+    leadSource: getText(payload.source, 80) ?? "Gmail",
+    sourceDetail: getText(
+      payload.mailboxEmail ??
+        payload.accountEmail ??
+        payload.gmailThreadId ??
+        payload.sourceDetail,
+      240,
+    ),
+    providerExternalId: getExternalId(payload, [
+      "gmailMessageId",
+      "messageId",
+      "gmailThreadId",
+      "threadId",
+      "externalLeadId",
+      "id",
+    ]),
+    campaign: getText(payload.campaign, 160),
+    explicitCompany: getText(payload.business ?? payload.company, 120),
+    verifiedCompanyKey: getVerifiedCompanyKey(payload.verifiedCompanyKey),
+    verifiedBranchKey: getVerifiedBranchKey(payload.verifiedBranchKey),
+    forceUnassignedRouting: payload.forceUnassignedRouting === true,
+    forceReviewReason: getText(payload.forceReviewReason, 240),
+    originalSubmissionTimestamp: normalizeTimestamp(
+      payload.receivedAt,
+      payload.occurredAt,
+      payload.timestamp,
+    ),
   });
 }
 

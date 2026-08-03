@@ -125,6 +125,30 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added safe write gating through `GOOGLE_CALENDAR_WRITE_ENABLED=false`, sanitized Calendar payloads, and setup documentation.
   - Did not modify `.env.local`, expose credentials, create live Calendar events, or apply the migration remotely.
 
+### Unified Lead Intake Hub - Production Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add unified lead intake hub`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added a canonical lead intake service for Website, Twilio, Gmail, manual CRM entry, and future provider adapters.
+  - Added duplicate prevention through phone/email normalization, existing customer matching, existing lead matching, provider event IDs, and request fingerprints.
+  - Existing customer matches now attach intake activity to Customer 360 without creating duplicate leads.
+  - New unmatched accepted intake creates exactly one CRM lead and an actionable follow-up notification.
+  - Gmail sync now routes unmatched inbound email into the same lead intake pipeline.
+  - Preserved source attribution and sanitized integration sync logging.
+  - Added service-level and browser regression coverage for duplicate detection, provider routing, lead creation, customer matching, malformed payloads, provider failures, logging, and UI surfacing.
+  - Did not add migrations, modify `.env.local`, activate live Yelp/Google Business Profile/Facebook connectivity, send real customer communications, or weaken authentication/RLS.
+
 ## Recording Template
 
 ### Sprint Name

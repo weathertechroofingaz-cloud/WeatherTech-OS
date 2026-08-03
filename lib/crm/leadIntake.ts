@@ -21,6 +21,7 @@ import {
 import {
   detectLeadIntakeDuplicates,
   getStrongestLeadIntakeDuplicateConfidence,
+  normalizeGmailLeadIntake,
   normalizeTwilioCallLeadIntake,
   normalizeTwilioSmsLeadIntake,
   normalizeWebsiteLeadIntake,
@@ -38,6 +39,7 @@ import {
 import {
   createIntegrationSyncLog,
   createLead,
+  createNotification,
   updateIntegrationSyncLog,
 } from "./repository";
 import type {
@@ -56,7 +58,7 @@ type CrmClient = SupabaseClient<Database>;
 type BusinessKey = "IHC" | "WeatherTech" | "Unassigned";
 export type LeadIntakeProvider = Extract<
   IntegrationProvider,
-  "website" | "yelp" | "twilio" | "twilio_sms"
+  "website" | "yelp" | "twilio" | "twilio_sms" | "gmail"
 >;
 
 export type WebsiteLeadRequestBody = {
@@ -224,6 +226,49 @@ export type TwilioLeadRequestBody = {
   verifiedSourceMetadata?: unknown;
 };
 
+export type GmailLeadRequestBody = {
+  gmailMessageId?: unknown;
+  messageId?: unknown;
+  gmailThreadId?: unknown;
+  threadId?: unknown;
+  fromEmail?: unknown;
+  from?: unknown;
+  fromName?: unknown;
+  name?: unknown;
+  contactName?: unknown;
+  phone?: unknown;
+  email?: unknown;
+  mailboxEmail?: unknown;
+  accountEmail?: unknown;
+  subject?: unknown;
+  body?: unknown;
+  message?: unknown;
+  preview?: unknown;
+  address?: unknown;
+  serviceAddress?: unknown;
+  city?: unknown;
+  location?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  postalCode?: unknown;
+  serviceType?: unknown;
+  requestedService?: unknown;
+  source?: unknown;
+  sourceDetail?: unknown;
+  business?: unknown;
+  company?: unknown;
+  companyName?: unknown;
+  campaign?: unknown;
+  receivedAt?: unknown;
+  occurredAt?: unknown;
+  timestamp?: unknown;
+  verifiedCompanyKey?: unknown;
+  verifiedBranchKey?: unknown;
+  forceUnassignedRouting?: unknown;
+  forceReviewReason?: unknown;
+  verifiedSourceMetadata?: unknown;
+};
+
 export type LeadIntakeResponseStatus =
   | "healthy"
   | "created"
@@ -256,7 +301,9 @@ export type LeadIntakeResponse = {
   status: LeadIntakeResponseStatus;
   provider?: LeadIntakeProvider;
   leadId?: string;
+  customerId?: string;
   duplicateOfLeadId?: string;
+  duplicateOfCustomerId?: string;
   intakeRecordId?: string;
   syncLogId?: string;
   retriedSyncLogId?: string;
@@ -359,6 +406,7 @@ export const LEAD_INTAKE_EVENT_TYPES: Record<LeadIntakeProvider, string> = {
   yelp: "yelp.lead.created",
   twilio: "twilio.call.lead.created",
   twilio_sms: "twilio.sms.lead.created",
+  gmail: "gmail.lead.created",
 };
 
 const DEFAULT_WEBSITE_ADDRESS = "Website lead - address pending";
@@ -479,6 +527,10 @@ function getDefaultSourceForProvider(provider: LeadIntakeProvider) {
 
   if (provider === "twilio_sms") {
     return "SMS";
+  }
+
+  if (provider === "gmail") {
+    return "Gmail";
   }
 
   return "Phone";
@@ -1133,6 +1185,123 @@ export function normalizeTwilioCallLeadBody(
   return normalizeTwilioCommonLeadBody(body, "twilio");
 }
 
+export function normalizeGmailLeadBody(
+  body: GmailLeadRequestBody,
+): NormalizeSuccess | NormalizeFailure {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const canonical = normalizeGmailLeadIntake(body as Record<string, unknown>);
+  const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
+  const { email, warning: emailWarning } = normalizeEmail(
+    body.fromEmail ?? body.email ?? body.from,
+  );
+  const phone = canonical.phone ?? normalizePhone(body.phone);
+  const subject = getText(body.subject, 240);
+  const message =
+    canonical.message ??
+    ([subject, getText(body.body ?? body.message ?? body.preview, 1500)]
+      .filter(Boolean)
+      .join("\n\n") ||
+      null);
+  const business = businessFromCompanyKey(canonical.companyKey);
+  const location = canonical.city ?? getText(body.city ?? body.location, 160);
+  const { serviceType, warning: serviceWarning } = normalizeServiceType(
+    canonical.requestedService ??
+      body.serviceType ??
+      body.requestedService ??
+      subject ??
+      message,
+    business === "Unassigned" ? "WeatherTech" : business,
+  );
+
+  if (emailWarning) {
+    warnings.push(emailWarning);
+  }
+
+  warnings.push(...canonical.warnings);
+
+  if (!rawName && !email && !phone && !message) {
+    errors.push("At least one contact field is required: name, email, phone, or message.");
+  }
+
+  if (errors.length > 0) {
+    return { lead: null, errors, warnings };
+  }
+
+  if (!canonical.serviceAddress && !location) {
+    warnings.push("address was blank, so a placeholder email lead address was used.");
+  }
+
+  if (serviceWarning) {
+    warnings.push(serviceWarning);
+  }
+
+  return {
+    lead: {
+      provider: "gmail",
+      business,
+      companyKey: canonical.companyKey,
+      branchKey: canonical.branchKey,
+      routingStatus: canonical.routing.status,
+      routingConfidence: canonical.routing.confidence,
+      routingReasons: canonical.routing.reasons,
+      assignedQueue: canonical.assignedQueue,
+      source: normalizeSource(body.source, "gmail"),
+      contactName: rawName ?? email ?? phone ?? "Gmail lead",
+      firstName: canonical.firstName,
+      lastName: canonical.lastName,
+      companyName: canonical.companyName,
+      phone,
+      email,
+      propertyAddress:
+        canonical.serviceAddress ?? location ?? "Gmail lead - address pending",
+      location,
+      state: canonical.state,
+      postalCode: canonical.postalCode,
+      serviceType,
+      message,
+      externalLeadId:
+        getText(body.gmailMessageId, 160) ??
+        getText(body.messageId, 160) ??
+        getText(body.gmailThreadId, 160) ??
+        getText(body.threadId, 160),
+      submittedAt: normalizeTimestamp(
+        body.receivedAt,
+        body.occurredAt,
+        body.timestamp,
+      ),
+      sourceAccount: getText(
+        body.mailboxEmail ??
+          body.accountEmail ??
+          body.gmailThreadId ??
+          body.threadId ??
+          body.sourceDetail,
+        240,
+      ),
+      campaign: canonical.campaign,
+      receivingBusinessPhoneNumber: null,
+      assignedUserId: canonical.assignedUserId,
+      urgency: canonical.urgency,
+      preferredContactMethod: "email",
+      websiteUrl: null,
+      yelpBusinessId: null,
+      yelpConversationId: null,
+      yelpLeadId: null,
+      utmSource: null,
+      utmCampaign: null,
+      utmMedium: null,
+      sourceMappingId: null,
+      sourceMappingDisplayName: null,
+      sourceMappingMatchType: null,
+      sourceMetadata: getSafeSourceMetadata(body.verifiedSourceMetadata),
+      correlationId: getText(body.gmailMessageId ?? body.messageId, 120),
+      duplicateConfidence: "no_match",
+      warnings,
+    },
+    errors: [],
+  };
+}
+
 function getCompanyText(company: CompanyRecord) {
   return `${company.name} ${company.short_name ?? ""} ${company.trade}`.toLowerCase();
 }
@@ -1204,8 +1373,10 @@ async function tryCreateLeadIntakeRecord({
   lead,
   status,
   linkedLeadId = null,
+  linkedCustomerId = null,
   duplicateMatches = [],
   syncLogId = null,
+  followUpState = null,
   reviewNotes = null,
 }: {
   client: CrmClient;
@@ -1219,13 +1390,16 @@ async function tryCreateLeadIntakeRecord({
     | "non_lead"
     | "dismissed";
   linkedLeadId?: string | null;
+  linkedCustomerId?: string | null;
   duplicateMatches?: LeadIntakeDuplicateMatch[];
   syncLogId?: string | null;
+  followUpState?: "not_required" | "required" | "scheduled" | "completed" | null;
   reviewNotes?: string | null;
 }) {
   const insert: LeadIntakeRecordInput = {
     company_id: company?.id ?? null,
     linked_lead_id: linkedLeadId,
+    linked_customer_id: linkedCustomerId,
     integration_sync_log_id: syncLogId,
     correlation_id: lead.correlationId ?? undefined,
     provider: lead.provider,
@@ -1238,7 +1412,9 @@ async function tryCreateLeadIntakeRecord({
     routing_status: lead.routingStatus,
     status,
     duplicate_confidence: lead.duplicateConfidence,
-    follow_up_state: lead.routingStatus === "needs_review" ? "required" : "not_required",
+    follow_up_state:
+      followUpState ??
+      (lead.routingStatus === "needs_review" ? "required" : "not_required"),
     urgency: lead.urgency,
     assigned_queue: lead.assignedQueue,
     assigned_user_id: lead.assignedUserId,
@@ -1546,7 +1722,9 @@ function buildLeadNotes(lead: NormalizedLeadIntake) {
         ? "Yelp"
         : lead.provider === "twilio_sms"
           ? "Twilio SMS"
-          : "Twilio call";
+          : lead.provider === "gmail"
+            ? "Gmail"
+            : "Twilio call";
   const campaignValues = [
     lead.utmSource ? `source=${lead.utmSource}` : null,
     lead.utmMedium ? `medium=${lead.utmMedium}` : null,
@@ -1604,6 +1782,14 @@ function buildLeadInput(company: CompanyRecord, lead: NormalizedLeadIntake): Lea
 }
 
 async function resolveSourceMapping(client: CrmClient, lead: NormalizedLeadIntake) {
+  if (lead.provider === "gmail") {
+    return {
+      mapping: null,
+      matchType: "none",
+      warnings: [],
+    } satisfies LeadSourceMappingResolution;
+  }
+
   const externalSourceId =
     lead.provider === "website"
       ? lead.websiteUrl
@@ -1637,6 +1823,27 @@ async function findExistingLeadId(client: CrmClient, leadId: string | null) {
   return data?.id ?? null;
 }
 
+async function findExistingCustomerId(
+  client: CrmClient,
+  customerId: string | null,
+) {
+  if (!customerId) {
+    return null;
+  }
+
+  const { data, error } = await client
+    .from("customers")
+    .select("id")
+    .eq("id", customerId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.id ?? null;
+}
+
 async function findDuplicateIntakeLog({
   client,
   lead,
@@ -1649,7 +1856,8 @@ async function findDuplicateIntakeLog({
   requestFingerprint: string;
 }) {
   const eventType = LEAD_INTAKE_EVENT_TYPES[lead.provider];
-  const columns = "id,related_record_id,status,external_id,request_fingerprint";
+  const columns =
+    "id,related_table,related_record_id,status,external_id,request_fingerprint";
 
   const findBy = async (column: "external_id" | "request_fingerprint", value: string) => {
     const { data, error } = await client
@@ -1657,7 +1865,6 @@ async function findDuplicateIntakeLog({
       .select(columns)
       .eq("provider", lead.provider)
       .eq("event_type", eventType)
-      .eq("related_table", "leads")
       .not("related_record_id", "is", null)
       .in("status", ["succeeded", "skipped"])
       .eq(column, value)
@@ -1670,14 +1877,22 @@ async function findDuplicateIntakeLog({
 
     for (const candidate of (data ?? []) as Pick<
       IntegrationSyncLogRecord,
-      "id" | "related_record_id" | "status" | "external_id" | "request_fingerprint"
+      | "id"
+      | "related_table"
+      | "related_record_id"
+      | "status"
+      | "external_id"
+      | "request_fingerprint"
     >[]) {
-      const existingLeadId = await findExistingLeadId(client, candidate.related_record_id);
+      const existingRecordId =
+        candidate.related_table === "customers"
+          ? await findExistingCustomerId(client, candidate.related_record_id)
+          : await findExistingLeadId(client, candidate.related_record_id);
 
-      if (existingLeadId) {
+      if (existingRecordId) {
         return {
           ...candidate,
-          related_record_id: existingLeadId,
+          related_record_id: existingRecordId,
         };
       }
     }
@@ -1905,6 +2120,54 @@ async function logLeadIntakeDuplicate({
   });
 }
 
+async function logLeadIntakeCustomerAttachment({
+  client,
+  company,
+  lead,
+  customerId,
+  requestFingerprint,
+  externalId,
+  warnings,
+}: {
+  client: CrmClient;
+  company: CompanyRecord;
+  lead: NormalizedLeadIntake;
+  customerId: string;
+  requestFingerprint: string;
+  externalId: string | null;
+  warnings: string[];
+}) {
+  const now = new Date().toISOString();
+
+  return createIntegrationSyncLog(client, {
+    company_id: company.id,
+    integration_connection_id: null,
+    provider: lead.provider,
+    direction: "provider_to_weathertech",
+    event_type: LEAD_INTAKE_EVENT_TYPES[lead.provider],
+    status: "succeeded",
+    related_table: "customers",
+    related_record_id: customerId,
+    external_id: externalId,
+    attempt_count: 1,
+    max_attempts: LEAD_INTAKE_MAX_ATTEMPTS,
+    last_attempted_at: now,
+    completed_at: now,
+    request_fingerprint: requestFingerprint,
+    request_summary: buildRequestSummary(lead),
+    response_summary: sanitizeIntegrationSyncLogSummary({
+      customerId,
+      companyId: company.id,
+      companyName: company.name,
+      warnings,
+      deduplication: {
+        outcome: "attached_to_existing_customer",
+        requestFingerprint: "stored",
+      },
+    }),
+  });
+}
+
 async function logLeadIntakeFailure({
   client,
   company,
@@ -1978,6 +2241,50 @@ function responseStatusForDuplicate(warnings: string[]) {
   return warnings.length > 0 ? "duplicate_with_warning" : "duplicate";
 }
 
+async function createLeadIntakeFollowUp({
+  client,
+  company,
+  lead,
+  customerId,
+  leadId,
+  outcome,
+}: {
+  client: CrmClient;
+  company: CompanyRecord;
+  lead: NormalizedLeadIntake;
+  customerId: string | null;
+  leadId: string | null;
+  outcome: "existing_customer" | "new_lead" | "needs_review";
+}) {
+  const outcomeLabel =
+    outcome === "existing_customer"
+      ? "existing customer"
+      : outcome === "new_lead"
+        ? "new lead"
+        : "review queue";
+  const source = [lead.source, lead.sourceAccount, lead.campaign]
+    .filter(Boolean)
+    .join(" / ");
+
+  return createNotification(client, {
+    company_id: company.id,
+    customer_id: customerId,
+    title: `Follow up: ${lead.contactName}`,
+    message: [
+      `New ${lead.provider.replace(/_/g, " ")} intake was routed to ${outcomeLabel}.`,
+      `Source: ${source || "not provided"}.`,
+      `Requested service: ${lead.serviceType}.`,
+      leadId ? `Lead ID: ${leadId}.` : null,
+      lead.message ? `Message: ${lead.message.slice(0, 220)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    channel: "in_app",
+    status: "queued",
+    remind_at: new Date().toISOString(),
+  });
+}
+
 export async function previewLeadIntake(
   client: CrmClient,
   lead: NormalizedLeadIntake,
@@ -2024,21 +2331,34 @@ export async function previewLeadIntake(
     (match) =>
       match.confidence === "exact_match" && match.candidate?.recordType === "lead",
   );
+  const customerMatch = duplicateMatches.find(
+    (match) =>
+      (match.confidence === "exact_match" || match.confidence === "likely_match") &&
+      match.candidate?.recordType === "customer",
+  );
   const duplicateLeadId =
-    duplicate?.related_record_id ?? exactLeadMatch?.candidate?.id ?? undefined;
+    duplicate?.related_table === "leads"
+      ? duplicate.related_record_id
+      : exactLeadMatch?.candidate?.id ?? undefined;
+  const duplicateCustomerId =
+    duplicate?.related_table === "customers"
+      ? duplicate.related_record_id
+      : customerMatch?.candidate?.id ?? undefined;
 
   return {
     ok: true,
     provider: mappedLead.provider,
     status: "dry_run",
     leadId: duplicateLeadId,
+    customerId: duplicateCustomerId,
     duplicateOfLeadId: duplicateLeadId,
+    duplicateOfCustomerId: duplicateCustomerId,
     routing: responseRouting(mappedLead),
     duplicateConfidence,
     warnings: mappedLead.warnings,
     requestFingerprint,
     externalId,
-    wouldCreateLead: !duplicateLeadId,
+    wouldCreateLead: !duplicateLeadId && !duplicateCustomerId,
     possibleMatches: duplicateMatches,
   };
 }
@@ -2087,6 +2407,25 @@ export async function processLeadIntake(
         };
       }
 
+      const reviewWarnings = [...mappedLead.warnings];
+
+      if (company) {
+        try {
+          await createLeadIntakeFollowUp({
+            client,
+            company,
+            lead: mappedLead,
+            customerId: null,
+            leadId: null,
+            outcome: "needs_review",
+          });
+        } catch (error) {
+          reviewWarnings.push(
+            `Review intake follow-up could not be created: ${describeSafeError(error)}`,
+          );
+        }
+      }
+
       return {
         ok: true,
         provider: mappedLead.provider,
@@ -2094,7 +2433,7 @@ export async function processLeadIntake(
         intakeRecordId: intakeRecord.id ?? undefined,
         routing: responseRouting(mappedLead),
         duplicateConfidence: mappedLead.duplicateConfidence,
-        warnings: mappedLead.warnings,
+        warnings: reviewWarnings,
         requestFingerprint,
         externalId,
       };
@@ -2140,11 +2479,119 @@ export async function processLeadIntake(
     (match) =>
       match.confidence === "exact_match" && match.candidate?.recordType === "lead",
   );
+  const customerMatch = duplicateMatches.find(
+    (match) =>
+      (match.confidence === "exact_match" || match.confidence === "likely_match") &&
+      match.candidate?.recordType === "customer",
+  );
+  const leadMatch = duplicateMatches.find(
+    (match) =>
+      (match.confidence === "exact_match" || match.confidence === "likely_match") &&
+      match.candidate?.recordType === "lead",
+  );
   const warnings = [...mappedLead.warnings];
 
-  if (duplicate?.related_record_id || exactLeadMatch?.candidate?.id) {
+  if (
+    duplicate?.related_table === "customers" ||
+    customerMatch?.candidate?.id
+  ) {
+    const customerId =
+      duplicate?.related_table === "customers"
+        ? duplicate.related_record_id ?? ""
+        : customerMatch?.candidate?.id ?? "";
+    let syncLogId: string | undefined;
+    let intakeRecordId: string | undefined;
+    let followUpCreated = false;
+
+    if (logOutcome) {
+      try {
+        const log = await logLeadIntakeCustomerAttachment({
+          client,
+          company,
+          lead: mappedLead,
+          customerId,
+          requestFingerprint,
+          externalId,
+          warnings,
+        });
+        syncLogId = log.id;
+      } catch (error) {
+        warnings.push(
+          `Customer match was detected, but intake logging failed: ${describeSafeError(error)}`,
+        );
+      }
+    }
+
+    try {
+      await createLeadIntakeFollowUp({
+        client,
+        company,
+        lead: mappedLead,
+        customerId,
+        leadId: null,
+        outcome: "existing_customer",
+      });
+      followUpCreated = true;
+    } catch (error) {
+      warnings.push(
+        `Customer intake follow-up could not be created: ${describeSafeError(error)}`,
+      );
+    }
+
+    try {
+      const intakeRecord = await tryCreateLeadIntakeRecord({
+        client,
+        company,
+        lead: mappedLead,
+        status: "duplicate",
+        linkedCustomerId: customerId,
+        duplicateMatches,
+        syncLogId: syncLogId ?? null,
+        followUpState: followUpCreated ? "scheduled" : "required",
+        reviewNotes:
+          "Existing customer matched. New lead creation skipped; follow up from Customer 360.",
+      });
+
+      if (intakeRecord.status === "created" && intakeRecord.id) {
+        intakeRecordId = intakeRecord.id;
+      } else if (intakeRecord.warning) {
+        warnings.push(intakeRecord.warning);
+      }
+    } catch (error) {
+      warnings.push(
+        `Customer match was detected, but intake review record creation failed: ${describeSafeError(error)}`,
+      );
+    }
+
+    return {
+      ok: true,
+      provider: mappedLead.provider,
+      status: responseStatusForDuplicate(warnings),
+      customerId,
+      duplicateOfCustomerId: customerId,
+      intakeRecordId,
+      syncLogId,
+      routing: responseRouting(mappedLead),
+      duplicateConfidence,
+      warnings,
+      requestFingerprint,
+      externalId,
+    };
+  }
+
+  if (
+    duplicate?.related_table === "leads" ||
+    duplicate?.related_record_id ||
+    leadMatch?.candidate?.id ||
+    exactLeadMatch?.candidate?.id
+  ) {
     const duplicateLeadId =
-      duplicate?.related_record_id ?? exactLeadMatch?.candidate?.id ?? "";
+      duplicate?.related_table === "leads" || !duplicate?.related_table
+        ? duplicate?.related_record_id ??
+          leadMatch?.candidate?.id ??
+          exactLeadMatch?.candidate?.id ??
+          ""
+        : leadMatch?.candidate?.id ?? exactLeadMatch?.candidate?.id ?? "";
     let syncLogId: string | undefined;
     let intakeRecordId: string | undefined;
 
@@ -2230,6 +2677,23 @@ export async function processLeadIntake(
     }
 
     let intakeRecordId: string | undefined;
+    let followUpCreated = false;
+
+    try {
+      await createLeadIntakeFollowUp({
+        client,
+        company,
+        lead: mappedLead,
+        customerId: null,
+        leadId: createdLead.id,
+        outcome: "new_lead",
+      });
+      followUpCreated = true;
+    } catch (error) {
+      warnings.push(
+        `Lead was created, but follow-up creation failed: ${describeSafeError(error)}`,
+      );
+    }
 
     try {
       const intakeRecord = await tryCreateLeadIntakeRecord({
@@ -2240,6 +2704,7 @@ export async function processLeadIntake(
         linkedLeadId: createdLead.id,
         duplicateMatches,
         syncLogId: syncLogId ?? null,
+        followUpState: followUpCreated ? "scheduled" : "required",
         reviewNotes:
           duplicateConfidence === "no_match"
             ? null

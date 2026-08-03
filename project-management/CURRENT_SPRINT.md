@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-Google Calendar Phase 1 - Production Scheduling Foundation
+Unified Lead Intake Hub - Production Foundation
 
 ## Objective
 
-Build the production-grade Google Calendar foundation that connects WeatherTech OS inspections, appointments, job scheduling, dispatch, and production scheduling to authorized Google Workspace calendars while keeping WeatherTech OS as the operational source of truth.
+Build one production-ready lead intake pipeline that normalizes every supported lead source into the existing WeatherTech OS CRM, Customer 360, Communications Hub, and follow-up workflow without replacing completed CRM behavior.
 
 ## Owner
 
@@ -22,63 +22,61 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-02.
+2026-08-03.
 
 ## Owner-Approved Scope
 
-- Reuse the existing Google Workspace OAuth foundation from the Gmail sprint.
-- Add Google Calendar API server-side configuration, readiness checks, and safe setup documentation.
-- Support multiple company-aware connected Google calendars for WeatherTech Roofing LLC and IHC Painting.
-- Preserve calendar ownership, calendar purpose, read-only/read-write mode, sync status, sync token, and provider identifiers.
-- Add additive data model changes only where required for calendar credentials, connected calendars, event mappings, push-notification metadata, and unmatched inbound event review.
-- Keep WeatherTech OS as the source of truth for inspections, appointments, jobs, dispatch, production schedules, and crew assignments.
-- Add server-side calendar discovery and manual sync foundations using mockable Calendar API boundaries.
-- Add outbound event create/update/cancel planning with idempotent provider mapping and disabled-by-default live writes.
-- Add inbound event synchronization and conflict-detection foundations without creating low-quality CRM records.
-- Surface Google Calendar readiness and synchronization status in the existing Integration Center and affected scheduling workflows.
-- Use existing integration sync logging with sanitized request and response summaries.
-- Add focused automated tests and browser regression coverage for Google Calendar foundation behavior.
-- Add concise Google Calendar setup documentation and safe environment placeholders.
+- Inspect and reuse the existing CRM, Customer 360, Twilio, Gmail, Google Calendar, integration logging, and lead-routing architecture.
+- Build one canonical lead intake service used by current production intake providers.
+- Support Website forms, Website inspection requests, Website estimate requests, Twilio voice, Twilio SMS, Gmail, Manual CRM entry, Yelp foundation, Google Business Profile foundation, Facebook foundation, and future providers.
+- Prevent duplicate CRM records through phone normalization, email normalization, existing customer matching, existing lead matching, provider event IDs, and request fingerprints.
+- Preserve source attribution for provider, campaign, referral/source detail, landing page/source account, UTM metadata, company, business line, and received timestamp where current schema supports it.
+- Ensure accepted intake either attaches to an existing customer or creates one new lead, but never both.
+- Add provider adapters for Website, Twilio, and Gmail.
+- Keep reusable adapter contracts for Yelp, Google Business Profile, Facebook, GoHighLevel, and future providers without activating live connectivity.
+- Integrate intake outcomes with Customer 360 and the unified Communications Hub.
+- Create actionable follow-up reminders using the existing notification workflow.
+- Continue using sanitized `integration_sync_logs` infrastructure.
+- Add automated and browser regression coverage for routing, duplicates, provider normalization, malformed payloads, missing fields, provider failures, logging, and UI surfacing.
 
 ## Explicit Exclusions
 
-- Do not redesign the application.
-- Do not create a standalone calendar dashboard.
-- Do not replace the current scheduling, dispatch, inspection, or job-management systems.
-- Do not create fake production synchronization or fake successful sync states.
-- Do not connect to or modify a real Google Calendar during automated testing.
-- Do not enable live Google Calendar writes by default.
-- Do not hard-code real email addresses, calendar IDs, customer data, OAuth tokens, access tokens, refresh tokens, or credentials.
-- Do not delete or destructively modify existing data.
-- Do not weaken authentication, RLS, or company access controls.
-- Do not begin website-form, Yelp, QuickBooks, e-signature, Google Business Profile, customer portal, or AI scheduling functionality.
-- Do not rebuild Gmail Phase 1.
+- Do not redesign the UI.
+- Do not replace existing CRM workflows.
+- Do not create placeholder dashboards.
+- Do not build AI features.
+- Do not activate live Yelp.
+- Do not activate live Google Business Profile.
+- Do not activate live Facebook.
+- Do not connect production websites yet.
+- Do not send real SMS, email, or customer messages.
+- Do not commit secrets.
+- Do not weaken authentication or RLS.
+- Do not perform destructive migrations.
 - Do not modify `.env.local`.
-- Do not remotely apply migrations unless explicitly safe, supported by the current environment, and consistent with repository policy.
 
 ## Completion Criteria
 
-- CURRENT_SPRINT.md reflects the approved Google Calendar sprint before implementation.
-- Google Calendar configuration values remain server-side only and are documented with safe placeholders.
-- Missing Google configuration and missing credentials fail safely.
-- Existing Gmail OAuth/mailbox behavior remains intact.
-- Scope-upgrade or reconnect requirements are surfaced without silently invalidating Gmail connections.
-- Multiple company-aware connected calendars can be represented without hard-coded production calendars.
-- Event payload generation avoids unnecessary private customer information and internal notes.
-- Event mapping and sync planning prevent duplicate Google event creation.
-- Calendar writes remain disabled unless `GOOGLE_CALENDAR_WRITE_ENABLED` is explicitly enabled server-side.
-- Inbound unmatched provider events are preserved for review rather than converted into poor CRM records.
-- Conflict detection covers employee, crew, schedule, and duplicate-provider mapping conflicts where current data supports it.
-- Integration logs remain sanitized and do not store tokens or full sensitive provider payloads.
-- Migrations, if any, are additive, transactional, non-destructive, and not remotely applied during this sprint.
+- Website, Twilio, and Gmail intake providers use the canonical lead intake service where production routing exists.
+- Manual lead entry remains in the existing CRM lead workflow and continues to use the shared normalization helpers available to the browser bundle.
+- Existing customer matches attach intake to Customer 360 and skip duplicate lead creation.
+- Existing lead/provider duplicates skip duplicate lead creation.
+- New unmatched accepted intake creates exactly one lead.
+- Intake records preserve provider/source attribution and link to customer or lead outcomes.
+- Follow-up reminders are created for accepted new leads, existing customer matches, and reviewable company-scoped intake.
+- Integration sync logs remain sanitized and record success, duplicate, customer attachment, and failure outcomes.
+- Yelp, Google Business Profile, Facebook, and future provider contracts remain foundation-only and do not imply live connectivity.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Focused Google Calendar foundation tests pass.
-- Existing Google Workspace/Gmail tests pass.
-- Existing Twilio, lead-intake, security, and migration-integrity tests pass where applicable.
-- Targeted and full signed-in browser regression pass where supported.
+- Lead routing tests pass.
+- Unified lead-intake service tests pass.
+- Twilio foundation tests pass.
+- Gmail foundation tests pass.
+- Google Calendar foundation tests pass.
+- Targeted browser regression passes for Lead Intake, Communications, Customer 360, Dashboard, Customers, Navigation, and Dark Mode where supported.
+- Full signed-in browser regression passes where supported.
 - Final scope audit confirms no excluded work or unrelated files were changed.
 - One focused conventional commit is created and pushed.
 - Local `main` equals `origin/main`.
@@ -91,28 +89,29 @@ Joe Harris
 - Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before product development begins.
-- Inspect existing CRM, Customer 360, Communications, Integration Center, Calendar, Dispatch, Jobs, Inspections, Supabase repository, API route, integration logging, and Google Workspace patterns before editing.
-- Run focused Google Calendar foundation tests using mocks.
-- Run existing Google Workspace/Gmail tests.
-- Run existing Twilio communications tests.
+- Inspect existing CRM, Customer 360, Communications, Integration Center, Lead Intake, Website intake, Yelp intake, Twilio webhooks, Gmail sync, Google Calendar foundation, Supabase repository, integration logging, and browser regression patterns before editing.
 - Run lead-intake routing tests.
+- Run unified lead-intake service tests.
+- Run existing Twilio communications tests.
+- Run existing Google Workspace/Gmail tests.
+- Run existing Google Calendar scheduling tests.
 - Run security and company-access tests.
-- Run migration-integrity tests if a migration is added.
+- Run migration-integrity tests.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Integration Center, Calendar, Dispatch, Jobs, Inspections, CRM, Customer 360, Gmail, and Twilio behavior.
+- Run targeted signed-in browser regression for Lead Intake, Communications, Customer 360, Dashboard, Customers, Navigation, and Dark Mode.
 - Run full signed-in browser regression if supported.
 - Clean all disposable regression records.
 
 ## Planned Commit Message
 
-`feat: add Google Calendar scheduling foundation`
+`feat: add unified lead intake hub`
 
 ## Blockers
 
-- Live Google Cloud Calendar API activation, OAuth consent approval, production redirect URI setup, account authorization, calendar selection, push-notification channel verification, and controlled live calendar write validation still require owner access.
+- Live website form connection, live Yelp/Google Business Profile/Facebook provider activation, production phone/email account authorization, and controlled provider traffic validation require owner-controlled external account access and are outside this sprint.
 
 ## Final Status
 
@@ -122,4 +121,4 @@ Completed and ready for commit/push verification.
 
 Use [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) as the mandatory lifecycle for this sprint. Do not promote [NEXT_SPRINT.md](./NEXT_SPRINT.md) or begin another sprint unless the owner explicitly approves that action.
 
-The Google Calendar Phase 1 foundation was implemented with server-side OAuth reuse, disabled-by-default live writes, additive migration `0028_google_calendar_scheduling_foundation.sql`, safe setup documentation, automated regression coverage, targeted browser validation, and full signed-in browser validation.
+The Unified Lead Intake Hub production foundation was implemented with canonical provider normalization, duplicate customer/lead prevention, existing-customer attachment, follow-up creation, sanitized integration logging, Gmail routing integration, provider adapter foundations, automated service coverage, targeted browser validation, and full signed-in browser validation.
