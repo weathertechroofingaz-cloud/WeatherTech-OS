@@ -53,4 +53,5 @@ not begin work when the current sprint is awaiting owner approval.
 - [Testing Standard](./docs/TESTING_STANDARD.md)
 - [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md)
 - [Google Workspace Phase 1 Setup](./docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md)
+- [Google Calendar Phase 1 Setup](./docs/GOOGLE_CALENDAR_PHASE_1_SETUP.md)
 - [Changelog](./CHANGELOG.md)

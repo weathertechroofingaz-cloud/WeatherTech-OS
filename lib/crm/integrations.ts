@@ -21,6 +21,12 @@ import type {
 
 export const googleCalendarScopes = [
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.events.readonly",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+];
+
+export const googleCalendarReadOnlyScopes = [
+  "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
 ];
 
@@ -40,11 +46,15 @@ export const googleWorkspaceEnvVars = {
   publicBaseUrl: "GOOGLE_PUBLIC_BASE_URL",
   tokenEncryptionKey: "GOOGLE_TOKEN_ENCRYPTION_KEY",
   gmailSendEnabled: "GOOGLE_GMAIL_SEND_ENABLED",
+  googleCalendarWriteEnabled: "GOOGLE_CALENDAR_WRITE_ENABLED",
   oauthStartEndpoint: "/api/integrations/google-workspace/oauth/start",
   oauthCallbackPath: "/api/integrations/google-workspace/oauth/callback",
   readinessEndpoint: "/api/integrations/google-workspace/readiness",
   syncEndpoint: "/api/integrations/google-workspace/sync",
   sendEndpoint: "/api/integrations/google-workspace/send",
+  calendarDiscoveryEndpoint: "/api/integrations/google-workspace/calendar/discover",
+  calendarSyncEndpoint: "/api/integrations/google-workspace/calendar/sync",
+  calendarWebhookEndpoint: "/api/integrations/google-workspace/calendar/webhook",
 };
 
 export const googleMapsEnvVars = {
@@ -129,11 +139,13 @@ export type GoogleCalendarEventPayload = {
   location?: string;
   description?: string;
   start: {
-    dateTime: string;
+    dateTime?: string;
+    date?: string;
     timeZone: string;
   };
   end: {
-    dateTime: string;
+    dateTime?: string;
+    date?: string;
     timeZone: string;
   };
   reminders: {
@@ -154,21 +166,28 @@ export type GoogleCalendarEventPayload = {
   };
 };
 
+function getCalendarEventDescription(event: ScheduleEventRecord, targetName: string) {
+  const descriptionLines = [
+    `WeatherTech OS ${event.event_type.replace(/_/g, " ")} appointment`,
+    `Target: ${targetName}`,
+    event.job_id ? `Job reference: ${event.job_id}` : "",
+    event.lead_id ? `Lead reference: ${event.lead_id}` : "",
+    event.customer_id ? `Customer reference: ${event.customer_id}` : "",
+    "Operational notes and private customer details remain in WeatherTech OS.",
+  ].filter(Boolean);
+
+  return descriptionLines.join("\n");
+}
+
 export function buildGoogleCalendarEventPayload(
   event: ScheduleEventRecord,
   targetName: string,
   timeZone = "America/Phoenix",
 ): GoogleCalendarEventPayload {
-  const descriptionLines = [
-    `WeatherTech OS ${event.event_type.replace(/_/g, " ")} appointment`,
-    `Target: ${targetName}`,
-    event.notes ? `Notes: ${event.notes}` : "",
-  ].filter(Boolean);
-
   return {
     summary: event.title,
     location: event.location ?? undefined,
-    description: descriptionLines.join("\n"),
+    description: getCalendarEventDescription(event, targetName),
     start: {
       dateTime: event.start_at,
       timeZone,

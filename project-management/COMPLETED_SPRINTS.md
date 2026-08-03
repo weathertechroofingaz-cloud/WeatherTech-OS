@@ -105,6 +105,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added Google Workspace setup documentation and safe environment placeholders.
   - Did not modify `.env.local`, expose credentials, send real email, or activate live Google Workspace connectivity.
 
+### Google Calendar Phase 1 - Production Scheduling Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Google Calendar scheduling foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added server-side Google Calendar configuration, OAuth scope-upgrade, calendar discovery, sync planning, inbound webhook intake, unmatched-event review, and conflict-detection foundations.
+  - Added additive migration `0028_google_calendar_scheduling_foundation.sql` for company-aware connected calendars, Calendar credentials, event sync metadata, and unmatched provider events.
+  - Added safe write gating through `GOOGLE_CALENDAR_WRITE_ENABLED=false`, sanitized Calendar payloads, and setup documentation.
+  - Did not modify `.env.local`, expose credentials, create live Calendar events, or apply the migration remotely.
+
 ## Recording Template
 
 ### Sprint Name

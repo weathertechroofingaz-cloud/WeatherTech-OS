@@ -7041,6 +7041,13 @@ async function testWebsiteMarketingFoundation(browser, tab) {
       return (
         text.includes("integration hub") &&
         text.includes("real-world service connections") &&
+        text.includes("production scheduling foundation") &&
+        text.includes("weathertech os remains") &&
+        text.includes("live writes disabled") &&
+        text.includes("connected calendars") &&
+        text.includes("event payload preview") &&
+        text.includes("prepare connection") &&
+        text.includes("connect calendar") &&
         text.includes("gmail / google workspace email foundation") &&
         text.includes("production google workspace foundation") &&
         text.includes("server-side oauth") &&
@@ -7054,6 +7061,33 @@ async function testWebsiteMarketingFoundation(browser, tab) {
     "marketing provider setup navigation",
     10000,
   );
+  const calendarFoundationState = await tab.playwright.evaluate(() => {
+    const section = document.querySelector('[data-testid="google-calendar-scheduling-foundation"]');
+    const text = section?.textContent?.toLowerCase() ?? "";
+
+    return {
+      visible: Boolean(section),
+      statesWriteDisabled: text.includes("live writes disabled"),
+      hasFakeSyncedAction: text.includes("mark synced"),
+      hasPayloadPreview: text.includes("event payload preview"),
+    };
+  });
+
+  if (!calendarFoundationState.visible) {
+    throw new Error("Google Calendar scheduling foundation panel is not visible.");
+  }
+
+  if (!calendarFoundationState.statesWriteDisabled) {
+    throw new Error("Google Calendar foundation does not state live writes are disabled.");
+  }
+
+  if (calendarFoundationState.hasFakeSyncedAction) {
+    throw new Error("Google Calendar foundation still exposes fake Mark synced action.");
+  }
+
+  if (!calendarFoundationState.hasPayloadPreview) {
+    throw new Error("Google Calendar foundation no longer shows the event payload preview.");
+  }
 
   await clickNav(tab, "Website & Marketing");
   await clickUnique(

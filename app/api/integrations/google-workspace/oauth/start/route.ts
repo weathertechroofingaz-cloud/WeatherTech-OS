@@ -6,6 +6,11 @@ import {
   getGoogleWorkspaceConfigCheckResult,
   GMAIL_OAUTH_EVENT_TYPE,
 } from "../../../../../../lib/googleWorkspace/serverClient";
+import {
+  GOOGLE_CALENDAR_DISCOVERY_EVENT_TYPE,
+  googleCalendarSupportedScopes,
+} from "../../../../../../lib/googleWorkspace/calendar";
+import { gmailIdentityScopes, gmailScopes } from "../../../../../../lib/crm/integrations";
 import type { CompanyRecord } from "../../../../../../lib/crm/types";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +18,7 @@ export const runtime = "nodejs";
 
 type OAuthStartBody = {
   companyId?: unknown;
+  provider?: unknown;
   redirectPath?: unknown;
   mailboxLabel?: unknown;
   loginHint?: unknown;
@@ -76,10 +82,18 @@ export async function POST(request: NextRequest) {
 
   const body = await getJsonBody(request);
   const companyId = getRequestString(body.companyId);
+  const requestedProvider = getRequestString(body.provider);
+  const provider =
+    requestedProvider === "google_calendar" ? "google_calendar" : "gmail";
+  const providerLabel = provider === "google_calendar" ? "Google Calendar" : "Gmail";
 
   if (!companyId) {
     return NextResponse.json(
-      { ok: false, authorizationUrl: null, message: "Select a company before connecting Gmail." },
+      {
+        ok: false,
+        authorizationUrl: null,
+        message: `Select a company before connecting ${providerLabel}.`,
+      },
       { status: 400 },
     );
   }
@@ -100,14 +114,22 @@ export async function POST(request: NextRequest) {
   const requestDetails = buildGoogleOAuthAuthorizationRequest({
     companyId,
     loginHint: getRequestString(body.loginHint),
+    scopes:
+      provider === "google_calendar"
+        ? googleCalendarSupportedScopes
+        : [...gmailIdentityScopes, ...gmailScopes],
   });
   const redirectPath = sanitizeRedirectPath(getRequestString(body.redirectPath));
   const mailboxLabel =
-    getRequestString(body.mailboxLabel) ?? `${(company as CompanyRecord).name} Gmail mailbox`;
+    getRequestString(body.mailboxLabel) ??
+    (provider === "google_calendar"
+      ? `${(company as CompanyRecord).name} Google Calendar`
+      : `${(company as CompanyRecord).name} Gmail mailbox`);
 
   const { error: stateError } = await serviceClient.from("gmail_oauth_states").insert({
     company_id: companyId,
     initiated_by: userResult.user.id,
+    provider,
     state_hash: requestDetails.stateHash,
     code_verifier: requestDetails.codeVerifier,
     redirect_path: redirectPath,
@@ -129,9 +151,12 @@ export async function POST(request: NextRequest) {
 
   await serviceClient.from("integration_sync_logs").insert({
     company_id: companyId,
-    provider: "gmail",
+    provider,
     direction: "provider_to_weathertech",
-    event_type: GMAIL_OAUTH_EVENT_TYPE,
+    event_type:
+      provider === "google_calendar"
+        ? GOOGLE_CALENDAR_DISCOVERY_EVENT_TYPE
+        : GMAIL_OAUTH_EVENT_TYPE,
     status: "queued",
     request_fingerprint: requestDetails.stateHash,
     request_summary: {
@@ -139,6 +164,7 @@ export async function POST(request: NextRequest) {
       mailboxLabel,
       redirectPath,
       scopesRequested: requestDetails.scopes.length,
+      provider,
     },
     response_summary: {},
   });

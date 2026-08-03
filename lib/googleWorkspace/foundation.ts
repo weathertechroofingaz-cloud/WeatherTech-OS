@@ -1,4 +1,9 @@
-import { gmailIdentityScopes, gmailScopes, googleWorkspaceEnvVars } from "../crm/integrations";
+import {
+  gmailIdentityScopes,
+  gmailScopes,
+  googleCalendarScopes,
+  googleWorkspaceEnvVars,
+} from "../crm/integrations";
 
 export type GoogleWorkspaceReadinessStatus =
   | "not_configured"
@@ -54,7 +59,15 @@ export const googleWorkspaceMailboxTemplates: GoogleWorkspaceMailboxTemplate[] =
 ];
 
 export type GoogleWorkspaceEndpoint = {
-  id: "oauth_start" | "oauth_callback" | "readiness" | "sync" | "send";
+  id:
+    | "oauth_start"
+    | "oauth_callback"
+    | "readiness"
+    | "sync"
+    | "send"
+    | "calendar_discovery"
+    | "calendar_sync"
+    | "calendar_webhook";
   label: string;
   path: string;
   method: "GET" | "POST";
@@ -104,6 +117,33 @@ export const googleWorkspaceEndpoints: GoogleWorkspaceEndpoint[] = [
     summary:
       "Sends only when a connected mailbox exists and GOOGLE_GMAIL_SEND_ENABLED is explicitly enabled.",
   },
+  {
+    id: "calendar_discovery",
+    label: "Calendar discovery",
+    path: googleWorkspaceEnvVars.calendarDiscoveryEndpoint,
+    method: "POST",
+    liveEnabled: true,
+    summary:
+      "Discovers calendars available to an authorized Google account and stores safe metadata.",
+  },
+  {
+    id: "calendar_sync",
+    label: "Manual Calendar sync",
+    path: googleWorkspaceEnvVars.calendarSyncEndpoint,
+    method: "POST",
+    liveEnabled: false,
+    summary:
+      "Creates or updates Google Calendar events only when GOOGLE_CALENDAR_WRITE_ENABLED is explicitly enabled.",
+  },
+  {
+    id: "calendar_webhook",
+    label: "Calendar webhook",
+    path: googleWorkspaceEnvVars.calendarWebhookEndpoint,
+    method: "POST",
+    liveEnabled: false,
+    summary:
+      "Accepts future Google Calendar push notifications after owner-controlled public webhook configuration.",
+  },
 ];
 
 export const googleWorkspaceRequiredEnvVars = [
@@ -117,6 +157,7 @@ export const googleWorkspaceOptionalEnvVars = [
   googleWorkspaceEnvVars.publicBaseUrl,
   googleWorkspaceEnvVars.workspaceDomain,
   googleWorkspaceEnvVars.gmailSendEnabled,
+  googleWorkspaceEnvVars.googleCalendarWriteEnabled,
 ] as const;
 
 export const googleWorkspacePhaseOneGuardrails = [
@@ -124,10 +165,16 @@ export const googleWorkspacePhaseOneGuardrails = [
   "Mailbox sync writes Gmail message metadata and sanitized previews into the existing CRM communication model.",
   "Unknown inbound Gmail messages are preserved for manual review rather than creating duplicate customers.",
   "Outbound Gmail send remains disabled unless GOOGLE_GMAIL_SEND_ENABLED is explicitly enabled.",
+  "Google Calendar writes remain disabled unless GOOGLE_CALENDAR_WRITE_ENABLED is explicitly enabled.",
+  "Calendar discovery and sync use server-side OAuth tokens and never expose provider credentials to browser code.",
   "Automated tests use mocks and never connect to or send through a real Gmail account.",
 ];
 
-export const googleWorkspaceSupportedScopes = [...gmailIdentityScopes, ...gmailScopes];
+export const googleWorkspaceSupportedScopes = [
+  ...gmailIdentityScopes,
+  ...gmailScopes,
+  ...googleCalendarScopes,
+];
 
 export const googleWorkspaceFoundationMigration =
   "0027_gmail_workspace_email_foundation.sql";

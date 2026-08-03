@@ -96,6 +96,10 @@ const expectedMigrations = [
     "0027_gmail_workspace_email_foundation.sql",
     "ac5dc160e5e6ee717588546f7c36d360646f79abdd716ae587006206fbbdaf85",
   ],
+  [
+    "0028_google_calendar_scheduling_foundation.sql",
+    "7fd989e897cbe98a16bf58edcd53a0a537c5cac026a241329015000849740b74",
+  ],
 ];
 
 const files = fs
@@ -148,7 +152,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0027 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0028 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -167,6 +171,7 @@ const securityHardeningIndex = files.indexOf("0024_security_company_access_harde
 const documentStorageIndex = files.indexOf("0025_document_storage_signature_workflow.sql");
 const propertyIntelligenceIndex = files.indexOf("0026_property_intelligence_foundation.sql");
 const gmailWorkspaceIndex = files.indexOf("0027_gmail_workspace_email_foundation.sql");
+const googleCalendarIndex = files.indexOf("0028_google_calendar_scheduling_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -203,8 +208,16 @@ if (
   failures.push("Gmail Workspace migration must order after property intelligence.");
 }
 
-if (gmailWorkspaceIndex !== files.length - 1) {
-  failures.push("Gmail Workspace foundation migration must remain last.");
+if (
+  gmailWorkspaceIndex === -1 ||
+  googleCalendarIndex === -1 ||
+  !(gmailWorkspaceIndex < googleCalendarIndex)
+) {
+  failures.push("Google Calendar migration must order after Gmail Workspace foundation.");
+}
+
+if (googleCalendarIndex !== files.length - 1) {
+  failures.push("Google Calendar scheduling foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -512,6 +525,116 @@ if (!gmailWorkspaceMigration.trim().startsWith("begin;") ||
   failures.push("0027 must remain transactionally wrapped.");
 }
 
+const googleCalendarMigration = fs.readFileSync(
+  path.join(migrationsDir, "0028_google_calendar_scheduling_foundation.sql"),
+  "utf8",
+);
+
+if (!googleCalendarMigration.trim().startsWith("begin;") ||
+    !googleCalendarMigration.trim().endsWith("commit;")) {
+  failures.push("0028 must remain transactionally wrapped.");
+}
+
+for (const requiredTable of [
+  "google_calendar_credentials",
+  "google_calendar_connected_calendars",
+  "google_calendar_unmatched_events",
+]) {
+  if (!googleCalendarMigration.includes(`public.${requiredTable}`)) {
+    failures.push(`0028 must create or configure ${requiredTable}.`);
+  }
+}
+
+for (const requiredCalendarColumn of [
+  "google_recurring_event_id",
+  "google_event_etag",
+  "google_event_status",
+  "provider_updated_at",
+  "deleted_at",
+  "conflict_status",
+  "conflict_reason",
+  "sync_attempt_count",
+  "last_synced_direction",
+  "metadata",
+]) {
+  if (!googleCalendarMigration.includes(requiredCalendarColumn)) {
+    failures.push(`0028 calendar_event_syncs must include ${requiredCalendarColumn}.`);
+  }
+}
+
+if (
+  !googleCalendarMigration.includes("alter table public.gmail_oauth_states") ||
+  !googleCalendarMigration.includes("add column if not exists provider text") ||
+  !googleCalendarMigration.includes("check (provider in ('gmail', 'google_calendar'))")
+) {
+  failures.push("0028 must make OAuth state provider-aware for Gmail and Google Calendar.");
+}
+
+for (const serviceOnlyExpectation of [
+  "revoke all on table public.google_calendar_credentials from anon",
+  "revoke all on table public.google_calendar_credentials from public",
+  "revoke all on table public.google_calendar_credentials from authenticated",
+  "grant select, insert, update, delete on table public.google_calendar_credentials to service_role",
+]) {
+  if (!googleCalendarMigration.includes(serviceOnlyExpectation)) {
+    failures.push(`0028 must include credential protection: ${serviceOnlyExpectation}.`);
+  }
+}
+
+for (const metadataTable of [
+  "google_calendar_connected_calendars",
+  "google_calendar_unmatched_events",
+]) {
+  if (
+    !googleCalendarMigration.includes(
+      `revoke delete on table public.${metadataTable} from authenticated`,
+    )
+  ) {
+    failures.push(`0028 must revoke authenticated delete access to ${metadataTable}.`);
+  }
+
+  if (
+    !googleCalendarMigration.includes(
+      `grant select, insert, update on table public.${metadataTable} to authenticated`,
+    )
+  ) {
+    failures.push(`0028 must only grant authenticated read/write metadata access to ${metadataTable}.`);
+  }
+}
+
+for (const requiredConstraint of [
+  "calendar_event_syncs_google_event_status_check",
+  "calendar_event_syncs_conflict_status_check",
+  "calendar_event_syncs_sync_attempt_count_check",
+  "calendar_event_syncs_last_synced_direction_check",
+  "google_calendar_connected_calendars_access_role_check",
+  "google_calendar_connected_calendars_purpose_check",
+  "google_calendar_connected_calendars_sync_mode_check",
+  "google_calendar_connected_calendars_status_check",
+  "google_calendar_unmatched_events_event_status_check",
+  "google_calendar_unmatched_events_review_status_check",
+]) {
+  if (!googleCalendarMigration.includes(requiredConstraint)) {
+    failures.push(`0028 must include ${requiredConstraint}.`);
+  }
+}
+
+for (const requiredIndex of [
+  "calendar_event_syncs_google_event_idx",
+  "calendar_event_syncs_recurring_event_idx",
+  "google_calendar_connected_calendars_connection_idx",
+  "google_calendar_unmatched_events_connection_idx",
+]) {
+  if (!googleCalendarMigration.includes(requiredIndex)) {
+    failures.push(`0028 must include ${requiredIndex}.`);
+  }
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(googleCalendarMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(googleCalendarMigration)) {
+  failures.push("0028 must not use broad USING/WITH CHECK (true) RLS policies.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -523,7 +646,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0027.",
+  "Verified raw filename order matches numeric order from 0001 through 0028.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -537,6 +660,9 @@ console.log(
 console.log(
   "Verified 0026_property_intelligence_foundation.sql precedes 0027_gmail_workspace_email_foundation.sql.",
 );
+console.log(
+  "Verified 0027_gmail_workspace_email_foundation.sql precedes 0028_google_calendar_scheduling_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -549,4 +675,7 @@ console.log(
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",
+);
+console.log(
+  "Verified 0028 Google Calendar schema, service-only credentials, company-scoped calendar metadata, sync mapping fields, and transactional wrapper.",
 );

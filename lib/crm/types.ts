@@ -269,6 +269,45 @@ export type CalendarEventSyncStatus =
   | "needs_update"
   | "conflict"
   | "error";
+export type GoogleCalendarPurpose =
+  | "inspections"
+  | "estimates"
+  | "production"
+  | "dispatch"
+  | "crew"
+  | "follow_up"
+  | "materials"
+  | "service"
+  | "operations"
+  | "personal";
+export type GoogleCalendarSyncMode = "read_only" | "read_write";
+export type GoogleCalendarConnectionStatus =
+  | "active"
+  | "disabled"
+  | "error"
+  | "needs_reauth";
+export type GoogleCalendarAccessRole =
+  | "none"
+  | "freeBusyReader"
+  | "reader"
+  | "writer"
+  | "writerWithoutPrivateAccess"
+  | "owner";
+export type GoogleCalendarEventStatus =
+  | "confirmed"
+  | "tentative"
+  | "cancelled"
+  | "unmatched";
+export type GoogleCalendarConflictStatus =
+  | "none"
+  | "possible"
+  | "confirmed"
+  | "resolved";
+export type GoogleCalendarUnmatchedReviewStatus =
+  | "needs_review"
+  | "linked"
+  | "dismissed"
+  | "ignored";
 export type EmailMessageCategory =
   | "estimate"
   | "invoice"
@@ -1116,12 +1155,93 @@ export type CalendarEventSyncRecord = {
   provider: IntegrationProvider;
   google_calendar_id: string;
   google_event_id: string | null;
+  google_recurring_event_id?: string | null;
+  google_event_etag?: string | null;
+  google_event_status?: Extract<
+    GoogleCalendarEventStatus,
+    "confirmed" | "tentative" | "cancelled"
+  >;
   sync_status: CalendarEventSyncStatus;
   sync_direction: IntegrationSyncDirection;
   last_synced_at: string | null;
   external_updated_at: string | null;
+  provider_updated_at?: string | null;
+  deleted_at?: string | null;
+  conflict_status?: GoogleCalendarConflictStatus;
+  conflict_reason?: string | null;
+  sync_attempt_count?: number;
+  last_synced_direction?: IntegrationSyncDirection | null;
   last_error: string | null;
   last_payload_hash: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoogleCalendarCredentialRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  account_email: string;
+  provider_account_id: string | null;
+  encrypted_access_token: string | null;
+  encrypted_refresh_token: string | null;
+  token_type: string | null;
+  scopes: string[];
+  token_expires_at: string | null;
+  last_refreshed_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoogleCalendarConnectedCalendarRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  google_calendar_id: string;
+  display_name: string;
+  description: string | null;
+  time_zone: string | null;
+  access_role: GoogleCalendarAccessRole | null;
+  primary_calendar: boolean;
+  selected_for_sync: boolean;
+  calendar_purpose: GoogleCalendarPurpose;
+  branch_location: string | null;
+  sync_mode: GoogleCalendarSyncMode;
+  status: GoogleCalendarConnectionStatus;
+  sync_token: string | null;
+  webhook_channel_id: string | null;
+  webhook_resource_id: string | null;
+  webhook_channel_expires_at: string | null;
+  last_sync_at: string | null;
+  last_successful_sync_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoogleCalendarUnmatchedEventRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  connected_calendar_id: string | null;
+  google_calendar_id: string;
+  google_event_id: string;
+  google_recurring_event_id: string | null;
+  google_event_etag: string | null;
+  event_status: GoogleCalendarEventStatus;
+  event_summary: string;
+  event_location: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  all_day_date: string | null;
+  provider_updated_at: string | null;
+  review_status: GoogleCalendarUnmatchedReviewStatus;
+  review_reason: string | null;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -1176,6 +1296,7 @@ export type GmailOauthStateRecord = {
   code_verifier: string;
   redirect_path: string;
   requested_scopes: string[];
+  provider: Extract<IntegrationProvider, "gmail" | "google_calendar">;
   mailbox_label: string | null;
   expires_at: string;
   consumed_at: string | null;
@@ -2049,13 +2170,115 @@ export type CalendarEventSyncInput = {
   provider?: IntegrationProvider;
   google_calendar_id: string;
   google_event_id?: string | null;
+  google_recurring_event_id?: string | null;
+  google_event_etag?: string | null;
+  google_event_status?: Extract<
+    GoogleCalendarEventStatus,
+    "confirmed" | "tentative" | "cancelled"
+  >;
   sync_status?: CalendarEventSyncStatus;
   sync_direction?: IntegrationSyncDirection;
   last_synced_at?: string | null;
   external_updated_at?: string | null;
+  provider_updated_at?: string | null;
+  deleted_at?: string | null;
+  conflict_status?: GoogleCalendarConflictStatus;
+  conflict_reason?: string | null;
+  sync_attempt_count?: number;
+  last_synced_direction?: IntegrationSyncDirection | null;
   last_error?: string | null;
   last_payload_hash?: string | null;
+  metadata?: Record<string, unknown>;
 };
+
+export type GoogleCalendarCredentialInsert = Omit<
+  GoogleCalendarCredentialRecord,
+  "id" | "created_at" | "updated_at"
+>;
+
+export type GoogleCalendarConnectedCalendarInsert = Omit<
+  GoogleCalendarConnectedCalendarRecord,
+  | "id"
+  | "created_at"
+  | "updated_at"
+  | "description"
+  | "time_zone"
+  | "access_role"
+  | "primary_calendar"
+  | "selected_for_sync"
+  | "calendar_purpose"
+  | "branch_location"
+  | "sync_mode"
+  | "status"
+  | "sync_token"
+  | "webhook_channel_id"
+  | "webhook_resource_id"
+  | "webhook_channel_expires_at"
+  | "last_sync_at"
+  | "last_successful_sync_at"
+  | "last_failure_at"
+  | "last_error"
+  | "metadata"
+> &
+  Partial<
+    Pick<
+      GoogleCalendarConnectedCalendarRecord,
+      | "description"
+      | "time_zone"
+      | "access_role"
+      | "primary_calendar"
+      | "selected_for_sync"
+      | "calendar_purpose"
+      | "branch_location"
+      | "sync_mode"
+      | "status"
+      | "sync_token"
+      | "webhook_channel_id"
+      | "webhook_resource_id"
+      | "webhook_channel_expires_at"
+      | "last_sync_at"
+      | "last_successful_sync_at"
+      | "last_failure_at"
+      | "last_error"
+      | "metadata"
+    >
+  >;
+
+export type GoogleCalendarUnmatchedEventInsert = Omit<
+  GoogleCalendarUnmatchedEventRecord,
+  | "id"
+  | "created_at"
+  | "updated_at"
+  | "connected_calendar_id"
+  | "google_recurring_event_id"
+  | "google_event_etag"
+  | "event_status"
+  | "event_location"
+  | "starts_at"
+  | "ends_at"
+  | "all_day_date"
+  | "provider_updated_at"
+  | "review_status"
+  | "review_reason"
+  | "metadata"
+> &
+  Partial<
+    Pick<
+      GoogleCalendarUnmatchedEventRecord,
+      | "connected_calendar_id"
+      | "google_recurring_event_id"
+      | "google_event_etag"
+      | "event_status"
+      | "event_location"
+      | "starts_at"
+      | "ends_at"
+      | "all_day_date"
+      | "provider_updated_at"
+      | "review_status"
+      | "review_reason"
+      | "metadata"
+    >
+  >;
 
 export type EmailMessageInput = {
   company_id: string;
@@ -2098,9 +2321,11 @@ export type EmailMessageInput = {
 
 export type GmailOauthStateInsert = Omit<
   GmailOauthStateRecord,
-  "id" | "created_at" | "updated_at" | "consumed_at" | "failure_reason"
+  "id" | "created_at" | "updated_at" | "provider" | "consumed_at" | "failure_reason"
 > &
-  Partial<Pick<GmailOauthStateRecord, "id" | "consumed_at" | "failure_reason">>;
+  Partial<
+    Pick<GmailOauthStateRecord, "id" | "provider" | "consumed_at" | "failure_reason">
+  >;
 
 export type GmailMailboxCredentialInsert = Omit<
   GmailMailboxCredentialRecord,
@@ -2627,6 +2852,8 @@ export type CrmSnapshot = {
   integrationSyncLogs: IntegrationSyncLogRecord[];
   leadIntakeRecords: LeadIntakeRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
+  googleCalendarConnectedCalendars: GoogleCalendarConnectedCalendarRecord[];
+  googleCalendarUnmatchedEvents: GoogleCalendarUnmatchedEventRecord[];
   emailMessages: EmailMessageRecord[];
   gmailEmailThreads: GmailEmailThreadRecord[];
   gmailEmailAttachments: GmailEmailAttachmentRecord[];
@@ -2919,6 +3146,30 @@ export type Database = {
         Insert: CalendarEventSyncInsert;
         Update: Partial<
           Database["public"]["Tables"]["calendar_event_syncs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      google_calendar_credentials: {
+        Row: GoogleCalendarCredentialRecord;
+        Insert: GoogleCalendarCredentialInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["google_calendar_credentials"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      google_calendar_connected_calendars: {
+        Row: GoogleCalendarConnectedCalendarRecord;
+        Insert: GoogleCalendarConnectedCalendarInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["google_calendar_connected_calendars"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      google_calendar_unmatched_events: {
+        Row: GoogleCalendarUnmatchedEventRecord;
+        Insert: GoogleCalendarUnmatchedEventInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["google_calendar_unmatched_events"]["Insert"]
         >;
         Relationships: [];
       };

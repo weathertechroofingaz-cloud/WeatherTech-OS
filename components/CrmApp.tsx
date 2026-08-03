@@ -39721,6 +39721,7 @@ type GoogleWorkspaceReadinessResult = {
       workspaceDomain: string | null;
       tokenEncryptionKey: string | null;
       gmailSendEnabled: boolean;
+      googleCalendarWriteEnabled: boolean;
     };
     scopes: string[];
   };
@@ -39741,6 +39742,58 @@ type GoogleWorkspaceReadinessResult = {
     tokenExpiresAt: string | null;
     disabled: boolean;
   }>;
+  calendar: {
+    config: {
+      ok: boolean;
+      writeEnabled: boolean;
+      missing: string[];
+      credentials: {
+        calendarWriteEnabled: boolean;
+        calendarApiBaseUrl: string;
+        calendarDiscoveryEndpoint: string;
+        calendarSyncEndpoint: string;
+        calendarWebhookEndpoint: string;
+        readOnlyScopes: string[];
+        readWriteScopes: string[];
+      };
+      scopes: string[];
+    };
+    schema: {
+      migration: string;
+      applied: boolean | null;
+      message: string;
+    };
+    connectedCalendarCount: number;
+    connections: Array<{
+      id: string;
+      companyId: string;
+      status: IntegrationConnectionStatus;
+      accountEmail: string | null;
+      providerAccountId: string | null;
+      scopes: string[];
+      scopesReady: boolean;
+      defaultCalendarId: string | null;
+      activeCalendarCount: number;
+      writeModeCount: number;
+      lastSyncAt: string | null;
+      lastFailureAt: string | null;
+      disabled: boolean;
+    }>;
+    calendars: Array<{
+      id: string;
+      companyId: string;
+      integrationConnectionId: string;
+      googleCalendarId: string;
+      displayName: string;
+      purpose: string;
+      syncMode: string;
+      status: string;
+      selectedForSync: boolean;
+      accessRole: string | null;
+      lastSyncAt: string | null;
+      lastError: string | null;
+    }>;
+  };
   endpoints: Array<{
     id: string;
     label: string;
@@ -40060,6 +40113,11 @@ function IntegrationsView({
     useState<GoogleWorkspaceReadinessResult | null>(null);
   const [isCheckingGoogleWorkspace, setIsCheckingGoogleWorkspace] = useState(false);
   const [isStartingGmailOAuth, setIsStartingGmailOAuth] = useState(false);
+  const [isStartingCalendarOAuth, setIsStartingCalendarOAuth] = useState(false);
+  const [isDiscoveringGoogleCalendars, setIsDiscoveringGoogleCalendars] = useState(false);
+  const [syncingCalendarEventId, setSyncingCalendarEventId] = useState<string | null>(
+    null,
+  );
   const [isSyncingGmail, setIsSyncingGmail] = useState(false);
   const [sendingGmailMessageId, setSendingGmailMessageId] = useState<string | null>(
     null,
@@ -40161,6 +40219,30 @@ function IntegrationsView({
       ? "Applied"
       : "Required"
     : "0027";
+  const googleCalendarReadiness = googleWorkspaceReadinessResult?.calendar;
+  const googleCalendarSchemaLabel = googleCalendarReadiness
+    ? googleCalendarReadiness.schema.applied
+      ? "Applied"
+      : "Required"
+    : "0028";
+  const googleCalendarWriteEnabled =
+    googleCalendarReadiness?.config.credentials.calendarWriteEnabled ?? false;
+  const discoveredGoogleCalendars =
+    googleCalendarReadiness?.calendars ??
+    snapshot.googleCalendarConnectedCalendars.map((calendar) => ({
+      id: calendar.id,
+      companyId: calendar.company_id,
+      integrationConnectionId: calendar.integration_connection_id,
+      googleCalendarId: calendar.google_calendar_id,
+      displayName: calendar.display_name,
+      purpose: calendar.calendar_purpose,
+      syncMode: calendar.sync_mode,
+      status: calendar.status,
+      selectedForSync: calendar.selected_for_sync,
+      accessRole: calendar.access_role,
+      lastSyncAt: calendar.last_successful_sync_at ?? calendar.last_sync_at,
+      lastError: calendar.last_error,
+    }));
 
   useEffect(() => {
     if (!snapshot.leads.length) {
@@ -40310,6 +40392,154 @@ function IntegrationsView({
       );
     } finally {
       setIsStartingGmailOAuth(false);
+    }
+  };
+
+  const handleStartCalendarOAuth = async () => {
+    const companyId =
+      primaryConnection?.company_id ?? snapshot.companies[0]?.id ?? "";
+
+    if (!companyId) {
+      onError("Create a company before connecting Google Calendar.");
+      return;
+    }
+
+    setIsStartingCalendarOAuth(true);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.oauthStartEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "google_calendar",
+          companyId,
+          redirectPath: "/?view=integrations",
+          mailboxLabel:
+            primaryConnection?.display_name ??
+            `${companyMap.get(companyId)?.name ?? "Company"} Google Calendar`,
+          loginHint: primaryConnection?.account_email ?? undefined,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        authorizationUrl?: string | null;
+        message?: string;
+      };
+
+      if (!response.ok || !result.ok || !result.authorizationUrl) {
+        onError(result.message ?? "Google Calendar OAuth could not be started.");
+        return;
+      }
+
+      window.location.assign(result.authorizationUrl);
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not start Google Calendar OAuth.",
+      );
+    } finally {
+      setIsStartingCalendarOAuth(false);
+    }
+  };
+
+  const handleDiscoverGoogleCalendars = async () => {
+    if (!primaryConnection) {
+      onError("Prepare or connect Google Calendar before discovery.");
+      return;
+    }
+
+    setIsDiscoveringGoogleCalendars(true);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.calendarDiscoveryEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          integrationConnectionId: primaryConnection.id,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        calendars?: unknown[];
+        message?: string;
+      };
+
+      if (!response.ok || !result.ok) {
+        onError(result.message ?? "Google Calendar discovery is not available yet.");
+      } else {
+        onNotice(
+          `Google Calendar discovery completed: ${result.calendars?.length ?? 0} calendars available.`,
+        );
+      }
+
+      await onReload();
+      await handleCheckGoogleWorkspaceReadiness();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not discover Google calendars.",
+      );
+    } finally {
+      setIsDiscoveringGoogleCalendars(false);
+    }
+  };
+
+  const handleSyncGoogleCalendarEvent = async (event: ScheduleEventRecord) => {
+    if (!primaryConnection) {
+      onError("Prepare or connect Google Calendar before syncing events.");
+      return;
+    }
+
+    setSyncingCalendarEventId(event.id);
+
+    try {
+      const response = await fetch(googleWorkspaceEnvVars.calendarSyncEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          integrationConnectionId: primaryConnection.id,
+          scheduleEventId: event.id,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        synced?: boolean;
+        writeDisabled?: boolean;
+        message?: string;
+      };
+
+      if (!response.ok || !result.ok) {
+        onError(result.message ?? "Google Calendar sync did not run.");
+      } else if (result.synced) {
+        onNotice("Google Calendar confirmed the event was synchronized.");
+      } else {
+        onNotice(
+          result.message ??
+            "Google Calendar sync was validated. Live writes remain disabled.",
+        );
+      }
+
+      await onReload();
+      await handleCheckGoogleWorkspaceReadiness();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "Could not sync Google Calendar event.",
+      );
+    } finally {
+      setSyncingCalendarEventId(null);
     }
   };
 
@@ -40747,20 +40977,22 @@ function IntegrationsView({
       await createIntegrationConnection(client, {
         company_id: companyId,
         provider: "google_calendar",
-        status: "connected",
+        status: "needs_reauth",
         display_name: displayName,
         account_email: accountEmail,
         default_calendar_id: defaultCalendarId,
         scopes: googleCalendarScopes,
         sync_direction: syncDirection,
-        credential_reference: `vault://google-calendar/${defaultCalendarId}`,
+        credential_reference: null,
         settings: {
           timeZone: "America/Phoenix",
           defaultReminderMinutes: 60,
-          includeJobNotes: true,
+          oauthRequired: true,
+          discoveryRequired: true,
+          calendarWriteEnabled: false,
         },
       });
-      onNotice("Google Calendar connection saved.");
+      onNotice("Google Calendar connection prepared. Complete Google OAuth before live discovery or sync.");
       await onReload();
       form.reset();
     } catch (error) {
@@ -40824,34 +41056,6 @@ function IntegrationsView({
       await onReload();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not queue event.");
-    }
-  };
-
-  const markCalendarSyncComplete = async (
-    event: ScheduleEventRecord,
-    sync: NonNullable<ReturnType<typeof getCalendarSyncRecord>>,
-  ) => {
-    const now = new Date().toISOString();
-
-    try {
-      await upsertCalendarEventSync(client, {
-        company_id: sync.company_id,
-        schedule_event_id: sync.schedule_event_id,
-        integration_connection_id: sync.integration_connection_id,
-        provider: "google_calendar",
-        google_calendar_id: sync.google_calendar_id,
-        google_event_id: sync.google_event_id ?? `google-${event.id}`,
-        sync_status: "synced",
-        sync_direction: sync.sync_direction,
-        last_synced_at: now,
-        external_updated_at: now,
-        last_error: null,
-        last_payload_hash: sync.last_payload_hash,
-      });
-      onNotice(`${event.title} marked synced.`);
-      await onReload();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update sync state.");
     }
   };
 
@@ -40939,36 +41143,75 @@ function IntegrationsView({
         </p>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(360px,0.75fr)]">
+      <section
+        className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(360px,0.75fr)]"
+        data-testid="google-calendar-scheduling-foundation"
+      >
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase text-sky-700">
-                Phase 5 - Google Calendar
+                Phase 6 - Google Calendar
               </p>
               <h3 className="mt-1 text-xl font-bold text-slate-950">
-                Appointment sync control center
+                Production scheduling foundation
               </h3>
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
-                Queue inspections, job starts, follow-ups, and deliveries for Calendar
-                sync while the secure OAuth worker handles Google credentials server-side.
+                Connect inspections, appointments, job starts, dispatch, and production
+                scheduling to authorized Google calendars while WeatherTech OS remains
+                the operational source of truth.
               </p>
             </div>
-            {primaryConnection ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  label={integrationStatusLabel(primaryConnection.status)}
-                  tone={getIntegrationStatusTone(primaryConnection.status)}
-                />
+            <div className="flex flex-wrap items-center gap-2">
+              {primaryConnection ? (
+                <>
+                  <Badge
+                    label={integrationStatusLabel(primaryConnection.status)}
+                    tone={getIntegrationStatusTone(primaryConnection.status)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void toggleConnectionStatus(primaryConnection)}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    {primaryConnection.status === "paused" ? "Resume" : "Pause"}
+                  </button>
+                </>
+              ) : null}
+              <Badge
+                label={googleCalendarWriteEnabled ? "Live writes enabled" : "Live writes disabled"}
+                tone={googleCalendarWriteEnabled ? "green" : "amber"}
+              />
+              <button
+                type="button"
+                onClick={() => void handleCheckGoogleWorkspaceReadiness()}
+                disabled={isCheckingGoogleWorkspace}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                {isCheckingGoogleWorkspace ? "Checking" : "Check readiness"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleStartCalendarOAuth()}
+                disabled={isStartingCalendarOAuth}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <CalendarClock className="h-4 w-4" />
+                {isStartingCalendarOAuth ? "Opening Google" : "Connect Calendar"}
+              </button>
+              {primaryConnection ? (
                 <button
                   type="button"
-                  onClick={() => void toggleConnectionStatus(primaryConnection)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  onClick={() => void handleDiscoverGoogleCalendars()}
+                  disabled={isDiscoveringGoogleCalendars}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {primaryConnection.status === "paused" ? "Resume" : "Pause"}
+                  <Search className="h-4 w-4" />
+                  {isDiscoveringGoogleCalendars ? "Discovering" : "Discover calendars"}
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-5">
@@ -40977,6 +41220,27 @@ function IntegrationsView({
             <ProfileStat label="Synced" value={googleSummary.synced} />
             <ProfileStat label="Needs update" value={googleSummary.needsUpdate} />
             <ProfileStat label="Errors" value={googleSummary.errors} />
+          </div>
+
+          <div className="mt-4 grid gap-3 rounded-lg border border-sky-200 bg-sky-50 p-4 md:grid-cols-4">
+            <ProfileStat label="Migration" value={googleCalendarSchemaLabel} />
+            <ProfileStat
+              label="Active calendars"
+              value={
+                googleCalendarReadiness?.connectedCalendarCount ??
+                discoveredGoogleCalendars.filter(
+                  (calendar) => calendar.status === "active" && calendar.selectedForSync,
+                ).length
+              }
+            />
+            <ProfileStat
+              label="Write mode"
+              value={googleCalendarWriteEnabled ? "Explicitly enabled" : "Disabled by default"}
+            />
+            <ProfileStat
+              label="Time zone"
+              value="America/Phoenix"
+            />
           </div>
 
           <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
@@ -41042,11 +41306,16 @@ function IntegrationsView({
                       {sync ? (
                         <button
                           type="button"
-                          onClick={() => void markCalendarSyncComplete(event, sync)}
-                          className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                          onClick={() => void handleSyncGoogleCalendarEvent(event)}
+                          disabled={syncingCalendarEventId === event.id}
+                          className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <CheckCircle2 className="h-4 w-4" />
-                          Mark synced
+                          <RefreshCcw className="h-4 w-4" />
+                          {syncingCalendarEventId === event.id
+                            ? "Checking"
+                            : googleCalendarWriteEnabled
+                              ? "Sync now"
+                              : "Validate sync"}
                         </button>
                       ) : null}
                     </div>
@@ -41090,6 +41359,10 @@ function IntegrationsView({
               </div>
             ) : (
               <form onSubmit={handleCreateGoogleConnection} className="mt-4 grid gap-3">
+                <p className="text-sm text-slate-500">
+                  Prepare a company-scoped Calendar connection record before OAuth.
+                  Live discovery and sync still require Google authorization.
+                </p>
                 <select
                   name="company_id"
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -41130,10 +41403,51 @@ function IntegrationsView({
                   type="submit"
                   className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                 >
-                  Save connection
+                  Prepare connection
                 </button>
               </form>
             )}
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">
+              Connected calendars
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Discovery runs server-side and stores only calendar metadata, sync mode,
+              ownership, and incremental sync state.
+            </p>
+            <div className="mt-4 grid gap-3">
+              {discoveredGoogleCalendars.length ? (
+                discoveredGoogleCalendars.slice(0, 5).map((calendar) => (
+                  <div
+                    key={calendar.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-950">
+                        {calendar.displayName}
+                      </p>
+                      <Badge
+                        label={calendar.selectedForSync ? "Selected" : "Not selected"}
+                        tone={calendar.selectedForSync ? "green" : "amber"}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {companyMap.get(calendar.companyId)?.name ?? "Company"} ·{" "}
+                      {calendar.purpose} · {calendar.syncMode.replace("_", "-")}
+                    </p>
+                    {calendar.lastError ? (
+                      <p className="mt-2 text-xs font-semibold text-amber-700">
+                        {calendar.lastError}
+                      </p>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <EmptyState label="No Google calendars have been discovered yet." />
+              )}
+            </div>
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

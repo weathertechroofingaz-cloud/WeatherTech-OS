@@ -40,6 +40,7 @@ function restoreEnv(originalEnv) {
     "GOOGLE_PUBLIC_BASE_URL",
     "GOOGLE_TOKEN_ENCRYPTION_KEY",
     "GOOGLE_GMAIL_SEND_ENABLED",
+    "GOOGLE_CALENDAR_WRITE_ENABLED",
   ]) {
     if (originalEnv[key] === undefined) {
       delete process.env[key];
@@ -108,6 +109,7 @@ try {
   process.env.GOOGLE_TOKEN_ENCRYPTION_KEY =
     "weathertech-test-token-encryption-key-that-is-not-real";
   process.env.GOOGLE_GMAIL_SEND_ENABLED = "false";
+  process.env.GOOGLE_CALENDAR_WRITE_ENABLED = "false";
 
   const readyConfig = serverClient.getGoogleWorkspaceConfigCheckResult();
   assertEqual(readyConfig.ok, true, "Complete Google env marks backend ready");
@@ -117,11 +119,18 @@ try {
     "Client secret is masked in readiness output",
   );
   assert(
-    readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.readonly") &&
+      readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.readonly") &&
       readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.send") &&
       readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.compose") &&
+      readyConfig.scopes.includes("https://www.googleapis.com/auth/calendar.events") &&
+      readyConfig.scopes.includes("https://www.googleapis.com/auth/calendar.calendarlist.readonly") &&
       readyConfig.scopes.includes("openid"),
-    "Google Workspace scopes include Gmail read, send, compose, and identity readiness",
+    "Google Workspace scopes include Gmail, Calendar, and identity readiness",
+  );
+  assertEqual(
+    readyConfig.credentials.googleCalendarWriteEnabled,
+    false,
+    "Calendar writes stay disabled unless explicitly enabled",
   );
 
   assertEqual(

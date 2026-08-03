@@ -710,6 +710,8 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
     integrationSyncLogs: [],
     leadIntakeRecords: [],
     calendarEventSyncs: [],
+    googleCalendarConnectedCalendars: [],
+    googleCalendarUnmatchedEvents: [],
     emailMessages: [],
     gmailEmailThreads: [],
     gmailEmailAttachments: [],

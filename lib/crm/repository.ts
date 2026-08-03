@@ -508,6 +508,8 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     integrationSyncLogs: [],
     leadIntakeRecords: [],
     calendarEventSyncs: [],
+    googleCalendarConnectedCalendars: [],
+    googleCalendarUnmatchedEvents: [],
     emailMessages: [],
     gmailEmailThreads: [],
     gmailEmailAttachments: [],
@@ -589,6 +591,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     integrationSyncLogs,
     leadIntakeRecords,
     calendarEventSyncs,
+    googleCalendarConnectedCalendars,
+    googleCalendarUnmatchedEvents,
     emailMessages,
     gmailEmailThreads,
     gmailEmailAttachments,
@@ -673,6 +677,15 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .from("calendar_event_syncs")
       .select("*")
       .order("updated_at", { ascending: false }),
+    client
+      .from("google_calendar_connected_calendars")
+      .select("*")
+      .order("updated_at", { ascending: false }),
+    client
+      .from("google_calendar_unmatched_events")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .limit(100),
     client.from("email_messages").select("*").order("updated_at", { ascending: false }),
     client
       .from("gmail_email_threads")
@@ -746,6 +759,20 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       ? [["lead_intake_records", leadIntakeRecords] as [string, { error: unknown }]]
       : []),
     ["calendar_event_syncs", calendarEventSyncs],
+    ...(googleCalendarConnectedCalendars.error &&
+    !isOptionalTableMissingError(googleCalendarConnectedCalendars.error)
+      ? [["google_calendar_connected_calendars", googleCalendarConnectedCalendars] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
+    ...(googleCalendarUnmatchedEvents.error &&
+    !isOptionalTableMissingError(googleCalendarUnmatchedEvents.error)
+      ? [["google_calendar_unmatched_events", googleCalendarUnmatchedEvents] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
     ["email_messages", emailMessages],
     ...(gmailEmailThreads.error && !isOptionalTableMissingError(gmailEmailThreads.error)
       ? [["gmail_email_threads", gmailEmailThreads] as [string, { error: unknown }]]
@@ -805,6 +832,14 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
     leadIntakeRecords: optionalRows("lead_intake_records", leadIntakeRecords),
     calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
+    googleCalendarConnectedCalendars: optionalRows(
+      "google_calendar_connected_calendars",
+      googleCalendarConnectedCalendars,
+    ),
+    googleCalendarUnmatchedEvents: optionalRows(
+      "google_calendar_unmatched_events",
+      googleCalendarUnmatchedEvents,
+    ),
     emailMessages: requireRows("email_messages", emailMessages),
     gmailEmailThreads: optionalRows("gmail_email_threads", gmailEmailThreads),
     gmailEmailAttachments: optionalRows(
@@ -2770,12 +2805,22 @@ export async function upsertCalendarEventSync(
         ...input,
         provider: input.provider ?? "google_calendar",
         google_event_id: input.google_event_id ?? null,
+        google_recurring_event_id: input.google_recurring_event_id ?? null,
+        google_event_etag: input.google_event_etag ?? null,
+        google_event_status: input.google_event_status ?? "confirmed",
         sync_status: input.sync_status ?? "queued",
         sync_direction: input.sync_direction ?? "two_way",
         last_synced_at: input.last_synced_at ?? null,
         external_updated_at: input.external_updated_at ?? null,
+        provider_updated_at: input.provider_updated_at ?? null,
+        deleted_at: input.deleted_at ?? null,
+        conflict_status: input.conflict_status ?? "none",
+        conflict_reason: input.conflict_reason ?? null,
+        sync_attempt_count: input.sync_attempt_count ?? 0,
+        last_synced_direction: input.last_synced_direction ?? null,
         last_error: input.last_error ?? null,
         last_payload_hash: input.last_payload_hash ?? null,
+        metadata: input.metadata ?? {},
       },
       {
         onConflict: "integration_connection_id,schedule_event_id",

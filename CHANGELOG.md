@@ -4,6 +4,14 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Google Calendar Phase 1 - Production Scheduling Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Google Calendar scheduling foundation`
+- Summary:
+  - Added the server-side Google Calendar foundation with OAuth reuse, company-aware connected calendars, disabled-by-default live writes, event sync planning, conflict detection, webhook intake, unmatched-event review, and sanitized integration logs.
+  - Added additive migration `0028_google_calendar_scheduling_foundation.sql`, safe setup documentation, and automated/browser regression coverage without applying the migration remotely.
+
 ### Gmail / Google Workspace Phase 1 - Production Email Foundation
 
 - Commit: `<this sprint commit>`

@@ -124,6 +124,14 @@ export function scopeCrmSnapshotByCompany(
             (companyTrade === "painting" && record.company_key === "ihc_painting"))),
     ),
     calendarEventSyncs: byCompany(snapshot.calendarEventSyncs, companyId),
+    googleCalendarConnectedCalendars: byCompany(
+      snapshot.googleCalendarConnectedCalendars,
+      companyId,
+    ),
+    googleCalendarUnmatchedEvents: byCompany(
+      snapshot.googleCalendarUnmatchedEvents,
+      companyId,
+    ),
     emailMessages: byCompany(snapshot.emailMessages, companyId),
     gmailEmailThreads: byCompany(snapshot.gmailEmailThreads, companyId),
     gmailEmailAttachments: byCompany(snapshot.gmailEmailAttachments, companyId),

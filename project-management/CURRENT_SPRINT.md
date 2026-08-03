@@ -4,17 +4,17 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Completed.
+Approved.
 
-This sprint was explicitly owner-approved in the Codex task request and completed using the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
+This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
 ## Sprint Name
 
-Gmail / Google Workspace Phase 1 - Production Email Foundation
+Google Calendar Phase 1 - Production Scheduling Foundation
 
 ## Objective
 
-Build the production-ready server-side Gmail / Google Workspace email foundation that connects company mailbox communication to the existing WeatherTech OS CRM, Customer 360, communications timeline, and integration logging workflow.
+Build the production-grade Google Calendar foundation that connects WeatherTech OS inspections, appointments, job scheduling, dispatch, and production scheduling to authorized Google Workspace calendars while keeping WeatherTech OS as the operational source of truth.
 
 ## Owner
 
@@ -26,50 +26,59 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Add secure server-side Google OAuth and Gmail API configuration support.
-- Support multiple company-aware connected mailboxes for WeatherTech Roofing LLC and IHC Painting.
-- Implement OAuth authorization, callback, reconnect, and disconnect foundation with state protection.
-- Add additive mailbox, email thread/message, draft, attachment metadata, and sync-state persistence only where required.
-- Import Gmail messages and threads server-side using mockable Gmail API boundaries.
-- Match synchronized email to existing customers, leads, and supported CRM relationships by normalized email address.
-- Preserve unmatched inbound email safely as unassigned communication requiring review.
-- Surface Gmail activity through the existing Customer 360 and communications timeline architecture.
-- Add safe outbound email and draft service boundaries without sending real customer email during tests.
-- Log OAuth, sync, matching, duplicate, send, draft, and error events through existing integration logging patterns.
-- Add focused automated tests and browser regression coverage for affected CRM/email workflows.
-- Add concise Google Workspace setup documentation.
+- Reuse the existing Google Workspace OAuth foundation from the Gmail sprint.
+- Add Google Calendar API server-side configuration, readiness checks, and safe setup documentation.
+- Support multiple company-aware connected Google calendars for WeatherTech Roofing LLC and IHC Painting.
+- Preserve calendar ownership, calendar purpose, read-only/read-write mode, sync status, sync token, and provider identifiers.
+- Add additive data model changes only where required for calendar credentials, connected calendars, event mappings, push-notification metadata, and unmatched inbound event review.
+- Keep WeatherTech OS as the source of truth for inspections, appointments, jobs, dispatch, production schedules, and crew assignments.
+- Add server-side calendar discovery and manual sync foundations using mockable Calendar API boundaries.
+- Add outbound event create/update/cancel planning with idempotent provider mapping and disabled-by-default live writes.
+- Add inbound event synchronization and conflict-detection foundations without creating low-quality CRM records.
+- Surface Google Calendar readiness and synchronization status in the existing Integration Center and affected scheduling workflows.
+- Use existing integration sync logging with sanitized request and response summaries.
+- Add focused automated tests and browser regression coverage for Google Calendar foundation behavior.
+- Add concise Google Calendar setup documentation and safe environment placeholders.
 
 ## Explicit Exclusions
 
 - Do not redesign the application.
-- Do not create a standalone email dashboard.
-- Do not create fake emails or fake successful sync states.
-- Do not send email to real customers during development or validation.
-- Do not hard-code real mailbox addresses.
-- Do not commit credentials, OAuth tokens, access tokens, refresh tokens, or private mailbox data.
+- Do not create a standalone calendar dashboard.
+- Do not replace the current scheduling, dispatch, inspection, or job-management systems.
+- Do not create fake production synchronization or fake successful sync states.
+- Do not connect to or modify a real Google Calendar during automated testing.
+- Do not enable live Google Calendar writes by default.
+- Do not hard-code real email addresses, calendar IDs, customer data, OAuth tokens, access tokens, refresh tokens, or credentials.
 - Do not delete or destructively modify existing data.
-- Do not replace the current CRM workflow.
 - Do not weaken authentication, RLS, or company access controls.
-- Do not begin Google Calendar, website-form, Yelp, QuickBooks, e-signature, Google Business Profile, or AI email functionality.
+- Do not begin website-form, Yelp, QuickBooks, e-signature, Google Business Profile, customer portal, or AI scheduling functionality.
+- Do not rebuild Gmail Phase 1.
 - Do not modify `.env.local`.
+- Do not remotely apply migrations unless explicitly safe, supported by the current environment, and consistent with repository policy.
 
 ## Completion Criteria
 
-- Gmail / Google Workspace configuration values remain server-side only and are documented with safe placeholders.
-- OAuth state generation and validation are tested.
-- Missing Google configuration fails safely.
-- Company-aware mailbox mapping is supported without hard-coded production email addresses.
-- Gmail message import, thread association, deduplication, attachment metadata, and sync failure handling are covered by focused tests.
-- Existing customer and lead email matching works by normalized email.
-- Unmatched inbound email is preserved for review without creating duplicate customers.
-- Drafting and outbound send boundaries are implemented safely with no real email sent in automated tests.
-- Integration logs remain sanitized and do not store tokens or full sensitive message bodies.
-- Existing Customer 360, Communications, CRM, Dashboard, and navigation workflows remain intact.
+- CURRENT_SPRINT.md reflects the approved Google Calendar sprint before implementation.
+- Google Calendar configuration values remain server-side only and are documented with safe placeholders.
+- Missing Google configuration and missing credentials fail safely.
+- Existing Gmail OAuth/mailbox behavior remains intact.
+- Scope-upgrade or reconnect requirements are surfaced without silently invalidating Gmail connections.
+- Multiple company-aware connected calendars can be represented without hard-coded production calendars.
+- Event payload generation avoids unnecessary private customer information and internal notes.
+- Event mapping and sync planning prevent duplicate Google event creation.
+- Calendar writes remain disabled unless `GOOGLE_CALENDAR_WRITE_ENABLED` is explicitly enabled server-side.
+- Inbound unmatched provider events are preserved for review rather than converted into poor CRM records.
+- Conflict detection covers employee, crew, schedule, and duplicate-provider mapping conflicts where current data supports it.
+- Integration logs remain sanitized and do not store tokens or full sensitive provider payloads.
+- Migrations, if any, are additive, transactional, non-destructive, and not remotely applied during this sprint.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Relevant automated and browser regression passes.
+- Focused Google Calendar foundation tests pass.
+- Existing Google Workspace/Gmail tests pass.
+- Existing Twilio, lead-intake, security, and migration-integrity tests pass where applicable.
+- Targeted and full signed-in browser regression pass where supported.
 - Final scope audit confirms no excluded work or unrelated files were changed.
 - One focused conventional commit is created and pushed.
 - Local `main` equals `origin/main`.
@@ -79,32 +88,38 @@ Joe Harris
 
 - Confirm [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) has been read.
 - Confirm approval status is exactly `Approved`.
-- Confirm the working tree is clean before development begins.
+- Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
-- Confirm local `HEAD` matches `origin/main` before development begins.
-- Inspect existing CRM, Customer 360, Communications, Integration Center, Twilio, GoHighLevel, Supabase repository, API route, and integration logging patterns before editing.
-- Run focused Google Workspace integration tests using mocks.
-- Run relevant existing integration and migration integrity tests.
+- Confirm local `HEAD` matches `origin/main` before product development begins.
+- Inspect existing CRM, Customer 360, Communications, Integration Center, Calendar, Dispatch, Jobs, Inspections, Supabase repository, API route, integration logging, and Google Workspace patterns before editing.
+- Run focused Google Calendar foundation tests using mocks.
+- Run existing Google Workspace/Gmail tests.
+- Run existing Twilio communications tests.
+- Run lead-intake routing tests.
+- Run security and company-access tests.
+- Run migration-integrity tests if a migration is added.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Communications, Customer 360, Integration Center, Dashboard, and navigation.
+- Run targeted signed-in browser regression for Integration Center, Calendar, Dispatch, Jobs, Inspections, CRM, Customer 360, Gmail, and Twilio behavior.
 - Run full signed-in browser regression if supported.
 - Clean all disposable regression records.
 
 ## Planned Commit Message
 
-`feat: add Gmail workspace email foundation`
+`feat: add Google Calendar scheduling foundation`
 
 ## Blockers
 
-- Live Google Cloud project configuration, Gmail API activation, OAuth consent approval, production redirect URI setup, mailbox owner authorization, and controlled live mailbox testing still require owner access.
+- Live Google Cloud Calendar API activation, OAuth consent approval, production redirect URI setup, account authorization, calendar selection, push-notification channel verification, and controlled live calendar write validation still require owner access.
 
 ## Final Status
 
-Completed pending the sprint commit and push recorded in Git history.
+Completed and ready for commit/push verification.
 
 ## Notes
 
 Use [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) as the mandatory lifecycle for this sprint. Do not promote [NEXT_SPRINT.md](./NEXT_SPRINT.md) or begin another sprint unless the owner explicitly approves that action.
+
+The Google Calendar Phase 1 foundation was implemented with server-side OAuth reuse, disabled-by-default live writes, additive migration `0028_google_calendar_scheduling_foundation.sql`, safe setup documentation, automated regression coverage, targeted browser validation, and full signed-in browser validation.

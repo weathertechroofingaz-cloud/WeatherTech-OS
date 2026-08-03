@@ -9,6 +9,7 @@ import {
   googleWorkspaceSupportedScopes,
 } from "./foundation";
 import { googleWorkspaceEnvVars } from "../crm/integrations";
+import { getGoogleCalendarConfigCheckResult } from "./calendar";
 import type {
   CompanyRecord,
   CrmSnapshot,
@@ -46,6 +47,7 @@ export type GoogleWorkspaceMaskedConfig = {
   workspaceDomain: string | null;
   tokenEncryptionKey: string | null;
   gmailSendEnabled: boolean;
+  googleCalendarWriteEnabled: boolean;
 };
 
 export type GoogleWorkspaceConfigCheckResult = {
@@ -57,6 +59,7 @@ export type GoogleWorkspaceConfigCheckResult = {
   oauthAuthorizationEndpoint: typeof GOOGLE_AUTH_URL;
   tokenEndpoint: typeof GOOGLE_TOKEN_URL;
   gmailApiBaseUrl: typeof GMAIL_API_BASE_URL;
+  calendarApiBaseUrl: string;
   scopes: string[];
 };
 
@@ -252,10 +255,14 @@ export function getGoogleWorkspaceConfigCheckResult(): GoogleWorkspaceConfigChec
       workspaceDomain: getServerEnv(googleWorkspaceEnvVars.workspaceDomain),
       tokenEncryptionKey: maskValue(getServerEnv(googleWorkspaceEnvVars.tokenEncryptionKey)),
       gmailSendEnabled: getBooleanEnvValue(googleWorkspaceEnvVars.gmailSendEnabled),
+      googleCalendarWriteEnabled: getBooleanEnvValue(
+        googleWorkspaceEnvVars.googleCalendarWriteEnabled,
+      ),
     },
     oauthAuthorizationEndpoint: GOOGLE_AUTH_URL,
     tokenEndpoint: GOOGLE_TOKEN_URL,
     gmailApiBaseUrl: GMAIL_API_BASE_URL,
+    calendarApiBaseUrl: getGoogleCalendarConfigCheckResult().credentials.calendarApiBaseUrl,
     scopes: googleWorkspaceSupportedScopes,
   };
 }
