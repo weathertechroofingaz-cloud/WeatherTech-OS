@@ -4,6 +4,27 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### AI Tools 2.0 - WeatherTech OS Operating System Brain
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add ai tools operating brain`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Extended the existing AI Tools workspace into a provider-disabled operating brain with a read-only command bar, daily intelligence summary, priority recommendations, assistant panels, approval gates, saved-analysis readiness, and generated drafts awaiting review.
+  - Added company-aware, role-aware rule-based intelligence that cites internal records and clearly labels missing information, completeness, approval requirements, provider-disabled behavior, and production-disabled state.
+  - Preserved and hardened the AI Scope Writer and AI Estimate Assistant so they use approved templates and existing estimate line items only.
+  - Added additive migration `0033_ai_tools_operating_brain.sql` for company-owned saved analyses, AI audit events, and AI usage limits, but did not apply it remotely from Codex.
+  - Did not activate paid AI providers, send communications, expose secrets, enable production automation, weaken RLS, or fake AI/provider output.
+
 ### Estimate & Proposal Builder 2.0 - World-Class Multi-Brand Sales, Acceptance, Invoice, and Payment System
 
 - Commit: `<this sprint commit>`

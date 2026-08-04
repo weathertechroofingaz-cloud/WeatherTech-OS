@@ -25,6 +25,7 @@ Current repository tests include:
 - `tests/quickbooks-online-foundation.test.mjs` for QuickBooks Online official capability flags, OAuth/company readiness, duplicate-safe customer/estimate/invoice/payment mappings, production write gates, and Integration Center provider registration.
 - `tests/electronic-signatures-foundation.test.mjs` for DocuSign and Dropbox Sign official capability flags, OAuth/account readiness, duplicate-safe signature request drafts, disabled live request gates, Customer 360 event labels, provider retry planning, Communications readiness, and Integration Center provider registration.
 - `tests/estimate-proposal-builder-v2.test.mjs` for customer-safe proposal packet generation, base proposal totals, optional upgrades, full replacement alternatives, deposit invoice drafts, brand-specific proposal numbering, and proposal-to-job guardrails.
+- `tests/ai-tools-operating-brain.test.mjs` for provider-disabled AI Tools 2.0 behavior, company scoping, role-aware financial language, prompt-safety blocking, grounded command responses, draft approval gates, and sensitive-label redaction.
 - `tests/production-readiness-center.test.mjs` for deployment readiness scoring, owner setup requirements, provider activation guides, guided launch-control sequence, launch gates, pending migration inventory, redacted environment readiness, three-company mapping guidance, controlled-test plans, migration checklist evidence, and non-green production activation gating.
 - `tests/staging-deployment-readiness.test.mjs` for private staging health/readiness metadata, required staging environment variables, secret redaction, disabled provider safety gates, Supabase reachability classification, production approval gating, and customer portal/public registration safety flags.
 - Additional validation may be embedded in browser regression flows.
@@ -39,7 +40,7 @@ The signed-in Codex browser regression entrypoint is:
 npm run test:browser:codex
 ```
 
-Current browser regression coverage includes high-value workflows across dashboard, office operations, settings integrations, Website & Marketing, calendar, leads, estimates, customers, inbox, lead intake, themes, inspections, dispatch, jobs, and job production flows.
+Current browser regression coverage includes high-value workflows across dashboard, office operations, settings integrations, AI Tools, Website & Marketing, calendar, leads, estimates, customers, inbox, lead intake, themes, inspections, dispatch, jobs, and job production flows.
 
 Rules:
 
@@ -64,6 +65,7 @@ Use targeted validation when a sprint changes a specific workflow:
 - Google Business Profile: three-location routing, OAuth-required state, dry-run/manual intake, disabled live sync, duplicate handling, review/reply honesty, and no live messaging.
 - QuickBooks Online: OAuth-required state, company realmId readiness, duplicate-safe mapping drafts, disabled live accounting sync, disabled accounting writes, disabled payment processing, and provider audit-log support.
 - Electronic Signatures: DocuSign and Dropbox Sign OAuth-required state, company account readiness, duplicate-safe signature request drafts, disabled live request/send gates, provider status labels, Customer 360 signature events, proposal signature readiness, and provider audit-log support.
+- AI Tools: AI Tools 2.0 command bar, provider-disabled honesty, grounded responses, supporting records, missing information, approval gates, company scoping, prompt-safety blocking, and no live AI/provider activation.
 - Documents: proposal and signed-proposal categories, customer-safe proposal packet drafts, required-document flags, document search/filtering, and no customer-facing internal notes.
 - Invoices: proposal deposit draft creation, disabled online payment collection, invoice search/filtering, and no fake paid or provider-collected status.
 - Production Readiness: deployment blocker honesty, private staging health/readiness endpoints, guided launch sequence, launch-gate evidence, missing environment-variable guidance, pending migration verification, provider activation cards, three-company mapping guidance, controlled-test plans, provider activation guides, unified production checklist, Settings and Integration Center navigation, and no fake green/connected launch status.

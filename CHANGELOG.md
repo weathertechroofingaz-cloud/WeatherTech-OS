@@ -4,6 +4,17 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### AI Tools 2.0 - WeatherTech OS Operating System Brain
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add ai tools operating brain`
+- Summary:
+  - Extended the existing AI Tools workspace into a company-aware, role-aware operating-brain foundation with a read-only command bar, grounded responses, daily intelligence, priority recommendations, assistant panels, approval gates, saved-analysis readiness, and generated drafts awaiting review.
+  - Added additive AI persistence in migration `0033_ai_tools_operating_brain.sql` for saved analyses, audit events, and usage limits with RLS, company ownership, disabled provider defaults, zero usage limits, and no authenticated delete grants.
+  - Preserved and hardened AI Scope Writer and AI Estimate Assistant so they only use approved templates, selected CRM context, and existing estimate line items.
+  - Added automated and browser regression coverage for provider-disabled behavior, company scoping, prompt safety, approval gates, and no fake AI/provider output.
+  - Did not activate paid AI providers, apply the remote migration from Codex, send communications, expose secrets, enable production automation, or weaken RLS.
+
 ### Estimate & Proposal Builder 2.0 - World-Class Multi-Brand Sales, Acceptance, Invoice, and Payment System
 
 - Commit: `<this sprint commit>`

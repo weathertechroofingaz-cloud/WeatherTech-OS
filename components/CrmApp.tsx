@@ -139,6 +139,16 @@ import {
   type ProposalWorkspaceModel,
 } from "../lib/crm/proposals";
 import {
+  answerAiCommand,
+  buildAiWorkspaceModel,
+  type AiAssistantDraft,
+  type AiGroundedResponse,
+  type AiPriorityItem,
+  type AiRecommendedAction,
+  type AiSourceRecord,
+  type AiWorkspaceModel,
+} from "../lib/crm/aiTools";
+import {
   buildCommunicationProviderReadiness,
   buildUnifiedInboxItems,
   communicationAttentionFilters,
@@ -6051,6 +6061,8 @@ function CrmWorkspace({
             <AiToolsView
               client={client}
               snapshot={scopedSnapshot}
+              companyMap={companyMap}
+              activeCompanyId={selectedCompanyId}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -33793,6 +33805,8 @@ function MaterialOrderEditor({
 type AiToolsViewProps = {
   client: CrmClient;
   snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  activeCompanyId: CompanyScopeId;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -33801,6 +33815,8 @@ type AiToolsViewProps = {
 function AiToolsView({
   client,
   snapshot,
+  companyMap,
+  activeCompanyId,
   onReload,
   onNotice,
   onError,
@@ -33810,18 +33826,78 @@ function AiToolsView({
   );
   const [scopeCustomerId, setScopeCustomerId] = useState("none");
   const [scopeDraft, setScopeDraft] = useState("");
-  const [estimateService, setEstimateService] = useState<ServiceType>("roofing");
-  const [estimateSize, setEstimateSize] = useState(24);
-  const [estimateComplexity, setEstimateComplexity] = useState("standard");
+  const [estimateSourceId, setEstimateSourceId] = useState(
+    snapshot.estimates[0]?.id ?? "",
+  );
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
+  const [aiCommand, setAiCommand] = useState("");
+  const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
+
+  const aiWorkspace = useMemo(
+    () =>
+      buildAiWorkspaceModel(snapshot, {
+        companyId: activeCompanyId,
+        companyMap,
+        userRole: "office",
+      }),
+    [activeCompanyId, companyMap, snapshot],
+  );
+
+  useEffect(() => {
+    if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
+      setScopeTemplateId(snapshot.scopeTemplates[0]?.id ?? "");
+    }
+  }, [scopeTemplateId, snapshot.scopeTemplates]);
+
+  useEffect(() => {
+    if (
+      scopeCustomerId !== "none" &&
+      !snapshot.customers.some((customer) => customer.id === scopeCustomerId)
+    ) {
+      setScopeCustomerId("none");
+    }
+  }, [scopeCustomerId, snapshot.customers]);
+
+  useEffect(() => {
+    if (!snapshot.estimates.some((estimate) => estimate.id === estimateSourceId)) {
+      setEstimateSourceId(snapshot.estimates[0]?.id ?? "");
+      setEstimateDraft([]);
+    }
+  }, [estimateSourceId, snapshot.estimates]);
+
   const selectedTemplate = snapshot.scopeTemplates.find(
     (template) => template.id === scopeTemplateId,
   );
   const selectedCustomer =
     snapshot.customers.find((customer) => customer.id === scopeCustomerId) ?? null;
+  const selectedEstimate =
+    snapshot.estimates.find((estimate) => estimate.id === estimateSourceId) ?? null;
+  const selectedEstimateItems = selectedEstimate
+    ? snapshot.estimateLineItems.filter((item) => item.estimate_id === selectedEstimate.id)
+    : [];
+
+  const runAiCommand = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!aiCommand.trim()) {
+      return;
+    }
+
+    const response = answerAiCommand({
+      prompt: aiCommand,
+      snapshot,
+      options: {
+        companyId: activeCompanyId,
+        companyMap,
+        userRole: "office",
+      },
+    });
+    setAiResponses((current) => [response, ...current].slice(0, 5));
+    setAiCommand("");
+  };
 
   const generateScope = () => {
     if (!selectedTemplate) {
+      onError("Choose an approved scope template before drafting.");
       return;
     }
 
@@ -33829,7 +33905,7 @@ function AiToolsView({
       ? `${selectedCustomer.display_name} at ${selectedCustomer.property_address}`
       : "the selected property";
     setScopeDraft(
-      `${selectedTemplate.template_body}\n\nProject-specific notes:\n- Customer/property: ${customerLine}\n- Confirm access, colors/materials, exclusions, and warranty before sending.\n\nAI prompt:\n${selectedTemplate.ai_prompt}`,
+      `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- Live AI provider is not configured; this draft uses approved template language and visible CRM context only.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
     );
   };
 
@@ -33839,18 +33915,33 @@ function AiToolsView({
       return;
     }
 
+    if (
+      !window.confirm(
+        "Save this reviewed rule-based scope draft? Confirm measurements, materials, warranty, and exclusions before customer use.",
+      )
+    ) {
+      return;
+    }
+
+    const companyId =
+      selectedCustomer?.company_id ?? selectedTemplate.company_id ?? snapshot.companies[0]?.id;
+    if (!companyId) {
+      onError("A company is required before saving a scope draft.");
+      return;
+    }
+
     try {
       const savedScope = await createScope(client, {
-        company_id: snapshot.companies[0]?.id ?? "",
+        company_id: companyId,
         customer_id: selectedCustomer?.id ?? null,
         lead_id: null,
         estimate_id: null,
         template_id: selectedTemplate.id,
-        title: `${selectedTemplate.title} AI Draft`,
+        title: `${selectedTemplate.title} Rule-Based Draft`,
         category: selectedTemplate.category,
         status: "draft",
         scope_body: scopeDraft,
-        notes: "Created from AI Scope Writer.",
+        notes: "Created from AI Scope Writer 2.0 in rule-based disabled-provider mode. Human review required.",
       });
       await createDocument(client, {
         company_id: savedScope.company_id,
@@ -33864,50 +33955,38 @@ function AiToolsView({
         body: scopeDraft,
       });
       await onReload();
-      onNotice("AI scope draft and document saved.");
+      onNotice("Reviewed rule-based scope draft and document saved.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to save scope."));
     }
   };
 
   const generateEstimate = () => {
-    const complexityMultiplier =
-      estimateComplexity === "premium" ? 1.25 : estimateComplexity === "repair" ? 0.55 : 1;
-    const laborRate = estimateService === "painting" ? 95 : 135;
-    const materialRate = estimateService === "painting" ? 58 : 118;
-    const laborUnits = Math.max(estimateSize, 1);
-    const materialUnits = Math.max(estimateSize, 1);
+    if (!selectedEstimate) {
+      onError("Choose an existing estimate before preparing an assistant draft.");
+      return;
+    }
 
-    setEstimateDraft([
-      {
-        category: "labor",
-        name:
-          estimateService === "painting"
-            ? "Surface preparation and coating labor"
-            : "Roofing production labor",
-        description: "Generated assistant estimate. Confirm quantities before sending.",
-        quantity: laborUnits,
-        unit: estimateService === "painting" ? "area" : "square",
-        unit_cost: Math.round(laborRate * complexityMultiplier),
-        taxable: false,
-        markup_rate: 0,
-        sort_order: 0,
-      },
-      {
-        category: "material",
-        name:
-          estimateService === "painting"
-            ? "Paint, primer, sundries, and masking"
-            : "Roofing materials and accessories",
-        description: "Generated material allowance.",
-        quantity: materialUnits,
-        unit: estimateService === "painting" ? "area" : "square",
-        unit_cost: Math.round(materialRate * complexityMultiplier),
-        taxable: true,
-        markup_rate: 8,
-        sort_order: 1,
-      },
-    ]);
+    if (!selectedEstimateItems.length) {
+      onError("The selected estimate has no line items. AI Tools will not invent pricing or quantities.");
+      return;
+    }
+
+    setEstimateDraft(
+      selectedEstimateItems.map((item, index) => ({
+        category: item.category,
+        name: item.name,
+        description:
+          item.description ??
+          "Copied from the selected estimate. Human review required before proposal use.",
+        quantity: item.quantity,
+        unit: item.unit,
+        unit_cost: item.unit_cost,
+        taxable: item.taxable,
+        markup_rate: item.markup_rate,
+        sort_order: index,
+      })),
+    );
   };
 
   const saveEstimateDraft = async () => {
@@ -33916,31 +33995,57 @@ function AiToolsView({
       return;
     }
 
+    if (!selectedEstimate) {
+      onError("Choose a source estimate before saving.");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        "Save this reviewed rule-based estimate draft? AI Tools did not send a proposal, request a signature, collect payment, or change pricing automatically.",
+      )
+    ) {
+      return;
+    }
+
     try {
       const savedEstimate = await createEstimate(
         client,
         {
-          company_id: snapshot.companies[0]?.id ?? "",
-          customer_id: selectedCustomer?.id ?? null,
-          lead_id: null,
-          title: `AI ${serviceLabel(estimateService)} Estimate`,
+          company_id: selectedEstimate.company_id,
+          customer_id: selectedEstimate.customer_id,
+          lead_id: selectedEstimate.lead_id,
+          title: `Rule-Based Draft from ${selectedEstimate.title}`,
           status: "draft",
-          service_type: estimateService,
+          service_type: selectedEstimate.service_type,
           issue_date: todayIsoDate(),
           expiration_date: addDaysIsoDate(30),
-          tax_rate: 8.6,
-          discount_type: "fixed",
-          discount_value: 0,
-          profit_margin_rate: 12,
-          notes: "Created from AI Estimate Assistant. Verify measurements and pricing.",
+          tax_rate: selectedEstimate.tax_rate,
+          discount_type: selectedEstimate.discount_type,
+          discount_value: selectedEstimate.discount_value,
+          profit_margin_rate: selectedEstimate.profit_margin_rate,
+          scope_of_work: selectedEstimate.scope_of_work,
+          painting_area_type: selectedEstimate.painting_area_type,
+          paint_brand: selectedEstimate.paint_brand,
+          paint_product_line: selectedEstimate.paint_product_line,
+          paint_finish: selectedEstimate.paint_finish,
+          color_selection_status: selectedEstimate.color_selection_status,
+          paint_color_body: selectedEstimate.paint_color_body,
+          paint_color_trim: selectedEstimate.paint_color_trim,
+          paint_color_accent: selectedEstimate.paint_color_accent,
+          surface_prep_level: selectedEstimate.surface_prep_level,
+          coats: selectedEstimate.coats,
+          primer_required: selectedEstimate.primer_required,
+          notes:
+            "Created from AI Estimate Assistant 2.0 in rule-based disabled-provider mode using existing estimate line items. Human review required.",
         },
         estimateDraft,
       );
       await createDocument(client, {
-        company_id: savedEstimate.company_id,
-        customer_id: savedEstimate.customer_id,
-        job_id: null,
-        estimate_id: savedEstimate.id,
+          company_id: savedEstimate.company_id,
+          customer_id: savedEstimate.customer_id,
+          job_id: null,
+          estimate_id: savedEstimate.id,
         invoice_id: null,
         change_order_id: null,
         title: `${savedEstimate.title} PDF Packet`,
@@ -33960,7 +34065,7 @@ function AiToolsView({
         ].join("\n"),
       });
       await onReload();
-      onNotice("AI estimate and PDF-ready document saved.");
+      onNotice("Reviewed rule-based estimate draft and PDF-ready document saved.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to save estimate."));
     }
@@ -33968,22 +34073,164 @@ function AiToolsView({
 
   const estimateTotals = calculateEstimateTotals(
     {
-      tax_rate: 8.6,
-      discount_type: "fixed",
-      discount_value: 0,
-      profit_margin_rate: 12,
+      tax_rate: selectedEstimate?.tax_rate ?? 0,
+      discount_type: selectedEstimate?.discount_type ?? "fixed",
+      discount_value: selectedEstimate?.discount_value ?? 0,
+      profit_margin_rate: selectedEstimate?.profit_margin_rate ?? 0,
     },
     estimateDraft,
   );
 
   return (
-    <div className="grid gap-5 xl:grid-cols-2">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="grid gap-5" data-testid="ai-tools-2-workspace">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">
+              WeatherTech OS Operating Brain
+            </p>
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">
+              AI Tools 2.0
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              Company-aware intelligence for priorities, proposals, scopes, inspections,
+              production, communications, documents, readiness, and finance. Live AI is
+              disabled until an owner-approved provider is configured.
+            </p>
+          </div>
+          <AiProviderCard model={aiWorkspace} />
+        </div>
+
+        <form
+          onSubmit={runAiCommand}
+          className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-3"
+          data-testid="ai-command-bar"
+        >
+          <label className="sr-only" htmlFor="ai-command-input">
+            Ask AI Tools
+          </label>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <Bot className="h-5 w-5 shrink-0 text-sky-600" />
+              <input
+                id="ai-command-input"
+                value={aiCommand}
+                onChange={(event) => setAiCommand(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                placeholder="Ask: What needs my attention today?"
+              />
+            </div>
+            <button
+              type="submit"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+            >
+              <WandSparkles className="h-4 w-4" />
+              Analyze
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {[
+              "What needs my attention today?",
+              "Show overdue estimates.",
+              "Show jobs missing crew assignments.",
+              "Show proposals awaiting signature.",
+            ].map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                onClick={() => {
+                  const response = answerAiCommand({
+                    prompt,
+                    snapshot,
+                    options: {
+                      companyId: activeCompanyId,
+                      companyMap,
+                      userRole: "office",
+                    },
+                  });
+                  setAiResponses((current) => [response, ...current].slice(0, 5));
+                }}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-sky-200 hover:text-sky-700"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </form>
+
+        <AiGroundedResponsePanel response={aiResponses[0] ?? null} />
+      </section>
+
+      <section
+        className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]"
+        data-testid="ai-daily-brief"
+      >
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">
+                Daily Intelligence Summary
+              </p>
+              <h3 className="mt-1 text-xl font-bold text-slate-950">
+                {aiWorkspace.executiveBrief.headline}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {aiWorkspace.executiveBrief.summary}
+              </p>
+            </div>
+            <ShieldCheck className="h-6 w-6 text-emerald-600" />
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {aiWorkspace.executiveBrief.metrics.map((metric) => (
+              <AiMetricCard key={metric.label} metric={metric} />
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Context scope</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                {aiWorkspace.companyScopeLabel}
+              </p>
+            </div>
+            <AiStatusBadge label="Rule-based insight" tone="blue" />
+          </div>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            {Object.entries(aiWorkspace.contextSummary).map(([label, value]) => (
+              <div key={label} className="rounded-xl bg-slate-50 p-3">
+                <dt className="capitalize text-slate-500">{label.replace(/([A-Z])/g, " $1")}</dt>
+                <dd className="mt-1 text-lg font-bold text-slate-950">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Urgent alerts and recommended actions</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Ranked by urgency, due dates, customer waiting time, revenue, workflow risk,
+              unresolved communications, and provider failures.
+            </p>
+          </div>
+          <AiStatusBadge label="Approval required for writes" tone="amber" />
+        </div>
+        <AiPriorityList items={aiWorkspace.priorityItems} />
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+      <section
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        data-testid="ai-scope-writer-2"
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-950">AI Scope Writer</h2>
+            <h2 className="text-xl font-bold text-slate-950">AI Scope Writer 2.0</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Draft customer-ready scopes from templates and CRM context.
+              Draft customer-ready scopes from approved templates and visible CRM context.
             </p>
           </div>
           <Bot className="h-6 w-6 text-sky-600" />
@@ -34019,7 +34266,7 @@ function AiToolsView({
               className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
             >
               <WandSparkles className="h-4 w-4" />
-              Generate scope
+              Build rule-based scope
             </button>
             <button
               type="button"
@@ -34027,7 +34274,7 @@ function AiToolsView({
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               <FileText className="h-4 w-4" />
-              Save draft
+              Save reviewed draft
             </button>
             <button
               type="button"
@@ -34044,50 +34291,47 @@ function AiToolsView({
             className="min-h-96 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6"
             placeholder="Generated scope appears here"
           />
+          <AiDraftList drafts={aiWorkspace.scopeWriter.slice(0, 3)} />
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <section
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        data-testid="ai-estimate-assistant-2"
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-slate-950">
-              AI Estimate Assistant
+              AI Estimate Assistant 2.0
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Produce a starting estimate from service type, size, and complexity.
+              Prepare proposal-ready drafts from existing estimates without inventing prices.
             </p>
           </div>
           <Calculator className="h-6 w-6 text-sky-600" />
         </div>
         <div className="mt-5 grid gap-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3">
             <select
-              value={estimateService}
-              onChange={(event) => setEstimateService(event.target.value as ServiceType)}
+              value={estimateSourceId}
+              onChange={(event) => {
+                setEstimateSourceId(event.target.value);
+                setEstimateDraft([]);
+              }}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
-              {serviceTypes.map((service) => (
-                <option key={service.value} value={service.value}>
-                  {service.label}
+              <option value="">Select an existing estimate</option>
+              {snapshot.estimates.map((estimate) => (
+                <option key={estimate.id} value={estimate.id}>
+                  {estimate.title} - {formatMoney(estimate.total)}
                 </option>
               ))}
             </select>
-            <input
-              value={estimateSize}
-              onChange={(event) => setEstimateSize(Number(event.target.value) || 0)}
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              inputMode="decimal"
-              placeholder="Size"
-            />
-            <select
-              value={estimateComplexity}
-              onChange={(event) => setEstimateComplexity(event.target.value)}
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="standard">Standard</option>
-              <option value="premium">Premium</option>
-              <option value="repair">Repair</option>
-            </select>
+            <p className="text-xs leading-5 text-slate-500">
+              Estimate Assistant 2.0 copies existing line items only. It will not invent
+              measurements, unit costs, margins, warranties, deposits, signatures, payments,
+              or QuickBooks status.
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -34096,7 +34340,7 @@ function AiToolsView({
               className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
             >
               <Calculator className="h-4 w-4" />
-              Generate estimate
+              Build from selected estimate
             </button>
             <button
               type="button"
@@ -34104,7 +34348,7 @@ function AiToolsView({
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               <FileText className="h-4 w-4" />
-              Save estimate
+              Save reviewed estimate
             </button>
             <button
               type="button"
@@ -34145,9 +34389,347 @@ function AiToolsView({
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <TotalRow label="Estimated total" value={estimateTotals.total} strong />
           </div>
+          <AiDraftList drafts={aiWorkspace.estimateAssistant.slice(0, 3)} />
         </div>
       </section>
+      </div>
+
+      <section
+        className="grid gap-5 xl:grid-cols-3"
+        data-testid="ai-assistant-panels"
+      >
+        <AiAssistantPanel title="Proposal Intelligence" icon={<FileText className="h-5 w-5" />} drafts={aiWorkspace.proposalIntelligence} testId="ai-proposal-intelligence" />
+        <AiAssistantPanel title="Inspection Assistant" icon={<ClipboardList className="h-5 w-5" />} drafts={aiWorkspace.inspectionAssistant} testId="ai-inspection-assistant" />
+        <AiAssistantPanel title="Sales Assistant" icon={<DollarSign className="h-5 w-5" />} drafts={aiWorkspace.salesAssistant} testId="ai-sales-assistant" />
+        <AiAssistantPanel title="Operations Assistant" icon={<CalendarClock className="h-5 w-5" />} drafts={aiWorkspace.operationsAssistant} testId="ai-operations-assistant" />
+        <AiAssistantPanel title="Financial Assistant" icon={<ReceiptText className="h-5 w-5" />} drafts={aiWorkspace.financialAssistant} testId="ai-financial-assistant" />
+        <AiAssistantPanel title="Communication Drafts" icon={<MessageSquare className="h-5 w-5" />} drafts={aiWorkspace.communicationsAssistant} testId="ai-communication-assistant" />
+        <AiAssistantPanel title="Marketing Intelligence" icon={<Globe2 className="h-5 w-5" />} drafts={aiWorkspace.marketingAssistant} testId="ai-marketing-assistant" />
+        <AiAssistantPanel title="Weather Intelligence" icon={<CloudSun className="h-5 w-5" />} drafts={aiWorkspace.weatherAssistant} testId="ai-weather-assistant" />
+        <AiAssistantPanel title="Document Intelligence" icon={<FileText className="h-5 w-5" />} drafts={aiWorkspace.documentAssistant} testId="ai-document-assistant" />
+      </section>
+
+      <section
+        className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.7fr)]"
+        data-testid="ai-approval-gates"
+      >
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Generated drafts awaiting review</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Drafts are previews only. They do not send messages, create invoices, change
+            schedules, request signatures, process payments, or publish website content.
+          </p>
+          <AiDraftList drafts={aiWorkspace.generatedDrafts} />
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-950">Approval gates</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            AI Tools cannot approve its own work or execute irreversible actions.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {aiWorkspace.approvalGates.slice(0, 18).map((gate) => (
+              <AiStatusBadge key={gate} label={gate} tone="amber" />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        data-testid="ai-saved-work"
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Saved AI analyses</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Persistence is architecture-ready through migration 0033. This run did not
+              apply remote migrations or configure a live AI provider.
+            </p>
+          </div>
+          <AiStatusBadge label="Production disabled" tone="slate" />
+        </div>
+        <AiDraftList drafts={aiWorkspace.savedAnalyses} />
+      </section>
     </div>
+  );
+}
+
+function AiProviderCard({ model }: { model: AiWorkspaceModel }) {
+  return (
+    <div
+      className="rounded-2xl border border-amber-200 bg-amber-50 p-4"
+      data-testid="ai-disabled-state"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+        <div>
+          <p className="font-semibold text-amber-950">{model.provider.label}</p>
+          <p className="mt-1 text-sm leading-5 text-amber-900">{model.provider.summary}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <AiStatusBadge label="AI_ENABLED=false" tone="amber" />
+        <AiStatusBadge label="No fake AI output" tone="slate" />
+        <AiStatusBadge label="Owner setup required" tone="amber" />
+      </div>
+    </div>
+  );
+}
+
+function AiGroundedResponsePanel({ response }: { response: AiGroundedResponse | null }) {
+  if (!response) {
+    return (
+      <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+        Ask a read-only question or choose a suggested command. Responses will show the
+        answer, supporting records, missing information, approval requirements, and
+        whether production activation is disabled.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mt-4 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4"
+      data-testid="ai-grounded-response"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">
+            Grounded response
+          </p>
+          <h3 className="mt-1 text-lg font-bold text-slate-950">{response.prompt}</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <AiStatusBadge label={response.mode.replace(/_/g, " ")} tone="blue" />
+          <AiStatusBadge label={response.readOnly ? "Read-only" : "Write action"} tone="slate" />
+          {response.approvalRequired ? <AiStatusBadge label="Approval required" tone="amber" /> : null}
+          {response.productionDisabled ? <AiStatusBadge label="Production disabled" tone="amber" /> : null}
+        </div>
+      </div>
+      <pre className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+        {response.answer}
+      </pre>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <AiSourceList title="Supporting records" records={response.supportingRecords} />
+        <div>
+          <p className="text-sm font-semibold text-slate-950">Missing information</p>
+          <ul className="mt-2 space-y-2 text-sm text-slate-600">
+            {response.missingInformation.map((item) => (
+              <li key={item}>- {item}</li>
+            ))}
+          </ul>
+        </div>
+        <AiActionList actions={response.actions} />
+      </div>
+    </div>
+  );
+}
+
+function AiMetricCard({
+  metric,
+}: {
+  metric: AiWorkspaceModel["executiveBrief"]["metrics"][number];
+}) {
+  const toneClass =
+    metric.tone === "critical"
+      ? "border-red-200 bg-red-50 text-red-950"
+      : metric.tone === "warning"
+      ? "border-amber-200 bg-amber-50 text-amber-950"
+      : metric.tone === "healthy"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+      : "border-slate-200 bg-slate-50 text-slate-950";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide opacity-75">
+        {metric.label}
+      </p>
+      <p className="mt-2 text-2xl font-bold">{metric.value}</p>
+      <p className="mt-1 text-xs leading-5 opacity-80">{metric.detail}</p>
+    </div>
+  );
+}
+
+function AiPriorityList({ items }: { items: AiPriorityItem[] }) {
+  if (!items.length) {
+    return <EmptyState label="No urgent AI priority items in the current company scope." />;
+  }
+
+  return (
+    <div className="mt-4 grid gap-3">
+      {items.slice(0, 8).map((item) => (
+        <div
+          key={item.id}
+          className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[120px_minmax(0,1fr)_220px]"
+        >
+          <div>
+            <AiStatusBadge label={item.priority} tone={item.priority === "critical" ? "red" : item.priority === "high" ? "amber" : "blue"} />
+            <p className="mt-2 text-xs text-slate-500">Score {item.score}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-950">{item.title}</p>
+            <p className="mt-1 text-sm leading-5 text-slate-600">{item.summary}</p>
+            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {item.category} - {item.reason}
+            </p>
+          </div>
+          <div className="rounded-xl bg-white p-3 text-sm text-slate-600">
+            <p className="font-semibold text-slate-950">{item.suggestedAction.label}</p>
+            <p className="mt-1 text-xs leading-5">{item.suggestedAction.reason}</p>
+            <p className="mt-2 text-xs font-semibold text-slate-500">
+              {item.source.safeReference}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AiAssistantPanel({
+  title,
+  icon,
+  drafts,
+  testId,
+}: {
+  title: string;
+  icon: ReactNode;
+  drafts: AiAssistantDraft[];
+  testId: string;
+}) {
+  const draft = drafts[0];
+
+  return (
+    <article
+      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      data-testid={testId}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700">
+            {icon}
+          </span>
+          <h3 className="text-base font-bold text-slate-950">{title}</h3>
+        </div>
+        <AiStatusBadge label={draft?.mode.replace(/_/g, " ") ?? "provider disabled"} tone="blue" />
+      </div>
+      {draft ? (
+        <div className="mt-4">
+          <p className="text-sm font-semibold text-slate-950">{draft.title}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{draft.body}</p>
+          <AiSourceList title="Evidence" records={draft.sourceRecords.slice(0, 3)} compact />
+          {draft.missingInformation.length ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-amber-700">
+              Missing: {draft.missingInformation.slice(0, 3).join(", ")}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <EmptyState label={`${title} has no visible records in this company scope.`} />
+      )}
+    </article>
+  );
+}
+
+function AiDraftList({ drafts }: { drafts: AiAssistantDraft[] }) {
+  if (!drafts.length) {
+    return <EmptyState label="No draft previews are available in this company scope." />;
+  }
+
+  return (
+    <div className="mt-4 grid gap-3">
+      {drafts.map((draft) => (
+        <div key={draft.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-semibold text-slate-950">{draft.title}</p>
+              <p className="mt-1 text-sm leading-6 text-slate-600">{draft.body}</p>
+            </div>
+            <AiStatusBadge
+              label={draft.requiresApproval ? "Review required" : "Read-only"}
+              tone={draft.requiresApproval ? "amber" : "slate"}
+            />
+          </div>
+          {draft.missingInformation.length ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Missing: {draft.missingInformation.slice(0, 5).join(", ")}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AiSourceList({
+  title,
+  records,
+  compact = false,
+}: {
+  title: string;
+  records: AiSourceRecord[];
+  compact?: boolean;
+}) {
+  return (
+    <div className={compact ? "mt-3" : ""}>
+      <p className="text-sm font-semibold text-slate-950">{title}</p>
+      {records.length ? (
+        <ul className="mt-2 space-y-2 text-sm text-slate-600">
+          {records.map((record) => (
+            <li key={`${record.table}-${record.id}`} className="truncate">
+              {record.label} - {record.safeReference} - {record.hrefView}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-500">No supporting records available.</p>
+      )}
+    </div>
+  );
+}
+
+function AiActionList({ actions }: { actions: AiRecommendedAction[] }) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-950">Recommended actions</p>
+      {actions.length ? (
+        <ul className="mt-2 space-y-2 text-sm text-slate-600">
+          {actions.map((actionItem) => (
+            <li key={actionItem.id}>
+              {actionItem.label}
+              {actionItem.requiredConfirmation ? " - confirmation required" : ""}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-500">No write actions proposed.</p>
+      )}
+    </div>
+  );
+}
+
+function AiStatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "blue" | "amber" | "red" | "slate";
+}) {
+  const toneClass =
+    tone === "red"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : tone === "amber"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : tone === "blue"
+      ? "border-sky-200 bg-sky-50 text-sky-700"
+      : "border-slate-200 bg-slate-50 text-slate-600";
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold capitalize ${toneClass}`}
+    >
+      {label}
+    </span>
   );
 }
 

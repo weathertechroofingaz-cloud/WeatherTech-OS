@@ -144,6 +144,9 @@ export function scopeCrmSnapshotByCompany(
     notifications: byCompany(snapshot.notifications, companyId),
     integrationConnections: byCompany(snapshot.integrationConnections, companyId),
     integrationSyncLogs: byCompany(snapshot.integrationSyncLogs, companyId),
+    aiSavedAnalyses: byCompany(snapshot.aiSavedAnalyses, companyId),
+    aiAuditEvents: byCompany(snapshot.aiAuditEvents, companyId),
+    aiUsageLimits: byCompany(snapshot.aiUsageLimits, companyId),
     leadIntakeRecords: snapshot.leadIntakeRecords.filter(
       (record) =>
         record.company_id === companyId ||

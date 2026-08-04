@@ -8,6 +8,9 @@ import {
 } from "./operations";
 import type {
   CrmSnapshot,
+  AiAuditEventRecord,
+  AiSavedAnalysisRecord,
+  AiUsageLimitRecord,
   CalendarEventSyncInput,
   CalendarEventSyncRecord,
   ChangeOrderInput,
@@ -513,6 +516,9 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     notifications: [],
     integrationConnections: [],
     integrationSyncLogs: [],
+    aiSavedAnalyses: [],
+    aiAuditEvents: [],
+    aiUsageLimits: [],
     leadIntakeRecords: [],
     calendarEventSyncs: [],
     googleCalendarConnectedCalendars: [],
@@ -603,6 +609,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications,
     integrationConnections,
     integrationSyncLogs,
+    aiSavedAnalyses,
+    aiAuditEvents,
+    aiUsageLimits,
     leadIntakeRecords,
     calendarEventSyncs,
     googleCalendarConnectedCalendars,
@@ -708,6 +717,20 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("created_at", { ascending: false })
       .limit(100),
+    client
+      .from("ai_saved_analyses")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .limit(100),
+    client
+      .from("ai_audit_events")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200),
+    client
+      .from("ai_usage_limits")
+      .select("*")
+      .order("updated_at", { ascending: false }),
     client
       .from("lead_intake_records")
       .select("*")
@@ -820,6 +843,15 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["notifications", notifications],
     ["integration_connections", integrationConnections],
     ["integration_sync_logs", integrationSyncLogs],
+    ...(aiSavedAnalyses.error && !isOptionalTableMissingError(aiSavedAnalyses.error)
+      ? [["ai_saved_analyses", aiSavedAnalyses] as [string, { error: unknown }]]
+      : []),
+    ...(aiAuditEvents.error && !isOptionalTableMissingError(aiAuditEvents.error)
+      ? [["ai_audit_events", aiAuditEvents] as [string, { error: unknown }]]
+      : []),
+    ...(aiUsageLimits.error && !isOptionalTableMissingError(aiUsageLimits.error)
+      ? [["ai_usage_limits", aiUsageLimits] as [string, { error: unknown }]]
+      : []),
     ...(leadIntakeRecords.error && !isOptionalTableMissingError(leadIntakeRecords.error)
       ? [["lead_intake_records", leadIntakeRecords] as [string, { error: unknown }]]
       : []),
@@ -908,6 +940,18 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications: requireRows("notifications", notifications),
     integrationConnections: requireRows("integration_connections", integrationConnections),
     integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
+    aiSavedAnalyses: optionalRows(
+      "ai_saved_analyses",
+      aiSavedAnalyses as CrmListResult<AiSavedAnalysisRecord>,
+    ),
+    aiAuditEvents: optionalRows(
+      "ai_audit_events",
+      aiAuditEvents as CrmListResult<AiAuditEventRecord>,
+    ),
+    aiUsageLimits: optionalRows(
+      "ai_usage_limits",
+      aiUsageLimits as CrmListResult<AiUsageLimitRecord>,
+    ),
     leadIntakeRecords: optionalRows("lead_intake_records", leadIntakeRecords),
     calendarEventSyncs: requireRows("calendar_event_syncs", calendarEventSyncs),
     googleCalendarConnectedCalendars: optionalRows(

@@ -22,6 +22,7 @@ WeatherTech OS is a Next.js App Router application.
 - `app/page.tsx` dynamically loads `components/CrmApp.tsx` and shows a skeleton while the client workspace loads.
 - `components/CrmApp.tsx` currently contains the primary application shell, authentication flow, workspace navigation, views, and many module-level UI panels.
 - `lib/crm` contains typed CRM models, repository functions, company scoping, metrics, communications, integrations, operations helpers, templates, routing, and provider-readiness logic.
+- `lib/crm/aiTools.ts` contains the provider-disabled AI Tools 2.0 operating-brain helpers for company-scoped, role-aware, read-only intelligence and draft recommendations.
 - `lib/supabase` contains Supabase browser/server client setup.
 - `app/api` contains server routes for lead intake and integration readiness/test endpoints.
 - `supabase/migrations` contains the database migration history.
@@ -107,6 +108,7 @@ Current implementation:
 
 - `CrmSnapshot` includes `companies`, `companyMemberships`, and `companyWorkflowSettings`.
 - `scopeCrmSnapshotByCompany` filters snapshot records by selected company.
+- AI Tools 2.0 uses the scoped snapshot before deriving command answers, priority items, drafts, and context counts.
 - WeatherTech Roofing LLC uses purple as the primary brand accent with orange support.
 - IHC Painting uses orange-focused accents through the `wt-company-painting` class.
 - Scope templates are filtered by company and trade to avoid mixing roofing and painting defaults.

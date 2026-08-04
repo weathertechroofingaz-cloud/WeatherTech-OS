@@ -116,6 +116,10 @@ const expectedMigrations = [
     "0032_estimate_proposal_builder_v2.sql",
     "25021ad2b0d22441c259d520b85dfa8ec53f5ff2ff1327783741366869626a51",
   ],
+  [
+    "0033_ai_tools_operating_brain.sql",
+    "f73eab951eaa4229314391f1eb5d49711c8dcbfce0f4ed3af4fabfb2ecfed73e",
+  ],
 ];
 
 const files = fs
@@ -168,7 +172,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0032 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0033 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -192,6 +196,7 @@ const googleBusinessProfileIndex = files.indexOf("0029_google_business_profile_f
 const quickBooksOnlineIndex = files.indexOf("0030_quickbooks_online_foundation.sql");
 const electronicSignaturesIndex = files.indexOf("0031_electronic_signatures_foundation.sql");
 const proposalBuilderIndex = files.indexOf("0032_estimate_proposal_builder_v2.sql");
+const aiToolsIndex = files.indexOf("0033_ai_tools_operating_brain.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -270,8 +275,16 @@ if (
   failures.push("Estimate Proposal Builder 2.0 migration must order after Electronic Signatures.");
 }
 
-if (proposalBuilderIndex !== files.length - 1) {
-  failures.push("Estimate Proposal Builder 2.0 migration must remain last.");
+if (
+  proposalBuilderIndex === -1 ||
+  aiToolsIndex === -1 ||
+  !(proposalBuilderIndex < aiToolsIndex)
+) {
+  failures.push("AI Tools 2.0 migration must order after Estimate Proposal Builder 2.0.");
+}
+
+if (aiToolsIndex !== files.length - 1) {
+  failures.push("AI Tools 2.0 migration must remain last.");
 }
 
 for (const file of files) {
@@ -1028,6 +1041,94 @@ if (!proposalBuilderMigration.includes("proposal_templates") ||
   failures.push("0032 must seed company-aware WeatherTech and IHC proposal templates.");
 }
 
+const aiToolsMigration = fs.readFileSync(
+  path.join(migrationsDir, "0033_ai_tools_operating_brain.sql"),
+  "utf8",
+);
+
+if (!aiToolsMigration.trim().startsWith("begin;") ||
+    !aiToolsMigration.trim().endsWith("commit;")) {
+  failures.push("0033 must be wrapped in an explicit transaction.");
+}
+
+for (const requiredTable of [
+  "ai_saved_analyses",
+  "ai_audit_events",
+  "ai_usage_limits",
+]) {
+  if (!aiToolsMigration.includes(`public.${requiredTable}`)) {
+    failures.push(`0033 must create or configure ${requiredTable}.`);
+  }
+
+  if (!aiToolsMigration.includes(`alter table public.${requiredTable} enable row level security`)) {
+    failures.push(`0033 must enable RLS for ${requiredTable}.`);
+  }
+}
+
+for (const requiredProvider of ["disabled", "openai", "anthropic", "owner_approved"]) {
+  if (!aiToolsMigration.includes(`'${requiredProvider}'`)) {
+    failures.push(`0033 AI provider checks must allow ${requiredProvider}.`);
+  }
+}
+
+for (const requiredAiTask of [
+  "daily_brief",
+  "command",
+  "scope_writer",
+  "estimate_assistant",
+  "proposal_review",
+  "inspection_analysis",
+  "sales_analysis",
+  "operations_analysis",
+  "financial_analysis",
+  "communication_draft",
+  "marketing_analysis",
+  "weather_analysis",
+  "document_analysis",
+  "saved_analysis",
+]) {
+  if (!aiToolsMigration.includes(`'${requiredAiTask}'`)) {
+    failures.push(`0033 task_type checks must allow ${requiredAiTask}.`);
+  }
+}
+
+for (const requiredPolicyHelper of [
+  "public.wtos_can_read_company",
+  "public.wtos_can_manage_sales",
+  "public.wtos_can_manage_production",
+  "public.wtos_can_manage_financials",
+  "public.wtos_can_manage_documents",
+  "public.wtos_can_manage_settings",
+]) {
+  if (!aiToolsMigration.includes(requiredPolicyHelper)) {
+    failures.push(`0033 must use scoped RLS helper ${requiredPolicyHelper}.`);
+  }
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(aiToolsMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(aiToolsMigration)) {
+  failures.push("0033 must not add broad USING/WITH CHECK (true) RLS policies.");
+}
+
+if (/grant\s+[^;]*delete[^;]*to\s+authenticated/i.test(aiToolsMigration)) {
+  failures.push("0033 must not grant DELETE privileges to authenticated users.");
+}
+
+if (!aiToolsMigration.includes("default false") ||
+    !aiToolsMigration.includes("daily_request_limit integer not null default 0") ||
+    !aiToolsMigration.includes("per_company_monthly_budget_cents integer not null default 0")) {
+  failures.push("0033 must keep live AI disabled and budget/request limits at zero by default.");
+}
+
+if (!aiToolsMigration.includes("revoke all on") ||
+    !aiToolsMigration.includes("from anon")) {
+  failures.push("0033 must revoke anon access to AI persistence tables.");
+}
+
+if (/api[_ -]?key|access[_ -]?token|refresh[_ -]?token|sk-[a-z0-9]/i.test(aiToolsMigration)) {
+  failures.push("0033 must not contain secret material or credential placeholders.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -1039,7 +1140,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0032.",
+  "Verified raw filename order matches numeric order from 0001 through 0033.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -1068,6 +1169,9 @@ console.log(
 console.log(
   "Verified 0031_electronic_signatures_foundation.sql precedes 0032_estimate_proposal_builder_v2.sql.",
 );
+console.log(
+  "Verified 0032_estimate_proposal_builder_v2.sql precedes 0033_ai_tools_operating_brain.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -1089,6 +1193,9 @@ console.log(
 );
 console.log(
   "Verified 0032 proposal tables, customer-safe document categories, pricing options, and scoped RLS policies.",
+);
+console.log(
+  "Verified 0033 AI persistence tables, provider-disabled defaults, scoped RLS policies, and authenticated delete revocation.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

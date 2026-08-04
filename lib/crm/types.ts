@@ -345,6 +345,45 @@ export type IntegrationSyncLogStatus =
   | "failed"
   | "skipped"
   | "retrying";
+export type AiProvider = "disabled" | "openai" | "anthropic" | "owner_approved";
+export type AiWorkMode =
+  | "rule_based_insight"
+  | "provider_disabled"
+  | "live_provider";
+export type AiTaskType =
+  | "daily_brief"
+  | "command"
+  | "scope_writer"
+  | "estimate_assistant"
+  | "proposal_review"
+  | "inspection_analysis"
+  | "sales_analysis"
+  | "operations_analysis"
+  | "financial_analysis"
+  | "communication_draft"
+  | "marketing_analysis"
+  | "weather_analysis"
+  | "document_analysis"
+  | "saved_analysis";
+export type AiApprovalState =
+  | "draft"
+  | "needs_review"
+  | "approved"
+  | "rejected"
+  | "blocked";
+export type AiSavedAnalysisStatus = "active" | "archived" | "expired";
+export type AiAuditEventType =
+  | "request_initiated"
+  | "provider_blocked"
+  | "provider_failed"
+  | "response_generated"
+  | "draft_generated"
+  | "action_proposed"
+  | "action_approved"
+  | "action_rejected"
+  | "output_saved"
+  | "safety_block"
+  | "permission_block";
 export type GoHighLevelSyncObjectType =
   | "contact"
   | "opportunity"
@@ -1582,6 +1621,72 @@ export type EmailMessageRecord = {
   updated_at: string;
 };
 
+export type AiSavedAnalysisRecord = {
+  id: string;
+  company_id: string;
+  customer_id: string | null;
+  lead_id: string | null;
+  estimate_id: string | null;
+  proposal_revision_id: string | null;
+  job_id: string | null;
+  inspection_id: string | null;
+  invoice_id: string | null;
+  document_id: string | null;
+  title: string;
+  task_type: AiTaskType;
+  mode: AiWorkMode;
+  provider: AiProvider;
+  model: string | null;
+  prompt_summary: string | null;
+  output: Record<string, unknown>;
+  source_records: unknown[];
+  approval_state: AiApprovalState;
+  status: AiSavedAnalysisStatus;
+  created_by: string | null;
+  expires_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AiAuditEventRecord = {
+  id: string;
+  company_id: string;
+  saved_analysis_id: string | null;
+  actor_user_id: string | null;
+  task_type: AiTaskType;
+  event_type: AiAuditEventType;
+  provider: AiProvider;
+  model: string | null;
+  source_records: unknown[];
+  action_type: string | null;
+  action_preview: Record<string, unknown>;
+  status: string;
+  safety_flags: string[];
+  token_count: number | null;
+  estimated_cost_cents: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AiUsageLimitRecord = {
+  id: string;
+  company_id: string;
+  ai_enabled: boolean;
+  allowed_providers: AiProvider[];
+  allowed_models: string[];
+  daily_request_limit: number;
+  per_user_daily_request_limit: number;
+  per_company_monthly_budget_cents: number;
+  expensive_task_confirmation_cents: number;
+  token_limit: number;
+  timeout_ms: number;
+  retry_limit: number;
+  last_reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type GmailOauthStateRecord = {
   id: string;
   company_id: string;
@@ -2572,6 +2677,64 @@ export type IntegrationSyncLogInput = {
   error_message?: string | null;
 };
 
+export type AiSavedAnalysisInput = {
+  company_id: string;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  estimate_id?: string | null;
+  proposal_revision_id?: string | null;
+  job_id?: string | null;
+  inspection_id?: string | null;
+  invoice_id?: string | null;
+  document_id?: string | null;
+  title: string;
+  task_type: AiTaskType;
+  mode?: AiWorkMode;
+  provider?: AiProvider;
+  model?: string | null;
+  prompt_summary?: string | null;
+  output?: Record<string, unknown>;
+  source_records?: unknown[];
+  approval_state?: AiApprovalState;
+  status?: AiSavedAnalysisStatus;
+  created_by?: string | null;
+  expires_at?: string | null;
+  archived_at?: string | null;
+};
+
+export type AiAuditEventInput = {
+  company_id: string;
+  saved_analysis_id?: string | null;
+  actor_user_id?: string | null;
+  task_type: AiTaskType;
+  event_type: AiAuditEventType;
+  provider?: AiProvider;
+  model?: string | null;
+  source_records?: unknown[];
+  action_type?: string | null;
+  action_preview?: Record<string, unknown>;
+  status?: string;
+  safety_flags?: string[];
+  token_count?: number | null;
+  estimated_cost_cents?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type AiUsageLimitInput = {
+  company_id: string;
+  ai_enabled?: boolean;
+  allowed_providers?: AiProvider[];
+  allowed_models?: string[];
+  daily_request_limit?: number;
+  per_user_daily_request_limit?: number;
+  per_company_monthly_budget_cents?: number;
+  expensive_task_confirmation_cents?: number;
+  token_limit?: number;
+  timeout_ms?: number;
+  retry_limit?: number;
+  last_reviewed_at?: string | null;
+};
+
 export type GoHighLevelSyncMappingInput = {
   company_id: string;
   integration_connection_id?: string | null;
@@ -3224,6 +3387,23 @@ export type IntegrationSyncLogInsert = IntegrationSyncLogInput & {
   updated_at?: string;
 };
 
+export type AiSavedAnalysisInsert = AiSavedAnalysisInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AiAuditEventInsert = AiAuditEventInput & {
+  id?: string;
+  created_at?: string;
+};
+
+export type AiUsageLimitInsert = AiUsageLimitInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type GoHighLevelSyncMappingInsert = GoHighLevelSyncMappingInput & {
   id?: string;
   created_at?: string;
@@ -3353,6 +3533,9 @@ export type CrmSnapshot = {
   notifications: NotificationRecord[];
   integrationConnections: IntegrationConnectionRecord[];
   integrationSyncLogs: IntegrationSyncLogRecord[];
+  aiSavedAnalyses: AiSavedAnalysisRecord[];
+  aiAuditEvents: AiAuditEventRecord[];
+  aiUsageLimits: AiUsageLimitRecord[];
   leadIntakeRecords: LeadIntakeRecord[];
   calendarEventSyncs: CalendarEventSyncRecord[];
   googleCalendarConnectedCalendars: GoogleCalendarConnectedCalendarRecord[];
@@ -3633,6 +3816,30 @@ export type Database = {
         Insert: IntegrationSyncLogInsert;
         Update: Partial<
           Database["public"]["Tables"]["integration_sync_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      ai_saved_analyses: {
+        Row: AiSavedAnalysisRecord;
+        Insert: AiSavedAnalysisInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["ai_saved_analyses"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      ai_audit_events: {
+        Row: AiAuditEventRecord;
+        Insert: AiAuditEventInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["ai_audit_events"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      ai_usage_limits: {
+        Row: AiUsageLimitRecord;
+        Insert: AiUsageLimitInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["ai_usage_limits"]["Insert"]
         >;
         Relationships: [];
       };

@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-Estimate & Proposal Builder 2.0 - World-Class Multi-Brand Sales, Acceptance, Invoice, and Payment System
+AI Tools 2.0 - WeatherTech OS Operating System Brain
 
 ## Objective
 
-Transform the existing estimate workspace into a production proposal system for WeatherTech Roofing LLC and IHC Painting that supports customer-safe proposal packets, company-specific proposal structure, optional upgrades, alternatives, deposit invoice drafts, signature readiness, payment readiness, job handoff readiness, and future QuickBooks export readiness without activating live providers.
+Transform the existing AI Tools workspace into the central intelligence layer of WeatherTech OS for WeatherTech Roofing LLC and IHC Painting. The workspace must use authorized WeatherTech OS data, clearly distinguish verified facts from calculated insight and recommendations, keep live AI providers disabled until owner setup, and never fabricate records, prices, schedules, customer facts, provider status, payment status, or production readiness.
 
 ## Owner
 
@@ -26,47 +26,46 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Reuse the existing Estimates, Documents, Invoices, Customer 360, Customer Portal, Integration Center, QuickBooks readiness, and Electronic Signatures readiness architecture.
-- Add company-aware proposal templates for WeatherTech Roofing LLC and IHC Painting.
-- Add proposal revisions, customer-facing proposal sections, upgrade and alternative options, acceptance records, payment schedules, and proposal audit events.
-- Keep internal costs, margins, markup, commissions, and private notes out of customer-facing proposal packets.
-- Preserve clear base proposal total, selected upgrades total, accepted total, and deposit draft amount.
-- Support base proposal pricing, add-on upgrades, replacement alternatives, allowances, materials, warranties, exclusions, payment schedule language, and terms.
-- Save customer-safe proposal packets into Documents.
-- Create deposit invoice drafts from accepted proposal totals without activating payment collection.
-- Surface proposal totals, payment schedule, and approval readiness in the Customer Portal.
-- Keep signature provider, online payment collection, and QuickBooks sync readiness honest and disabled until future activation.
-- Add proposal regression coverage, migration integrity coverage, and browser regression assertions.
+- Reuse and extend the existing AI Tools workspace.
+- Preserve and extend the AI Scope Writer and AI Estimate Assistant.
+- Add an AI command bar for read-only, grounded operating-system questions.
+- Add daily intelligence, urgent alerts, recommended actions, revenue opportunities, sales follow-ups, estimate/proposal opportunities, production risks, financial risks, communication gaps, weather/material/readiness signals, saved analyses, and drafts awaiting review.
+- Support company-aware, role-aware, permission-aware intelligence for WeatherTech Roofing LLC and IHC Painting.
+- Cite supporting internal records and show missing information, data completeness, approval requirements, provider requirements, and production-disabled state.
+- Add provider readiness architecture, saved-analysis persistence, audit-event persistence, usage-limit persistence, prompt-safety checks, approval gates, and regression coverage.
+- Reuse existing CRM, Customer 360, Leads, Customers, Estimates, Proposal Builder 2.0, Inspections, Jobs, Calendar, Dispatch, Photos, Materials, Routes, Invoices, Change Orders, Analytics, Customer Portal, Employee Portal, Documents, Website & Marketing, Notifications, Integration Center, Production Readiness, activity timelines, audit logs, company access controls, Supabase data access, authentication, provider foundations, and browser regression framework.
 
 ## Explicit Exclusions
 
-- Do not activate DocuSign, Dropbox Sign, QuickBooks Online, payment processors, SMS, email, or other live providers.
-- Do not send real proposals, real signature requests, real invoices, real payment links, customer SMS, or customer email.
+- Do not create a second AI Command Center.
+- Do not create a duplicate AI navigation item.
+- Do not activate paid AI providers.
+- Do not send real customer communications.
+- Do not enable production automation.
 - Do not apply remote Supabase migrations from Codex during this sprint.
-- Do not weaken authentication or RLS.
-- Do not expose secrets, credentials, API keys, provider tokens, or `.env.local` values.
+- Do not modify the live Supabase database.
+- Do not weaken authentication, RLS, company isolation, or approval gates.
+- Do not expose secrets, credentials, API keys, provider tokens, prompts containing private keys, or `.env.local` values.
+- Do not fabricate records, prices, schedules, customer facts, job status, provider status, payment status, or production readiness.
 - Do not create destructive migrations.
 - Do not redesign unrelated modules.
-- Do not create a duplicate CRM, duplicate estimate system, or duplicate accounting workflow.
-- Do not fake connected, signed, paid, synced, delivered, or accepted provider states.
 - Do not begin another sprint after completion.
 
 ## Completion Criteria
 
-- Estimate workspace includes Proposal Builder 2.0.
-- Proposal pricing separates base total, selected upgrade total, accepted total, deposit draft, and remaining balance.
-- Optional upgrades do not alter the base proposal until selected.
-- Full replacement alternatives replace the base proposal total without double-counting add-ons.
-- Customer-facing packets exclude internal cost, margin, markup, commission, and private note language.
-- Company-specific WeatherTech Roofing LLC and IHC Painting templates are seeded by migration.
-- Documents support proposal and signed proposal categories.
-- Deposit invoice draft creation uses existing invoice architecture and does not activate online payments.
-- Signature readiness, payment readiness, and QuickBooks readiness display disabled/foundation states honestly.
-- Customer Portal surfaces the latest proposal and proposal payment schedule without activating customer payment.
-- Migration `0032_estimate_proposal_builder_v2.sql` is additive, transactionally wrapped, non-destructive, and not remotely applied by Codex.
-- Automated proposal tests pass.
+- AI Tools page becomes the AI Tools 2.0 operating-brain workspace.
+- AI command bar returns grounded read-only responses from authorized snapshot data.
+- Responses show answer, supporting records, missing information, completeness, recommended next action, approval state, provider requirement, read-only state, and production-disabled state.
+- AI Scope Writer and AI Estimate Assistant remain present and safer than before.
+- Scope drafts are generated from approved templates and selected CRM context only.
+- Estimate drafts use existing estimate line items only and do not invent prices, quantities, margins, warranties, deposits, signatures, payments, or QuickBooks state.
+- Prompt injection, secret-exposure, live-send, payment, deployment, and migration requests are blocked.
+- Generated drafts and recommended actions require human approval and never execute irreversible writes automatically.
+- Additive migration `0033_ai_tools_operating_brain.sql` is transactionally wrapped, non-destructive, company-owned, RLS-protected, and not remotely applied by Codex.
+- Automated AI Tools regression tests pass.
 - Migration integrity tests pass.
-- Browser regression includes proposal-builder customer-safe assertions.
+- Browser regression includes AI Tools 2.0 coverage.
+- Documentation records the AI Tools architecture and disabled-provider boundaries.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
@@ -82,7 +81,7 @@ Joe Harris
 - Confirm explicit owner approval from the task request.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before development begins.
-- Run proposal builder automated tests.
+- Run AI Tools automated tests.
 - Run migration integrity tests.
 - Run security/company-access policy tests.
 - Run provider-foundation tests where applicable.
@@ -90,17 +89,17 @@ Joe Harris
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Estimates, proposal builder, Documents, Invoices, Customer Portal, Customer 360, navigation, and related workflows.
+- Run targeted signed-in browser regression for AI Tools, Dashboard, CRM, Estimates, Documents, Customer 360, navigation, and related workflows.
 - Run full signed-in browser regression where supported.
-- Confirm no disposable proposal, estimate, invoice, or regression records remain.
+- Confirm no disposable AI Tools regression records remain.
 
 ## Planned Commit Message
 
-`feat: add estimate proposal builder v2`
+`feat: add ai tools operating brain`
 
 ## Blockers
 
-Live provider activation remains blocked until owner-controlled provider credentials, OAuth setup, payment processor setup, QuickBooks setup, signature provider setup, production migration application, and explicit activation approval are complete.
+Live AI provider activation remains blocked until owner-controlled provider selection, server-side credentials, model limits, token/cost budgets, safety settings, controlled testing, migration deployment, and explicit production activation approval are complete.
 
 ## Final Status
 
