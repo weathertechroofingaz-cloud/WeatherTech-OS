@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-Production Activation & Deployment Readiness
+Production Activation Phase 1 - Guided Owner Setup and Launch Control
 
 ## Objective
 
-Prepare WeatherTech OS for safe production deployment and staged live activation without deploying, enabling live integrations, committing credentials, weakening authentication, or changing existing production workflows.
+Extend the existing Production Readiness Center into a guided owner setup and launch-control workflow for safe staged activation of WeatherTech OS without deploying, enabling live integrations, committing credentials, weakening authentication, or changing existing production workflows.
 
 ## Owner
 
@@ -26,22 +26,26 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Review existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, and Financial workspace readiness.
-- Build a Production Readiness Center that truthfully reports overall readiness, environment status, required migrations, pending owner setup, OAuth/credential requirements, production-disabled states, ready-for-activation states, connected states when records genuinely indicate them, health status, last validation, last regression, and last migration.
-- Add Production Activation Guides for Twilio, Gmail, Google Calendar, Google Business Profile, Yelp, Website, QuickBooks Online, and Electronic Signatures.
-- Add deployment readiness checks for missing environment variables, pending migrations, missing OAuth configuration, missing webhook secrets, missing provider IDs, database readiness, integration readiness, and browser regression status.
-- Create a unified production checklist covering Database, Supabase, Authentication, Integrations, Security, Documents, Customer Portal, Financial, Communications, Website, Monitoring, and Backups.
-- Reuse existing application architecture, navigation, design language, provider registry concepts, company scoping, and browser regression patterns.
-- Update sprint-management documentation after completion.
+- Reuse the existing Production Readiness Center rather than creating a second dashboard.
+- Add a guided production activation sequence that orders repository verification, Supabase migration validation, authentication, production deployment, production URL setup, monitoring, provider setup, controlled testing, internal pilot, and final owner approval.
+- Add provider activation cards for Supabase, Vercel or approved deployment provider, Twilio, Gmail / Google Workspace, Google Calendar, Website lead capture, Yelp, Google Business Profile, QuickBooks Online, DocuSign, and Dropbox Sign.
+- Show truthful states for not configured, owner action required, OAuth required, external approval required, production URL required, migration verification required, controlled testing required, blocked, active, and failed.
+- Add a pending migration inventory that distinguishes repository presence from verified remote production application.
+- Add a redacted environment readiness inventory that can be evaluated server-side without exposing secrets to browser code.
+- Add three-company/branch mapping guidance for WeatherTech Roofing LLC Phoenix, WeatherTech Roofing LLC Tucson, and IHC Painting.
+- Add controlled-test plans and launch gates with required evidence, stop conditions, rollback paths, and owner responsibilities.
+- Update production activation documentation, module registry, testing standard, changelog, and sprint-management records.
 
 ## Explicit Exclusions
 
 - Do not deploy.
 - Do not enable production credentials.
 - Do not activate live integrations.
+- Do not run Supabase `db push`, migration repair, or remote migration commands.
 - Do not add live provider writes, sends, sync, or customer automation.
 - Do not commit secrets or inspect secrets in browser code.
 - Do not create destructive migrations.
+- Do not create new migrations.
 - Do not weaken authentication or RLS.
 - Do not fake readiness, connected states, validation, migration status, provider health, or green deployment status.
 - Do not redesign the application.
@@ -51,12 +55,16 @@ Joe Harris
 ## Completion Criteria
 
 - Production Readiness Center is accessible through existing administration navigation.
-- The center reviews the approved subsystems and truthfully reports production-disabled, owner-setup, credential, OAuth, migration, validation, regression, and readiness blockers.
-- Each requested provider has an activation guide with required owner actions, credentials, OAuth setup, external approvals, testing sequence, and rollback procedure.
-- The unified production checklist includes database/Supabase, authentication/security, integrations, documents, customer portal, financial, communications, website, monitoring, backups, and browser regression readiness.
+- The center includes a guided launch-control sequence with explicit owner action, Codex responsibility, evidence, dependency, next-action, and stop-condition language.
+- Provider activation cards show setup guide paths, required credentials/mappings, controlled tests, rollback, disabled safety flags, and truthful non-active statuses unless real evidence exists.
+- Pending migrations show Git presence and migration-integrity-test inclusion without claiming verified live production application.
+- Environment variables are inventoried without exposing secret values to browser code.
+- WeatherTech Phoenix, WeatherTech Tucson, and IHC mappings remain owner-action-required until real provider identifiers are supplied outside the repository.
+- Controlled-test plans and launch gates block internal pilot and daily production use until evidence and owner approval exist.
 - Production readiness logic is reusable and covered by targeted automated tests.
 - Browser regression covers the Production Readiness Center and confirms it routes to existing Settings and Integration Center workflows.
-- No live provider activation, deployment, production credential use, fake readiness, `.env.local` change, package change, schema/RLS change, or destructive migration is introduced.
+- Production activation documentation identifies the exact activation order, deployment blockers, pending migration inventory, owner actions, controlled tests, rollback, internal-pilot criteria, daily-production criteria, and intentionally disabled capabilities.
+- No live provider activation, deployment, production credential use, fake readiness, `.env.local` change, package change, schema/RLS change, remote migration command, or destructive migration is introduced.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
@@ -75,7 +83,7 @@ Joe Harris
 - Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before product development begins.
-- Inspect existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, Financial workspace, provider readiness helpers, sprint workflow docs, and browser regression patterns before editing.
+- Inspect existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, Financial workspace, provider readiness helpers, sprint workflow docs, production activation docs, and browser regression patterns before editing.
 - Run the production readiness center test.
 - Run security/company-access policy tests.
 - Run migration-integrity tests.
@@ -90,15 +98,15 @@ Joe Harris
 
 ## Planned Commit Message
 
-`feat: add production readiness center`
+`feat: add guided production launch control`
 
 ## Blockers
 
-Actual production deployment, live provider activation, production credentials, OAuth app approval, provider webhook configuration, provider IDs, monitoring, backups, and final production Supabase verification remain owner-controlled rollout steps outside this sprint.
+Actual production deployment, live provider activation, production credentials, OAuth app approval, provider webhook configuration, provider IDs, monitoring, backups, production Supabase migration application/verification, and final owner production-use approval remain owner-controlled rollout steps outside this sprint.
 
 ## Final Status
 
-In progress until validation, commit, push, remote synchronization, and clean working tree verification complete.
+Completed after validation, commit, push, remote synchronization, and clean working tree verification. Do not begin or promote another sprint without explicit owner approval.
 
 ## Notes
 

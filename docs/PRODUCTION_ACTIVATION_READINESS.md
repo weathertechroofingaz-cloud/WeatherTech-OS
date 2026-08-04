@@ -37,6 +37,149 @@ The application includes a Production Readiness Center under the existing admini
 
 The center reports readiness conservatively. Missing credentials, OAuth setup, pending migration verification, missing webhook configuration, disabled production gates, absent monitoring, or missing regression evidence must not display as green.
 
+## Guided Launch Control
+
+Production Activation Phase 1 adds a launch-control layer to the existing Production Readiness Center. It is a guided owner setup and controlled-test workflow, not a deployment mechanism.
+
+The launch-control model records:
+
+- Ordered activation steps.
+- Owner actions.
+- Codex responsibilities.
+- Required evidence fields.
+- Provider prerequisites.
+- Three-company and branch mapping guidance.
+- Pending migration inventory.
+- Environment readiness inventory.
+- Controlled-test plans.
+- Launch gates.
+- Rollback expectations.
+
+### Exact Activation Order
+
+1. Repository and release checkpoint.
+2. Supabase production migration validation.
+3. Authentication and redirect configuration.
+4. Vercel or approved production deployment.
+5. Custom production URL.
+6. Monitoring, backups, and rollback.
+7. Twilio.
+8. Gmail / Google Workspace.
+9. Google Calendar.
+10. Website lead capture.
+11. Yelp.
+12. Google Business Profile.
+13. QuickBooks Online.
+14. Electronic signatures.
+15. Customer portal, if owner-approved.
+16. Controlled internal pilot.
+17. Final production-use approval.
+
+The order is intentional: migration and security evidence comes before deployment, production URL setup comes before OAuth redirects and webhooks, provider setup comes before controlled testing, and owner approval comes before daily production use.
+
+### Launch Gates
+
+The launch gates remain blocked until evidence exists.
+
+- Deployment-ready: requires clean repository validation, verified migration inventory, environment readiness, rollback plan, monitoring, and owner approval.
+- Ready for provider setup: requires production URL, OAuth redirect URIs, provider credentials, business account IDs, disabled write gates, and rollback ownership.
+- Ready for internal pilot: requires signed-in regression, controlled provider tests, company-routing verification, disposable test-data cleanup, monitoring, and owner acceptance.
+- Daily production use: requires pilot completion, customer-facing automation approval, support ownership, backup/restore evidence, and final owner approval.
+
+### Pending Migration Inventory
+
+Git presence is not production proof. The Production Readiness Center intentionally reports remote migration status as unknown until the verified Supabase CLI path confirms the correct WeatherTech OS project and migration history.
+
+The owner must verify production application status for provider and security migrations including:
+
+- `0012_integration_sync_logs.sql`
+- `0014_website_lead_intake_provider.sql`
+- `0021_twilio_live_integration_foundation.sql`
+- `0022_gohighlevel_sync_foundation.sql`
+- `0024_security_company_access_hardening.sql`
+- `0025_document_storage_signature_workflow.sql`
+- `0027_gmail_workspace_email_foundation.sql`
+- `0028_google_calendar_scheduling_foundation.sql`
+- `0029_google_business_profile_foundation.sql`
+- `0030_quickbooks_online_foundation.sql`
+- `0031_electronic_signatures_foundation.sql`
+
+### Environment Readiness
+
+Environment readiness must be validated server-side. Browser code must never inspect or display secret values.
+
+Readiness checks classify values as:
+
+- Present.
+- Missing.
+- Unknown.
+- Invalid.
+- Disabled safely.
+- Enabled, requires approval.
+
+Provider write or send flags should remain disabled until an owner-approved activation step explicitly enables them.
+
+### Company And Branch Mapping
+
+Every live provider must map to the correct business context before activation:
+
+- WeatherTech Roofing LLC - Phoenix.
+- WeatherTech Roofing LLC - Tucson.
+- IHC Painting.
+
+Unknown mappings are blockers. The system must not infer a provider account, phone number, location ID, realm ID, or website source ID from partial evidence.
+
+### Controlled-Test Rule
+
+Every provider test must use an approved test contact, test account, sandbox mode, or dry-run path where available. Stop immediately if a test routes to the wrong WeatherTech/IHC company, creates duplicate records, sends a real unapproved customer communication, exposes a secret, fails signature/webhook validation, or creates disposable data that cannot be cleaned up.
+
+### Owner Responsibilities
+
+The owner controls:
+
+- Production hosting account and deployment approval.
+- Supabase project verification and migration deployment approval.
+- Provider account ownership.
+- OAuth app approval.
+- Webhook URL registration.
+- Business account IDs and branch/location mappings.
+- Production credentials and secret rotation.
+- Go-live timing.
+- Customer-facing automation approval.
+
+### Codex Responsibilities
+
+Codex may:
+
+- Validate repository state.
+- Run local validation and browser regression.
+- Inspect non-secret configuration metadata.
+- Maintain setup documentation.
+- Implement disabled-by-default readiness architecture.
+- Report exact blockers and owner actions.
+
+Codex must not:
+
+- Deploy production.
+- Apply remote migrations unless separately approved with a positively verified project and path.
+- Activate providers.
+- Send customer communications.
+- Commit secrets.
+- Guess provider IDs, OAuth configuration, DNS, or credentials.
+
+### Evidence Fields
+
+Every launch step should record:
+
+- Status.
+- Date checked.
+- Checked by.
+- Test record ID.
+- Provider account or location label.
+- Result.
+- Failure reason.
+- Required next action.
+
 ## Owner Setup Checklist
 
 Before production activation, the owner must verify:

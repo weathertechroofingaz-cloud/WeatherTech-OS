@@ -398,10 +398,180 @@ try {
     "Monitoring, backups, and launch control",
   ].forEach((label) => assert(checklistLabels.includes(label), `${label} checklist exists`));
 
+  const activationLabels = center.activationSequence.map((step) => step.label);
+  [
+    "Repository and release checkpoint",
+    "Supabase production migration validation",
+    "Authentication and redirect configuration",
+    "Vercel or approved production deployment",
+    "Custom production URL",
+    "Monitoring, backups, and rollback",
+    "Twilio",
+    "Gmail / Google Workspace",
+    "Google Calendar",
+    "Website lead capture",
+    "Yelp",
+    "Google Business Profile",
+    "QuickBooks Online",
+    "Electronic signatures",
+    "Customer portal, if owner-approved",
+    "Controlled internal pilot",
+    "Final production-use approval",
+  ].forEach((label) => assert(activationLabels.includes(label), `${label} activation step exists`));
+
+  const productionUrlStep = center.activationSequence.find(
+    (step) => step.id === "production-deployment",
+  );
+  const websiteStep = center.activationSequence.find(
+    (step) => step.id === "website-lead-capture",
+  );
+  assert(productionUrlStep.order < websiteStep.order, "Production URL comes before website lead capture");
+  assertEqual(
+    productionUrlStep.status,
+    "production_url_required",
+    "Missing production URL blocks deployment stage",
+  );
+
+  const providerCardLabels = center.providerActivationCards.map((card) => card.label);
+  [
+    "Supabase",
+    "Vercel or approved deployment provider",
+    "Twilio",
+    "Google Workspace / Gmail",
+    "Google Calendar",
+    "Website lead capture",
+    "Yelp",
+    "Google Business Profile",
+    "QuickBooks Online",
+    "DocuSign",
+    "Dropbox Sign",
+  ].forEach((label) => assert(providerCardLabels.includes(label), `${label} provider activation card exists`));
+
+  assert(
+    center.providerActivationCards.every((card) => card.status !== "active"),
+    "Provider cards must not fake active connections",
+  );
+  assert(
+    center.providerActivationCards.every((card) => card.rollbackSummary.length > 0),
+    "Every provider card documents rollback",
+  );
+
+  const migrationNames = center.migrationInventory.map((migration) => migration.filename);
+  [
+    "0027_gmail_workspace_email_foundation.sql",
+    "0028_google_calendar_scheduling_foundation.sql",
+    "0029_google_business_profile_foundation.sql",
+    "0030_quickbooks_online_foundation.sql",
+    "0031_electronic_signatures_foundation.sql",
+  ].forEach((filename) => assert(migrationNames.includes(filename), `${filename} migration is inventoried`));
+  assert(
+    center.migrationInventory.every(
+      (migration) =>
+        migration.repositoryStatus === "present_in_repository" &&
+        migration.integrityStatus === "included_in_migration_integrity_tests" &&
+        migration.remoteStatus === "remote_status_unknown",
+    ),
+    "Migrations distinguish repository presence from unknown remote application",
+  );
+
+  const mappingLabels = center.companyMappingGuidance.map((mapping) => mapping.label);
+  [
+    "WeatherTech Roofing LLC - Phoenix",
+    "WeatherTech Roofing LLC - Tucson",
+    "IHC",
+  ].forEach((label) => assert(mappingLabels.includes(label), `${label} mapping guidance exists`));
+  assert(
+    center.companyMappingGuidance.every((mapping) =>
+      mapping.providerMappings.every((provider) => provider.status === "owner_action_required"),
+    ),
+    "Unknown account mappings remain blocked for owner action",
+  );
+
+  const controlledPlanLabels = center.controlledTestPlans.map((plan) => plan.label);
+  assert(
+    controlledPlanLabels.some((label) => label.includes("Twilio controlled test")),
+    "Twilio controlled-test plan exists",
+  );
+  assert(
+    center.controlledTestPlans.every((plan) =>
+      plan.stopConditions.some((condition) => condition.includes("wrong WeatherTech/IHC company")),
+    ),
+    "Controlled tests stop on company-mapping mistakes",
+  );
+
+  const launchGateStatuses = new Map(
+    center.launchGates.map((gate) => [gate.id, gate.status]),
+  );
+  assertEqual(
+    launchGateStatuses.get("internal-pilot-ready"),
+    "blocked",
+    "Internal pilot remains blocked without evidence",
+  );
+  assertEqual(
+    launchGateStatuses.get("daily-production-use"),
+    "blocked",
+    "Daily production use requires owner approval",
+  );
+
+  const unknownEnvironmentInventory = center.environmentInventory.flatMap(
+    (group) => group.checks,
+  );
+  assert(
+    unknownEnvironmentInventory.some((check) => check.status === "unknown"),
+    "Browser-readiness environment inventory stays unknown until server-side validation",
+  );
+
+  const validatedEnvironmentInventory = readinessModule.buildProductionEnvironmentInventory({
+    NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-key",
+    SUPABASE_SERVICE_ROLE_KEY: "super-secret-service-key",
+    NEXT_PUBLIC_APP_URL: "https://app.example.test",
+    TWILIO_OUTBOUND_SMS_ENABLED: "false",
+    GOOGLE_GMAIL_SEND_ENABLED: "maybe",
+    WEBSITE_INTAKE_ENABLED: "true",
+  });
+  const validatedChecks = validatedEnvironmentInventory.flatMap((group) => group.checks);
+  assert(
+    validatedChecks.some(
+      (check) =>
+        check.name === "SUPABASE_SERVICE_ROLE_KEY" &&
+        check.status === "present" &&
+        check.secret,
+    ),
+    "Server-side environment inventory reports secret presence without exposing value",
+  );
+  assert(
+    !JSON.stringify(validatedEnvironmentInventory).includes("super-secret-service-key"),
+    "Secret values are redacted from environment inventory",
+  );
+  assert(
+    validatedChecks.some(
+      (check) => check.name === "TWILIO_OUTBOUND_SMS_ENABLED" && check.status === "disabled_safely",
+    ),
+    "Disabled provider-write gates are recognized as safe",
+  );
+  assert(
+    validatedChecks.some(
+      (check) => check.name === "GOOGLE_GMAIL_SEND_ENABLED" && check.status === "invalid",
+    ),
+    "Invalid safety flag values are rejected",
+  );
+  assert(
+    validatedChecks.some(
+      (check) => check.name === "WEBSITE_INTAKE_ENABLED" && check.status === "enabled_requires_approval",
+    ),
+    "Enabled production switches require approval",
+  );
+
   assertEqual(
     readinessModule.productionReadinessStateLabel("credentials_required"),
     "Credentials required",
     "Readiness labels are user-facing",
+  );
+  assertEqual(
+    readinessModule.launchControlStateLabel("owner_action_required"),
+    "Owner action required",
+    "Launch-control labels are user-facing",
   );
 
   console.log("Production readiness center tests passed.");

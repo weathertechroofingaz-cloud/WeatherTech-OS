@@ -188,9 +188,20 @@ import {
 } from "../lib/crm/integrationCenter";
 import {
   buildProductionReadinessCenter,
+  launchControlStateLabel,
+  launchControlTone,
+  productionEnvironmentClassificationLabel,
+  productionEnvironmentVariableStatusLabel,
   productionReadinessStateLabel,
+  type ProductionActivationStep,
   type ProductionActivationGuide,
   type ProductionChecklistGroup,
+  type ProductionCompanyMappingGuidance,
+  type ProductionControlledTestPlan,
+  type ProductionEnvironmentGroup,
+  type ProductionLaunchGate,
+  type ProductionMigrationInventoryItem,
+  type ProductionProviderActivationCard,
   type ProductionReadinessCheck,
   type ProductionReadinessTone,
 } from "../lib/crm/productionReadiness";
@@ -40189,6 +40200,43 @@ function ProductionReadinessView({
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Guided activation sequence
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Launch-control order
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            The order reflects real dependencies: migrations and security first,
+            production URL before OAuth and webhooks, controlled tests before
+            provider activation, and owner approval before daily production use.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-3">
+          {readiness.activationSequence.map((step) => (
+            <ActivationStepCard key={step.id} step={step} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-red-700">
+            Launch gates
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            No gate passes without evidence
+          </h3>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.launchGates.map((gate) => (
+            <LaunchGateCard key={gate.id} gate={gate} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase text-sky-700">
@@ -40215,6 +40263,100 @@ function ProductionReadinessView({
         <div className="mt-5 grid gap-4 xl:grid-cols-2">
           {readiness.providerChecks.map((check) => (
             <ReadinessCheckCard key={check.id} check={check} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Provider activation cards
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Guided setup without fake connectivity
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            Each card points to the existing setup guide, required mappings,
+            controlled-test plan, disabled safety flags, and rollback path.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.providerActivationCards.map((card) => (
+            <ProviderActivationCard key={card.id} card={card} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-amber-700">
+            Pending migration inventory
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Repository migrations require production verification
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            Presence in Git is not treated as proof of production application.
+            Remote migration status stays unknown until the verified Supabase CLI
+            path confirms the correct WeatherTech OS project.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-3 xl:grid-cols-2">
+          {readiness.migrationInventory.map((migration) => (
+            <MigrationInventoryCard key={migration.id} migration={migration} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-amber-700">
+            Environment readiness inventory
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Server-side validation, redacted by design
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            Browser code does not read production secrets. These checks define
+            what server-side launch validation must classify before deployment
+            or provider connection.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.environmentInventory.map((group) => (
+            <EnvironmentInventoryGroupCard key={group.id} group={group} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Three-company mapping guidance
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Unknown mappings stay blocked
+          </h3>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-3">
+          {readiness.companyMappingGuidance.map((mapping) => (
+            <CompanyMappingGuidanceCard key={mapping.id} mapping={mapping} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Controlled-test plans
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Test before moving to the next provider
+          </h3>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.controlledTestPlans.map((plan) => (
+            <ControlledTestPlanCard key={plan.id} plan={plan} />
           ))}
         </div>
       </section>
@@ -40301,6 +40443,222 @@ function ProductionReadinessView({
 
 function readinessToneToBadge(tone: ProductionReadinessTone): ProviderBadgeTone {
   return tone;
+}
+
+function ActivationStepCard({ step }: { step: ProductionActivationStep }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="flex gap-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-sm font-black text-sky-700 ring-1 ring-slate-200">
+            {step.order}
+          </span>
+          <div>
+            <p className="font-bold text-slate-950">{step.label}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">{step.summary}</p>
+            <p className="mt-2 text-sm font-semibold text-slate-800">
+              Next action: {step.nextAction}
+            </p>
+          </div>
+        </div>
+        <ProviderStatusBadge
+          label={launchControlStateLabel(step.status)}
+          tone={launchControlTone(step.status)}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 xl:grid-cols-3">
+        <ReadinessList title="Dependencies" items={step.dependencies} />
+        <ReadinessList title="Owner actions" items={step.ownerActions} />
+        <ReadinessList title="Codex responsibilities" items={step.codexResponsibilities} />
+      </div>
+    </article>
+  );
+}
+
+function LaunchGateCard({ gate }: { gate: ProductionLaunchGate }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-bold text-slate-950">{gate.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{gate.summary}</p>
+        </div>
+        <ProviderStatusBadge
+          label={launchControlStateLabel(gate.status)}
+          tone={launchControlTone(gate.status)}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <ReadinessList title="Required evidence" items={gate.requiredEvidence} />
+        <ReadinessList title="Blocking reasons" items={gate.blockingReasons} />
+      </div>
+    </article>
+  );
+}
+
+function ProviderActivationCard({ card }: { card: ProductionProviderActivationCard }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-bold text-slate-950">{card.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{card.summary}</p>
+          <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+            Setup guide: {card.setupDocumentPath}
+          </p>
+        </div>
+        <ProviderStatusBadge
+          label={launchControlStateLabel(card.status)}
+          tone={launchControlTone(card.status)}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <ReadinessList title="Required before activation" items={card.requiredBeforeActivation} />
+        <ReadinessList title="Mappings" items={card.requiredMappings} />
+        <ReadinessList title="Controlled test" items={card.controlledTestPlan} />
+        <ReadinessList title="Rollback" items={card.rollbackSummary} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {card.disabledSafetyFlags.map((flag) => (
+          <span
+            key={flag}
+            className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs font-semibold text-blue-700"
+          >
+            {flag}
+          </span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function MigrationInventoryCard({
+  migration,
+}: {
+  migration: ProductionMigrationInventoryItem;
+}) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-bold text-slate-950">{migration.filename}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{migration.area}</p>
+        </div>
+        <ProviderStatusBadge label="Remote status unknown" tone="amber" />
+      </div>
+      <div className="mt-4 grid gap-2 text-sm text-slate-600">
+        <p>Repository: Present in repository</p>
+        <p>Integrity: Included in migration integrity tests</p>
+        <p>Applied locally: Requires verification</p>
+        <p>Remote: Requires verification</p>
+        <p className="font-semibold text-slate-800">{migration.requiredAction}</p>
+      </div>
+    </article>
+  );
+}
+
+function EnvironmentInventoryGroupCard({
+  group,
+}: {
+  group: ProductionEnvironmentGroup;
+}) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="font-bold text-slate-950">{group.label}</p>
+      <div className="mt-4 grid gap-2">
+        {group.checks.map((check) => (
+          <div
+            key={`${group.id}-${check.name}`}
+            className="rounded-lg border border-slate-200 bg-white p-3"
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-950">{check.name}</p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                  {productionEnvironmentClassificationLabel(check.classification)}
+                  {check.secret ? " - secret value redacted" : ""}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{check.summary}</p>
+              </div>
+              <ProviderStatusBadge
+                label={productionEnvironmentVariableStatusLabel(check.status)}
+                tone={
+                  check.status === "present" || check.status === "disabled_safely"
+                    ? "green"
+                    : check.status === "invalid" || check.status === "enabled_requires_approval"
+                      ? "red"
+                      : "amber"
+                }
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function CompanyMappingGuidanceCard({
+  mapping,
+}: {
+  mapping: ProductionCompanyMappingGuidance;
+}) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="font-bold text-slate-950">{mapping.label}</p>
+      <p className="mt-1 text-sm leading-6 text-slate-600">
+        {mapping.company} / {mapping.branch}
+      </p>
+      <div className="mt-4 grid gap-2">
+        {mapping.providerMappings.map((provider) => (
+          <div
+            key={`${mapping.id}-${provider.provider}-${provider.envVar}`}
+            className="rounded-lg border border-slate-200 bg-white p-3"
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-950">
+                  {provider.provider}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  {provider.mappingLabel}
+                </p>
+                <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+                  {provider.envVar}
+                </p>
+              </div>
+              <ProviderStatusBadge
+                label={launchControlStateLabel(provider.status)}
+                tone={launchControlTone(provider.status)}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ControlledTestPlanCard({ plan }: { plan: ProductionControlledTestPlan }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-bold text-slate-950">{plan.label}</p>
+          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
+            Evidence must not store credentials
+          </p>
+        </div>
+        <ProviderStatusBadge label="Controlled testing required" tone="amber" />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <ReadinessList title="Prerequisites" items={plan.prerequisites} />
+        <ReadinessList title="Steps" items={plan.steps} />
+        <ReadinessList title="Expected evidence" items={plan.expectedEvidence} />
+        <ReadinessList title="Stop conditions" items={plan.stopConditions} />
+      </div>
+    </article>
+  );
 }
 
 function ReadinessStatCard({

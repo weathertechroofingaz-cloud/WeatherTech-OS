@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Production Activation Phase 1 - Guided Owner Setup and Launch Control
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add guided production launch control`
+- Summary:
+  - Extended the Production Readiness Center into a guided launch-control workspace with ordered activation steps, launch gates, provider activation cards, pending migration inventory, redacted environment readiness, three-company mapping guidance, and controlled-test plans.
+  - Added permanent production activation documentation for owner actions, Codex responsibilities, provider prerequisites, deployment blockers, controlled tests, rollback, internal pilot entry criteria, and final production-use approval.
+  - Preserved all disabled-by-default provider boundaries without deploying, running remote migrations, committing credentials, activating live integrations, or faking connected/ready status.
+
 ### Production Activation & Deployment Readiness
 
 - Commit: `<this sprint commit>`

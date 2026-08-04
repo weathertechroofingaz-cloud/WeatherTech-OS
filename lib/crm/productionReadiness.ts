@@ -75,6 +75,114 @@ export type ProductionChecklistGroup = {
   items: ProductionReadinessCheck[];
 };
 
+export type LaunchControlState =
+  | "codex_work_complete"
+  | "owner_action_required"
+  | "external_approval_required"
+  | "oauth_required"
+  | "migration_verification_required"
+  | "production_url_required"
+  | "controlled_testing_required"
+  | "blocked"
+  | "active"
+  | "failed";
+
+export type ProductionActivationStep = {
+  id: string;
+  order: number;
+  label: string;
+  status: LaunchControlState;
+  summary: string;
+  dependencies: string[];
+  ownerActions: string[];
+  codexResponsibilities: string[];
+  evidenceFields: string[];
+  nextAction: string;
+};
+
+export type ProductionProviderActivationCard = {
+  id: string;
+  label: string;
+  status: LaunchControlState;
+  summary: string;
+  setupDocumentPath: string;
+  requiredBeforeActivation: string[];
+  requiredMappings: string[];
+  controlledTestPlan: string[];
+  rollbackSummary: string[];
+  disabledSafetyFlags: string[];
+  evidenceFields: string[];
+};
+
+export type ProductionCompanyMappingGuidance = {
+  id: string;
+  label: string;
+  company: "WeatherTech Roofing LLC" | "IHC Painting";
+  branch: "Phoenix" | "Tucson" | "IHC";
+  providerMappings: Array<{
+    provider: string;
+    mappingLabel: string;
+    envVar: string;
+    status: LaunchControlState;
+  }>;
+};
+
+export type ProductionMigrationInventoryItem = {
+  id: string;
+  filename: string;
+  area: string;
+  repositoryStatus: "present_in_repository";
+  integrityStatus: "included_in_migration_integrity_tests";
+  appliedLocallyStatus: "requires_verification";
+  remoteStatus: "remote_status_unknown";
+  requiredAction: string;
+};
+
+export type ProductionEnvironmentVariableStatus =
+  | "present"
+  | "missing"
+  | "invalid"
+  | "unknown"
+  | "disabled_safely"
+  | "enabled_requires_approval";
+
+export type ProductionEnvironmentVariableCheck = {
+  name: string;
+  classification:
+    | "required_before_deployment"
+    | "required_before_provider_connection"
+    | "optional"
+    | "disabled_safety_flag";
+  status: ProductionEnvironmentVariableStatus;
+  secret: boolean;
+  summary: string;
+};
+
+export type ProductionEnvironmentGroup = {
+  id: string;
+  label: string;
+  checks: ProductionEnvironmentVariableCheck[];
+};
+
+export type ProductionControlledTestPlan = {
+  id: string;
+  label: string;
+  providerCardId: string;
+  prerequisites: string[];
+  steps: string[];
+  expectedEvidence: string[];
+  stopConditions: string[];
+};
+
+export type ProductionLaunchGate = {
+  id: string;
+  label: string;
+  status: LaunchControlState;
+  summary: string;
+  requiredEvidence: string[];
+  blockingReasons: string[];
+};
+
 export type ProductionReadinessCenter = {
   score: number;
   scoreLabel: string;
@@ -93,6 +201,14 @@ export type ProductionReadinessCenter = {
   subsystemChecks: ProductionReadinessCheck[];
   activationGuides: ProductionActivationGuide[];
   deploymentChecklist: ProductionChecklistGroup[];
+  activationSequence: ProductionActivationStep[];
+  providerActivationCards: ProductionProviderActivationCard[];
+  companyMappingGuidance: ProductionCompanyMappingGuidance[];
+  migrationInventory: ProductionMigrationInventoryItem[];
+  environmentInventory: ProductionEnvironmentGroup[];
+  controlledTestPlans: ProductionControlledTestPlan[];
+  launchGates: ProductionLaunchGate[];
+  evidenceFields: string[];
   blockers: string[];
 };
 
@@ -186,6 +302,264 @@ const providerGuideEnv = {
     goHighLevelEnvVars.ihcLocationId,
   ],
 };
+
+const setupDocumentPaths = {
+  twilio: "docs/TWILIO_PHASE_1_SETUP.md",
+  googleWorkspace: "docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md",
+  googleCalendar: "docs/GOOGLE_CALENDAR_PHASE_1_SETUP.md",
+  googleBusinessProfile: "docs/GOOGLE_BUSINESS_PROFILE_PHASE_1_SETUP.md",
+  yelp: "docs/YELP_INTEGRATION_PHASE_1_SETUP.md",
+  website: "docs/WEBSITE_INTEGRATION_PHASE_1_SETUP.md",
+  quickbooks: "docs/QUICKBOOKS_ONLINE_PHASE_1_SETUP.md",
+  signatures: "docs/ELECTRONIC_SIGNATURES_PHASE_1_SETUP.md",
+  production: "docs/PRODUCTION_ACTIVATION_READINESS.md",
+};
+
+const productionEvidenceFields = [
+  "Status",
+  "Date checked",
+  "Checked by",
+  "Test record ID",
+  "Provider account or location label",
+  "Result",
+  "Failure reason",
+  "Required next action",
+];
+
+const branchMappingGuidance: ProductionCompanyMappingGuidance[] = [
+  {
+    id: "weathertech-phoenix",
+    label: "WeatherTech Roofing LLC - Phoenix",
+    company: "WeatherTech Roofing LLC",
+    branch: "Phoenix",
+    providerMappings: [
+      {
+        provider: "Twilio",
+        mappingLabel: "Phoenix business phone number",
+        envVar: twilioEnvVars.weatherTechPhoenixNumber,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Website",
+        mappingLabel: "Phoenix website source ID",
+        envVar: websiteEnvVars.weatherTechPhoenixSourceId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Google Business Profile",
+        mappingLabel: "Phoenix GBP location ID",
+        envVar: googleBusinessProfileEnvVars.weatherTechPhoenixLocationId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Yelp",
+        mappingLabel: "Phoenix Yelp business/account ID",
+        envVar: "YELP_ACCOUNT_ID_WEATHERTECH_PHOENIX",
+        status: "owner_action_required",
+      },
+    ],
+  },
+  {
+    id: "weathertech-tucson",
+    label: "WeatherTech Roofing LLC - Tucson",
+    company: "WeatherTech Roofing LLC",
+    branch: "Tucson",
+    providerMappings: [
+      {
+        provider: "Twilio",
+        mappingLabel: "Tucson business phone number",
+        envVar: twilioEnvVars.weatherTechTucsonNumber,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Website",
+        mappingLabel: "Tucson website source ID",
+        envVar: websiteEnvVars.weatherTechTucsonSourceId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Google Business Profile",
+        mappingLabel: "Tucson GBP location ID",
+        envVar: googleBusinessProfileEnvVars.weatherTechTucsonLocationId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Yelp",
+        mappingLabel: "Tucson Yelp business/account ID",
+        envVar: "YELP_ACCOUNT_ID_WEATHERTECH_TUCSON",
+        status: "owner_action_required",
+      },
+    ],
+  },
+  {
+    id: "ihc",
+    label: "IHC",
+    company: "IHC Painting",
+    branch: "IHC",
+    providerMappings: [
+      {
+        provider: "Twilio",
+        mappingLabel: "IHC business phone number",
+        envVar: twilioEnvVars.ihcNumber,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Website",
+        mappingLabel: "IHC website source ID",
+        envVar: websiteEnvVars.ihcSourceId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Google Business Profile",
+        mappingLabel: "IHC GBP location ID",
+        envVar: googleBusinessProfileEnvVars.ihcLocationId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "QuickBooks Online",
+        mappingLabel: "IHC QuickBooks realm ID",
+        envVar: quickBooksOnlineEnvVars.ihcRealmId,
+        status: "owner_action_required",
+      },
+      {
+        provider: "Yelp",
+        mappingLabel: "IHC Yelp business/account ID",
+        envVar: "YELP_ACCOUNT_ID_IHC",
+        status: "owner_action_required",
+      },
+    ],
+  },
+];
+
+const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
+  {
+    id: "integration-sync-logs",
+    filename: "0012_integration_sync_logs.sql",
+    area: "Integration logging",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify the production migration history before deployment.",
+  },
+  {
+    id: "website-lead-intake-provider",
+    filename: "0014_website_lead_intake_provider.sql",
+    area: "Website and provider lead intake",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Confirm website, Yelp, and provider constraints are applied in production.",
+  },
+  {
+    id: "twilio-live-foundation",
+    filename: "0021_twilio_live_integration_foundation.sql",
+    area: "Twilio",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Confirm Twilio integration metadata exists before live call/SMS tests.",
+  },
+  {
+    id: "gohighlevel-sync-foundation",
+    filename: "0022_gohighlevel_sync_foundation.sql",
+    area: "GoHighLevel",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Confirm sync-log and conflict fields exist before any automation bridge testing.",
+  },
+  {
+    id: "security-company-access",
+    filename: "0024_security_company_access_hardening.sql",
+    area: "Security and company isolation",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Run runtime RLS validation before internal pilot.",
+  },
+  {
+    id: "document-storage-signature",
+    filename: "0025_document_storage_signature_workflow.sql",
+    area: "Documents and signatures",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify document storage and signature status columns before testing provider signatures.",
+  },
+  {
+    id: "gmail-workspace-email",
+    filename: "0027_gmail_workspace_email_foundation.sql",
+    area: "Gmail / Google Workspace",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify mailbox and email metadata tables before mailbox sync testing.",
+  },
+  {
+    id: "google-calendar-scheduling",
+    filename: "0028_google_calendar_scheduling_foundation.sql",
+    area: "Google Calendar",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify calendar mapping tables before controlled calendar sync.",
+  },
+  {
+    id: "google-business-profile",
+    filename: "0029_google_business_profile_foundation.sql",
+    area: "Google Business Profile",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify GBP provider constraints before location/review testing.",
+  },
+  {
+    id: "quickbooks-online",
+    filename: "0030_quickbooks_online_foundation.sql",
+    area: "QuickBooks Online",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify QuickBooks provider constraints before sandbox accounting tests.",
+  },
+  {
+    id: "electronic-signatures",
+    filename: "0031_electronic_signatures_foundation.sql",
+    area: "Electronic signatures",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify DocuSign and Dropbox Sign provider constraints before sandbox signature tests.",
+  },
+];
+
+export function launchControlStateLabel(status: LaunchControlState) {
+  const labels: Record<LaunchControlState, string> = {
+    codex_work_complete: "Codex work complete",
+    owner_action_required: "Owner action required",
+    external_approval_required: "External approval required",
+    oauth_required: "OAuth required",
+    migration_verification_required: "Migration verification required",
+    production_url_required: "Production URL required",
+    controlled_testing_required: "Controlled testing required",
+    blocked: "Blocked",
+    active: "Active",
+    failed: "Failed",
+  };
+
+  return labels[status];
+}
 
 export const productionActivationGuides: ProductionActivationGuide[] = [
   {
@@ -385,6 +759,802 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
     ],
   },
 ];
+
+const baseActivationSequence: ProductionActivationStep[] = [
+  {
+    id: "repository-release-checkpoint",
+    order: 1,
+    label: "Repository and release checkpoint",
+    status: "codex_work_complete",
+    summary: "Code must be committed, pushed, validated, and clean before deployment planning begins.",
+    dependencies: ["Approved sprint scope", "Clean working tree", "Local main equals origin/main"],
+    ownerActions: ["Review the final sprint summary and approve the deployment candidate."],
+    codexResponsibilities: ["Run build, type-check, lint, browser regression, and final Git synchronization checks."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Use the latest pushed commit as the only deployment candidate.",
+  },
+  {
+    id: "supabase-migration-validation",
+    order: 2,
+    label: "Supabase production migration validation",
+    status: "migration_verification_required",
+    summary: "Provider and security migrations must be verified against the correct WeatherTech OS Supabase project before deployment.",
+    dependencies: ["Repository checkpoint", "Verified Supabase project reference", "No pending migration history conflicts"],
+    ownerActions: ["Authorize the production migration verification window."],
+    codexResponsibilities: ["Use the documented Supabase CLI path only after the project is positively verified."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Verify remote migration history; do not apply migrations from this workspace.",
+  },
+  {
+    id: "authentication-redirects",
+    order: 3,
+    label: "Authentication and redirect configuration",
+    status: "owner_action_required",
+    summary: "Production auth URLs and OAuth redirects depend on the final production URL.",
+    dependencies: ["Supabase migration validation", "Production URL selected"],
+    ownerActions: ["Confirm allowed auth redirect URLs for the production domain."],
+    codexResponsibilities: ["Document required redirect paths without committing credentials."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Configure production auth URLs after the deployment URL is known.",
+  },
+  {
+    id: "production-deployment",
+    order: 4,
+    label: "Vercel or approved production deployment",
+    status: "production_url_required",
+    summary: "A real deployment is needed before webhooks, OAuth callbacks, and live provider tests can be configured.",
+    dependencies: ["Repository checkpoint", "Production build", "Owner-approved deployment provider"],
+    ownerActions: ["Connect the approved hosting project and set production environment variables."],
+    codexResponsibilities: ["Provide the readiness checklist and verify no deployment occurred in this sprint."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Deploy only in a separate owner-controlled deployment step.",
+  },
+  {
+    id: "custom-url",
+    order: 5,
+    label: "Custom production URL",
+    status: "production_url_required",
+    summary: "Provider callback URLs, webhook endpoints, website form posting, and OAuth apps require a stable HTTPS production URL.",
+    dependencies: ["Production deployment"],
+    ownerActions: ["Approve domain, DNS, SSL, and final callback base URL."],
+    codexResponsibilities: ["Keep callback path documentation aligned with existing provider setup docs."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Record the production URL before configuring provider consoles.",
+  },
+  {
+    id: "monitoring-backups-rollback",
+    order: 6,
+    label: "Monitoring, backups, and rollback",
+    status: "owner_action_required",
+    summary: "Launch must have error monitoring, Supabase backup expectations, rollback owner, and release owner before internal pilot.",
+    dependencies: ["Production deployment", "Supabase project verification"],
+    ownerActions: ["Assign monitoring destination, backup expectations, rollback owner, release owner, and launch window."],
+    codexResponsibilities: ["Keep rollback instructions non-destructive and provider-specific."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Record owner and rollback evidence before provider activation.",
+  },
+  {
+    id: "twilio",
+    order: 7,
+    label: "Twilio",
+    status: "controlled_testing_required",
+    summary: "Call and SMS testing requires production URLs, Twilio account access, business-number mapping, and outbound gates disabled until approval.",
+    dependencies: ["Production URL", "Webhook URL", "Company number mapping", "Controlled test contacts"],
+    ownerActions: ["Sign into Twilio, confirm numbers, configure callbacks, and approve controlled inbound tests."],
+    codexResponsibilities: ["Verify Customer 360 activity and duplicate prevention using controlled records only."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Run controlled inbound call/SMS tests before any outbound enablement.",
+  },
+  {
+    id: "gmail",
+    order: 8,
+    label: "Gmail / Google Workspace",
+    status: "oauth_required",
+    summary: "Mailbox sync requires Google Cloud OAuth setup, authorized mailbox mapping, and send gates disabled until explicit approval.",
+    dependencies: ["Production URL", "Google Cloud OAuth app", "Mailbox mapping"],
+    ownerActions: ["Approve Google Cloud OAuth app and connect a controlled mailbox."],
+    codexResponsibilities: ["Validate import/matching without sending customer email."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Connect a test mailbox and validate controlled email intake.",
+  },
+  {
+    id: "google-calendar",
+    order: 9,
+    label: "Google Calendar",
+    status: "oauth_required",
+    summary: "Calendar sync requires the same production OAuth base URL and approved company-calendar mappings.",
+    dependencies: ["Production URL", "Google Workspace OAuth", "Calendar mapping"],
+    ownerActions: ["Authorize a controlled calendar for inspections and production scheduling."],
+    codexResponsibilities: ["Validate no duplicate event creation during controlled sync tests."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Sync one controlled inspection and reschedule it without duplication.",
+  },
+  {
+    id: "website-lead-capture",
+    order: 10,
+    label: "Website lead capture",
+    status: "controlled_testing_required",
+    summary: "Website forms require production URL, HMAC signing, allowed origins, branch source IDs, and abuse controls.",
+    dependencies: ["Production URL", "Website admin access", "Signing secret", "Source mapping"],
+    ownerActions: ["Install signed test form posts on approved WeatherTech/IHC domains."],
+    codexResponsibilities: ["Verify attribution, routing, follow-up, and duplicate handling."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Submit one controlled signed test form per approved website source.",
+  },
+  {
+    id: "yelp",
+    order: 11,
+    label: "Yelp",
+    status: "external_approval_required",
+    summary: "Yelp live lead sync depends on official partner/API access and verified business mappings.",
+    dependencies: ["Yelp partner approval", "Business/account IDs", "Webhook setup"],
+    ownerActions: ["Confirm Yelp access path and business identifiers."],
+    codexResponsibilities: ["Keep manual/test intake separate from live Yelp API claims."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Use manual or test intake until live Yelp partner access is verified.",
+  },
+  {
+    id: "google-business-profile",
+    order: 12,
+    label: "Google Business Profile",
+    status: "external_approval_required",
+    summary: "GBP requires authorized accounts, location IDs, approved API access, OAuth, and Pub/Sub readiness.",
+    dependencies: ["Production URL", "GBP API access", "Location mapping", "Pub/Sub setup"],
+    ownerActions: ["Authorize GBP accounts and confirm WeatherTech Phoenix, Tucson, and IHC location IDs."],
+    codexResponsibilities: ["Keep replies and unsupported messaging disabled."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Validate account/location discovery before accepting live activity.",
+  },
+  {
+    id: "quickbooks-online",
+    order: 13,
+    label: "QuickBooks Online",
+    status: "controlled_testing_required",
+    summary: "QuickBooks activation starts in sandbox and must not create production accounting records without separate approval.",
+    dependencies: ["Production URL", "Intuit OAuth app", "Realm ID mapping", "Sandbox company"],
+    ownerActions: ["Approve Intuit app, sandbox company, and WeatherTech/IHC realm mapping."],
+    codexResponsibilities: ["Validate customer, estimate, invoice, and payment mapping drafts only."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Use a sandbox company and keep accounting writes disabled.",
+  },
+  {
+    id: "electronic-signatures",
+    order: 14,
+    label: "Electronic signatures",
+    status: "controlled_testing_required",
+    summary: "DocuSign and Dropbox Sign require sandbox OAuth, account mapping, webhooks, and provider writes disabled until approval.",
+    dependencies: ["Production URL", "Provider sandbox", "Account mapping", "Webhook validation"],
+    ownerActions: ["Approve DocuSign/Dropbox Sign app setup and sandbox sender identity."],
+    codexResponsibilities: ["Validate signature request mapping without real customer sends."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Run sandbox signature status tests before any live signature request.",
+  },
+  {
+    id: "customer-portal",
+    order: 15,
+    label: "Customer portal, if owner-approved",
+    status: "owner_action_required",
+    summary: "Customer portal activation remains optional and must wait for customer-visible data rules and portal access validation.",
+    dependencies: ["Authentication verification", "Document visibility rules", "Owner approval"],
+    ownerActions: ["Approve whether the portal enters pilot and which customers may access it."],
+    codexResponsibilities: ["Verify customer isolation and visibility rules before any external access."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Keep portal public access blocked until owner approval.",
+  },
+  {
+    id: "internal-pilot",
+    order: 16,
+    label: "Controlled internal pilot",
+    status: "blocked",
+    summary: "Internal pilot is blocked until migrations, auth, production URL, rollback, backups, monitoring, and controlled provider tests pass.",
+    dependencies: ["All prior gates", "Controlled test evidence", "Owner pilot approval"],
+    ownerActions: ["Name pilot users, launch window, rollback owner, and acceptance criteria."],
+    codexResponsibilities: ["Confirm no critical regression failures and no live customer automation surprises."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Start only after the launch gates report ready for internal pilot.",
+  },
+  {
+    id: "final-production-approval",
+    order: 17,
+    label: "Final production-use approval",
+    status: "blocked",
+    summary: "Daily production use must remain blocked until the owner explicitly approves it after controlled pilot evidence.",
+    dependencies: ["Internal pilot evidence", "Owner approval", "Provider rollback confidence"],
+    ownerActions: ["Approve daily production use in writing after reviewing pilot evidence."],
+    codexResponsibilities: ["Do not auto-approve production use."],
+    evidenceFields: productionEvidenceFields,
+    nextAction: "Wait for explicit owner approval after pilot review.",
+  },
+];
+
+function buildProviderActivationCards(): ProductionProviderActivationCard[] {
+  return [
+    {
+      id: "supabase",
+      label: "Supabase",
+      status: "migration_verification_required",
+      summary: "Database, RLS, auth, storage, and migration history must be verified against the correct production project before deployment.",
+      setupDocumentPath: setupDocumentPaths.production,
+      requiredBeforeActivation: [
+        "Correct project reference verified",
+        "Remote migration history verified",
+        "Company-access RLS runtime tests passed",
+        "Backups and rollback owner confirmed",
+      ],
+      requiredMappings: ["WeatherTech Roofing LLC company records", "IHC Painting company records", "Portal roles remain isolated"],
+      controlledTestPlan: [
+        "Run read-only migration list verification.",
+        "Run anonymous access denial checks.",
+        "Run authorized company-scoped access checks.",
+      ],
+      rollbackSummary: [
+        "Use the documented migration rollback plan only after owner approval.",
+        "Do not delete production CRM records.",
+        "Preserve imported records even if provider activation is paused.",
+      ],
+      disabledSafetyFlags: ["No remote migrations are applied by this sprint."],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "vercel",
+      label: "Vercel or approved deployment provider",
+      status: "production_url_required",
+      summary: "Production deployment and URL setup are required before OAuth callbacks, webhooks, and live provider tests.",
+      setupDocumentPath: setupDocumentPaths.production,
+      requiredBeforeActivation: [
+        "Vercel project connected",
+        "Production domain and SSL configured",
+        "Production environment variables configured server-side",
+        "Health and browser smoke validation passed",
+      ],
+      requiredMappings: ["Production URL used for every OAuth callback and webhook base URL"],
+      controlledTestPlan: [
+        "Deploy the approved commit only.",
+        "Verify app load, auth callback, and no console-breaking errors.",
+        "Run post-deploy smoke tests before provider tests.",
+      ],
+      rollbackSummary: [
+        "Rollback to the previous Vercel deployment.",
+        "Disable provider webhooks before reverting provider tests if needed.",
+        "Keep database records intact.",
+      ],
+      disabledSafetyFlags: ["No deployment is performed by this sprint."],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "twilio",
+      label: "Twilio",
+      status: "controlled_testing_required",
+      summary: "Foundation exists for calls and SMS, but credentials, numbers, callbacks, compliance, and outbound gates require owner setup.",
+      setupDocumentPath: setupDocumentPaths.twilio,
+      requiredBeforeActivation: productionActivationGuides[0].requiredOwnerActions,
+      requiredMappings: ["WeatherTech Phoenix number", "WeatherTech Tucson number", "IHC number"],
+      controlledTestPlan: productionActivationGuides[0].testingSequence,
+      rollbackSummary: productionActivationGuides[0].rollbackProcedure,
+      disabledSafetyFlags: [twilioEnvVars.outboundSmsEnabled ?? "TWILIO_OUTBOUND_SMS_ENABLED"],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "gmail",
+      label: "Google Workspace / Gmail",
+      status: "oauth_required",
+      summary: "Email foundation exists, but OAuth, mailbox authorization, token storage, and send approval are still required.",
+      setupDocumentPath: setupDocumentPaths.googleWorkspace,
+      requiredBeforeActivation: productionActivationGuides[1].requiredOwnerActions,
+      requiredMappings: ["WeatherTech mailbox", "IHC mailbox", "Authorized sender policy"],
+      controlledTestPlan: productionActivationGuides[1].testingSequence,
+      rollbackSummary: productionActivationGuides[1].rollbackProcedure,
+      disabledSafetyFlags: [googleWorkspaceEnvVars.gmailSendEnabled ?? "GOOGLE_GMAIL_SEND_ENABLED"],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "google-calendar",
+      label: "Google Calendar",
+      status: "oauth_required",
+      summary: "Calendar foundation exists, but production OAuth, calendar mapping, and write approval are required.",
+      setupDocumentPath: setupDocumentPaths.googleCalendar,
+      requiredBeforeActivation: productionActivationGuides[2].requiredOwnerActions,
+      requiredMappings: ["Inspection calendar", "Production calendar", "IHC calendar"],
+      controlledTestPlan: productionActivationGuides[2].testingSequence,
+      rollbackSummary: productionActivationGuides[2].rollbackProcedure,
+      disabledSafetyFlags: [googleWorkspaceEnvVars.googleCalendarWriteEnabled],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "website",
+      label: "Website lead capture",
+      status: "controlled_testing_required",
+      summary: "Signed website intake foundation exists, but production websites, HMAC secrets, source IDs, and origin controls require setup.",
+      setupDocumentPath: setupDocumentPaths.website,
+      requiredBeforeActivation: productionActivationGuides[5].requiredOwnerActions,
+      requiredMappings: ["WeatherTech Phoenix source", "WeatherTech Tucson source", "IHC source"],
+      controlledTestPlan: productionActivationGuides[5].testingSequence,
+      rollbackSummary: productionActivationGuides[5].rollbackProcedure,
+      disabledSafetyFlags: [
+        websiteEnvVars.enabled,
+        "WEATHERTECH_WEBSITE_INTAKE_ENABLED",
+        "WEATHERTECH_TUCSON_WEBSITE_INTAKE_ENABLED",
+        "IHC_WEBSITE_INTAKE_ENABLED",
+      ],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "yelp",
+      label: "Yelp",
+      status: "external_approval_required",
+      summary: "Yelp foundation exists, but live leads require official access, business IDs, OAuth or partner setup, and owner approval.",
+      setupDocumentPath: setupDocumentPaths.yelp,
+      requiredBeforeActivation: productionActivationGuides[4].requiredOwnerActions,
+      requiredMappings: ["WeatherTech Phoenix Yelp business", "WeatherTech Tucson Yelp business", "IHC Yelp business"],
+      controlledTestPlan: productionActivationGuides[4].testingSequence,
+      rollbackSummary: productionActivationGuides[4].rollbackProcedure,
+      disabledSafetyFlags: ["YELP_LIVE_SYNC_ENABLED", "YELP_OUTBOUND_MESSAGING_ENABLED"],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "google-business-profile",
+      label: "Google Business Profile",
+      status: "external_approval_required",
+      summary: "GBP foundation exists, but API access, OAuth, Pub/Sub, account IDs, and location IDs remain owner setup.",
+      setupDocumentPath: setupDocumentPaths.googleBusinessProfile,
+      requiredBeforeActivation: productionActivationGuides[3].requiredOwnerActions,
+      requiredMappings: ["WeatherTech Phoenix GBP location", "WeatherTech Tucson GBP location", "IHC GBP location"],
+      controlledTestPlan: productionActivationGuides[3].testingSequence,
+      rollbackSummary: productionActivationGuides[3].rollbackProcedure,
+      disabledSafetyFlags: [
+        googleBusinessProfileEnvVars.syncEnabled,
+        googleBusinessProfileEnvVars.reviewReplyEnabled,
+      ],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "quickbooks",
+      label: "QuickBooks Online",
+      status: "controlled_testing_required",
+      summary: "Accounting mapping foundation exists, but sandbox OAuth, realm IDs, and explicit accounting-write approval are required.",
+      setupDocumentPath: setupDocumentPaths.quickbooks,
+      requiredBeforeActivation: productionActivationGuides[6].requiredOwnerActions,
+      requiredMappings: ["WeatherTech QuickBooks company realm", "IHC QuickBooks company realm"],
+      controlledTestPlan: productionActivationGuides[6].testingSequence,
+      rollbackSummary: productionActivationGuides[6].rollbackProcedure,
+      disabledSafetyFlags: [
+        quickBooksOnlineEnvVars.syncEnabled,
+        quickBooksOnlineEnvVars.accountingWritesEnabled,
+        quickBooksOnlineEnvVars.paymentProcessingEnabled,
+      ],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "docusign",
+      label: "DocuSign",
+      status: "controlled_testing_required",
+      summary: "DocuSign support is provider-ready, but OAuth, account IDs, webhooks, sandbox tests, and write gates remain disabled.",
+      setupDocumentPath: setupDocumentPaths.signatures,
+      requiredBeforeActivation: productionActivationGuides[7].requiredOwnerActions,
+      requiredMappings: ["WeatherTech DocuSign account", "IHC DocuSign account"],
+      controlledTestPlan: productionActivationGuides[7].testingSequence,
+      rollbackSummary: productionActivationGuides[7].rollbackProcedure,
+      disabledSafetyFlags: [
+        electronicSignatureEnvVars.docusignSignatureRequestsEnabled,
+        electronicSignatureEnvVars.docusignProviderWritesEnabled,
+      ],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "dropbox-sign",
+      label: "Dropbox Sign",
+      status: "controlled_testing_required",
+      summary: "Dropbox Sign support is provider-ready, but OAuth, account IDs, webhooks, sandbox tests, and write gates remain disabled.",
+      setupDocumentPath: setupDocumentPaths.signatures,
+      requiredBeforeActivation: productionActivationGuides[7].requiredOwnerActions,
+      requiredMappings: ["WeatherTech Dropbox Sign account", "IHC Dropbox Sign account"],
+      controlledTestPlan: productionActivationGuides[7].testingSequence,
+      rollbackSummary: productionActivationGuides[7].rollbackProcedure,
+      disabledSafetyFlags: [
+        electronicSignatureEnvVars.dropboxSignSignatureRequestsEnabled,
+        electronicSignatureEnvVars.dropboxSignProviderWritesEnabled,
+      ],
+      evidenceFields: productionEvidenceFields,
+    },
+  ];
+}
+
+export function launchControlTone(status: LaunchControlState): ProductionReadinessTone {
+  if (status === "codex_work_complete" || status === "active") {
+    return "green";
+  }
+
+  if (status === "failed" || status === "blocked") {
+    return "red";
+  }
+
+  if (
+    status === "owner_action_required" ||
+    status === "external_approval_required" ||
+    status === "oauth_required" ||
+    status === "migration_verification_required" ||
+    status === "production_url_required" ||
+    status === "controlled_testing_required"
+  ) {
+    return "amber";
+  }
+
+  return "slate";
+}
+
+export function productionEnvironmentVariableStatusLabel(
+  status: ProductionEnvironmentVariableStatus,
+) {
+  const labels: Record<ProductionEnvironmentVariableStatus, string> = {
+    present: "Present",
+    missing: "Missing",
+    invalid: "Invalid",
+    unknown: "Unknown",
+    disabled_safely: "Disabled safely",
+    enabled_requires_approval: "Enabled - approval required",
+  };
+
+  return labels[status];
+}
+
+export function productionEnvironmentClassificationLabel(
+  classification: ProductionEnvironmentVariableCheck["classification"],
+) {
+  const labels: Record<ProductionEnvironmentVariableCheck["classification"], string> = {
+    required_before_deployment: "Required before deployment",
+    required_before_provider_connection: "Required before provider connection",
+    optional: "Optional",
+    disabled_safety_flag: "Disabled safety flag",
+  };
+
+  return labels[classification];
+}
+
+function getEnvironmentValue(
+  env: Record<string, string | undefined> | undefined,
+  name: string,
+) {
+  if (!env) {
+    return null;
+  }
+
+  const value = env[name];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isBooleanFlagName(name: string) {
+  return name.endsWith("_ENABLED") || name.endsWith("_TEST_MODE");
+}
+
+function classifyEnvironmentVariable(
+  name: string,
+  classification: ProductionEnvironmentVariableCheck["classification"],
+  env?: Record<string, string | undefined>,
+): ProductionEnvironmentVariableStatus {
+  const value = getEnvironmentValue(env, name);
+
+  if (value === null) {
+    return "unknown";
+  }
+
+  if (classification === "disabled_safety_flag") {
+    if (!value || value === "false") {
+      return "disabled_safely";
+    }
+
+    if (value === "true") {
+      return "enabled_requires_approval";
+    }
+
+    return "invalid";
+  }
+
+  if (isBooleanFlagName(name) && value && value !== "true" && value !== "false") {
+    return "invalid";
+  }
+
+  if (!value) {
+    return classification === "optional" ? "missing" : "missing";
+  }
+
+  return "present";
+}
+
+function environmentVariableSummary(
+  status: ProductionEnvironmentVariableStatus,
+  classification: ProductionEnvironmentVariableCheck["classification"],
+) {
+  if (status === "unknown") {
+    return "Requires server-side production environment verification.";
+  }
+
+  if (status === "present") {
+    return "Configured; value is intentionally redacted.";
+  }
+
+  if (status === "disabled_safely") {
+    return "Disabled safety flag is off.";
+  }
+
+  if (status === "enabled_requires_approval") {
+    return "Enabled flag must be reviewed against owner approval before launch.";
+  }
+
+  if (status === "invalid") {
+    return "Configured value does not match the expected safe format.";
+  }
+
+  return classification === "optional"
+    ? "Optional value is not configured."
+    : "Required value is missing.";
+}
+
+function isSecretEnvironmentVariable(name: string) {
+  return /SECRET|TOKEN|KEY|SID|HMAC|VERIFIER/i.test(name) &&
+    !name.startsWith("NEXT_PUBLIC_");
+}
+
+function buildEnvironmentCheck(
+  name: string,
+  classification: ProductionEnvironmentVariableCheck["classification"],
+  env?: Record<string, string | undefined>,
+): ProductionEnvironmentVariableCheck {
+  const status = classifyEnvironmentVariable(name, classification, env);
+
+  return {
+    name,
+    classification,
+    status,
+    secret: isSecretEnvironmentVariable(name),
+    summary: environmentVariableSummary(status, classification),
+  };
+}
+
+function buildEnvironmentGroup(
+  id: string,
+  label: string,
+  variables: Array<{
+    name: string;
+    classification: ProductionEnvironmentVariableCheck["classification"];
+  }>,
+  env?: Record<string, string | undefined>,
+): ProductionEnvironmentGroup {
+  return {
+    id,
+    label,
+    checks: variables.map((variable) =>
+      buildEnvironmentCheck(variable.name, variable.classification, env),
+    ),
+  };
+}
+
+export function buildProductionEnvironmentInventory(
+  env?: Record<string, string | undefined>,
+): ProductionEnvironmentGroup[] {
+  return [
+    buildEnvironmentGroup(
+      "deployment",
+      "Deployment and Supabase",
+      [
+        { name: "NEXT_PUBLIC_SUPABASE_URL", classification: "required_before_deployment" },
+        { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", classification: "required_before_deployment" },
+        { name: "SUPABASE_SERVICE_ROLE_KEY", classification: "required_before_deployment" },
+        { name: "NEXT_PUBLIC_APP_URL", classification: "required_before_deployment" },
+        { name: "PRODUCTION_HEALTHCHECK_URL", classification: "optional" },
+      ],
+      env,
+    ),
+    buildEnvironmentGroup(
+      "twilio",
+      "Twilio",
+      [
+        ...providerGuideEnv.twilio.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        { name: twilioEnvVars.outboundSmsEnabled, classification: "disabled_safety_flag" },
+      ],
+      env,
+    ),
+    buildEnvironmentGroup(
+      "google-workspace",
+      "Google Workspace and Calendar",
+      [
+        ...providerGuideEnv.googleWorkspace.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        { name: googleWorkspaceEnvVars.gmailSendEnabled, classification: "disabled_safety_flag" },
+        {
+          name: googleWorkspaceEnvVars.googleCalendarWriteEnabled,
+          classification: "disabled_safety_flag",
+        },
+      ],
+      env,
+    ),
+    buildEnvironmentGroup(
+      "website-yelp-gbp",
+      "Website, Yelp, and Google Business Profile",
+      [
+        ...providerGuideEnv.website.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        ...providerGuideEnv.yelp.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        ...providerGuideEnv.googleBusinessProfile.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        { name: websiteEnvVars.enabled, classification: "disabled_safety_flag" },
+        { name: "YELP_LIVE_SYNC_ENABLED", classification: "disabled_safety_flag" },
+        { name: "YELP_OUTBOUND_MESSAGING_ENABLED", classification: "disabled_safety_flag" },
+        { name: googleBusinessProfileEnvVars.syncEnabled, classification: "disabled_safety_flag" },
+        {
+          name: googleBusinessProfileEnvVars.reviewReplyEnabled,
+          classification: "disabled_safety_flag",
+        },
+      ],
+      env,
+    ),
+    buildEnvironmentGroup(
+      "quickbooks-signatures",
+      "QuickBooks and Electronic Signatures",
+      [
+        ...providerGuideEnv.quickbooks.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        ...providerGuideEnv.signatures.map((name) => ({
+          name,
+          classification: "required_before_provider_connection" as const,
+        })),
+        { name: quickBooksOnlineEnvVars.syncEnabled, classification: "disabled_safety_flag" },
+        {
+          name: quickBooksOnlineEnvVars.accountingWritesEnabled,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: quickBooksOnlineEnvVars.paymentProcessingEnabled,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: electronicSignatureEnvVars.docusignSignatureRequestsEnabled,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: electronicSignatureEnvVars.docusignProviderWritesEnabled,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: electronicSignatureEnvVars.dropboxSignSignatureRequestsEnabled,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: electronicSignatureEnvVars.dropboxSignProviderWritesEnabled,
+          classification: "disabled_safety_flag",
+        },
+      ],
+      env,
+    ),
+  ];
+}
+
+function buildControlledTestPlans(
+  providerCards: ProductionProviderActivationCard[],
+): ProductionControlledTestPlan[] {
+  return providerCards
+    .filter((card) => card.id !== "vercel")
+    .map((card) => ({
+      id: `${card.id}-controlled-test`,
+      label: `${card.label} controlled test`,
+      providerCardId: card.id,
+      prerequisites: [
+        "Production URL and callback paths are configured where required.",
+        "Required migrations and RLS runtime validation are verified.",
+        "Owner-controlled account access is available.",
+        "Production writes or sends remain disabled unless this specific test is approved.",
+      ],
+      steps: card.controlledTestPlan,
+      expectedEvidence: card.evidenceFields,
+      stopConditions: [
+        "Unexpected customer-facing communication occurs.",
+        "A provider account maps to the wrong WeatherTech/IHC company or branch.",
+        "Duplicate CRM activity is created.",
+        "A required rollback path is missing.",
+      ],
+    }));
+}
+
+function buildLaunchGates(): ProductionLaunchGate[] {
+  return [
+    {
+      id: "deployment-ready",
+      label: "Deployment-ready",
+      status: "blocked",
+      summary: "Blocked until production environment variables, Supabase project verification, and migration history evidence exist.",
+      requiredEvidence: [
+        "Clean pushed commit",
+        "Production build pass",
+        "Supabase project reference verified",
+        "Remote migration history verified",
+        "Production environment variables configured server-side",
+      ],
+      blockingReasons: [
+        "Production deployment has not been run.",
+        "Production environment status is not verified by this browser view.",
+        "Remote migration status is unknown until CLI verification.",
+      ],
+    },
+    {
+      id: "provider-setup-ready",
+      label: "Ready for provider setup",
+      status: "blocked",
+      summary: "Blocked until the production URL and callback base paths are confirmed.",
+      requiredEvidence: [
+        "Production URL",
+        "OAuth redirect URI list",
+        "Webhook URL list",
+        "Provider setup owner",
+      ],
+      blockingReasons: [
+        "OAuth redirect URIs require a real production URL.",
+        "Webhook configuration requires a deployed HTTPS endpoint.",
+      ],
+    },
+    {
+      id: "controlled-testing-ready",
+      label: "Ready for controlled testing",
+      status: "blocked",
+      summary: "Blocked until provider credentials, account mapping, safety flags, and rollback paths are validated.",
+      requiredEvidence: [
+        "Provider account mapping",
+        "Controlled test record ID",
+        "Disabled production-write gates",
+        "Rollback procedure confirmed",
+      ],
+      blockingReasons: [
+        "Provider credentials are owner-controlled and not configured by this sprint.",
+        "Unknown account mappings must remain blocked.",
+      ],
+    },
+    {
+      id: "internal-pilot-ready",
+      label: "Ready for internal pilot",
+      status: "blocked",
+      summary: "Blocked until migrations, auth, RLS, backups, monitoring, rollback ownership, and critical regression evidence pass.",
+      requiredEvidence: [
+        "Runtime RLS validation",
+        "Authentication URL validation",
+        "Full signed-in browser regression",
+        "Monitoring destination",
+        "Backup and rollback owner",
+        "Pilot user list",
+      ],
+      blockingReasons: [
+        "Daily production use has not been owner-approved.",
+        "Backup, monitoring, rollback, and pilot owner evidence is not recorded.",
+      ],
+    },
+    {
+      id: "daily-production-use",
+      label: "Ready for daily production use",
+      status: "blocked",
+      summary: "Daily production use remains blocked until the owner explicitly approves after internal pilot evidence.",
+      requiredEvidence: [
+        "Owner production-use approval",
+        "Internal pilot sign-off",
+        "No critical regression failures",
+        "Provider rollback confidence",
+      ],
+      blockingReasons: [
+        "WeatherTech OS must not approve itself for daily production use.",
+      ],
+    },
+  ];
+}
 
 function stateTone(status: ProductionReadinessState): ProductionReadinessTone {
   if (status === "connected" || status === "ready_for_activation") {
@@ -885,6 +2055,8 @@ export function buildProductionReadinessCenter(snapshot: CrmSnapshot): Productio
     integrationStatus,
     providerChecks,
   );
+  const providerActivationCards = buildProviderActivationCards();
+  const controlledTestPlans = buildControlledTestPlans(providerActivationCards);
   const blockers = buildBlockers(providerChecks, migrationStatus);
   const score = calculateScore({ subsystemChecks, providerChecks, databaseStatus });
   const lastSyncOrActivity = latestTimestamp([
@@ -922,6 +2094,14 @@ export function buildProductionReadinessCenter(snapshot: CrmSnapshot): Productio
     subsystemChecks,
     activationGuides: productionActivationGuides,
     deploymentChecklist,
+    activationSequence: baseActivationSequence,
+    providerActivationCards,
+    companyMappingGuidance: branchMappingGuidance,
+    migrationInventory: providerMigrationInventory,
+    environmentInventory: buildProductionEnvironmentInventory(),
+    controlledTestPlans,
+    launchGates: buildLaunchGates(),
+    evidenceFields: productionEvidenceFields,
     blockers,
   };
 }

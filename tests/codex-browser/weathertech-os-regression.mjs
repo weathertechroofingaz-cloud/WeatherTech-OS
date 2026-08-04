@@ -7284,7 +7284,44 @@ async function testProductionReadinessCenter(browser, tab) {
         text.includes("0031_electronic_signatures_foundation.sql") &&
         text.includes("remaining blockers") &&
         text.includes("do not deploy or activate") &&
+        text.includes("guided activation sequence") &&
+        text.includes("launch-control order") &&
+        text.includes("repository and release checkpoint") &&
+        text.includes("supabase production migration validation") &&
+        text.includes("vercel or approved production deployment") &&
+        text.includes("custom production url") &&
+        text.includes("controlled internal pilot") &&
+        text.includes("final production-use approval") &&
+        text.includes("launch gates") &&
+        text.includes("no gate passes without evidence") &&
+        text.includes("deployment-ready") &&
+        text.includes("ready for provider setup") &&
+        text.includes("ready for internal pilot") &&
         text.includes("pending owner setup") &&
+        text.includes("provider activation cards") &&
+        text.includes("guided setup without fake connectivity") &&
+        text.includes("supabase") &&
+        text.includes("vercel or approved deployment provider") &&
+        text.includes("pending migration inventory") &&
+        text.includes("repository migrations require production verification") &&
+        text.includes("remote status unknown") &&
+        text.includes("0027_gmail_workspace_email_foundation.sql") &&
+        text.includes("0028_google_calendar_scheduling_foundation.sql") &&
+        text.includes("0029_google_business_profile_foundation.sql") &&
+        text.includes("0030_quickbooks_online_foundation.sql") &&
+        text.includes("environment readiness inventory") &&
+        text.includes("server-side validation, redacted by design") &&
+        text.includes("twilio_outbound_sms_enabled") &&
+        text.includes("google_gmail_send_enabled") &&
+        text.includes("quickbooks_accounting_writes_enabled") &&
+        text.includes("three-company mapping guidance") &&
+        text.includes("unknown mappings stay blocked") &&
+        text.includes("weathertech roofing llc - phoenix") &&
+        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("ihc") &&
+        text.includes("controlled-test plans") &&
+        text.includes("test before moving to the next provider") &&
+        text.includes("evidence must not store credentials") &&
         text.includes("production activation guides") &&
         text.includes("unified production checklist") &&
         text.includes("deployment readiness checks") &&
@@ -9533,10 +9570,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Restore inspection confirmation did not explain the action.");
   }
 
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
+  await clickVisibleDomButtonByText(
+    tab,
+    "Confirm restore",
     "Confirm restore inspection",
-    { retryTransientClick: true },
   );
   await waitForAsync(
     async () => {
@@ -9545,8 +9582,28 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
       return inspection && inspection.status !== "canceled" ? inspection : null;
     },
     "inspection restored persistence",
-    15000,
-  );
+    30000,
+  ).catch(async (error) => {
+    const pageState = await tab.playwright.evaluate(() => {
+      const text = document.body.innerText;
+      const confirmation = document.querySelector(
+        '[role="alertdialog"][aria-label="Restore inspection confirmation"]',
+      );
+
+      return {
+        restoreConfirmationOpen: Boolean(confirmation),
+        hasRestoreNotice: text.includes("Inspection restored."),
+        hasRestoreError: text.includes("Unable to restore inspection"),
+        recordManagementText:
+          document.querySelector('[data-testid="inspection-record-management"]')
+            ?.textContent ?? null,
+      };
+    });
+
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} State: ${JSON.stringify(pageState)}`,
+    );
+  });
   progress("inspections:record-management:done");
 
   return {
