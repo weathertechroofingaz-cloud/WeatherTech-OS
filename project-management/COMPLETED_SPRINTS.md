@@ -4,6 +4,27 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Estimate & Proposal Builder 2.0 - World-Class Multi-Brand Sales, Acceptance, Invoice, and Payment System
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add estimate proposal builder v2`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added company-aware proposal templates, proposal revisions, customer-facing sections, proposal options, acceptance records, payment schedules, and audit events.
+  - Preserved strict internal/customer-facing separation so internal costs, margin, markup, commissions, and private notes stay out of proposal packets.
+  - Added base-total, optional-upgrade, replacement-alternative, deposit invoice draft, Customer Portal proposal summary, signature readiness, payment readiness, and QuickBooks readiness behavior.
+  - Added additive migration `0032_estimate_proposal_builder_v2.sql` but did not apply it remotely from Codex.
+  - Did not activate live DocuSign, Dropbox Sign, payments, QuickBooks Online, outbound proposal delivery, provider webhooks, or customer messaging.
+
 ### Production Deployment Phase 1 - Private Staging Deployment
 
 - Commit: `<this sprint commit>`

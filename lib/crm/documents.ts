@@ -506,7 +506,6 @@ function buildEstimateDraft(
             ["Materials", formatMoney(estimate.material_total)],
             ["Discount", formatMoney(estimate.discount_total)],
             ["Tax", formatMoney(estimate.tax_total)],
-            ["Profit margin", formatMoney(estimate.profit_margin_total)],
             ["Total", formatMoney(estimate.total)],
           ]),
         },
@@ -516,7 +515,7 @@ function buildEstimateDraft(
           body: list(
             lineItems.map(
               (item) =>
-                `${item.name} - ${item.quantity} ${item.unit} x ${formatMoney(item.unit_cost)} = ${formatMoney(item.total)}`,
+                `${item.name} - ${item.quantity} ${item.unit} - ${formatMoney(item.total)}`,
             ),
           ),
         },
@@ -528,13 +527,9 @@ function buildEstimateDraft(
             ["Signature", "Customer signature required before production scheduling."],
             [
               "Terms",
-              "Approval authorizes the selected scope, listed line items, taxes, discounts, margins, and company terms. Changes to hidden conditions, selections, colors, or access requirements require written approval.",
+              "Approval authorizes the selected scope, listed line items, taxes, discounts, and company terms. Changes to hidden conditions, selections, colors, or access requirements require written approval.",
             ],
           ]),
-        },
-        {
-          title: "Notes",
-          body: estimate.notes ?? "No notes recorded.",
         },
       ],
     }),

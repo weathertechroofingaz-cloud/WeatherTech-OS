@@ -183,6 +183,8 @@ export type SignatureStatus =
   | "declined"
   | "expired";
 export type DocumentCategory =
+  | "proposal"
+  | "signed_proposal"
   | "estimate"
   | "scope"
   | "invoice"
@@ -203,6 +205,108 @@ export type DocumentCategory =
 export type DocumentStatus = "draft" | "ready" | "sent" | "signed" | "archived";
 export type DocumentRequirementLevel = "required" | "optional";
 export type PaymentStatus = "pending" | "posted" | "failed" | "refunded";
+export type ProposalTemplateStatus = "active" | "archived";
+export type ProposalRevisionStatus =
+  | "draft"
+  | "ready_for_review"
+  | "approved_internally"
+  | "ready_to_send"
+  | "sent"
+  | "viewed"
+  | "changes_requested"
+  | "accepted"
+  | "declined"
+  | "expired"
+  | "superseded"
+  | "converted_to_job"
+  | "canceled";
+export type ProposalSectionType =
+  | "cover"
+  | "customer"
+  | "property"
+  | "overview"
+  | "inspection_summary"
+  | "findings"
+  | "recommended_solution"
+  | "scope"
+  | "line_items"
+  | "base_proposal"
+  | "optional_upgrades"
+  | "alternatives"
+  | "allowances"
+  | "materials"
+  | "photos"
+  | "warranty"
+  | "exclusions"
+  | "payment_schedule"
+  | "financing"
+  | "terms"
+  | "customer_notes"
+  | "signature_acceptance"
+  | "attachments"
+  | "custom";
+export type ProposalOptionType =
+  | "add_on_upgrade"
+  | "replacement_alternative"
+  | "required_choice"
+  | "optional_choice";
+export type ProposalPriceEffectType =
+  | "additive"
+  | "replace_base_amount"
+  | "full_alternate_total";
+export type ProposalDepositType = "none" | "fixed" | "percent" | "custom_schedule";
+export type ProposalSignatureReadinessStatus =
+  | "not_configured"
+  | "sending_disabled"
+  | "ready_for_sandbox_testing"
+  | "awaiting_signature"
+  | "signed"
+  | "declined"
+  | "expired"
+  | "failed";
+export type ProposalPaymentStatus =
+  | "online_payments_disabled"
+  | "provider_not_configured"
+  | "deposit_required"
+  | "pending"
+  | "processing"
+  | "received"
+  | "failed"
+  | "refunded"
+  | "partially_refunded"
+  | "paid_in_full"
+  | "past_due";
+export type ProposalQuickBooksSyncStatus =
+  | "not_configured"
+  | "ready"
+  | "production_disabled"
+  | "exported"
+  | "sync_failed";
+export type ProposalAcceptanceMethod =
+  | "internal_recorded"
+  | "customer_portal"
+  | "signature_provider";
+export type ProposalPaymentScheduleType =
+  | "deposit"
+  | "progress"
+  | "final"
+  | "change_order"
+  | "custom";
+export type ProposalPaymentAmountType = "fixed" | "percent" | "balance";
+export type ProposalPaymentDueTrigger =
+  | "upon_acceptance"
+  | "specific_date"
+  | "production_start"
+  | "progress_milestone"
+  | "completion"
+  | "custom";
+export type ProposalPaymentScheduleStatus =
+  | "pending"
+  | "invoice_created"
+  | "paid"
+  | "waived"
+  | "blocked";
+export type ProposalAuditActorType = "internal" | "customer" | "provider" | "system";
 export type NotificationChannel = "email" | "sms" | "in_app";
 export type NotificationStatus = "queued" | "sent" | "read" | "dismissed";
 export type IntegrationProvider =
@@ -1031,6 +1135,190 @@ export type PaymentRecord = {
   updated_at: string;
 };
 
+export type ProposalTemplateRecord = {
+  id: string;
+  company_id: string | null;
+  template_key: string;
+  name: string;
+  category: string;
+  service_type: ServiceType;
+  status: ProposalTemplateStatus;
+  is_default: boolean;
+  version_number: number;
+  description: string;
+  default_sections: unknown[];
+  default_options: unknown[];
+  default_terms: string | null;
+  default_warranty: string | null;
+  created_by: string | null;
+  last_edited_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EstimateProposalRevisionRecord = {
+  id: string;
+  company_id: string;
+  estimate_id: string;
+  customer_id: string | null;
+  lead_id: string | null;
+  property_id: string | null;
+  template_id: string | null;
+  proposal_number: string;
+  revision_number: number;
+  title: string;
+  status: ProposalRevisionStatus;
+  brand_name: string;
+  brand_primary_color: string | null;
+  brand_accent_color: string | null;
+  base_subtotal: number;
+  discount_total: number;
+  tax_total: number;
+  fee_total: number;
+  base_total: number;
+  selected_upgrades_total: number;
+  accepted_total: number;
+  deposit_type: ProposalDepositType;
+  deposit_value: number;
+  deposit_required: boolean;
+  deposit_due_date: string | null;
+  deposit_amount: number;
+  deposit_paid: number;
+  remaining_balance: number;
+  requires_signature: boolean;
+  requires_deposit_before_job: boolean;
+  signature_status: ProposalSignatureReadinessStatus;
+  payment_status: ProposalPaymentStatus;
+  quickbooks_sync_status: ProposalQuickBooksSyncStatus;
+  customer_visible_notes: string | null;
+  internal_notes: string | null;
+  terms: string | null;
+  acceptance_required: boolean;
+  sent_at: string | null;
+  viewed_at: string | null;
+  accepted_at: string | null;
+  declined_at: string | null;
+  expires_at: string | null;
+  superseded_at: string | null;
+  immutable_after_at: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  source_snapshot: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EstimateProposalSectionRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string;
+  section_key: string;
+  title: string;
+  section_type: ProposalSectionType;
+  body: string;
+  customer_visible: boolean;
+  is_required: boolean;
+  sort_order: number;
+  source_type: string | null;
+  source_record_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EstimateProposalOptionRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string;
+  option_type: ProposalOptionType;
+  option_group_key: string | null;
+  name: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  price: number;
+  price_effect_type: ProposalPriceEffectType;
+  base_replacement_amount: number;
+  customer_visible: boolean;
+  selected: boolean;
+  selected_by: string | null;
+  selected_at: string | null;
+  required: boolean;
+  recommended: boolean;
+  best_value: boolean;
+  dependency_option_id: string | null;
+  conflicting_option_id: string | null;
+  warranty_effect: string | null;
+  scope_details: string | null;
+  customer_notes: string | null;
+  internal_notes: string | null;
+  source_line_item_id: string | null;
+  source_finding_id: string | null;
+  source_photo_id: string | null;
+  sort_order: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EstimateProposalAcceptanceRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string;
+  estimate_id: string;
+  customer_id: string | null;
+  signer_name: string;
+  signer_email: string | null;
+  accepted_total: number;
+  selected_option_ids: string[];
+  terms_accepted: boolean;
+  acceptance_method: ProposalAcceptanceMethod;
+  signature_status: Extract<
+    ProposalSignatureReadinessStatus,
+    "not_configured" | "awaiting_signature" | "signed" | "declined" | "expired" | "failed"
+  >;
+  ip_hash: string | null;
+  user_agent: string | null;
+  audit_metadata: Record<string, unknown>;
+  accepted_at: string;
+  created_at: string;
+};
+
+export type ProposalPaymentScheduleRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string;
+  invoice_id: string | null;
+  milestone_name: string;
+  schedule_type: ProposalPaymentScheduleType;
+  amount_type: ProposalPaymentAmountType;
+  amount_value: number;
+  calculated_amount: number;
+  due_trigger: ProposalPaymentDueTrigger;
+  due_date: string | null;
+  status: ProposalPaymentScheduleStatus;
+  sort_order: number;
+  customer_visible: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProposalAuditEventRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string | null;
+  estimate_id: string | null;
+  customer_id: string | null;
+  event_type: string;
+  actor_type: ProposalAuditActorType;
+  actor_id: string | null;
+  summary: string;
+  metadata: Record<string, unknown>;
+  idempotency_key: string | null;
+  created_at: string;
+};
+
 export type NotificationRecord = {
   id: string;
   company_id: string;
@@ -1843,6 +2131,168 @@ export type InvoiceInput = {
   notes?: string | null;
 };
 
+export type ProposalTemplateInput = {
+  company_id?: string | null;
+  template_key: string;
+  name: string;
+  category: string;
+  service_type: ServiceType;
+  status?: ProposalTemplateStatus;
+  is_default?: boolean;
+  version_number?: number;
+  description?: string;
+  default_sections?: unknown[];
+  default_options?: unknown[];
+  default_terms?: string | null;
+  default_warranty?: string | null;
+  created_by?: string | null;
+  last_edited_by?: string | null;
+};
+
+export type EstimateProposalRevisionInput = {
+  company_id: string;
+  estimate_id: string;
+  customer_id?: string | null;
+  lead_id?: string | null;
+  property_id?: string | null;
+  template_id?: string | null;
+  proposal_number: string;
+  revision_number?: number;
+  title: string;
+  status?: ProposalRevisionStatus;
+  brand_name: string;
+  brand_primary_color?: string | null;
+  brand_accent_color?: string | null;
+  base_subtotal?: number;
+  discount_total?: number;
+  tax_total?: number;
+  fee_total?: number;
+  base_total?: number;
+  selected_upgrades_total?: number;
+  accepted_total?: number;
+  deposit_type?: ProposalDepositType;
+  deposit_value?: number;
+  deposit_required?: boolean;
+  deposit_due_date?: string | null;
+  deposit_amount?: number;
+  deposit_paid?: number;
+  remaining_balance?: number;
+  requires_signature?: boolean;
+  requires_deposit_before_job?: boolean;
+  signature_status?: ProposalSignatureReadinessStatus;
+  payment_status?: ProposalPaymentStatus;
+  quickbooks_sync_status?: ProposalQuickBooksSyncStatus;
+  customer_visible_notes?: string | null;
+  internal_notes?: string | null;
+  terms?: string | null;
+  acceptance_required?: boolean;
+  sent_at?: string | null;
+  viewed_at?: string | null;
+  accepted_at?: string | null;
+  declined_at?: string | null;
+  expires_at?: string | null;
+  superseded_at?: string | null;
+  immutable_after_at?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+  source_snapshot?: Record<string, unknown>;
+};
+
+export type EstimateProposalSectionInput = {
+  company_id: string;
+  proposal_revision_id: string;
+  section_key: string;
+  title: string;
+  section_type?: ProposalSectionType;
+  body?: string;
+  customer_visible?: boolean;
+  is_required?: boolean;
+  sort_order?: number;
+  source_type?: string | null;
+  source_record_id?: string | null;
+  created_by?: string | null;
+};
+
+export type EstimateProposalOptionInput = {
+  company_id: string;
+  proposal_revision_id: string;
+  option_type: ProposalOptionType;
+  option_group_key?: string | null;
+  name: string;
+  description?: string | null;
+  quantity?: number;
+  unit?: string;
+  price?: number;
+  price_effect_type?: ProposalPriceEffectType;
+  base_replacement_amount?: number;
+  customer_visible?: boolean;
+  selected?: boolean;
+  selected_by?: string | null;
+  selected_at?: string | null;
+  required?: boolean;
+  recommended?: boolean;
+  best_value?: boolean;
+  dependency_option_id?: string | null;
+  conflicting_option_id?: string | null;
+  warranty_effect?: string | null;
+  scope_details?: string | null;
+  customer_notes?: string | null;
+  internal_notes?: string | null;
+  source_line_item_id?: string | null;
+  source_finding_id?: string | null;
+  source_photo_id?: string | null;
+  sort_order?: number;
+  created_by?: string | null;
+};
+
+export type EstimateProposalAcceptanceInput = {
+  company_id: string;
+  proposal_revision_id: string;
+  estimate_id: string;
+  customer_id?: string | null;
+  signer_name: string;
+  signer_email?: string | null;
+  accepted_total: number;
+  selected_option_ids?: string[];
+  terms_accepted: boolean;
+  acceptance_method: ProposalAcceptanceMethod;
+  signature_status?: EstimateProposalAcceptanceRecord["signature_status"];
+  ip_hash?: string | null;
+  user_agent?: string | null;
+  audit_metadata?: Record<string, unknown>;
+  accepted_at?: string;
+};
+
+export type ProposalPaymentScheduleInput = {
+  company_id: string;
+  proposal_revision_id: string;
+  invoice_id?: string | null;
+  milestone_name: string;
+  schedule_type: ProposalPaymentScheduleType;
+  amount_type: ProposalPaymentAmountType;
+  amount_value?: number;
+  calculated_amount?: number;
+  due_trigger?: ProposalPaymentDueTrigger;
+  due_date?: string | null;
+  status?: ProposalPaymentScheduleStatus;
+  sort_order?: number;
+  customer_visible?: boolean;
+  notes?: string | null;
+};
+
+export type ProposalAuditEventInput = {
+  company_id: string;
+  proposal_revision_id?: string | null;
+  estimate_id?: string | null;
+  customer_id?: string | null;
+  event_type: string;
+  actor_type?: ProposalAuditActorType;
+  actor_id?: string | null;
+  summary: string;
+  metadata?: Record<string, unknown>;
+  idempotency_key?: string | null;
+};
+
 export type MaterialOrderItemInput = {
   id?: string;
   name: string;
@@ -2639,6 +3089,46 @@ export type InvoiceLineItemInsert = InvoiceLineItemInput & {
   updated_at?: string;
 };
 
+export type ProposalTemplateInsert = ProposalTemplateInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type EstimateProposalRevisionInsert = EstimateProposalRevisionInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type EstimateProposalSectionInsert = EstimateProposalSectionInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type EstimateProposalOptionInsert = EstimateProposalOptionInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type EstimateProposalAcceptanceInsert = EstimateProposalAcceptanceInput & {
+  id?: string;
+  created_at?: string;
+};
+
+export type ProposalPaymentScheduleInsert = ProposalPaymentScheduleInput & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ProposalAuditEventInsert = ProposalAuditEventInput & {
+  id?: string;
+  created_at?: string;
+};
+
 export type MaterialOrderInsert = MaterialOrderInput & {
   id?: string;
   total?: number;
@@ -2853,6 +3343,13 @@ export type CrmSnapshot = {
   signatures: SignatureRecord[];
   documents: DocumentRecord[];
   payments: PaymentRecord[];
+  proposalTemplates: ProposalTemplateRecord[];
+  proposalRevisions: EstimateProposalRevisionRecord[];
+  proposalSections: EstimateProposalSectionRecord[];
+  proposalOptions: EstimateProposalOptionRecord[];
+  proposalAcceptances: EstimateProposalAcceptanceRecord[];
+  proposalPaymentSchedules: ProposalPaymentScheduleRecord[];
+  proposalAuditEvents: ProposalAuditEventRecord[];
   notifications: NotificationRecord[];
   integrationConnections: IntegrationConnectionRecord[];
   integrationSyncLogs: IntegrationSyncLogRecord[];
@@ -3059,6 +3556,62 @@ export type Database = {
         Row: PaymentRecord;
         Insert: PaymentInsert;
         Update: Partial<Database["public"]["Tables"]["payments"]["Insert"]>;
+        Relationships: [];
+      };
+      proposal_templates: {
+        Row: ProposalTemplateRecord;
+        Insert: ProposalTemplateInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["proposal_templates"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      estimate_proposal_revisions: {
+        Row: EstimateProposalRevisionRecord;
+        Insert: EstimateProposalRevisionInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["estimate_proposal_revisions"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      estimate_proposal_sections: {
+        Row: EstimateProposalSectionRecord;
+        Insert: EstimateProposalSectionInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["estimate_proposal_sections"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      estimate_proposal_options: {
+        Row: EstimateProposalOptionRecord;
+        Insert: EstimateProposalOptionInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["estimate_proposal_options"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      estimate_proposal_acceptances: {
+        Row: EstimateProposalAcceptanceRecord;
+        Insert: EstimateProposalAcceptanceInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["estimate_proposal_acceptances"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      proposal_payment_schedules: {
+        Row: ProposalPaymentScheduleRecord;
+        Insert: ProposalPaymentScheduleInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["proposal_payment_schedules"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      proposal_audit_events: {
+        Row: ProposalAuditEventRecord;
+        Insert: ProposalAuditEventInsert;
+        Update: Partial<
+          Database["public"]["Tables"]["proposal_audit_events"]["Insert"]
+        >;
         Relationships: [];
       };
       notifications: {

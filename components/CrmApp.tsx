@@ -130,6 +130,15 @@ import {
 } from "../lib/crm/companyScope";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
+  buildDepositInvoiceDraftFromProposal,
+  buildProposalDocumentDraft,
+  buildProposalWorkspaceModel,
+  formatProposalMoney,
+  proposalCanConvertToJob,
+  scrubCustomerFacingText,
+  type ProposalWorkspaceModel,
+} from "../lib/crm/proposals";
+import {
   buildCommunicationProviderReadiness,
   buildUnifiedInboxItems,
   communicationAttentionFilters,
@@ -1039,6 +1048,8 @@ const signatureStatuses: { value: SignatureStatus; label: string }[] = [
 ];
 
 const documentCategories: { value: DocumentCategory; label: string }[] = [
+  { value: "proposal", label: "Proposals" },
+  { value: "signed_proposal", label: "Signed proposals" },
   { value: "contract", label: "Contracts" },
   { value: "estimate", label: "Estimates" },
   { value: "signed_agreement", label: "Signed agreements" },
@@ -13453,7 +13464,10 @@ function ChartPanel({
   const max = Math.max(...rows.map((row) => row.value), 1);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section
+      data-testid="estimate-pdf-preview"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-lg font-bold text-slate-950">{title}</h2>
         <BarChartIcon />
@@ -21721,6 +21735,9 @@ function EstimatesView({
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | "all">("all");
   const [isApprovingEstimate, setIsApprovingEstimate] = useState(false);
   const [isConvertingEstimate, setIsConvertingEstimate] = useState(false);
+  const [proposalSelectedOptionIds, setProposalSelectedOptionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [createdEstimateFingerprints, setCreatedEstimateFingerprints] = useState<Set<string>>(
     () => new Set(),
   );
@@ -21731,9 +21748,10 @@ function EstimatesView({
     () => buildUnifiedInboxItems(snapshot, companyMap),
     [snapshot, companyMap],
   );
-  const selectedLineItems = selectedEstimate
-    ? getEstimateLineItems(snapshot, selectedEstimate.id)
-    : [];
+  const selectedLineItems = useMemo(
+    () => (selectedEstimate ? getEstimateLineItems(snapshot, selectedEstimate.id) : []),
+    [selectedEstimate, snapshot],
+  );
   const filteredEstimates = snapshot.estimates.filter((estimate) => {
     const query = search.toLowerCase();
     const target = getEstimateTargetName(snapshot, estimate).toLowerCase();
@@ -21767,14 +21785,46 @@ function EstimatesView({
   const selectedEstimateInspection = selectedEstimate
     ? getEstimateRelatedInspection(snapshot, selectedEstimate, selectedEstimateJob)
     : null;
-  const selectedEstimatePhotos = selectedEstimate
-    ? getEstimateRelatedPhotos(
-        snapshot,
-        selectedEstimate,
-        selectedEstimateJob,
-        selectedEstimateInspection,
-      )
-    : [];
+  const selectedEstimatePhotos = useMemo(
+    () =>
+      selectedEstimate
+        ? getEstimateRelatedPhotos(
+            snapshot,
+            selectedEstimate,
+            selectedEstimateJob,
+            selectedEstimateInspection,
+          )
+        : [],
+    [selectedEstimate, selectedEstimateInspection, selectedEstimateJob, snapshot],
+  );
+  const selectedEstimateCompany = selectedEstimate
+    ? companyMap.get(selectedEstimate.company_id)
+    : undefined;
+  const selectedProposalModel = useMemo(
+    () =>
+      selectedEstimate
+        ? buildProposalWorkspaceModel({
+            snapshot,
+            estimate: selectedEstimate,
+            lineItems: selectedLineItems,
+            company: selectedEstimateCompany,
+            scope: selectedEstimateScope,
+            inspection: selectedEstimateInspection,
+            photos: selectedEstimatePhotos,
+            selectedOptionIds: proposalSelectedOptionIds,
+          })
+        : null,
+    [
+      proposalSelectedOptionIds,
+      selectedEstimate,
+      selectedEstimateCompany,
+      selectedEstimateInspection,
+      selectedEstimatePhotos,
+      selectedEstimateScope,
+      selectedLineItems,
+      snapshot,
+    ],
+  );
   const selectedEstimateCommunications = selectedEstimate
     ? unifiedInboxItems.filter(
         (item) =>
@@ -21795,6 +21845,14 @@ function EstimatesView({
     (signature) =>
       signature.document_id !== null && selectedEstimateDocumentIds.has(signature.document_id),
   );
+  const selectedProposalDepositInvoice =
+    selectedEstimate && selectedProposalModel
+      ? snapshot.invoices.find(
+          (invoice) =>
+            invoice.estimate_id === selectedEstimate.id &&
+            invoice.invoice_number === `DEP-${selectedProposalModel.proposalNumber}`,
+        ) ?? null
+      : null;
   const isCreatingEstimate = selectedEstimateId === "new" || selectedEstimate === null;
   const workflowActions = useMemo(
     () => buildDailyWorkflowActions(snapshot, companyMap),
@@ -21811,12 +21869,16 @@ function EstimatesView({
   const handleStartNewEstimate = () => {
     updateUiPreservingScrollPosition(() => {
       setSelectedEstimateId("new");
+      setProposalSelectedOptionIds(new Set());
       setEstimateDraftVersion((version) => version + 1);
     });
   };
 
   const handleSelectEstimate = (estimateId: string) => {
-    updateUiPreservingScrollPosition(() => setSelectedEstimateId(estimateId));
+    updateUiPreservingScrollPosition(() => {
+      setSelectedEstimateId(estimateId);
+      setProposalSelectedOptionIds(new Set());
+    });
   };
 
   const handleSaveEstimate = async (
@@ -22007,6 +22069,74 @@ function EstimatesView({
       onNotice("Estimate packet saved to documents.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to save estimate packet."));
+    }
+  };
+
+  const handleSaveProposalDocument = async (estimate: EstimateRecord) => {
+    if (!selectedProposalModel) {
+      onError("Select an estimate before saving a proposal packet.");
+      return;
+    }
+
+    const existingProposal = snapshot.documents.find(
+      (document) =>
+        document.estimate_id === estimate.id &&
+        document.category === "proposal" &&
+        document.title === `${estimate.title} - Proposal Packet`,
+    );
+
+    if (existingProposal) {
+      onNotice("Proposal packet already exists. Open Documents to review or revise it.");
+      return;
+    }
+
+    try {
+      await createDocument(
+        client,
+        buildProposalDocumentDraft({
+          snapshot,
+          estimate,
+          lineItems: selectedLineItems,
+          company: selectedEstimateCompany,
+          scope: selectedEstimateScope,
+          inspection: selectedEstimateInspection,
+          photos: selectedEstimatePhotos,
+        }),
+      );
+      await onReload();
+      onNotice("Customer-safe proposal packet saved to Documents.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save proposal packet."));
+    }
+  };
+
+  const handleCreateProposalDepositInvoice = async (estimate: EstimateRecord) => {
+    if (!selectedProposalModel) {
+      onError("Select an estimate before creating a deposit invoice.");
+      return;
+    }
+
+    if (selectedProposalModel.financials.depositAmount <= 0) {
+      onError("This proposal does not require a deposit.");
+      return;
+    }
+
+    if (selectedProposalDepositInvoice) {
+      onNotice("Existing deposit invoice opened.");
+      onViewChange("invoices");
+      return;
+    }
+
+    try {
+      const draft = buildDepositInvoiceDraftFromProposal({
+        estimate,
+        model: selectedProposalModel,
+      });
+      await createInvoice(client, draft.input, draft.lineItems);
+      await onReload();
+      onNotice("Deposit invoice draft created. Online payment collection remains disabled.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to create deposit invoice."));
     }
   };
 
@@ -22272,11 +22402,33 @@ function EstimatesView({
               compact
             />
           ) : null}
+          <ProposalBuilderPanel
+            estimate={selectedEstimate}
+            model={selectedProposalModel}
+            depositInvoice={selectedProposalDepositInvoice}
+            onToggleOption={(optionId) =>
+              setProposalSelectedOptionIds((current) => {
+                const next = new Set(current);
+
+                if (next.has(optionId)) {
+                  next.delete(optionId);
+                } else {
+                  next.add(optionId);
+                }
+
+                return next;
+              })
+            }
+            onSaveProposalDocument={handleSaveProposalDocument}
+            onCreateDepositInvoice={handleCreateProposalDepositInvoice}
+            onOpenDocuments={() => onViewChange("documents")}
+            onOpenInvoices={() => onViewChange("invoices")}
+          />
           <EstimatePdfPreview
             estimate={selectedEstimate}
             lineItems={selectedLineItems}
             snapshot={snapshot}
-            company={selectedEstimate ? companyMap.get(selectedEstimate.company_id) : undefined}
+            company={selectedEstimateCompany}
           />
           <EstimateWorkflowPanel
             snapshot={snapshot}
@@ -23459,6 +23611,256 @@ function TotalRow({
   );
 }
 
+function ProposalBuilderPanel({
+  estimate,
+  model,
+  depositInvoice,
+  onToggleOption,
+  onSaveProposalDocument,
+  onCreateDepositInvoice,
+  onOpenDocuments,
+  onOpenInvoices,
+}: {
+  estimate: EstimateRecord | null;
+  model: ProposalWorkspaceModel | null;
+  depositInvoice: InvoiceRecord | null;
+  onToggleOption: (optionId: string) => void;
+  onSaveProposalDocument: (estimate: EstimateRecord) => Promise<void>;
+  onCreateDepositInvoice: (estimate: EstimateRecord) => Promise<void>;
+  onOpenDocuments: () => void;
+  onOpenInvoices: () => void;
+}) {
+  if (!estimate || !model) {
+    return (
+      <section
+        data-testid="proposal-builder-2-workspace"
+        className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+      >
+        <h3 className="text-lg font-bold text-slate-950">Proposal Builder 2.0</h3>
+        <EmptyState label="Select or save an estimate to build a customer proposal." />
+      </section>
+    );
+  }
+
+  const conversionReadiness = proposalCanConvertToJob({
+    estimate,
+    model,
+    hasSignedAcceptance: model.revision?.signature_status === "signed",
+    hasDepositInvoice: depositInvoice !== null,
+  });
+
+  return (
+    <section
+      data-testid="proposal-builder-2-workspace"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-sky-700">
+            Proposal Builder 2.0
+          </p>
+          <h3 className="mt-1 text-lg font-black text-slate-950">
+            {model.brand.serviceLabel}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {model.proposalNumber} - {model.templateName}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge label={model.brand.companyName} tone={model.brand.shortName === "IHC" ? "amber" : "blue"} />
+          <Badge label="Customer-safe" tone="green" />
+        </div>
+      </div>
+
+      <div
+        className="mt-4 rounded-lg border p-4 text-white"
+        style={{ backgroundColor: model.brand.primaryColor }}
+      >
+        <p className="text-xs font-bold uppercase text-white/80">Customer-facing total</p>
+        <p className="mt-2 text-3xl font-black" data-testid="proposal-accepted-total">
+          {formatProposalMoney(model.financials.acceptedTotal)}
+        </p>
+        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+          <div className="rounded-md bg-white/12 p-3">
+            <p className="text-white/75">Base proposal</p>
+            <p className="font-bold" data-testid="proposal-base-total">
+              {formatProposalMoney(model.financials.baseTotal)}
+            </p>
+          </div>
+          <div className="rounded-md bg-white/12 p-3">
+            <p className="text-white/75">Selected upgrades</p>
+            <p className="font-bold" data-testid="proposal-selected-upgrades-total">
+              {formatProposalMoney(model.financials.selectedUpgradesTotal)}
+            </p>
+          </div>
+          <div className="rounded-md bg-white/12 p-3">
+            <p className="text-white/75">Deposit draft</p>
+            <p className="font-bold" data-testid="proposal-deposit-total">
+              {formatProposalMoney(model.financials.depositAmount)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {model.readiness.map((item) => (
+          <div
+            key={item.label}
+            className={`rounded-lg border p-3 ${
+              item.state === "ready"
+                ? "border-emerald-200 bg-emerald-50"
+                : item.state === "blocked"
+                  ? "border-rose-200 bg-rose-50"
+                  : "border-amber-200 bg-amber-50"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-sm font-black text-slate-950">{item.label}</p>
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                {item.state}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-slate-950">Optional upgrades and alternatives</p>
+            <p className="mt-1 text-sm text-slate-600">
+              Base total stays unchanged until a customer intentionally selects an option.
+            </p>
+          </div>
+          <Badge
+            label={`${model.options.length} configured`}
+            tone={model.options.length ? "blue" : "amber"}
+          />
+        </div>
+        <div className="mt-3 space-y-2" data-testid="proposal-options-list">
+          {model.options.map((option) => (
+            <label
+              key={option.id}
+              className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm transition hover:border-sky-200 hover:bg-sky-50"
+            >
+              <input
+                type="checkbox"
+                checked={option.selected}
+                onChange={() => onToggleOption(option.id)}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block font-bold text-slate-950">{option.name}</span>
+                <span className="mt-1 block text-slate-500">
+                  {option.description || option.scopeDetails || "Customer-selectable option"}
+                </span>
+              </span>
+              <span className="font-bold text-slate-950">
+                {formatProposalMoney(option.price)}
+              </span>
+            </label>
+          ))}
+          {!model.options.length ? (
+            <EmptyState label="No saved upgrade or alternative options are configured for this proposal yet." />
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <div className="rounded-lg border border-slate-200 p-4">
+          <p className="text-sm font-black text-slate-950">Signature readiness</p>
+          <p className="mt-1 text-sm text-slate-600">
+            DocuSign / Dropbox Sign architecture is ready, but live signature sending is disabled.
+          </p>
+          <Badge label={model.revision?.signature_status ?? "not_configured"} tone="amber" />
+        </div>
+        <div className="rounded-lg border border-slate-200 p-4">
+          <p className="text-sm font-black text-slate-950">Payment readiness</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Deposit schedule is calculated, but online payment collection is not connected.
+          </p>
+          <Badge label={model.revision?.payment_status ?? "online_payments_disabled"} tone="amber" />
+        </div>
+        <div className="rounded-lg border border-slate-200 p-4">
+          <p className="text-sm font-black text-slate-950">QuickBooks readiness</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Accounting export mapping is prepared, but QuickBooks sync remains production disabled.
+          </p>
+          <Badge label={model.revision?.quickbooks_sync_status ?? "production_disabled"} tone="amber" />
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <p className="text-sm font-black text-slate-950">Customer-facing sections</p>
+        <div className="mt-3 space-y-3">
+          {model.sections
+            .filter((section) => section.customerVisible)
+            .map((section) => (
+              <div key={section.key} className="rounded-md border border-slate-200 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-bold text-slate-900">{section.title}</p>
+                  {section.required ? <Badge label="Required" tone="blue" /> : null}
+                </div>
+                <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
+                  {scrubCustomerFacingText(section.body) || "No customer-visible content yet."}
+                </p>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-black text-slate-950">Job conversion guardrail</p>
+            <p className="mt-1 text-sm text-slate-600">
+              {conversionReadiness.reason}
+            </p>
+          </div>
+          <Badge label={conversionReadiness.ready ? "Ready" : "Needs action"} tone={conversionReadiness.ready ? "green" : "amber"} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => void onSaveProposalDocument(estimate)}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-800"
+        >
+          <FileText className="h-4 w-4" />
+          Save proposal packet
+        </button>
+        <button
+          type="button"
+          onClick={() => void onCreateDepositInvoice(estimate)}
+          disabled={depositInvoice !== null || model.financials.depositAmount <= 0}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <ReceiptText className="h-4 w-4" />
+          {depositInvoice ? "Deposit invoice exists" : "Create deposit invoice"}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenDocuments}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+        >
+          <FileText className="h-4 w-4" />
+          Open Documents
+        </button>
+        <button
+          type="button"
+          onClick={onOpenInvoices}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+        >
+          <ReceiptText className="h-4 w-4" />
+          Open Invoices
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function EstimatePdfPreview({
   estimate,
   lineItems,
@@ -23499,7 +23901,10 @@ function EstimatePdfPreview({
   const brandColor = getCompanyBrandColor(company);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section
+      data-testid="estimate-pdf-preview"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 className="text-lg font-bold text-slate-950">PDF Preview</h3>
@@ -23626,19 +24031,15 @@ function EstimatePdfPreview({
           <TotalRow label="Subtotal" value={estimate.subtotal} />
           <TotalRow label="Discount" value={-estimate.discount_total} />
           <TotalRow label="Tax" value={estimate.tax_total} />
-          <TotalRow label="Profit margin" value={estimate.profit_margin_total} />
-          <TotalRow label="Total" value={estimate.total} strong />
+          <TotalRow label="Customer total" value={estimate.total} strong />
         </div>
 
-        {estimate.notes ? (
-          <div className="mx-5 mt-5 rounded-lg bg-slate-50 p-3 text-slate-600">
-            {estimate.notes}
-          </div>
-        ) : null}
         {estimate.scope_of_work ? (
           <div className="mx-5 mt-3 rounded-lg bg-slate-50 p-3 text-slate-600">
             <p className="font-semibold text-slate-950">Scope of work</p>
-            <p className="mt-1 whitespace-pre-line">{estimate.scope_of_work}</p>
+            <p className="mt-1 whitespace-pre-line">
+              {scrubCustomerFacingText(estimate.scope_of_work)}
+            </p>
           </div>
         ) : null}
         <div className="m-5 grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
@@ -34263,6 +34664,41 @@ function CustomerPortalView({
   const propertySummaries = related && customer
     ? buildCustomerPropertySummaries(customer, related)
     : [];
+  const latestProposalEstimate =
+    related?.estimates
+      .filter((estimate) => estimate.status !== "declined" && estimate.status !== "rejected")
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null;
+  const latestProposalModel = useMemo(() => {
+    if (!related || !latestProposalEstimate) {
+      return null;
+    }
+
+    const linkedJob =
+      related.jobs.find((job) => job.estimate_id === latestProposalEstimate.id) ?? null;
+    const linkedInspection = getEstimateRelatedInspection(
+      snapshot,
+      latestProposalEstimate,
+      linkedJob,
+    );
+    const linkedScope =
+      related.scopes.find((scope) => scope.estimate_id === latestProposalEstimate.id) ??
+      null;
+
+    return buildProposalWorkspaceModel({
+      snapshot,
+      estimate: latestProposalEstimate,
+      lineItems: getEstimateLineItems(snapshot, latestProposalEstimate.id),
+      company: companyMap.get(latestProposalEstimate.company_id),
+      scope: linkedScope,
+      inspection: linkedInspection,
+      photos: getEstimateRelatedPhotos(
+        snapshot,
+        latestProposalEstimate,
+        linkedJob,
+        linkedInspection,
+      ),
+    });
+  }, [companyMap, latestProposalEstimate, related, snapshot]);
   const primaryProperty = propertySummaries[0] ?? null;
   const portalDocuments = (related?.documents ?? [])
     .filter((document) => document.status !== "archived")
@@ -34458,47 +34894,92 @@ function CustomerPortalView({
 
       {activeTab === "home" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <CustomerPortalSection
-            title="Home"
-            description="The most important project details in one homeowner-friendly view."
-            testId="customer-portal-home"
-          >
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
-                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
-                  Current status
-                </p>
-                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
-                  {portalStatus.label}
-                </p>
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  {portalStatus.detail}
-                </p>
+          <div className="space-y-5">
+            <CustomerPortalSection
+              title="Home"
+              description="The most important project details in one homeowner-friendly view."
+              testId="customer-portal-home"
+            >
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                  <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                    Current status
+                  </p>
+                  <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                    {portalStatus.label}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {portalStatus.detail}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                  <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                    Next scheduled event
+                  </p>
+                  <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                    {nextScheduleItem ? formatDateTime(nextScheduleItem.startAt) : "Nothing scheduled"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {nextScheduleItem?.title ?? "The office will schedule the next visit when ready."}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                  <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                    Project manager
+                  </p>
+                  <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
+                    {assignedProjectManager}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {company?.phone ?? "Use the office contact on your paperwork."}
+                  </p>
+                </div>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
-                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
-                  Next scheduled event
-                </p>
-                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
-                  {nextScheduleItem ? formatDateTime(nextScheduleItem.startAt) : "Nothing scheduled"}
-                </p>
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  {nextScheduleItem?.title ?? "The office will schedule the next visit when ready."}
-                </p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
-                <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
-                  Project manager
-                </p>
-                <p className="mt-2 text-xl font-black text-slate-950 dark:text-white">
-                  {assignedProjectManager}
-                </p>
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  {company?.phone ?? "Use the office contact on your paperwork."}
-                </p>
-              </div>
-            </div>
-          </CustomerPortalSection>
+            </CustomerPortalSection>
+            {latestProposalEstimate && latestProposalModel ? (
+              <CustomerPortalSection
+                title="Current proposal"
+                description="The latest customer-facing proposal total and next approval step."
+                testId="customer-portal-proposal-summary"
+              >
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                    <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                      Proposal
+                    </p>
+                    <p className="mt-2 text-lg font-black text-slate-950 dark:text-white">
+                      {latestProposalModel.proposalNumber}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                      {latestProposalEstimate.title}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                    <p className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                      Accepted total
+                    </p>
+                    <p className="mt-2 text-lg font-black text-slate-950 dark:text-white">
+                      {formatProposalMoney(latestProposalModel.financials.acceptedTotal)}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                      Base total remains {formatProposalMoney(latestProposalModel.financials.baseTotal)}.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/70 dark:bg-amber-950/40">
+                    <p className="text-xs font-bold uppercase text-amber-800 dark:text-amber-200">
+                      Approval readiness
+                    </p>
+                    <p className="mt-2 text-lg font-black text-amber-950 dark:text-amber-50">
+                      Signature provider not connected
+                    </p>
+                    <p className="mt-1 text-sm text-amber-800 dark:text-amber-100">
+                      The office will send approval instructions when provider setup is active.
+                    </p>
+                  </div>
+                </div>
+              </CustomerPortalSection>
+            ) : null}
+          </div>
 
           <aside className="space-y-5">
             <CustomerPortalSection title="Primary contact">
@@ -34871,6 +35352,39 @@ function CustomerPortalView({
               Online payments are not enabled yet. The office can share current payment instructions.
             </p>
           </div>
+          {latestProposalModel ? (
+            <div
+              className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+              data-testid="customer-portal-proposal-payment-summary"
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-black text-slate-950">
+                    Proposal payment schedule
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Deposit and balance are calculated from the latest proposal, but online
+                    payment is disabled until provider activation.
+                  </p>
+                </div>
+                <Badge label={latestProposalModel.proposalNumber} tone="blue" />
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <CustomerDetail
+                  label="Accepted total"
+                  value={formatProposalMoney(latestProposalModel.financials.acceptedTotal)}
+                />
+                <CustomerDetail
+                  label="Deposit"
+                  value={formatProposalMoney(latestProposalModel.financials.depositAmount)}
+                />
+                <CustomerDetail
+                  label="Balance"
+                  value={formatProposalMoney(latestProposalModel.financials.remainingBalance)}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-4 md:grid-cols-3">
             <div className="rounded-lg border border-slate-200 p-4">
               <p className="text-xs font-bold uppercase text-slate-500">Invoice total</p>
@@ -40622,9 +41136,9 @@ function EnvironmentInventoryGroupCard({
     <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <p className="font-bold text-slate-950">{group.label}</p>
       <div className="mt-4 grid gap-2">
-        {group.checks.map((check) => (
+        {group.checks.map((check, checkIndex) => (
           <div
-            key={`${group.id}-${check.name}`}
+            key={`${group.id}-${check.name}-${check.classification}-${checkIndex}`}
             className="rounded-lg border border-slate-200 bg-white p-3"
           >
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">

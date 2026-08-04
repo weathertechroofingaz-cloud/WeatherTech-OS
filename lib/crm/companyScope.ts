@@ -57,6 +57,10 @@ export function scopeCrmSnapshotByCompany(
   const scheduleEventIds = new Set(scheduleEvents.map((event) => event.id));
   const invoices = byCompany(snapshot.invoices, companyId);
   const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
+  const proposalRevisions = byCompany(snapshot.proposalRevisions, companyId);
+  const proposalRevisionIds = new Set(
+    proposalRevisions.map((proposal) => proposal.id),
+  );
   const materialOrders = byCompany(snapshot.materialOrders, companyId);
   const materialOrderIds = new Set(materialOrders.map((order) => order.id));
   const employees = byCompany(snapshot.employees, companyId);
@@ -111,6 +115,32 @@ export function scopeCrmSnapshotByCompany(
     signatures: byCompany(snapshot.signatures, companyId),
     documents: byCompany(snapshot.documents, companyId),
     payments: byCompany(snapshot.payments, companyId),
+    proposalTemplates: snapshot.proposalTemplates.filter(
+      (template) => template.company_id === null || template.company_id === companyId,
+    ),
+    proposalRevisions,
+    proposalSections: snapshot.proposalSections.filter((section) =>
+      proposalRevisionIds.has(section.proposal_revision_id),
+    ),
+    proposalOptions: snapshot.proposalOptions.filter((option) =>
+      proposalRevisionIds.has(option.proposal_revision_id),
+    ),
+    proposalAcceptances: snapshot.proposalAcceptances.filter(
+      (acceptance) =>
+        acceptance.company_id === companyId ||
+        proposalRevisionIds.has(acceptance.proposal_revision_id),
+    ),
+    proposalPaymentSchedules: snapshot.proposalPaymentSchedules.filter((schedule) =>
+      proposalRevisionIds.has(schedule.proposal_revision_id),
+    ),
+    proposalAuditEvents: snapshot.proposalAuditEvents.filter(
+      (event) =>
+        event.company_id === companyId ||
+        (event.proposal_revision_id !== null &&
+          proposalRevisionIds.has(event.proposal_revision_id)) ||
+        (event.estimate_id !== null && estimateIds.has(event.estimate_id)) ||
+        (event.customer_id !== null && customerIds.has(event.customer_id)),
+    ),
     notifications: byCompany(snapshot.notifications, companyId),
     integrationConnections: byCompany(snapshot.integrationConnections, companyId),
     integrationSyncLogs: byCompany(snapshot.integrationSyncLogs, companyId),

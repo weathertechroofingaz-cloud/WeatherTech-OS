@@ -57,6 +57,7 @@ not begin work when the current sprint is awaiting owner approval.
 - [Google Business Profile Phase 1 Setup](./docs/GOOGLE_BUSINESS_PROFILE_PHASE_1_SETUP.md)
 - [QuickBooks Online Phase 1 Setup](./docs/QUICKBOOKS_ONLINE_PHASE_1_SETUP.md)
 - [Electronic Signatures Phase 1 Setup](./docs/ELECTRONIC_SIGNATURES_PHASE_1_SETUP.md)
+- [Estimate & Proposal Builder 2.0](./docs/ESTIMATE_PROPOSAL_BUILDER_2.md)
 - [Production Activation Readiness](./docs/PRODUCTION_ACTIVATION_READINESS.md)
 - [Private Staging Deployment](./docs/PRIVATE_STAGING_DEPLOYMENT.md)
 - [Website Integration Phase 1 Setup](./docs/WEBSITE_INTEGRATION_PHASE_1_SETUP.md)

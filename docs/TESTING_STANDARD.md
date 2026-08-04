@@ -24,6 +24,7 @@ Current repository tests include:
 - `tests/google-business-profile-foundation.test.mjs` for Google Business Profile location routing, official capability flags, OAuth/PubSub readiness, disabled live boundaries, safe logging, and three-location readiness.
 - `tests/quickbooks-online-foundation.test.mjs` for QuickBooks Online official capability flags, OAuth/company readiness, duplicate-safe customer/estimate/invoice/payment mappings, production write gates, and Integration Center provider registration.
 - `tests/electronic-signatures-foundation.test.mjs` for DocuSign and Dropbox Sign official capability flags, OAuth/account readiness, duplicate-safe signature request drafts, disabled live request gates, Customer 360 event labels, provider retry planning, Communications readiness, and Integration Center provider registration.
+- `tests/estimate-proposal-builder-v2.test.mjs` for customer-safe proposal packet generation, base proposal totals, optional upgrades, full replacement alternatives, deposit invoice drafts, brand-specific proposal numbering, and proposal-to-job guardrails.
 - `tests/production-readiness-center.test.mjs` for deployment readiness scoring, owner setup requirements, provider activation guides, guided launch-control sequence, launch gates, pending migration inventory, redacted environment readiness, three-company mapping guidance, controlled-test plans, migration checklist evidence, and non-green production activation gating.
 - `tests/staging-deployment-readiness.test.mjs` for private staging health/readiness metadata, required staging environment variables, secret redaction, disabled provider safety gates, Supabase reachability classification, production approval gating, and customer portal/public registration safety flags.
 - Additional validation may be embedded in browser regression flows.
@@ -53,7 +54,7 @@ Use targeted validation when a sprint changes a specific workflow:
 
 - Leads: create/update, source badges, pipeline state, duplicate behavior.
 - Customers: create/update, Customer 360, search, timeline, related panels.
-- Estimates: draft, edit, approve, signature request, job handoff.
+- Estimates: draft, edit, approve, customer-safe proposal packet, optional upgrades, replacement alternatives, deposit invoice draft, signature readiness, payment readiness, QuickBooks readiness, and job handoff.
 - Jobs: create/update, schedule, checklist, notes, materials, production, dispatch.
 - Inspections: create/edit, findings, measurements, estimate-only, optional report.
 - Communications: inbox filters, provider badges, detail panels, safe logging.
@@ -62,7 +63,9 @@ Use targeted validation when a sprint changes a specific workflow:
 - Yelp: three-account routing, partner-required state, dry-run/manual intake, disabled live sync, duplicate handling, and no outbound messaging.
 - Google Business Profile: three-location routing, OAuth-required state, dry-run/manual intake, disabled live sync, duplicate handling, review/reply honesty, and no live messaging.
 - QuickBooks Online: OAuth-required state, company realmId readiness, duplicate-safe mapping drafts, disabled live accounting sync, disabled accounting writes, disabled payment processing, and provider audit-log support.
-- Electronic Signatures: DocuSign and Dropbox Sign OAuth-required state, company account readiness, duplicate-safe signature request drafts, disabled live request/send gates, provider status labels, Customer 360 signature events, and provider audit-log support.
+- Electronic Signatures: DocuSign and Dropbox Sign OAuth-required state, company account readiness, duplicate-safe signature request drafts, disabled live request/send gates, provider status labels, Customer 360 signature events, proposal signature readiness, and provider audit-log support.
+- Documents: proposal and signed-proposal categories, customer-safe proposal packet drafts, required-document flags, document search/filtering, and no customer-facing internal notes.
+- Invoices: proposal deposit draft creation, disabled online payment collection, invoice search/filtering, and no fake paid or provider-collected status.
 - Production Readiness: deployment blocker honesty, private staging health/readiness endpoints, guided launch sequence, launch-gate evidence, missing environment-variable guidance, pending migration verification, provider activation cards, three-company mapping guidance, controlled-test plans, provider activation guides, unified production checklist, Settings and Integration Center navigation, and no fake green/connected launch status.
 
 ## Manual QA Checklist

@@ -4,6 +4,17 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Estimate & Proposal Builder 2.0 - World-Class Multi-Brand Sales, Acceptance, Invoice, and Payment System
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add estimate proposal builder v2`
+- Summary:
+  - Added the WeatherTech Roofing LLC and IHC Painting proposal-builder foundation on top of the existing estimate workflow.
+  - Added additive proposal template, revision, section, option, acceptance, payment schedule, and audit-event schema in migration `0032_estimate_proposal_builder_v2.sql`.
+  - Added customer-safe proposal packets, optional upgrades, replacement alternatives, deposit invoice drafts, Customer Portal proposal visibility, and honest signature/payment/QuickBooks readiness.
+  - Preserved internal/customer-facing separation by removing internal cost, margin, markup, commission, and private note language from customer packets.
+  - Did not activate DocuSign, Dropbox Sign, payment processors, QuickBooks Online writes, outbound proposal delivery, provider webhooks, or remote migration application.
+
 ### Production Deployment Phase 1 - Private Staging Deployment
 
 - Commit: `<this sprint commit>`

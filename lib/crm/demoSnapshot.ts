@@ -691,6 +691,13 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
     signatures: [],
     documents: [],
     payments: [],
+    proposalTemplates: [],
+    proposalRevisions: [],
+    proposalSections: [],
+    proposalOptions: [],
+    proposalAcceptances: [],
+    proposalPaymentSchedules: [],
+    proposalAuditEvents: [],
     notifications: [
       {
         id: "demo-notification-1",

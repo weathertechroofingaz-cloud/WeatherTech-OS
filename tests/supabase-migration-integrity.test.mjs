@@ -112,6 +112,10 @@ const expectedMigrations = [
     "0031_electronic_signatures_foundation.sql",
     "d3d12e6c5f407481a728c8c05524f8738655a8bb1cad6299dc9937eb76f0f313",
   ],
+  [
+    "0032_estimate_proposal_builder_v2.sql",
+    "25021ad2b0d22441c259d520b85dfa8ec53f5ff2ff1327783741366869626a51",
+  ],
 ];
 
 const files = fs
@@ -164,7 +168,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0031 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0032 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -187,6 +191,7 @@ const googleCalendarIndex = files.indexOf("0028_google_calendar_scheduling_found
 const googleBusinessProfileIndex = files.indexOf("0029_google_business_profile_foundation.sql");
 const quickBooksOnlineIndex = files.indexOf("0030_quickbooks_online_foundation.sql");
 const electronicSignaturesIndex = files.indexOf("0031_electronic_signatures_foundation.sql");
+const proposalBuilderIndex = files.indexOf("0032_estimate_proposal_builder_v2.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -257,8 +262,16 @@ if (
   failures.push("Electronic Signatures migration must order after QuickBooks Online foundation.");
 }
 
-if (electronicSignaturesIndex !== files.length - 1) {
-  failures.push("Electronic Signatures foundation migration must remain last.");
+if (
+  electronicSignaturesIndex === -1 ||
+  proposalBuilderIndex === -1 ||
+  !(electronicSignaturesIndex < proposalBuilderIndex)
+) {
+  failures.push("Estimate Proposal Builder 2.0 migration must order after Electronic Signatures.");
+}
+
+if (proposalBuilderIndex !== files.length - 1) {
+  failures.push("Estimate Proposal Builder 2.0 migration must remain last.");
 }
 
 for (const file of files) {
@@ -905,6 +918,116 @@ if (!electronicSignaturesMigration.includes("docusign") ||
   failures.push("0031 must add DocuSign and Dropbox Sign provider keys.");
 }
 
+const proposalBuilderMigration = fs.readFileSync(
+  path.join(migrationsDir, "0032_estimate_proposal_builder_v2.sql"),
+  "utf8",
+);
+
+if (!proposalBuilderMigration.trim().startsWith("begin;") ||
+    !proposalBuilderMigration.trim().endsWith("commit;")) {
+  failures.push("0032 must be wrapped in an explicit transaction.");
+}
+
+for (const requiredTable of [
+  "proposal_templates",
+  "estimate_proposal_revisions",
+  "estimate_proposal_sections",
+  "estimate_proposal_options",
+  "estimate_proposal_acceptances",
+  "proposal_payment_schedules",
+  "proposal_audit_events",
+]) {
+  if (!proposalBuilderMigration.includes(`public.${requiredTable}`)) {
+    failures.push(`0032 must create or configure ${requiredTable}.`);
+  }
+}
+
+for (const requiredDocumentCategory of ["proposal", "signed_proposal"]) {
+  if (!proposalBuilderMigration.includes(`'${requiredDocumentCategory}'`)) {
+    failures.push(`0032 documents category check must allow ${requiredDocumentCategory}.`);
+  }
+}
+
+for (const requiredProposalStatus of [
+  "ready_for_review",
+  "ready_to_send",
+  "sent",
+  "viewed",
+  "accepted",
+  "declined",
+  "expired",
+  "superseded",
+  "converted_to_job",
+]) {
+  if (!proposalBuilderMigration.includes(`'${requiredProposalStatus}'`)) {
+    failures.push(`0032 proposal revision status check must allow ${requiredProposalStatus}.`);
+  }
+}
+
+for (const requiredOptionValue of [
+  "add_on_upgrade",
+  "replacement_alternative",
+  "required_choice",
+  "optional_choice",
+  "additive",
+  "replace_base_amount",
+  "full_alternate_total",
+]) {
+  if (!proposalBuilderMigration.includes(`'${requiredOptionValue}'`)) {
+    failures.push(`0032 proposal options must include ${requiredOptionValue}.`);
+  }
+}
+
+for (const requiredColumn of [
+  "customer_visible_notes",
+  "internal_notes",
+  "requires_signature",
+  "requires_deposit_before_job",
+  "quickbooks_sync_status",
+  "source_snapshot",
+  "selected_option_ids",
+  "terms_accepted",
+  "idempotency_key",
+]) {
+  if (!proposalBuilderMigration.includes(requiredColumn)) {
+    failures.push(`0032 must include proposal column ${requiredColumn}.`);
+  }
+}
+
+for (const requiredPolicyHelper of [
+  "public.wtos_can_read_company",
+  "public.wtos_can_manage_sales",
+  "public.wtos_can_manage_financials",
+  "public.wtos_can_manage_settings",
+]) {
+  if (!proposalBuilderMigration.includes(requiredPolicyHelper)) {
+    failures.push(`0032 must use scoped RLS helper ${requiredPolicyHelper}.`);
+  }
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(proposalBuilderMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(proposalBuilderMigration)) {
+  failures.push("0032 must not add broad USING/WITH CHECK (true) RLS policies.");
+}
+
+if (/grant\s+[^;]*delete[^;]*to\s+authenticated/i.test(proposalBuilderMigration)) {
+  failures.push("0032 must not grant DELETE privileges to authenticated users.");
+}
+
+if (proposalBuilderMigration.includes("public.inspection_findings")) {
+  failures.push("0032 must not reference a non-existent inspection_findings table.");
+}
+
+if (!proposalBuilderMigration.includes("check (accepted_total >= base_total)")) {
+  failures.push("0032 must keep accepted proposal totals compatible with base totals.");
+}
+
+if (!proposalBuilderMigration.includes("proposal_templates") ||
+    !proposalBuilderMigration.includes("WeatherTech Roofing LLC") ||
+    !proposalBuilderMigration.includes("IHC Painting")) {
+  failures.push("0032 must seed company-aware WeatherTech and IHC proposal templates.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -916,7 +1039,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0031.",
+  "Verified raw filename order matches numeric order from 0001 through 0032.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -942,6 +1065,9 @@ console.log(
 console.log(
   "Verified 0030_quickbooks_online_foundation.sql precedes 0031_electronic_signatures_foundation.sql.",
 );
+console.log(
+  "Verified 0031_electronic_signatures_foundation.sql precedes 0032_estimate_proposal_builder_v2.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -960,6 +1086,9 @@ console.log(
 );
 console.log(
   "Verified 0031 adds docusign and dropbox_sign to integration provider constraints without broad RLS policies.",
+);
+console.log(
+  "Verified 0032 proposal tables, customer-safe document categories, pricing options, and scoped RLS policies.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

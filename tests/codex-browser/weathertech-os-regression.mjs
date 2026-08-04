@@ -6598,6 +6598,30 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
   await waitFor(
     tab,
     () => {
+      const proposal = document.querySelector('[data-testid="proposal-builder-2-workspace"]');
+      const pdfPreview = document.querySelector('[data-testid="estimate-pdf-preview"]');
+      const proposalText = proposal?.textContent ?? "";
+      const previewText = pdfPreview?.textContent ?? "";
+
+      return (
+        proposalText.includes("Proposal Builder 2.0") &&
+        proposalText.includes("Base proposal") &&
+        proposalText.includes("Customer-safe") &&
+        proposalText.includes("online deposit collection is disabled") &&
+        proposalText.includes("Signature provider not connected") &&
+        proposalText.includes("QuickBooks sync remains production disabled") &&
+        previewText.includes("Customer total") &&
+        !previewText.includes("Profit margin") &&
+        !previewText.includes("estimate notes")
+      );
+    },
+    "proposal builder v2 customer-safe workspace",
+    15000,
+  );
+
+  await waitFor(
+    tab,
+    () => {
       const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
       const requestButton = document.querySelector(
         '[data-testid="estimate-request-signature-button"]',

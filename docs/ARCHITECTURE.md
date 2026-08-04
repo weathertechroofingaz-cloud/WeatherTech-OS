@@ -143,6 +143,7 @@ Current reusable components include:
 - `components/EstimatesPanel.tsx`
 - `components/ScopesPanel.tsx`
 - `components/FollowUpsPanel.tsx`
+- `lib/crm/proposals.ts`
 
 The primary application also contains many local reusable UI helpers inside `components/CrmApp.tsx`.
 
@@ -239,7 +240,8 @@ Future guidance:
 - Lead intake routing and deduplication belongs in `lib/crm/leadIntake.ts`, `lib/crm/leadRouting.ts`, and the related API routes.
 - Provider readiness belongs in `lib/crm/integrationCenter.ts` or provider-specific `lib/<provider>` modules.
 - Job production, scheduling, and field work belong in Jobs, Dispatch, Production, Calendar, or Inspections.
-- Documents that relate to customers, estimates, jobs, and inspections belong in Documents and the related module panels.
+- Documents that relate to customers, estimates, proposals, jobs, and inspections belong in Documents and the related module panels.
+- Proposal logic belongs in `lib/crm/proposals.ts` and should preserve the internal/customer-facing boundary before any content reaches Documents, Customer Portal, signatures, payments, or QuickBooks export readiness.
 
 ## Dependency Boundaries
 

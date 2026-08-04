@@ -503,6 +503,13 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     signatures: [],
     documents: [],
     payments: [],
+    proposalTemplates: [],
+    proposalRevisions: [],
+    proposalSections: [],
+    proposalOptions: [],
+    proposalAcceptances: [],
+    proposalPaymentSchedules: [],
+    proposalAuditEvents: [],
     notifications: [],
     integrationConnections: [],
     integrationSyncLogs: [],
@@ -586,6 +593,13 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     signatures,
     documents,
     payments,
+    proposalTemplates,
+    proposalRevisions,
+    proposalSections,
+    proposalOptions,
+    proposalAcceptances,
+    proposalPaymentSchedules,
+    proposalAuditEvents,
     notifications,
     integrationConnections,
     integrationSyncLogs,
@@ -658,6 +672,32 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     client.from("signatures").select("*").order("updated_at", { ascending: false }),
     client.from("documents").select("*").order("updated_at", { ascending: false }),
     client.from("payments").select("*").order("paid_at", { ascending: false }),
+    client.from("proposal_templates").select("*").order("updated_at", { ascending: false }),
+    client
+      .from("estimate_proposal_revisions")
+      .select("*")
+      .order("updated_at", { ascending: false }),
+    client
+      .from("estimate_proposal_sections")
+      .select("*")
+      .order("sort_order", { ascending: true }),
+    client
+      .from("estimate_proposal_options")
+      .select("*")
+      .order("sort_order", { ascending: true }),
+    client
+      .from("estimate_proposal_acceptances")
+      .select("*")
+      .order("accepted_at", { ascending: false }),
+    client
+      .from("proposal_payment_schedules")
+      .select("*")
+      .order("sort_order", { ascending: true }),
+    client
+      .from("proposal_audit_events")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200),
     client.from("notifications").select("*").order("remind_at", { ascending: true }),
     client
       .from("integration_connections")
@@ -752,6 +792,31 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["signatures", signatures],
     ["documents", documents],
     ["payments", payments],
+    ...(proposalTemplates.error && !isOptionalTableMissingError(proposalTemplates.error)
+      ? [["proposal_templates", proposalTemplates] as [string, { error: unknown }]]
+      : []),
+    ...(proposalRevisions.error && !isOptionalTableMissingError(proposalRevisions.error)
+      ? [["estimate_proposal_revisions", proposalRevisions] as [string, { error: unknown }]]
+      : []),
+    ...(proposalSections.error && !isOptionalTableMissingError(proposalSections.error)
+      ? [["estimate_proposal_sections", proposalSections] as [string, { error: unknown }]]
+      : []),
+    ...(proposalOptions.error && !isOptionalTableMissingError(proposalOptions.error)
+      ? [["estimate_proposal_options", proposalOptions] as [string, { error: unknown }]]
+      : []),
+    ...(proposalAcceptances.error && !isOptionalTableMissingError(proposalAcceptances.error)
+      ? [["estimate_proposal_acceptances", proposalAcceptances] as [string, { error: unknown }]]
+      : []),
+    ...(proposalPaymentSchedules.error &&
+    !isOptionalTableMissingError(proposalPaymentSchedules.error)
+      ? [["proposal_payment_schedules", proposalPaymentSchedules] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
+    ...(proposalAuditEvents.error && !isOptionalTableMissingError(proposalAuditEvents.error)
+      ? [["proposal_audit_events", proposalAuditEvents] as [string, { error: unknown }]]
+      : []),
     ["notifications", notifications],
     ["integration_connections", integrationConnections],
     ["integration_sync_logs", integrationSyncLogs],
@@ -827,6 +892,19 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     signatures: requireRows("signatures", signatures),
     documents: requireRows("documents", documents),
     payments: requireRows("payments", payments),
+    proposalTemplates: optionalRows("proposal_templates", proposalTemplates),
+    proposalRevisions: optionalRows("estimate_proposal_revisions", proposalRevisions),
+    proposalSections: optionalRows("estimate_proposal_sections", proposalSections),
+    proposalOptions: optionalRows("estimate_proposal_options", proposalOptions),
+    proposalAcceptances: optionalRows(
+      "estimate_proposal_acceptances",
+      proposalAcceptances,
+    ),
+    proposalPaymentSchedules: optionalRows(
+      "proposal_payment_schedules",
+      proposalPaymentSchedules,
+    ),
+    proposalAuditEvents: optionalRows("proposal_audit_events", proposalAuditEvents),
     notifications: requireRows("notifications", notifications),
     integrationConnections: requireRows("integration_connections", integrationConnections),
     integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
