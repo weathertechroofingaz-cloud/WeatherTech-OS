@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Google Business Profile Phase 1 - Multi-Location Integration Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Google Business Profile integration foundation`
+- Summary:
+  - Added the disabled-by-default Google Business Profile multi-location foundation for WeatherTech Phoenix, WeatherTech Tucson, and IHC using the Unified Lead Intake Hub.
+  - Documented official Google Business Profile account/location, reviews, performance, OAuth, Pub/Sub, unsupported messaging, and discontinued Q&A boundaries.
+  - Preserved dry-run routing, dedupe, Customer 360 activity, follow-up, and sanitized integration logging without scraping Google, storing passwords, sending review replies, or activating live sync.
+
 ### Yelp Integration Phase 1 - Multi-Account Lead Intake Foundation
 
 - Commit: `<this sprint commit>`

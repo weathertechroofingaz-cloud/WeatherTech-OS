@@ -189,6 +189,27 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Documented official Yelp capability boundaries, including partner-required Leads API, OAuth, and webhook activation.
   - Kept live Yelp sync and outbound replies disabled by default and did not scrape Yelp, store Yelp passwords, send real Yelp messages, modify `.env.local`, or add migrations.
 
+### Google Business Profile Phase 1 - Multi-Location Integration Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Google Business Profile integration foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added the three-location Google Business Profile foundation for WeatherTech Phoenix, WeatherTech Tucson, and IHC.
+  - Preserved the Unified Lead Intake Hub as the canonical pipeline for controlled Google Business Profile dry-run payloads.
+  - Documented official Google Business Profile capability boundaries, including account/location APIs, reviews, performance, OAuth, Pub/Sub notifications, discontinued Q&A, and unsupported chat/request-a-quote behavior.
+  - Added additive provider constraint migration `0029_google_business_profile_foundation.sql`.
+  - Kept live Google Business Profile sync, review replies, and customer messaging disabled by default and did not scrape Google, automate browser login, store Google passwords, send real review replies, modify `.env.local`, weaken authentication/RLS, or perform destructive migrations.
+
 ## Recording Template
 
 ### Sprint Name

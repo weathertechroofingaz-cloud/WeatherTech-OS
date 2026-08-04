@@ -100,6 +100,10 @@ const expectedMigrations = [
     "0028_google_calendar_scheduling_foundation.sql",
     "7fd989e897cbe98a16bf58edcd53a0a537c5cac026a241329015000849740b74",
   ],
+  [
+    "0029_google_business_profile_foundation.sql",
+    "cd53500ead34d1a26ffb6189ff10204bf6f5bbb99f69225d8005bbbdc792e5a3",
+  ],
 ];
 
 const files = fs
@@ -172,6 +176,7 @@ const documentStorageIndex = files.indexOf("0025_document_storage_signature_work
 const propertyIntelligenceIndex = files.indexOf("0026_property_intelligence_foundation.sql");
 const gmailWorkspaceIndex = files.indexOf("0027_gmail_workspace_email_foundation.sql");
 const googleCalendarIndex = files.indexOf("0028_google_calendar_scheduling_foundation.sql");
+const googleBusinessProfileIndex = files.indexOf("0029_google_business_profile_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -216,8 +221,18 @@ if (
   failures.push("Google Calendar migration must order after Gmail Workspace foundation.");
 }
 
-if (googleCalendarIndex !== files.length - 1) {
-  failures.push("Google Calendar scheduling foundation migration must remain last.");
+if (
+  googleCalendarIndex === -1 ||
+  googleBusinessProfileIndex === -1 ||
+  !(googleCalendarIndex < googleBusinessProfileIndex)
+) {
+  failures.push(
+    "Google Business Profile migration must order after Google Calendar scheduling foundation.",
+  );
+}
+
+if (googleBusinessProfileIndex !== files.length - 1) {
+  failures.push("Google Business Profile foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -635,6 +650,123 @@ if (/using\s*\(\s*true\s*\)/i.test(googleCalendarMigration) ||
   failures.push("0028 must not use broad USING/WITH CHECK (true) RLS policies.");
 }
 
+const googleBusinessProfileMigration = fs.readFileSync(
+  path.join(migrationsDir, "0029_google_business_profile_foundation.sql"),
+  "utf8",
+);
+
+function readProviderCheckValuesFromMigration({
+  migration,
+  migrationLabel,
+  constraintName,
+}) {
+  const constraintStart = migration.indexOf(`add constraint ${constraintName}`);
+
+  if (constraintStart === -1) {
+    failures.push(`${migrationLabel} is missing ${constraintName}.`);
+    return [];
+  }
+
+  const constraintEnd = migration.indexOf(");", constraintStart);
+
+  if (constraintEnd === -1) {
+    failures.push(`${migrationLabel} ${constraintName} block is not terminated.`);
+    return [];
+  }
+
+  const constraintBlock = migration.slice(constraintStart, constraintEnd);
+
+  return [...constraintBlock.matchAll(/'([^']+)'/g)]
+    .map((match) => match[1])
+    .sort();
+}
+
+const integrationProvidersWithGbp = [
+  "google_business_profile",
+  ...supportedIntegrationProviders,
+].sort();
+const leadSourceMappingProvidersWithGbp = [
+  "google_business_profile",
+  "gohighlevel",
+  "twilio",
+  "twilio_sms",
+  "website",
+  "yelp",
+].sort();
+const leadIntakeRecordProvidersWithGbp = [
+  "email",
+  "gmail",
+  "gohighlevel",
+  "google_business_profile",
+  "manual",
+  "referral",
+  "twilio",
+  "twilio_sms",
+  "website",
+  "yelp",
+].sort();
+
+for (const constraintName of [
+  "integration_connections_provider_check",
+  "integration_sync_logs_provider_check",
+]) {
+  const providers = readProviderCheckValuesFromMigration({
+    migration: googleBusinessProfileMigration,
+    migrationLabel: "0029",
+    constraintName,
+  });
+
+  if (JSON.stringify(providers) !== JSON.stringify(integrationProvidersWithGbp)) {
+    failures.push(
+      `0029 ${constraintName} must allow exactly ${integrationProvidersWithGbp.join(", ")}.`,
+    );
+  }
+}
+
+const leadSourceProviders = readProviderCheckValuesFromMigration({
+  migration: googleBusinessProfileMigration,
+  migrationLabel: "0029",
+  constraintName: "lead_source_mappings_provider_check",
+});
+
+if (
+  JSON.stringify(leadSourceProviders) !==
+  JSON.stringify(leadSourceMappingProvidersWithGbp)
+) {
+  failures.push(
+    `0029 lead_source_mappings_provider_check must allow exactly ${leadSourceMappingProvidersWithGbp.join(", ")}.`,
+  );
+}
+
+const leadIntakeProviders = readProviderCheckValuesFromMigration({
+  migration: googleBusinessProfileMigration,
+  migrationLabel: "0029",
+  constraintName: "lead_intake_records_provider_check",
+});
+
+if (
+  JSON.stringify(leadIntakeProviders) !==
+  JSON.stringify(leadIntakeRecordProvidersWithGbp)
+) {
+  failures.push(
+    `0029 lead_intake_records_provider_check must allow exactly ${leadIntakeRecordProvidersWithGbp.join(", ")}.`,
+  );
+}
+
+if (!googleBusinessProfileMigration.trim().startsWith("begin;") ||
+    !googleBusinessProfileMigration.trim().endsWith("commit;")) {
+  failures.push("0029 must be wrapped in an explicit transaction.");
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(googleBusinessProfileMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(googleBusinessProfileMigration)) {
+  failures.push("0029 must not add broad USING/WITH CHECK (true) RLS policies.");
+}
+
+if (googleBusinessProfileMigration.includes("unknown_provider")) {
+  failures.push("0029 must not allow unknown_provider.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -646,7 +778,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0028.",
+  "Verified raw filename order matches numeric order from 0001 through 0029.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -663,6 +795,9 @@ console.log(
 console.log(
   "Verified 0027_gmail_workspace_email_foundation.sql precedes 0028_google_calendar_scheduling_foundation.sql.",
 );
+console.log(
+  "Verified 0028_google_calendar_scheduling_foundation.sql precedes 0029_google_business_profile_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -672,6 +807,9 @@ console.log(
 );
 console.log(
   "Verified 0026 property intelligence schema, property links, RLS policies, and transactional wrapper.",
+);
+console.log(
+  "Verified 0029 adds google_business_profile to integration, source mapping, and lead intake provider constraints.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

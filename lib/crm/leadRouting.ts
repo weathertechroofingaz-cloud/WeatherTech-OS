@@ -176,7 +176,8 @@ export const leadIntakeAdapterDefinitions: LeadIntakeAdapterDefinition[] = [
     provider: "google_business_profile",
     label: "Google Business Profile",
     status: "setup_required",
-    summary: "Reusable adapter contract only; live Google Business Profile intake is not enabled.",
+    summary:
+      "Routes controlled Google Business Profile test payloads through lead intake; live reviews and location notifications require Google API approval, OAuth, and Pub/Sub setup.",
   },
   {
     provider: "facebook",
@@ -918,6 +919,103 @@ export function normalizeYelpLeadIntake(payload: GenericPayload) {
       source: getText(payload.consentSource, 120),
       capturedAt: getText(payload.consentCapturedAt, 80),
     },
+  });
+}
+
+export function normalizeGoogleBusinessProfileLeadIntake(payload: GenericPayload) {
+  const googleLocationId = getText(
+    payload.googleLocationId ?? payload.locationId ?? payload.locationName,
+    160,
+  );
+  const submittedAt = normalizeTimestamp(
+    payload.submittedAt,
+    payload.timestamp,
+    payload.receivedAt,
+    payload.updateTime,
+    payload.createTime,
+  );
+  const firstName = getText(payload.firstName, 80);
+  const lastName = getText(payload.lastName, 120);
+  const fullName =
+    getText(payload.name ?? payload.customerName ?? payload.reviewerName, 160) ??
+    ([firstName, lastName].filter(Boolean).join(" ") || null);
+  const preferredContactToken = getToken(
+    getText(payload.preferredContactMethod ?? payload.preferredContact, 40),
+  );
+  const verifiedCompanyKey = getVerifiedCompanyKey(payload.verifiedCompanyKey);
+  const verifiedBranchKey = getVerifiedBranchKey(payload.verifiedBranchKey);
+  const hasVerifiedRegistryRouting = Boolean(verifiedCompanyKey && verifiedBranchKey);
+  const sourceDetail = getText(
+    payload.sourceDetail ??
+      payload.googleBusinessProfileLocationKey ??
+      payload.gbpLocationKey ??
+      payload.locationKey ??
+      googleLocationId ??
+      payload.businessName,
+    240,
+  );
+
+  return createCanonicalLeadIntake({
+    provider: "google_business_profile",
+    fullName,
+    companyName: getText(payload.companyName, 160),
+    phone: normalizeLeadIntakePhone(payload.phone),
+    email: normalizeLeadIntakeEmail(payload.email),
+    serviceAddress: getText(payload.address ?? payload.serviceAddress, 240),
+    city: getText(payload.city ?? payload.location, 120),
+    state: getText(payload.state, 40) ?? "AZ",
+    postalCode: getText(payload.zip ?? payload.postalCode, 20),
+    requestedService: normalizeService(
+      payload.serviceType ??
+        payload.requestedService ??
+        payload.service ??
+        payload.message ??
+        payload.reviewText,
+    ),
+    message: getText(
+      payload.message ?? payload.comments ?? payload.notes ?? payload.reviewText,
+      1500,
+    ),
+    preferredContactMethod: preferredContactToken.includes("email")
+      ? "email"
+      : preferredContactToken.includes("sms")
+        ? "sms"
+        : preferredContactToken.includes("phone") || preferredContactToken.includes("call")
+          ? "phone"
+          : "unknown",
+    leadSource: getText(payload.source, 80) ?? "Google Business Profile",
+    sourceDetail,
+    providerExternalId: getExternalId(payload, [
+      "googleReviewId",
+      "reviewId",
+      "googleEventId",
+      "eventId",
+      "externalLeadId",
+      "sourceExternalId",
+      "externalId",
+      "id",
+    ]),
+    campaign: getText(payload.campaign, 160),
+    explicitCompany: getText(payload.business ?? payload.company, 120),
+    verifiedCompanyKey,
+    verifiedBranchKey,
+    forceUnassignedRouting:
+      payload.forceUnassignedRouting === true || !hasVerifiedRegistryRouting,
+    forceReviewReason:
+      getText(payload.forceReviewReason, 240) ??
+      (!hasVerifiedRegistryRouting
+        ? "Google Business Profile location registry could not verify the company or branch."
+        : null),
+    intakeTimestamp: new Date().toISOString(),
+    originalSubmissionTimestamp: submittedAt,
+    consentMetadata: {
+      smsConsent: typeof payload.smsConsent === "boolean" ? payload.smsConsent : null,
+      emailConsent:
+        typeof payload.emailConsent === "boolean" ? payload.emailConsent : null,
+      source: getText(payload.consentSource, 120),
+      capturedAt: getText(payload.consentCapturedAt, 80),
+    },
+    safeRawSourceReference: sourceDetail,
   });
 }
 

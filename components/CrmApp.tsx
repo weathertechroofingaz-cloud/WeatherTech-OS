@@ -204,6 +204,12 @@ import {
   normalizeLeadIntakePhone,
 } from "../lib/crm/leadRouting";
 import {
+  googleBusinessProfileDryRunPath,
+  googleBusinessProfileEndpointPath,
+  googleBusinessProfileLocations,
+  googleBusinessProfileOfficialCapabilities,
+} from "../lib/crm/googleBusinessProfileLeadCapture";
+import {
   twilioBusinessNumberRouteTemplates,
   twilioLiveFoundationChecklist,
   twilioLiveReadinessLabels,
@@ -14091,7 +14097,7 @@ function WebsiteMarketingView({
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
               Read-only operating view for website leads, Yelp conversations,
-              GoHighLevel readiness, source routing, duplicate protection, and
+              Google Business Profile readiness, GoHighLevel readiness, source routing, duplicate protection, and
               owner setup requirements. This page does not connect providers,
               send campaigns, alter CRM records, or create new workflows.
             </p>
@@ -14133,7 +14139,7 @@ function WebsiteMarketingView({
                 Source readiness
               </p>
               <h3 className="mt-1 text-xl font-black text-slate-950">
-                Website, Yelp, and GoHighLevel intake
+                Website, Google Business Profile, Yelp, and GoHighLevel intake
               </h3>
             </div>
             <ProviderStatusBadge label="No live provider activation" tone="blue" />
@@ -14322,13 +14328,14 @@ function WebsiteMarketingView({
             </button>
           ))}
           {!marketingItems.length ? (
-            <EmptyState label="No website, Yelp, or GoHighLevel activity is visible in the loaded CRM snapshot." />
+            <EmptyState label="No website, Google Business Profile, Yelp, or GoHighLevel activity is visible in the loaded CRM snapshot." />
           ) : null}
         </div>
       </section>
 
       <section className="grid gap-5">
         <WebsiteLeadCaptureFoundationPanel />
+        <GoogleBusinessProfileFoundationPanel />
         <YelpLeadCaptureFoundationPanel />
       </section>
 
@@ -19394,6 +19401,7 @@ function getCustomerIntegrationProviders(providers: IntegrationProviderReadiness
     "gmail",
     "gohighlevel",
     "website_forms",
+    "google_business_profile",
     "yelp",
   ];
 
@@ -43639,6 +43647,141 @@ function WebsiteLeadCaptureFoundationPanel() {
   );
 }
 
+function GoogleBusinessProfileFoundationPanel() {
+  const readinessStates = [
+    { label: "Not Configured", tone: "slate" as const },
+    { label: "OAuth Required", tone: "amber" as const },
+    { label: "Ready for Testing", tone: "blue" as const },
+    { label: "Production Disabled", tone: "amber" as const },
+    { label: "Connected", tone: "green" as const },
+    { label: "Sync Failed", tone: "red" as const },
+  ];
+  const getCapabilityTone = (
+    status: (typeof googleBusinessProfileOfficialCapabilities)[number]["status"],
+  ) => {
+    if (status === "available") return "green" as const;
+    if (status === "oauth_required") return "blue" as const;
+    if (status === "project_approval_required") return "amber" as const;
+    if (status === "production_disabled") return "amber" as const;
+    if (status === "discontinued") return "red" as const;
+
+    return "slate" as const;
+  };
+
+  return (
+    <section
+      className="rounded-lg border border-violet-200 bg-violet-50 p-5"
+      data-testid="google-business-profile-foundation"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-violet-700">
+            Google Business Profile
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Multi-location local-search foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Google Business Profile is prepared for account/location mapping,
+            OAuth readiness, review activity, performance metrics, Pub/Sub
+            notifications, Customer 360 activity, duplicate checks, follow-up
+            creation, and safe integration logging. Live synchronization is not
+            enabled, and Google chat, request-a-quote, and Q&amp;A intake are
+            not supported as live provider sources.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Production Disabled" tone="amber" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {readinessStates.map((state) => (
+          <ProviderStatusBadge
+            key={state.label}
+            label={state.label}
+            tone={state.tone}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Endpoint" value={googleBusinessProfileEndpointPath} />
+        <ProfileStat label="Dry run" value={googleBusinessProfileDryRunPath} />
+        <ProfileStat
+          label="Locations"
+          value={googleBusinessProfileLocations.length}
+        />
+        <ProfileStat label="Live Google" value="OAuth Required" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Approved GBP Locations
+          </p>
+          {googleBusinessProfileLocations.map((location) => (
+            <div
+              key={location.key}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{location.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Location key {location.key}; branch {location.branchLabel};
+                    queue {location.defaultQueue}. Google account and location
+                    IDs stay server-side in hosting environment variables.
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Purpose
+                  </p>
+                  <p className="mt-0.5 text-sm leading-6 text-slate-500">
+                    {location.purpose}
+                  </p>
+                </div>
+                <ProviderStatusBadge label="OAuth required" tone="amber" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Official Capability Boundary
+          </p>
+          {googleBusinessProfileOfficialCapabilities.map((capability) => (
+            <div
+              key={capability.key}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">
+                    {capability.label}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    {capability.summary}
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={capability.status.replace(/_/g, " ")}
+                  tone={getCapabilityTone(capability.status)}
+                />
+              </div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm leading-6 text-amber-900">
+            Owner setup requires Google Business Profile API approval, a
+            server-side OAuth client, business.manage consent, mapped account
+            and location IDs, and Pub/Sub notification setup. No Google
+            passwords, browser automation, scraping, review replies, or live
+            customer messaging are used by this foundation.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function YelpLeadCaptureFoundationPanel() {
   const readinessStates = [
     { label: "Not Configured", tone: "slate" as const },
@@ -44259,6 +44402,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <WebsiteLeadCaptureFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <GoogleBusinessProfileFoundationPanel />
       </div>
 
       <div className="mt-5">

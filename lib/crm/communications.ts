@@ -529,6 +529,10 @@ function getIntegrationCommunicationChannel(
     return "gohighlevel";
   }
 
+  if (provider === "google_business_profile") {
+    return "google_business";
+  }
+
   return "internal";
 }
 
@@ -555,6 +559,10 @@ function getIntegrationInboxProvider(provider: IntegrationProvider): Communicati
 
   if (provider === "gohighlevel") {
     return "gohighlevel";
+  }
+
+  if (provider === "google_business_profile") {
+    return "google_business";
   }
 
   return "manual_unknown";
@@ -587,11 +595,20 @@ function getLeadIntakeInboxProvider(provider: LeadIntakeRecord["provider"]): Com
     return "gohighlevel";
   }
 
+  if (provider === "google_business_profile") {
+    return "google_business";
+  }
+
   return "manual_unknown";
 }
 
 function getLeadIntakeChannel(provider: CommunicationProvider): CommunicationChannel {
-  if (provider === "website" || provider === "yelp" || provider === "gohighlevel") {
+  if (
+    provider === "website" ||
+    provider === "yelp" ||
+    provider === "gohighlevel" ||
+    provider === "google_business"
+  ) {
     return provider;
   }
 
@@ -1363,7 +1380,7 @@ export function communicationItemMatchesAttentionFilter(
 }
 
 export function getInboxProviderTone(provider: CommunicationProvider) {
-  return provider === "website" || provider === "yelp"
+  return provider === "website" || provider === "yelp" || provider === "google_business"
     ? "green"
     : provider === "manual_unknown" || provider === "internal"
       ? "amber"
@@ -1371,7 +1388,7 @@ export function getInboxProviderTone(provider: CommunicationProvider) {
 }
 
 export function getCommunicationChannelTone(channel: CommunicationChannel) {
-  return channel === "website" || channel === "yelp"
+  return channel === "website" || channel === "yelp" || channel === "google_business"
     ? "green"
     : channel === "internal" || channel === "gohighlevel" || channel === "calendar"
       ? "amber"
@@ -2251,9 +2268,14 @@ function getProviderConnection(
     provider === "google_calendar" ||
     provider === "gohighlevel" ||
     provider === "website" ||
-    provider === "yelp"
+    provider === "yelp" ||
+    provider === "google_business"
   ) {
-    return connections.find((connection) => connection.provider === provider);
+    return connections.find((connection) =>
+      provider === "google_business"
+        ? connection.provider === "google_business_profile"
+        : connection.provider === provider,
+    );
   }
 
   return undefined;

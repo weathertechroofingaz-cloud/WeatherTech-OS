@@ -5540,12 +5540,18 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   const websiteLeadName = `${TEST_PREFIX} ${runId} WEBSITE INTAKE`;
   const yelpExternalId = `${TEST_PREFIX} ${runId} YELP EXT`;
   const yelpLeadName = `${TEST_PREFIX} ${runId} YELP INTAKE`;
+  const gbpExternalId = `${TEST_PREFIX} ${runId} GBP EXT`;
+  const gbpLeadName = `${TEST_PREFIX} ${runId} GBP INTAKE`;
   const retryExternalId = `${TEST_PREFIX} ${runId} RETRY EXT`;
   const retryLeadName = `${TEST_PREFIX} ${runId} RETRY INTAKE`;
   const submittedAt = new Date().toISOString();
 
   progress("lead-intake:invalid-json:start");
-  for (const path of ["/api/leads/website", "/api/leads/yelp"]) {
+  for (const path of [
+    "/api/leads/website",
+    "/api/leads/yelp",
+    "/api/leads/google-business-profile",
+  ]) {
     const invalidJson = await postAppRaw(baseUrl, path, "{");
 
     if (invalidJson.status !== 400 || invalidJson.body?.status !== "invalid_json") {
@@ -5588,6 +5594,46 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     );
   }
   progress("lead-intake:yelp:request-guards:done");
+
+  progress("lead-intake:gbp:request-guards:start");
+  const unsupportedGbpContentType = await fetch(
+    new URL("/api/leads/google-business-profile", baseUrl),
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "text/plain",
+      },
+      body: "not-json",
+    },
+  );
+  const unsupportedGbpBody = await unsupportedGbpContentType.json();
+
+  if (
+    unsupportedGbpContentType.status !== 415 ||
+    unsupportedGbpBody?.status !== "unsupported_content_type"
+  ) {
+    throw new Error(
+      `GBP unsupported content type was ${unsupportedGbpContentType.status} ${JSON.stringify(unsupportedGbpBody)}`,
+    );
+  }
+
+  const oversizedGbp = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile",
+    {
+      locationKey: "weathertech-phoenix",
+      reviewerName: `${TEST_PREFIX} ${runId} OVERSIZED GBP`,
+      reviewText: "x".repeat(33000),
+    },
+  );
+
+  if (oversizedGbp.status !== 413 || oversizedGbp.body?.status !== "payload_too_large") {
+    throw new Error(
+      `GBP oversized payload was ${oversizedGbp.status} ${JSON.stringify(oversizedGbp.body)}`,
+    );
+  }
+  progress("lead-intake:gbp:request-guards:done");
 
   progress("lead-intake:website:dry-run:start");
   const websitePayload = {
@@ -5793,6 +5839,100 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:yelp:dry-run:done");
 
+  progress("lead-intake:gbp:dry-run:start");
+  const gbpPayload = {
+    googleBusinessProfileLocationKey: "weathertech-phoenix",
+    source: "Google Business Profile",
+    googleReviewId: gbpExternalId,
+    submittedAt,
+    reviewerName: gbpLeadName,
+    phone: "6025550444",
+    email: `gbp-${runId}@example.test`,
+    city: "Phoenix",
+    serviceType: "roofing",
+    reviewRating: 3,
+    reviewText: `${TEST_PREFIX} ${runId} Google Business Profile intake message`,
+  };
+  const gbpPhoenixDryRun = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile?dryRun=1",
+    gbpPayload,
+  );
+
+  if (
+    gbpPhoenixDryRun.status !== 200 ||
+    gbpPhoenixDryRun.body?.routing?.company !== "weathertech_roofing" ||
+    gbpPhoenixDryRun.body?.routing?.branch !== "weathertech_phoenix"
+  ) {
+    throw new Error(`Phoenix GBP dry run failed: ${gbpPhoenixDryRun.status} ${JSON.stringify(gbpPhoenixDryRun.body)}`);
+  }
+
+  const gbpTucsonDryRun = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile?dryRun=1",
+    {
+      ...gbpPayload,
+      googleBusinessProfileLocationKey: "weathertech-tucson",
+      googleReviewId: `${gbpExternalId} TUCSON`,
+      reviewerName: `${gbpLeadName} TUCSON`,
+      phone: "5205550444",
+      email: `gbp-tucson-${runId}@example.test`,
+      city: "Tucson",
+    },
+  );
+
+  if (gbpTucsonDryRun.status !== 200 || gbpTucsonDryRun.body?.routing?.branch !== "weathertech_tucson") {
+    throw new Error(`Tucson GBP dry run failed: ${gbpTucsonDryRun.status} ${JSON.stringify(gbpTucsonDryRun.body)}`);
+  }
+
+  const gbpIhcDryRun = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile?dryRun=1",
+    {
+      ...gbpPayload,
+      googleBusinessProfileLocationKey: "ihc",
+      googleReviewId: `${gbpExternalId} IHC`,
+      reviewerName: `${gbpLeadName} IHC`,
+      phone: "6025550445",
+      email: `gbp-ihc-${runId}@example.test`,
+      city: "Tempe",
+      serviceType: "painting",
+    },
+  );
+
+  if (gbpIhcDryRun.status !== 200 || gbpIhcDryRun.body?.routing?.company !== "ihc_painting") {
+    throw new Error(`IHC GBP dry run failed: ${gbpIhcDryRun.status} ${JSON.stringify(gbpIhcDryRun.body)}`);
+  }
+
+  const unknownGbpDryRun = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile?dryRun=1",
+    {
+      ...gbpPayload,
+      googleBusinessProfileLocationKey: "unknown-gbp-location",
+      googleReviewId: `${gbpExternalId} UNKNOWN`,
+      reviewerName: `${gbpLeadName} UNKNOWN`,
+    },
+  );
+
+  if (
+    unknownGbpDryRun.status !== 200 ||
+    unknownGbpDryRun.body?.routing?.company !== "unassigned"
+  ) {
+    throw new Error(`Unknown GBP location was not unassigned: ${unknownGbpDryRun.status} ${JSON.stringify(unknownGbpDryRun.body)}`);
+  }
+
+  const unsignedGbp = await postAppJson(
+    baseUrl,
+    "/api/leads/google-business-profile",
+    gbpPayload,
+  );
+
+  if (unsignedGbp.status !== 503 || unsignedGbp.body?.status !== "production_disabled") {
+    throw new Error(`Unsigned GBP intake was not held behind the disabled live gate: ${unsignedGbp.status} ${JSON.stringify(unsignedGbp.body)}`);
+  }
+  progress("lead-intake:gbp:dry-run:done");
+
   progress("lead-intake:yelp:create:start");
   const yelpSensitiveValues = [
     yelpLeadName,
@@ -5927,6 +6067,79 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:yelp:create:done");
 
+  progress("lead-intake:gbp:create:start");
+  const gbpSeedBase = {
+    company_id: companies.weatherTech.id,
+    [leadNameColumn]: gbpLeadName,
+    phone: gbpPayload.phone,
+    email: gbpPayload.email,
+    property_address: "444 TEST GBP Intake Way, Phoenix, AZ",
+    status: "new",
+    pipeline_stage: "new_lead",
+    priority: "normal",
+    estimated_value: 0,
+    next_follow_up: null,
+    notes: `${TEST_PREFIX} ${runId} seeded Google Business Profile source badge record. Endpoint live create skipped because GBP live sync is disabled in the local server.`,
+  };
+  const gbpSeedPayloads = [
+    {
+      ...gbpSeedBase,
+      source: "Google Business Profile",
+    },
+    {
+      ...gbpSeedBase,
+      lead_source: "Google Business Profile",
+      service_needed: "roofing",
+    },
+  ];
+  let seededGbpLead = null;
+  let lastGbpSeedError = null;
+
+  for (const payload of gbpSeedPayloads) {
+    try {
+      [seededGbpLead] = await restRequest(env, "leads", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(payload),
+      });
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastGbpSeedError = error;
+
+      if (
+        message.includes("Could not find") ||
+        message.includes("does not exist") ||
+        message.includes("schema cache")
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (!seededGbpLead) {
+    throw lastGbpSeedError ?? new Error("Unable to seed GBP UI regression lead.");
+  }
+
+  const gbpLeads = await findLeadsByContactName(env, gbpLeadName, leadNameColumn);
+
+  if (gbpLeads.length !== 1) {
+    throw new Error(`GBP intake created ${gbpLeads.length} matching leads, expected 1.`);
+  }
+
+  const gbpLead = gbpLeads[0];
+
+  if (gbpLead.company_id !== companies.weatherTech.id) {
+    throw new Error("GBP intake did not route to WeatherTech Roofing LLC.");
+  }
+
+  if (!getLeadRowSource(gbpLead).toLowerCase().includes("google business profile")) {
+    throw new Error(`GBP lead source was ${getLeadRowSource(gbpLead)}.`);
+  }
+  progress("lead-intake:gbp:create:done");
+
   progress("lead-intake:retry:start");
   const retryPayload = {
     provider: "website",
@@ -6029,19 +6242,21 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   await clickNav(tab, "Inbox");
   await waitFor(
     tab,
-    ({ websiteName, yelpName }) => {
+    ({ websiteName, yelpName, gbpName }) => {
       const text = document.body.innerText;
 
       return (
         text.includes(websiteName) &&
         text.includes(yelpName) &&
+        text.includes(gbpName) &&
         text.includes("Website") &&
+        text.includes("Google Business Profile") &&
         text.includes("Yelp")
       );
     },
-    "Website and Yelp intake records in Inbox",
+    "Website, GBP, and Yelp intake records in Inbox",
     15000,
-    { websiteName: retryLeadName, yelpName: yelpLeadName },
+    { websiteName: retryLeadName, yelpName: yelpLeadName, gbpName: gbpLeadName },
   );
   await waitFor(
     tab,
@@ -6061,6 +6276,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
         text.includes("ihc yelp") &&
         text.includes("unassigned yelp account") &&
         text.includes("yelp") &&
+        text.includes("google business profile") &&
         text.includes("twilio calls") &&
         text.includes("twilio sms") &&
         text.includes("gmail") &&
@@ -6097,6 +6313,16 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     15000,
     yelpLeadName,
   );
+  await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), gbpLeadName, "GBP lead search");
+  await waitFor(
+    tab,
+    (name) =>
+      document.body.innerText.includes(name) &&
+      document.body.innerText.includes("Google Business Profile"),
+    "GBP source badge in Leads",
+    15000,
+    gbpLeadName,
+  );
   progress("lead-intake:ui:done");
 
   return {
@@ -6110,8 +6336,14 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     yelpIhcDryRunRouting: yelpIhcDryRun.body.routing,
     unknownYelpDryRunRouting: unknownYelpDryRun.body.routing,
     unsignedYelpStatus: unsignedYelp.body.status,
+    gbpPhoenixDryRunRouting: gbpPhoenixDryRun.body.routing,
+    gbpTucsonDryRunRouting: gbpTucsonDryRun.body.routing,
+    gbpIhcDryRunRouting: gbpIhcDryRun.body.routing,
+    unknownGbpDryRunRouting: unknownGbpDryRun.body.routing,
+    unsignedGbpStatus: unsignedGbp.body.status,
     yelpCreateMode,
     yelpLeadId: yelpLeadRecordId,
+    gbpLeadId: gbpLead.id,
     retryLeadId: retryLead.id,
     retryLogId: failedLog.id,
   };
@@ -6904,6 +7136,17 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("weathertech-tucson") &&
         text.includes("private yelp business ids") &&
         text.includes("oauth credentials stay server-side") &&
+        text.includes("google business profile") &&
+        text.includes("multi-location local-search foundation") &&
+        text.includes("/api/leads/google-business-profile") &&
+        text.includes("oauth required") &&
+        text.includes("ready for testing") &&
+        text.includes("production disabled") &&
+        text.includes("pub/sub") &&
+        text.includes("google chat, request-a-quote, and q&a intake are") &&
+        text.includes("weathertech roofing llc - phoenix gbp") &&
+        text.includes("weathertech roofing llc - tucson gbp") &&
+        text.includes("ihc painting gbp") &&
         [
           "twilio",
           "gmail",
@@ -6997,13 +7240,15 @@ async function testWebsiteMarketingFoundation(browser, tab) {
       return (
         text.includes("marketing integration foundation") &&
         text.includes("read-only operating view") &&
-        text.includes("website, yelp, and gohighlevel intake") &&
+        text.includes("website, google business profile, yelp, and gohighlevel intake") &&
         text.includes("no live provider activation") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
         text.includes("ihc painting") &&
         text.includes("website lead capture") &&
         text.includes("secure form-intake foundation") &&
+        text.includes("google business profile") &&
+        text.includes("multi-location local-search foundation") &&
         text.includes("yelp lead integration") &&
         text.includes("secure yelp intake foundation") &&
         text.includes("marketing providers are architecture-ready, not live-connected") &&

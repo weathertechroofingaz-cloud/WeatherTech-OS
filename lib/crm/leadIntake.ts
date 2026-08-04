@@ -21,6 +21,7 @@ import {
 import {
   detectLeadIntakeDuplicates,
   getStrongestLeadIntakeDuplicateConfidence,
+  normalizeGoogleBusinessProfileLeadIntake,
   normalizeGmailLeadIntake,
   normalizeTwilioCallLeadIntake,
   normalizeTwilioSmsLeadIntake,
@@ -58,7 +59,7 @@ type CrmClient = SupabaseClient<Database>;
 type BusinessKey = "IHC" | "WeatherTech" | "Unassigned";
 export type LeadIntakeProvider = Extract<
   IntegrationProvider,
-  "website" | "yelp" | "twilio" | "twilio_sms" | "gmail"
+  "website" | "google_business_profile" | "yelp" | "twilio" | "twilio_sms" | "gmail"
 >;
 
 export type WebsiteLeadRequestBody = {
@@ -194,6 +195,75 @@ export type YelpLeadRequestBody = {
   submittedAt?: unknown;
   timestamp?: unknown;
   receivedAt?: unknown;
+  smsConsent?: unknown;
+  emailConsent?: unknown;
+  consentSource?: unknown;
+  consentCapturedAt?: unknown;
+  correlationId?: unknown;
+  verifiedCompanyKey?: unknown;
+  verifiedBranchKey?: unknown;
+  forceUnassignedRouting?: unknown;
+  forceReviewReason?: unknown;
+  verifiedSourceMetadata?: unknown;
+};
+
+export type GoogleBusinessProfileLeadRequestBody = {
+  googleBusinessProfileLocationKey?: unknown;
+  gbpLocationKey?: unknown;
+  locationKey?: unknown;
+  googleAccountId?: unknown;
+  accountId?: unknown;
+  providerAccountId?: unknown;
+  googleLocationId?: unknown;
+  locationId?: unknown;
+  locationName?: unknown;
+  businessName?: unknown;
+  googleEventType?: unknown;
+  eventType?: unknown;
+  googleEventId?: unknown;
+  eventId?: unknown;
+  googleReviewId?: unknown;
+  reviewId?: unknown;
+  reviewRating?: unknown;
+  rating?: unknown;
+  reviewerName?: unknown;
+  reviewText?: unknown;
+  customerName?: unknown;
+  name?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
+  companyName?: unknown;
+  phone?: unknown;
+  email?: unknown;
+  address?: unknown;
+  serviceAddress?: unknown;
+  city?: unknown;
+  location?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  postalCode?: unknown;
+  source?: unknown;
+  sourceDetail?: unknown;
+  serviceType?: unknown;
+  requestedService?: unknown;
+  service?: unknown;
+  message?: unknown;
+  comments?: unknown;
+  notes?: unknown;
+  preferredContactMethod?: unknown;
+  preferredContact?: unknown;
+  campaign?: unknown;
+  submittedAt?: unknown;
+  timestamp?: unknown;
+  receivedAt?: unknown;
+  updateTime?: unknown;
+  createTime?: unknown;
+  externalLeadId?: unknown;
+  sourceExternalId?: unknown;
+  externalId?: unknown;
+  id?: unknown;
+  business?: unknown;
+  company?: unknown;
   smsConsent?: unknown;
   emailConsent?: unknown;
   consentSource?: unknown;
@@ -427,6 +497,7 @@ type RetryPayloadEncryptionEnvelope = {
 
 export const LEAD_INTAKE_EVENT_TYPES: Record<LeadIntakeProvider, string> = {
   website: "website.lead.created",
+  google_business_profile: "google_business_profile.lead.created",
   yelp: "yelp.lead.created",
   twilio: "twilio.call.lead.created",
   twilio_sms: "twilio.sms.lead.created",
@@ -434,6 +505,8 @@ export const LEAD_INTAKE_EVENT_TYPES: Record<LeadIntakeProvider, string> = {
 };
 
 const DEFAULT_WEBSITE_ADDRESS = "Website lead - address pending";
+const DEFAULT_GOOGLE_BUSINESS_PROFILE_ADDRESS =
+  "Google Business Profile lead - address pending";
 const DEFAULT_YELP_ADDRESS = "Yelp lead - address pending";
 const DEFAULT_TWILIO_ADDRESS = "Phone lead - address pending";
 const LEAD_INTAKE_MAX_ATTEMPTS = 3;
@@ -547,6 +620,10 @@ function getDefaultSourceForProvider(provider: LeadIntakeProvider) {
 
   if (provider === "yelp") {
     return "Yelp";
+  }
+
+  if (provider === "google_business_profile") {
+    return "Google Business Profile";
   }
 
   if (provider === "twilio_sms") {
@@ -715,6 +792,70 @@ function normalizeBusinessFromYelp(body: YelpLeadRequestBody):
   };
 }
 
+function normalizeBusinessFromGoogleBusinessProfile(
+  body: GoogleBusinessProfileLeadRequestBody,
+):
+  | { business: BusinessKey; warning: string | null }
+  | { business: null; warning: string } {
+  const businessText = getText(body.business, 100);
+  const businessToken = getToken(businessText);
+  const locationToken = getToken(
+    getText(
+      body.locationName ??
+        body.googleBusinessProfileLocationKey ??
+        body.gbpLocationKey ??
+        body.googleLocationId,
+      160,
+    ),
+  );
+  const serviceToken = getToken(getText(body.serviceType, 80));
+  const searchableToken = [
+    businessToken,
+    locationToken,
+    getToken(getText(body.businessName, 160)),
+    serviceToken,
+  ].join(" ");
+
+  if (businessToken.includes("ihc")) {
+    return { business: "IHC", warning: null };
+  }
+
+  if (businessToken.includes("weathertech")) {
+    return { business: "WeatherTech", warning: null };
+  }
+
+  if (businessText) {
+    return {
+      business: null,
+      warning: 'Business must be "IHC" or "WeatherTech".',
+    };
+  }
+
+  if (searchableToken.includes("ihc") || searchableToken.includes("paint")) {
+    return {
+      business: "IHC",
+      warning:
+        "Business was blank and was inferred as IHC from Google Business Profile metadata.",
+    };
+  }
+
+  if (
+    searchableToken.includes("weathertech") ||
+    searchableToken.includes("roof")
+  ) {
+    return {
+      business: "WeatherTech",
+      warning:
+        "Business was blank and was inferred as WeatherTech from Google Business Profile metadata.",
+    };
+  }
+
+  return {
+    business: "WeatherTech",
+    warning: "Business was blank and was defaulted to WeatherTech.",
+  };
+}
+
 function normalizeServiceType(
   value: unknown,
   business: BusinessKey,
@@ -829,7 +970,11 @@ function applyLeadSourceMapping(
     sourceDetail: resolution.mapping.external_source_id ?? resolution.mapping.display_name,
   });
   const defaultAddress =
-    lead.provider === "website" ? DEFAULT_WEBSITE_ADDRESS : DEFAULT_YELP_ADDRESS;
+    lead.provider === "website"
+      ? DEFAULT_WEBSITE_ADDRESS
+      : lead.provider === "google_business_profile"
+        ? DEFAULT_GOOGLE_BUSINESS_PROFILE_ADDRESS
+        : DEFAULT_YELP_ADDRESS;
   const shouldUseMappedAddress =
     !lead.propertyAddress ||
     lead.propertyAddress === defaultAddress ||
@@ -1067,6 +1212,145 @@ export function normalizeYelpLeadBody(
       yelpBusinessId,
       yelpConversationId,
       yelpLeadId,
+      utmSource: null,
+      utmCampaign: null,
+      utmMedium: null,
+      sourceMappingId: null,
+      sourceMappingDisplayName: null,
+      sourceMappingMatchType: null,
+      sourceMetadata: getSafeSourceMetadata(body.verifiedSourceMetadata),
+      correlationId: getText(body.correlationId, 120),
+      duplicateConfidence: "no_match",
+      warnings,
+    },
+    errors: [],
+  };
+}
+
+export function normalizeGoogleBusinessProfileLeadBody(
+  body: GoogleBusinessProfileLeadRequestBody,
+): NormalizeSuccess | NormalizeFailure {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const canonical = normalizeGoogleBusinessProfileLeadIntake(
+    body as Record<string, unknown>,
+  );
+  const rawName = canonical.fullName === "Unknown lead" ? null : canonical.fullName;
+  const phone = canonical.phone ?? normalizePhone(body.phone);
+  const { email, warning: emailWarning } = normalizeEmail(body.email);
+  const message =
+    canonical.message ??
+    getText(body.message ?? body.comments ?? body.notes ?? body.reviewText, 1500);
+  const business = businessFromCompanyKey(canonical.companyKey);
+  const businessResolution = normalizeBusinessFromGoogleBusinessProfile(body);
+
+  if (emailWarning) {
+    warnings.push(emailWarning);
+  }
+
+  if (businessResolution.warning) {
+    warnings.push(businessResolution.warning);
+  }
+
+  warnings.push(...canonical.warnings);
+
+  if (!rawName && !phone && !email && !message) {
+    errors.push(
+      "At least one contact field is required: name, phone, email, or message.",
+    );
+  }
+
+  if (errors.length > 0) {
+    return { lead: null, errors, warnings };
+  }
+
+  const location = canonical.city ?? getText(body.city ?? body.location, 160);
+  const fallbackBusiness =
+    business === "Unassigned"
+      ? businessResolution.business ?? "WeatherTech"
+      : business;
+  const { serviceType, warning: serviceWarning } = normalizeServiceType(
+    body.serviceType ??
+      body.requestedService ??
+      body.service ??
+      body.message ??
+      body.reviewText,
+    fallbackBusiness,
+  );
+  const googleEventId =
+    getText(body.googleReviewId, 160) ??
+    getText(body.reviewId, 160) ??
+    getText(body.googleEventId, 160) ??
+    getText(body.eventId, 160) ??
+    getText(body.externalLeadId, 160) ??
+    getText(body.sourceExternalId, 160) ??
+    getText(body.externalId, 160) ??
+    getText(body.id, 160);
+  const googleLocationId =
+    getText(body.googleLocationId, 160) ??
+    getText(body.locationId, 160) ??
+    getText(body.locationName, 160) ??
+    getText(body.googleBusinessProfileLocationKey, 160) ??
+    getText(body.gbpLocationKey, 160);
+  const sourceAccount =
+    getText(body.sourceDetail ?? body.locationName ?? googleLocationId, 240) ??
+    canonical.sourceDetail;
+
+  if (!location) {
+    warnings.push(
+      "location was blank, so a placeholder Google Business Profile lead address was used.",
+    );
+  }
+
+  if (serviceWarning) {
+    warnings.push(serviceWarning);
+  }
+
+  return {
+    lead: {
+      provider: "google_business_profile",
+      business,
+      companyKey: canonical.companyKey,
+      branchKey: canonical.branchKey,
+      routingStatus: canonical.routing.status,
+      routingConfidence: canonical.routing.confidence,
+      routingReasons: canonical.routing.reasons,
+      assignedQueue: canonical.assignedQueue,
+      source: normalizeSource(body.source, "google_business_profile"),
+      contactName:
+        rawName ?? phone ?? email ?? message ?? "Google Business Profile lead",
+      firstName: canonical.firstName,
+      lastName: canonical.lastName,
+      companyName: canonical.companyName,
+      phone,
+      email,
+      propertyAddress:
+        canonical.serviceAddress ??
+        location ??
+        DEFAULT_GOOGLE_BUSINESS_PROFILE_ADDRESS,
+      location,
+      state: canonical.state,
+      postalCode: canonical.postalCode,
+      serviceType,
+      message,
+      externalLeadId: googleEventId,
+      submittedAt: normalizeTimestamp(
+        body.submittedAt,
+        body.timestamp,
+        body.receivedAt,
+        body.updateTime,
+        body.createTime,
+      ),
+      sourceAccount,
+      campaign: canonical.campaign,
+      receivingBusinessPhoneNumber: null,
+      assignedUserId: canonical.assignedUserId,
+      urgency: canonical.urgency,
+      preferredContactMethod: canonical.preferredContactMethod,
+      websiteUrl: null,
+      yelpBusinessId: null,
+      yelpConversationId: null,
+      yelpLeadId: null,
       utmSource: null,
       utmCampaign: null,
       utmMedium: null,
@@ -1742,6 +2026,8 @@ function buildLeadNotes(lead: NormalizedLeadIntake) {
   const label =
     lead.provider === "website"
       ? "Website"
+      : lead.provider === "google_business_profile"
+        ? "Google Business Profile"
       : lead.provider === "yelp"
         ? "Yelp"
         : lead.provider === "twilio_sms"
@@ -1817,6 +2103,8 @@ async function resolveSourceMapping(client: CrmClient, lead: NormalizedLeadIntak
   const externalSourceId =
     lead.provider === "website"
       ? lead.websiteUrl
+      : lead.provider === "google_business_profile"
+        ? lead.sourceAccount
       : lead.provider === "yelp"
         ? lead.yelpBusinessId
         : lead.receivingBusinessPhoneNumber ?? lead.sourceAccount;

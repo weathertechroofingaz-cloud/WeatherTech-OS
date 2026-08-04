@@ -447,6 +447,123 @@ try {
     "Yelp provider duplicate does not insert a second lead",
   );
 
+  const gbpCustomerMatchDb = createMockSupabase({
+    companies: [baseCompany],
+    customers: [
+      {
+        id: "customer-gbp-1",
+        company_id: baseCompany.id,
+        display_name: "Google Existing Customer",
+        contact_name: "Google Existing Customer",
+        phone: "+16025550107",
+        email: "gbp-existing@example.test",
+        property_address: "777 Google Review Way",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const gbpCustomerLead = leadIntake.normalizeGoogleBusinessProfileLeadBody({
+    business: "WeatherTech",
+    verifiedCompanyKey: "weathertech_roofing",
+    verifiedBranchKey: "weathertech_phoenix",
+    googleBusinessProfileLocationKey: "weathertech-phoenix",
+    googleReviewId: "GBP-CUSTOMER-MATCH",
+    reviewerName: "Google Existing Customer",
+    phone: "(602) 555-0107",
+    email: "gbp-existing@example.test",
+    address: "777 Google Review Way",
+    city: "Phoenix",
+    serviceType: "roofing",
+    source: "Google Business Profile",
+    reviewText: "Please follow up on this roof leak.",
+  });
+  assert(gbpCustomerLead.lead, "GBP customer-match lead normalizes");
+  const gbpCustomerResult = await leadIntake.processLeadIntake(
+    gbpCustomerMatchDb.client,
+    gbpCustomerLead.lead,
+  );
+  assertEqual(
+    gbpCustomerResult.customerId,
+    "customer-gbp-1",
+    "GBP intake attaches to an existing customer",
+  );
+  assertEqual(
+    gbpCustomerMatchDb.state.leads.length,
+    0,
+    "GBP existing customer match does not create a duplicate lead",
+  );
+  assertEqual(
+    gbpCustomerMatchDb.state.notifications[0]?.customer_id,
+    "customer-gbp-1",
+    "GBP existing customer match creates a customer follow-up",
+  );
+
+  const gbpProviderDuplicateDb = createMockSupabase({
+    companies: [baseCompany],
+    leads: [
+      {
+        id: "lead-gbp-existing",
+        company_id: baseCompany.id,
+        contact_name: "Existing GBP Lead",
+        phone: "+16025550108",
+        email: null,
+        property_address: "888 Google Duplicate Way",
+        source: "Google Business Profile",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    integration_sync_logs: [
+      {
+        id: "sync-gbp-existing",
+        provider: "google_business_profile",
+        event_type: "google_business_profile.lead.created",
+        status: "succeeded",
+        related_table: "leads",
+        related_record_id: "lead-gbp-existing",
+        external_id: "GBP-DUPLICATE-LEAD",
+        request_fingerprint: "fingerprint-existing",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const gbpDuplicateLead = leadIntake.normalizeGoogleBusinessProfileLeadBody({
+    business: "WeatherTech",
+    verifiedCompanyKey: "weathertech_roofing",
+    verifiedBranchKey: "weathertech_phoenix",
+    googleBusinessProfileLocationKey: "weathertech-phoenix",
+    googleReviewId: "GBP-DUPLICATE-LEAD",
+    reviewerName: "Existing GBP Lead",
+    phone: "6025550108",
+    address: "888 Google Duplicate Way",
+    city: "Phoenix",
+    serviceType: "roofing",
+    source: "Google Business Profile",
+    reviewText: "Need a roof inspection.",
+  });
+  assert(gbpDuplicateLead.lead, "GBP duplicate lead normalizes");
+  const gbpDuplicateResult = await leadIntake.processLeadIntake(
+    gbpProviderDuplicateDb.client,
+    gbpDuplicateLead.lead,
+  );
+  assertEqual(
+    gbpDuplicateResult.duplicateOfLeadId,
+    "lead-gbp-existing",
+    "GBP provider external ID prevents duplicate processing",
+  );
+  assertEqual(
+    gbpProviderDuplicateDb.state.leads.length,
+    1,
+    "GBP provider duplicate does not insert a second lead",
+  );
+
+  const invalidGbp = leadIntake.normalizeGoogleBusinessProfileLeadBody({});
+  assertEqual(
+    invalidGbp.lead,
+    null,
+    "Malformed GBP payload without contact or message is rejected",
+  );
+
   const invalidGmail = leadIntake.normalizeGmailLeadBody({});
   assertEqual(
     invalidGmail.lead,

@@ -213,9 +213,11 @@ export type IntegrationProvider =
   | "twilio_sms"
   | "gohighlevel"
   | "website"
+  | "google_business_profile"
   | "yelp";
 export type LeadSourceMappingProvider =
   | "website"
+  | "google_business_profile"
   | "yelp"
   | "twilio"
   | "twilio_sms"
@@ -380,6 +382,7 @@ export type LeadIntakeRecordProvider =
   | "manual"
   | "website"
   | "yelp"
+  | "google_business_profile"
   | "twilio"
   | "twilio_sms"
   | "gohighlevel"

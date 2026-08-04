@@ -54,6 +54,7 @@ not begin work when the current sprint is awaiting owner approval.
 - [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md)
 - [Google Workspace Phase 1 Setup](./docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md)
 - [Google Calendar Phase 1 Setup](./docs/GOOGLE_CALENDAR_PHASE_1_SETUP.md)
+- [Google Business Profile Phase 1 Setup](./docs/GOOGLE_BUSINESS_PROFILE_PHASE_1_SETUP.md)
 - [Website Integration Phase 1 Setup](./docs/WEBSITE_INTEGRATION_PHASE_1_SETUP.md)
 - [Yelp Integration Phase 1 Setup](./docs/YELP_INTEGRATION_PHASE_1_SETUP.md)
 - [Changelog](./CHANGELOG.md)

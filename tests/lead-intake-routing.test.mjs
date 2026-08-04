@@ -27,6 +27,7 @@ try {
       "lib/crm/leadRouting.ts",
       "lib/crm/websiteLeadCapture.ts",
       "lib/crm/yelpLeadCapture.ts",
+      "lib/crm/googleBusinessProfileLeadCapture.ts",
       "--target",
       "ES2022",
       "--module",
@@ -56,6 +57,9 @@ try {
   );
   const yelpCapture = await import(
     pathToFileURL(join(outDir, "yelpLeadCapture.js"))
+  );
+  const gbpCapture = await import(
+    pathToFileURL(join(outDir, "googleBusinessProfileLeadCapture.js"))
   );
 
   const website = routing.normalizeWebsiteLeadIntake({
@@ -470,6 +474,96 @@ try {
     },
   ]);
   assertEqual(yelpPhoneMatches[0]?.confidence, "likely_match", "Yelp phone duplicate is likely");
+
+  const gbpPhoenixResolution =
+    gbpCapture.resolveGoogleBusinessProfileLocation({
+      googleBusinessProfileLocationKey: "weathertech-phoenix",
+      googleReviewId: "TEST_GBP_REVIEW",
+    });
+  const gbpPhoenix = routing.normalizeGoogleBusinessProfileLeadIntake(
+    gbpCapture.buildGoogleBusinessProfileLeadCaptureRequestBody({
+      body: {
+        googleBusinessProfileLocationKey: "weathertech-phoenix",
+        googleReviewId: "TEST_GBP_REVIEW",
+        reviewerName: "TEST Phoenix GBP",
+        phone: "6025550181",
+        city: "Phoenix",
+        serviceType: "roofing",
+        reviewText: "Need help with a roof leak.",
+      },
+      resolution: gbpPhoenixResolution,
+      correlationId: "test-gbp-phoenix-correlation",
+    }),
+  );
+  assertEqual(gbpPhoenix.companyKey, "weathertech_roofing", "Phoenix GBP routes to WeatherTech");
+  assertEqual(gbpPhoenix.branchKey, "weathertech_phoenix", "Phoenix GBP routes to Phoenix branch");
+
+  const gbpTucsonResolution = gbpCapture.resolveGoogleBusinessProfileLocation({
+    locationKey: "weathertech-tucson",
+  });
+  const gbpTucson = routing.normalizeGoogleBusinessProfileLeadIntake(
+    gbpCapture.buildGoogleBusinessProfileLeadCaptureRequestBody({
+      body: {
+        locationKey: "weathertech-tucson",
+        googleEventId: "TEST_GBP_TUCSON",
+        name: "TEST Tucson GBP",
+        phone: "5205550181",
+        city: "Tucson",
+        serviceType: "roofing",
+      },
+      resolution: gbpTucsonResolution,
+      correlationId: "test-gbp-tucson-correlation",
+    }),
+  );
+  assertEqual(gbpTucson.branchKey, "weathertech_tucson", "Tucson GBP routes to Tucson branch");
+
+  const gbpIhcResolution = gbpCapture.resolveGoogleBusinessProfileLocation({
+    locationKey: "ihc",
+  });
+  const gbpIhc = routing.normalizeGoogleBusinessProfileLeadIntake(
+    gbpCapture.buildGoogleBusinessProfileLeadCaptureRequestBody({
+      body: {
+        locationKey: "ihc",
+        googleEventId: "TEST_GBP_IHC",
+        name: "TEST IHC GBP",
+        email: "ihc-gbp@example.test",
+        city: "Tempe",
+        serviceType: "painting",
+      },
+      resolution: gbpIhcResolution,
+      correlationId: "test-gbp-ihc-correlation",
+    }),
+  );
+  assertEqual(gbpIhc.companyKey, "ihc_painting", "IHC GBP routes to IHC");
+  assertEqual(gbpIhc.branchKey, "ihc", "IHC GBP routes to IHC branch");
+
+  const unknownGbpResolution = gbpCapture.resolveGoogleBusinessProfileLocation({
+    locationKey: "unknown-gbp-location",
+    serviceType: "roofing",
+  });
+  const unknownGbp = routing.normalizeGoogleBusinessProfileLeadIntake(
+    gbpCapture.buildGoogleBusinessProfileLeadCaptureRequestBody({
+      body: {
+        locationKey: "unknown-gbp-location",
+        name: "TEST Unknown GBP",
+        phone: "6025550182",
+        serviceType: "roofing",
+      },
+      resolution: unknownGbpResolution,
+      correlationId: "test-gbp-unknown-correlation",
+    }),
+  );
+  assertEqual(unknownGbpResolution.status, "unknown", "Unknown GBP location remains unknown");
+  assertEqual(
+    unknownGbp.companyKey,
+    "unassigned",
+    "Unknown GBP location does not infer company from service type",
+  );
+  assertEqual(
+    unknownGbp.routing.status,
+    "needs_review",
+    "Unknown GBP location routes to review",
+  );
 
   const manual = routing.normalizeManualLeadIntake({
     name: "TEST Manual Unknown",

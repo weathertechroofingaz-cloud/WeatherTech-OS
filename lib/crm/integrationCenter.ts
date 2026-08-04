@@ -404,8 +404,9 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     label: "Google Business Profile",
     shortLabel: "GBP",
     family: "lead_intake",
-    description: "Future review, message, and local-search lead activity for WeatherTech and IHC locations.",
-    connectionProviders: [],
+    description:
+      "Multi-location Google Business Profile foundation for reviews, local profile activity, source attribution, and Customer 360 follow-up readiness.",
+    connectionProviders: ["google_business_profile"],
     capabilities: ["reviews", "website_leads", "crm_sync", "webhooks"],
     iconKey: "reviews",
     requiresCredentials: true,
@@ -415,7 +416,8 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "business_account",
         label: "Business account",
-        description: "Approved Google Business Profile account for WeatherTech or IHC locations.",
+        description:
+          "Approved Google Business Profile account for WeatherTech Phoenix, WeatherTech Tucson, or IHC.",
         required: true,
         sensitive: false,
         kind: "text",
@@ -431,7 +433,8 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "oauth_client",
         label: "OAuth client",
-        description: "Google OAuth application approved for reviews, messages, and local-search activity.",
+        description:
+          "Server-side Google OAuth application approved for Business Profile account, location, review, performance, and notification access.",
         required: true,
         sensitive: true,
         kind: "oauth",
@@ -441,7 +444,8 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       {
         id: "oauth_consent",
         label: "OAuth consent check",
-        description: "Confirm the connected Google account can access the approved business profile.",
+        description:
+          "Confirm the connected Google account can access the approved Business Profile accounts and locations.",
       },
       {
         id: "location_scope",
@@ -450,28 +454,32 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       },
       {
         id: "webhook",
-        label: "Webhook readiness check",
-        description: "Validate future review/message callbacks before accepting live activity.",
+        label: "Pub/Sub readiness check",
+        description:
+          "Validate future Google Pub/Sub review/location notifications before accepting live activity.",
       },
     ],
     oauthReadiness: {
       enabled: true,
       label: "OAuth required",
       callbackPath: null,
-      scopes: ["business.manage"],
-      summary: "Google Business Profile requires OAuth and approved location mapping before live sync.",
+      scopes: ["https://www.googleapis.com/auth/business.manage"],
+      summary:
+        "Google Business Profile requires approved API access, server-side OAuth, account/location mapping, and Pub/Sub notification setup before live sync.",
     },
     connectionSteps: [
-      "Approve the Google Business Profile account and owned locations.",
-      "Map each location to WeatherTech Roofing LLC or IHC.",
-      "Validate minimum OAuth scope and account access.",
-      "Enable review/message sync after routing and response rules are approved.",
+      "Request and receive Google Business Profile API project approval.",
+      "Create a server-side OAuth client and verify business.manage consent.",
+      "Map WeatherTech Phoenix, WeatherTech Tucson, and IHC locations.",
+      "Configure Pub/Sub notifications for reviews and location updates.",
+      "Enable live review/activity sync only after routing, dedupe, and response rules are approved.",
     ],
     disconnectSummary:
-      "A future disconnect will pause review/message sync without deleting CRM history.",
+      "A future disconnect will pause review and location activity sync without deleting CRM history.",
     reconnectSummary:
       "A future reconnect will revalidate account ownership and company location mapping.",
-    summaryWhenDisconnected: "Configuration is required before Google Business Profile reviews or messages can sync.",
+    summaryWhenDisconnected:
+      "Configuration is required before Google Business Profile reviews, performance metrics, or location notifications can sync. Google chat, request-a-quote, and Q&A are not supported live intake sources.",
   },
   {
     id: "yelp",
@@ -1035,7 +1043,9 @@ function getConnectionSummary(
 
   if (!primaryConnection) {
     if (
-      (metadata.id === "website_forms" || metadata.id === "yelp") &&
+      (metadata.id === "website_forms" ||
+        metadata.id === "yelp" ||
+        metadata.id === "google_business_profile") &&
       (syncState.relatedActivityCount > 0 || syncState.total > 0)
     ) {
       return `${metadata.label} activity is being tracked, but no formal provider connection record exists.`;
