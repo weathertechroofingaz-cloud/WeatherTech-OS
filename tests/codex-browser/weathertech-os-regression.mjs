@@ -5825,13 +5825,14 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
       "x-weathertech-signature": `sha256=${yelpSignature}`,
     });
 
-    if (yelpCreate.status !== 201 || !yelpCreate.body?.ok) {
-      throw new Error(`Yelp intake create failed: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
+    if (yelpCreate.status !== 503 || yelpCreate.body?.status !== "production_disabled") {
+      throw new Error(`Signed Yelp intake was not held behind the disabled live gate: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
     }
 
-    yelpLeadRecordId = yelpCreate.body.leadId;
-    yelpCreateMode = "signed_endpoint";
-  } else {
+    yelpCreateMode = "signed_live_disabled";
+  }
+
+  if (yelpCreateMode !== "signed_endpoint") {
     const yelpSeedBase = {
       company_id: companies.ihc.id,
       [leadNameColumn]: yelpLeadName,
@@ -5843,7 +5844,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
       priority: "normal",
       estimated_value: 0,
       next_follow_up: null,
-      notes: `${TEST_PREFIX} ${runId} seeded Yelp source badge record. Endpoint live create skipped because Yelp signing secret is not configured in the local server.`,
+      notes: `${TEST_PREFIX} ${runId} seeded Yelp source badge record. Endpoint live create skipped because Yelp live sync is disabled in the local server.`,
     };
     const yelpSeedPayloads = [
       {
@@ -6896,9 +6897,13 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("secure yelp intake foundation") &&
         text.includes("/api/leads/yelp") &&
         text.includes("account registry ready") &&
+        text.includes("partner access required") &&
+        text.includes("manual intake ready") &&
+        text.includes("live sync disabled") &&
         text.includes("weathertech-phoenix") &&
         text.includes("weathertech-tucson") &&
-        text.includes("private yelp business ids stay server-side") &&
+        text.includes("private yelp business ids") &&
+        text.includes("oauth credentials stay server-side") &&
         [
           "twilio",
           "gmail",

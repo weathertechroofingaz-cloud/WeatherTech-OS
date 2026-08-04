@@ -151,8 +151,8 @@ export const leadIntakeAdapterDefinitions: LeadIntakeAdapterDefinition[] = [
   {
     provider: "yelp",
     label: "Yelp",
-    status: "active",
-    summary: "Receives Yelp account payloads through the existing Yelp intake route.",
+    status: "setup_required",
+    summary: "Routes controlled Yelp test/manual payloads through lead intake; live Leads API access requires Yelp partner approval.",
   },
   {
     provider: "twilio_call",

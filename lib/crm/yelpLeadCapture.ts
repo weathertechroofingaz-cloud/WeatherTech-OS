@@ -1,9 +1,11 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { YelpLeadRequestBody } from "./leadIntake";
+import { sanitizeIntegrationSyncLogSummary } from "./integrations";
 import type {
   CanonicalLeadBranchKey,
   CanonicalLeadCompanyKey,
 } from "./leadRouting";
+import type { IntegrationSyncLogRecord } from "./types";
 
 type HeadersLike = Headers | Record<string, string | string[] | undefined>;
 
@@ -17,6 +19,40 @@ export type YelpLeadCaptureAccountStatus = "enabled" | "disabled";
 export type YelpLeadCaptureRoutingStatus =
   | "ready_to_route"
   | "needs_configuration";
+export type YelpLeadCaptureAuthorizationStatus =
+  | "partner_approval_required"
+  | "oauth_required"
+  | "manual_import_ready"
+  | "connected";
+export type YelpLeadCaptureConnectionStatus =
+  | "not_connected"
+  | "configuration_required"
+  | "approval_required"
+  | "ready_for_manual_intake"
+  | "connected"
+  | "disabled"
+  | "error";
+export type YelpLeadCaptureCapability =
+  | "manual_import"
+  | "dry_run_testing"
+  | "partner_leads_api"
+  | "partner_webhooks"
+  | "oauth"
+  | "outbound_reply";
+export type YelpLeadCaptureCapabilityStatus =
+  | "available"
+  | "ready"
+  | "disabled"
+  | "partner_required"
+  | "unsupported";
+export type YelpLeadCaptureProductionState =
+  | "production_disabled"
+  | "partner_access_required"
+  | "credentials_required"
+  | "ready_for_signed_testing"
+  | "live_sync_enabled"
+  | "authentication_failed"
+  | "intake_error";
 export type YelpLeadCaptureResolutionStatus =
   | "matched"
   | "ambiguous"
@@ -50,12 +86,22 @@ export type YelpLeadCaptureAccount = {
   companyLabel: "WeatherTech" | "IHC";
   branchKey: Exclude<CanonicalLeadBranchKey, "unassigned">;
   branchLabel: string;
+  providerAccountIdentifier: string;
+  businessIdEnvVar: string;
   accountAliases: string[];
   accountIdEnvVar: string;
+  purpose: string;
   sourceDetail: string;
   campaign: string;
   defaultQueue: string;
   status: YelpLeadCaptureAccountStatus;
+  authorizationStatus: YelpLeadCaptureAuthorizationStatus;
+  connectionStatus: YelpLeadCaptureConnectionStatus;
+  leadIngestionCapability: YelpLeadCaptureCapabilityStatus;
+  conversationCapability: YelpLeadCaptureCapabilityStatus;
+  outboundMessagingCapability: YelpLeadCaptureCapabilityStatus;
+  liveSyncEnabledEnvVar: string;
+  outboundMessagingEnabledEnvVar: string;
   verificationMethod: YelpLeadCaptureVerificationMethod;
   secretEnvVar: string;
   routingStatus: YelpLeadCaptureRoutingStatus;
@@ -104,7 +150,52 @@ export type YelpLeadCaptureReadiness = {
   enabledAccountCount: number;
   configuredVerificationCount: number;
   configuredProviderAccountCount: number;
+  configuredBusinessIdCount: number;
+  oauthClientConfigured: boolean;
+  partnerIdConfigured: boolean;
+  liveSyncEnabled: boolean;
+  outboundMessagingEnabled: boolean;
   ownerActions: string[];
+};
+
+export type YelpLeadCaptureOfficialCapability = {
+  key: string;
+  label: string;
+  status: YelpLeadCaptureCapabilityStatus;
+  summary: string;
+  officialDocumentationUrl: string;
+};
+
+export type YelpLeadCaptureAccountRuntimeStatus = {
+  key: YelpLeadCaptureAccountKey;
+  label: string;
+  companyLabel: "WeatherTech" | "IHC";
+  branchLabel: string;
+  providerAccountIdentifier: string;
+  configuredAccountIdentifiers: string[];
+  configuredBusinessId: string | null;
+  authorizationStatus: YelpLeadCaptureAuthorizationStatus;
+  connectionStatus: YelpLeadCaptureConnectionStatus;
+  leadIngestionCapability: YelpLeadCaptureCapabilityStatus;
+  conversationCapability: YelpLeadCaptureCapabilityStatus;
+  outboundMessagingCapability: YelpLeadCaptureCapabilityStatus;
+  liveSyncEnabled: boolean;
+  outboundMessagingEnabled: boolean;
+  productionState: YelpLeadCaptureProductionState;
+  productionLabel: string;
+  hasSigningSecret: boolean;
+  lastSuccessfulSubmissionAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+};
+
+export type YelpLeadCaptureSafeLogContext = {
+  body: YelpLeadRequestBody;
+  resolution: YelpLeadCaptureAccountResolution;
+  verification?: YelpLeadCaptureVerificationResult | null;
+  abuse?: YelpLeadCaptureAbuseResult | null;
+  correlationId?: string | null;
+  rawBody?: string | null;
 };
 
 export const yelpLeadCaptureEndpointPath = "/api/leads/yelp";
@@ -114,6 +205,63 @@ export const yelpLeadCaptureSignatureHeader = "x-weathertech-signature";
 export const yelpLeadCaptureTimestampHeader = "x-weathertech-timestamp";
 export const yelpLeadCaptureAccountHeader = "x-weathertech-yelp-account";
 export const yelpLeadCaptureSharedSecretEnvVar = "YELP_LEAD_CAPTURE_SECRET";
+
+export const yelpLeadCaptureEnvVars = {
+  apiKey: "YELP_API_KEY",
+  clientId: "YELP_CLIENT_ID",
+  clientSecret: "YELP_CLIENT_SECRET",
+  redirectUri: "YELP_REDIRECT_URI",
+  partnerId: "YELP_PARTNER_ID",
+  webhookSecret: "YELP_WEBHOOK_SECRET",
+  liveSyncEnabled: "YELP_LIVE_SYNC_ENABLED",
+  outboundMessagingEnabled: "YELP_OUTBOUND_MESSAGING_ENABLED",
+  productionEnabledAccountIds: "YELP_PRODUCTION_ENABLED_ACCOUNT_IDS",
+} as const;
+
+export const yelpLeadCaptureOfficialCapabilities: YelpLeadCaptureOfficialCapability[] = [
+  {
+    key: "fusion_business_search",
+    label: "Business profile lookup",
+    status: "available",
+    summary: "Yelp Places/Fusion supports business search and lookup for approved API keys.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/reference/v3_business_search",
+  },
+  {
+    key: "fusion_reviews",
+    label: "Review excerpts",
+    status: "available",
+    summary: "Yelp review endpoints return limited review excerpts and require appropriate plan permission.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/reference/v3_business_reviews",
+  },
+  {
+    key: "leads_api",
+    label: "Request-a-Quote leads",
+    status: "partner_required",
+    summary: "Yelp Leads API requires partner access, OAuth, advertising eligibility, and business subscription setup.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/docs/leads-api",
+  },
+  {
+    key: "leads_webhooks",
+    label: "Lead webhooks",
+    status: "partner_required",
+    summary: "Yelp lead webhooks are available after partner setup and business subscriptions.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/docs/leads-webhooks",
+  },
+  {
+    key: "outbound_replies",
+    label: "Yelp replies",
+    status: "partner_required",
+    summary: "Reply/read write actions require authorized Yelp Leads API access and are disabled in WeatherTech OS.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/docs/partner-integration-guide",
+  },
+  {
+    key: "profile_message_business",
+    label: "Message the business",
+    status: "unsupported",
+    summary: "The Yelp Leads API documentation says Message the Business profiles are not eligible for Leads API use.",
+    officialDocumentationUrl: "https://docs.developer.yelp.com/docs/leads-api",
+  },
+];
 
 export const yelpLeadCaptureReadinessLabels: Record<
   YelpLeadCaptureReadinessState,
@@ -138,6 +286,8 @@ export const yelpLeadCaptureAccounts: YelpLeadCaptureAccount[] = [
     companyLabel: "WeatherTech",
     branchKey: "weathertech_phoenix",
     branchLabel: "Phoenix",
+    providerAccountIdentifier: "weathertech-phoenix",
+    businessIdEnvVar: "YELP_BUSINESS_ID_WEATHERTECH_PHOENIX",
     accountAliases: [
       "weathertech-phoenix",
       "weathertech-roofing-phoenix",
@@ -145,10 +295,18 @@ export const yelpLeadCaptureAccounts: YelpLeadCaptureAccount[] = [
       "wtr-yelp-phoenix",
     ],
     accountIdEnvVar: "YELP_ACCOUNT_ID_WEATHERTECH_PHOENIX",
+    purpose: "Phoenix roofing lead intake and Request-a-Quote review.",
     sourceDetail: "WeatherTech Phoenix Yelp account",
     campaign: "yelp-phoenix",
     defaultQueue: "weathertech-roofing-phoenix",
     status: "enabled",
+    authorizationStatus: "partner_approval_required",
+    connectionStatus: "ready_for_manual_intake",
+    leadIngestionCapability: "partner_required",
+    conversationCapability: "partner_required",
+    outboundMessagingCapability: "disabled",
+    liveSyncEnabledEnvVar: "YELP_LIVE_SYNC_ENABLED_WEATHERTECH_PHOENIX",
+    outboundMessagingEnabledEnvVar: "YELP_OUTBOUND_MESSAGING_ENABLED_WEATHERTECH_PHOENIX",
     verificationMethod: "hmac_sha256",
     secretEnvVar: "YELP_LEAD_CAPTURE_SECRET_WEATHERTECH_PHOENIX",
     routingStatus: "ready_to_route",
@@ -160,6 +318,8 @@ export const yelpLeadCaptureAccounts: YelpLeadCaptureAccount[] = [
     companyLabel: "WeatherTech",
     branchKey: "weathertech_tucson",
     branchLabel: "Tucson",
+    providerAccountIdentifier: "weathertech-tucson",
+    businessIdEnvVar: "YELP_BUSINESS_ID_WEATHERTECH_TUCSON",
     accountAliases: [
       "weathertech-tucson",
       "weathertech-roofing-tucson",
@@ -167,10 +327,18 @@ export const yelpLeadCaptureAccounts: YelpLeadCaptureAccount[] = [
       "wtr-yelp-tucson",
     ],
     accountIdEnvVar: "YELP_ACCOUNT_ID_WEATHERTECH_TUCSON",
+    purpose: "Tucson roofing lead intake and Request-a-Quote review.",
     sourceDetail: "WeatherTech Tucson Yelp account",
     campaign: "yelp-tucson",
     defaultQueue: "weathertech-roofing-tucson",
     status: "enabled",
+    authorizationStatus: "partner_approval_required",
+    connectionStatus: "ready_for_manual_intake",
+    leadIngestionCapability: "partner_required",
+    conversationCapability: "partner_required",
+    outboundMessagingCapability: "disabled",
+    liveSyncEnabledEnvVar: "YELP_LIVE_SYNC_ENABLED_WEATHERTECH_TUCSON",
+    outboundMessagingEnabledEnvVar: "YELP_OUTBOUND_MESSAGING_ENABLED_WEATHERTECH_TUCSON",
     verificationMethod: "hmac_sha256",
     secretEnvVar: "YELP_LEAD_CAPTURE_SECRET_WEATHERTECH_TUCSON",
     routingStatus: "ready_to_route",
@@ -182,12 +350,22 @@ export const yelpLeadCaptureAccounts: YelpLeadCaptureAccount[] = [
     companyLabel: "IHC",
     branchKey: "ihc",
     branchLabel: "IHC",
+    providerAccountIdentifier: "ihc",
+    businessIdEnvVar: "YELP_BUSINESS_ID_IHC",
     accountAliases: ["ihc", "ihc-painting", "ihc yelp", "ihc-painting-yelp"],
     accountIdEnvVar: "YELP_ACCOUNT_ID_IHC",
+    purpose: "IHC painting lead intake and Request-a-Quote review.",
     sourceDetail: "IHC Yelp account",
     campaign: "yelp-ihc",
     defaultQueue: "ihc-painting",
     status: "enabled",
+    authorizationStatus: "partner_approval_required",
+    connectionStatus: "ready_for_manual_intake",
+    leadIngestionCapability: "partner_required",
+    conversationCapability: "partner_required",
+    outboundMessagingCapability: "disabled",
+    liveSyncEnabledEnvVar: "YELP_LIVE_SYNC_ENABLED_IHC",
+    outboundMessagingEnabledEnvVar: "YELP_OUTBOUND_MESSAGING_ENABLED_IHC",
     verificationMethod: "hmac_sha256",
     secretEnvVar: "YELP_LEAD_CAPTURE_SECRET_IHC",
     routingStatus: "ready_to_route",
@@ -202,6 +380,27 @@ export const yelpLeadCaptureSecretEnvVars = [
 export const yelpLeadCaptureAccountIdEnvVars = yelpLeadCaptureAccounts.map(
   (account) => account.accountIdEnvVar,
 );
+
+export const yelpLeadCaptureBusinessIdEnvVars = yelpLeadCaptureAccounts.map(
+  (account) => account.businessIdEnvVar,
+);
+
+function getEnvFlag(env: NodeJS.ProcessEnv, key: string, defaultValue = false) {
+  const value = env[key]?.trim().toLowerCase();
+
+  if (!value) {
+    return defaultValue;
+  }
+
+  return ["1", "true", "yes", "enabled", "on"].includes(value);
+}
+
+function getEnvList(env: NodeJS.ProcessEnv, key: string) {
+  return (env[key] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
 
 function getText(value: unknown, maxLength = 500) {
   if (typeof value === "string") {
@@ -252,8 +451,67 @@ function getAccountEnvIdentifiers(
   account: YelpLeadCaptureAccount,
   env: NodeJS.ProcessEnv,
 ) {
-  return [env[account.accountIdEnvVar]?.trim()].filter(
-    (value): value is string => Boolean(value),
+  return [
+    env[account.accountIdEnvVar]?.trim(),
+    env[account.businessIdEnvVar]?.trim(),
+  ].filter((value): value is string => Boolean(value));
+}
+
+export function getYelpLeadCaptureConfiguredAccountIdentifiers(
+  account: YelpLeadCaptureAccount,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return [
+    account.providerAccountIdentifier,
+    account.key,
+    ...account.accountAliases,
+    ...getAccountEnvIdentifiers(account, env),
+  ].filter((value, index, values) => values.indexOf(value) === index);
+}
+
+export function getYelpLeadCaptureConfiguredBusinessId(
+  account: YelpLeadCaptureAccount,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return env[account.businessIdEnvVar]?.trim() || null;
+}
+
+export function isYelpLeadCaptureLiveSyncEnabled(
+  account: YelpLeadCaptureAccount | null,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!account) {
+    return false;
+  }
+
+  const globalEnabled = getEnvFlag(env, yelpLeadCaptureEnvVars.liveSyncEnabled, false);
+  const accountEnabled = getEnvFlag(env, account.liveSyncEnabledEnvVar, false);
+  const enabledAccountIds = getEnvList(
+    env,
+    yelpLeadCaptureEnvVars.productionEnabledAccountIds,
+  ).map(getToken);
+  const accountIdEnabled =
+    enabledAccountIds.length === 0 ||
+    enabledAccountIds.some((token) =>
+      getYelpLeadCaptureConfiguredAccountIdentifiers(account, env)
+        .map(getToken)
+        .includes(token),
+    );
+
+  return globalEnabled && accountEnabled && accountIdEnabled;
+}
+
+export function isYelpOutboundMessagingEnabled(
+  account: YelpLeadCaptureAccount | null,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!account) {
+    return false;
+  }
+
+  return (
+    getEnvFlag(env, yelpLeadCaptureEnvVars.outboundMessagingEnabled, false) &&
+    getEnvFlag(env, account.outboundMessagingEnabledEnvVar, false)
   );
 }
 
@@ -408,6 +666,20 @@ export function createYelpLeadCaptureSignature({
 }) {
   return createHmac("sha256", secret)
     .update(`${timestamp}.${rawBody}`)
+    .digest("hex");
+}
+
+export function createYelpLeadCaptureRequestFingerprint({
+  rawBody,
+  account,
+  externalId,
+}: {
+  rawBody: string;
+  account: YelpLeadCaptureAccount | null;
+  externalId?: string | null;
+}) {
+  return createHash("sha256")
+    .update(`${account?.key ?? "unknown"}:${externalId ?? ""}:${rawBody}`)
     .digest("hex");
 }
 
@@ -757,6 +1029,135 @@ export function buildYelpLeadCaptureRequestBody({
   };
 }
 
+function getLogAccountKey(log: IntegrationSyncLogRecord) {
+  const summary = log.request_summary;
+  const sourceMetadata =
+    summary &&
+    typeof summary === "object" &&
+    "sourceMetadata" in summary &&
+    summary.sourceMetadata &&
+    typeof summary.sourceMetadata === "object"
+      ? (summary.sourceMetadata as Record<string, unknown>)
+      : null;
+  const directKey =
+    summary &&
+    typeof summary === "object" &&
+    typeof summary.sourceRegistryKey === "string"
+      ? summary.sourceRegistryKey
+      : null;
+  const metadataKey =
+    typeof sourceMetadata?.sourceRegistryKey === "string"
+      ? sourceMetadata.sourceRegistryKey
+      : null;
+
+  return directKey ?? metadataKey ?? null;
+}
+
+function getLogTimestamp(log: IntegrationSyncLogRecord) {
+  return log.completed_at ?? log.last_attempted_at ?? log.updated_at ?? log.created_at;
+}
+
+function getProductionLabel(state: YelpLeadCaptureProductionState) {
+  if (state === "live_sync_enabled") {
+    return "Live sync enabled";
+  }
+
+  if (state === "ready_for_signed_testing") {
+    return "Ready for signed testing";
+  }
+
+  if (state === "partner_access_required") {
+    return "Partner access required";
+  }
+
+  if (state === "credentials_required") {
+    return "Credentials required";
+  }
+
+  if (state === "authentication_failed") {
+    return "Authentication failing";
+  }
+
+  if (state === "intake_error") {
+    return "Intake error";
+  }
+
+  return "Production disabled";
+}
+
+export function buildYelpLeadCaptureAccountRuntimeStatuses({
+  logs,
+  env = process.env,
+}: {
+  logs: IntegrationSyncLogRecord[];
+  env?: NodeJS.ProcessEnv;
+}): YelpLeadCaptureAccountRuntimeStatus[] {
+  return yelpLeadCaptureAccounts.map((account) => {
+    const accountLogs = logs.filter(
+      (log) => log.provider === "yelp" && getLogAccountKey(log) === account.key,
+    );
+    const successfulLogs = accountLogs.filter((log) => log.status === "succeeded");
+    const failureLogs = accountLogs.filter(
+      (log) => log.status === "failed" || log.status === "retrying",
+    );
+    const lastSuccessfulSubmissionAt =
+      successfulLogs.map(getLogTimestamp).sort().at(-1) ?? null;
+    const lastFailureAt = failureLogs.map(getLogTimestamp).sort().at(-1) ?? null;
+    const latestFailure = failureLogs
+      .slice()
+      .sort((a, b) => getLogTimestamp(a).localeCompare(getLogTimestamp(b)))
+      .at(-1);
+    const latestFailureIsNewest =
+      Boolean(lastFailureAt) &&
+      (!lastSuccessfulSubmissionAt || lastFailureAt! > lastSuccessfulSubmissionAt);
+    const hasSigningSecret = Boolean(getYelpLeadCaptureSecret(account, env));
+    const liveSyncEnabled = isYelpLeadCaptureLiveSyncEnabled(account, env);
+    const outboundMessagingEnabled = isYelpOutboundMessagingEnabled(account, env);
+    const oauthReady = Boolean(
+      env[yelpLeadCaptureEnvVars.clientId]?.trim() &&
+        env[yelpLeadCaptureEnvVars.clientSecret]?.trim() &&
+        env[yelpLeadCaptureEnvVars.redirectUri]?.trim(),
+    );
+    const partnerReady = Boolean(env[yelpLeadCaptureEnvVars.partnerId]?.trim());
+    const productionState: YelpLeadCaptureProductionState = latestFailureIsNewest
+      ? latestFailure?.error_code === "missing_signature" ||
+        latestFailure?.error_code === "invalid_signature" ||
+        latestFailure?.error_code === "verification_required"
+        ? "authentication_failed"
+        : "intake_error"
+      : liveSyncEnabled
+        ? "live_sync_enabled"
+        : !partnerReady
+          ? "partner_access_required"
+          : !oauthReady || !hasSigningSecret
+            ? "credentials_required"
+            : "ready_for_signed_testing";
+
+    return {
+      key: account.key,
+      label: account.label,
+      companyLabel: account.companyLabel,
+      branchLabel: account.branchLabel,
+      providerAccountIdentifier: account.providerAccountIdentifier,
+      configuredAccountIdentifiers: getYelpLeadCaptureConfiguredAccountIdentifiers(account, env),
+      configuredBusinessId: getYelpLeadCaptureConfiguredBusinessId(account, env),
+      authorizationStatus: account.authorizationStatus,
+      connectionStatus: account.connectionStatus,
+      leadIngestionCapability: account.leadIngestionCapability,
+      conversationCapability: account.conversationCapability,
+      outboundMessagingCapability: account.outboundMessagingCapability,
+      liveSyncEnabled,
+      outboundMessagingEnabled,
+      productionState,
+      productionLabel: getProductionLabel(productionState),
+      hasSigningSecret,
+      lastSuccessfulSubmissionAt,
+      lastFailureAt,
+      lastError: latestFailure?.error_message ?? null,
+    };
+  });
+}
+
 export function buildYelpLeadCaptureReadiness(
   env: NodeJS.ProcessEnv = process.env,
 ): YelpLeadCaptureReadiness {
@@ -769,15 +1170,34 @@ export function buildYelpLeadCaptureReadiness(
   const configuredProviderAccountCount = yelpLeadCaptureAccounts.filter((account) =>
     Boolean(env[account.accountIdEnvVar]?.trim()),
   ).length;
+  const configuredBusinessIdCount = yelpLeadCaptureAccounts.filter((account) =>
+    Boolean(env[account.businessIdEnvVar]?.trim()),
+  ).length;
   const hasSharedSecret = Boolean(env[yelpLeadCaptureSharedSecretEnvVar]?.trim());
+  const oauthClientConfigured = Boolean(
+    env[yelpLeadCaptureEnvVars.clientId]?.trim() &&
+      env[yelpLeadCaptureEnvVars.clientSecret]?.trim() &&
+      env[yelpLeadCaptureEnvVars.redirectUri]?.trim(),
+  );
+  const partnerIdConfigured = Boolean(env[yelpLeadCaptureEnvVars.partnerId]?.trim());
+  const liveSyncEnabled = yelpLeadCaptureAccounts.some((account) =>
+    isYelpLeadCaptureLiveSyncEnabled(account, env),
+  );
+  const outboundMessagingEnabled = yelpLeadCaptureAccounts.some((account) =>
+    isYelpOutboundMessagingEnabled(account, env),
+  );
   const state: YelpLeadCaptureReadinessState =
     !yelpLeadCaptureAccounts.length
       ? "not_configured"
-      : configuredProviderAccountCount === 0
+      : !partnerIdConfigured
         ? "credentials_required"
-        : configuredVerificationCount === 0 && !hasSharedSecret
+        : configuredProviderAccountCount === 0 && configuredBusinessIdCount === 0
+        ? "credentials_required"
+        : !oauthClientConfigured || (configuredVerificationCount === 0 && !hasSharedSecret)
           ? "verification_required"
-          : "testing_required";
+          : liveSyncEnabled
+            ? "connected"
+            : "testing_required";
 
   return {
     state,
@@ -788,12 +1208,65 @@ export function buildYelpLeadCaptureReadiness(
     enabledAccountCount,
     configuredVerificationCount,
     configuredProviderAccountCount,
+    configuredBusinessIdCount,
+    oauthClientConfigured,
+    partnerIdConfigured,
+    liveSyncEnabled,
+    outboundMessagingEnabled,
     ownerActions: [
-      "Confirm the production Yelp delivery method and supported payload shape.",
-      "Add server-side Yelp signing secret environment variables in hosting.",
-      "Add server-side Yelp account ID environment variables after owner account verification.",
+      "Confirm Yelp partner approval, Request-a-Quote eligibility, and subscribed business IDs.",
+      "Add server-side Yelp OAuth, partner, webhook, signing secret, account ID, and business ID variables in hosting.",
+      "Keep Yelp live sync and outbound messaging disabled until signed end-to-end tests pass.",
       "Run dry-run previews for Phoenix, Tucson, and IHC before accepting live leads.",
       "Run one signed production test per Yelp account before marking Yelp connected.",
     ],
   };
+}
+
+export function buildYelpLeadCaptureSafeLogSummary({
+  body,
+  resolution,
+  verification = null,
+  abuse = null,
+  correlationId = null,
+  rawBody = null,
+}: YelpLeadCaptureSafeLogContext) {
+  return sanitizeIntegrationSyncLogSummary({
+    sourceRegistryKey: resolution.account?.key ?? null,
+    sourceResolutionStatus: resolution.status,
+    submittedAccountIdentifier: resolution.submittedAccountIdentifier,
+    submittedBusinessIdentifier: resolution.submittedBusinessIdentifier,
+    submittedConversationIdentifier: resolution.submittedConversationIdentifier,
+    verificationStatus: verification?.status ?? null,
+    productionEnabled: isYelpLeadCaptureLiveSyncEnabled(resolution.account),
+    outboundMessagingEnabled: isYelpOutboundMessagingEnabled(resolution.account),
+    spamReviewStatus: abuse?.status ?? null,
+    spamSignals: abuse?.signals.map((signal) => signal.code) ?? [],
+    yelp: {
+      hasBusinessId: Boolean(sanitizeText(body.yelpBusinessId ?? body.businessId, 160)),
+      hasLeadId: Boolean(sanitizeText(body.yelpLeadId ?? body.leadId, 160)),
+      hasConversationId: Boolean(
+        sanitizeText(body.yelpConversationId ?? body.conversationId ?? body.threadId, 160),
+      ),
+      accountKey: resolution.account?.key ?? null,
+      branch: resolution.account?.branchLabel ?? null,
+      company: resolution.account?.companyLabel ?? null,
+    },
+    contact: {
+      hasName: Boolean(buildName(body)),
+      hasPhone: Boolean(sanitizeText(body.phone, 40)),
+      hasEmail: Boolean(sanitizeText(body.email, 160)),
+    },
+    property: {
+      hasAddress: Boolean(sanitizeText(body.address ?? body.serviceAddress, 240)),
+      hasLocation: Boolean(sanitizeText(body.city ?? body.location, 120)),
+    },
+    message: {
+      hasMessage: Boolean(sanitizeText(body.message ?? body.comments ?? body.notes, 1500)),
+      length:
+        sanitizeText(body.message ?? body.comments ?? body.notes, 1500)?.length ?? 0,
+    },
+    correlationId: sanitizeText(correlationId, 120),
+    payloadHash: rawBody ? createHash("sha256").update(rawBody).digest("hex") : null,
+  });
 }

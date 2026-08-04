@@ -169,6 +169,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added safe environment placeholders and owner setup documentation for server-side HMAC configuration and production activation.
   - Did not modify `.env.local`, activate live public website forms, send customer communications, weaken authentication/RLS, or add destructive migrations.
 
+### Yelp Integration Phase 1 - Multi-Account Lead Intake Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Yelp integration lead intake foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added the three-account Yelp foundation for WeatherTech Phoenix, WeatherTech Tucson, and IHC.
+  - Preserved the Unified Lead Intake Hub as the canonical pipeline for controlled Yelp intake payloads.
+  - Documented official Yelp capability boundaries, including partner-required Leads API, OAuth, and webhook activation.
+  - Kept live Yelp sync and outbound replies disabled by default and did not scrape Yelp, store Yelp passwords, send real Yelp messages, modify `.env.local`, or add migrations.
+
 ## Recording Template
 
 ### Sprint Name

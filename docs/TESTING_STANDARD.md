@@ -18,6 +18,8 @@ git diff --check
 Current repository tests include:
 
 - `tests/lead-intake-routing.test.mjs` for lead intake routing, source matching, signature helpers, and duplicate policy behavior.
+- `tests/unified-lead-intake-service.test.mjs` for canonical intake deduplication, existing customer/lead matching, provider logging, and follow-up behavior.
+- `tests/yelp-integration-foundation.test.mjs` for Yelp account routing, official capability flags, disabled live boundaries, signature helpers, safe logging, and three-account readiness.
 - Additional validation may be embedded in browser regression flows.
 
 When a sprint changes routing, provider readiness, lead intake, deduplication, or pure helper logic, add or update targeted automated tests where practical.
@@ -51,6 +53,7 @@ Use targeted validation when a sprint changes a specific workflow:
 - Communications: inbox filters, provider badges, detail panels, safe logging.
 - Integrations: readiness cards, connection architecture, no fake connectivity.
 - Website & Marketing: source routing, provider honesty, existing-workspace navigation.
+- Yelp: three-account routing, partner-required state, dry-run/manual intake, disabled live sync, duplicate handling, and no outbound messaging.
 
 ## Manual QA Checklist
 

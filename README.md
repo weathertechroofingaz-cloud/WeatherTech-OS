@@ -55,4 +55,5 @@ not begin work when the current sprint is awaiting owner approval.
 - [Google Workspace Phase 1 Setup](./docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md)
 - [Google Calendar Phase 1 Setup](./docs/GOOGLE_CALENDAR_PHASE_1_SETUP.md)
 - [Website Integration Phase 1 Setup](./docs/WEBSITE_INTEGRATION_PHASE_1_SETUP.md)
+- [Yelp Integration Phase 1 Setup](./docs/YELP_INTEGRATION_PHASE_1_SETUP.md)
 - [Changelog](./CHANGELOG.md)

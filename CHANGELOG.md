@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Yelp Integration Phase 1 - Multi-Account Lead Intake Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add Yelp integration lead intake foundation`
+- Summary:
+  - Added the Yelp multi-account integration foundation for WeatherTech Phoenix, WeatherTech Tucson, and IHC using the Unified Lead Intake Hub.
+  - Documented official Yelp public, partner-only, OAuth, webhook, and unsupported capability boundaries.
+  - Kept live Yelp sync and outbound replies disabled by default while preserving dry-run/manual routing, dedupe, Customer 360 activity, follow-up, and sanitized integration logging.
+
 ### Website Integration Phase 1 - Multi-Brand Live Lead Capture Foundation
 
 - Commit: `<this sprint commit>`

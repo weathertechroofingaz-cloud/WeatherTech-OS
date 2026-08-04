@@ -13941,9 +13941,10 @@ function LeadIntakeRoutingEnginePanel({
               ))}
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              Yelp posts use account registry routing, signed request checks,
-              duplicate detection, Customer 360 matching, and review queues before CRM leads are
-              created.
+              Yelp manual imports and dry-run previews use account registry
+              routing, signed request checks, duplicate detection, Customer 360
+              matching, and review queues. Live Yelp posts stay disabled until
+              partner access and owner approval are configured.
             </p>
           </div>
 
@@ -43642,11 +43643,11 @@ function YelpLeadCaptureFoundationPanel() {
   const readinessStates = [
     { label: "Not Configured", tone: "slate" as const },
     { label: "Account Registry Ready", tone: "green" as const },
+    { label: "Partner Access Required", tone: "amber" as const },
     { label: "Credentials Required", tone: "amber" as const },
     { label: "Verification Required", tone: "amber" as const },
-    { label: "Endpoint Ready", tone: "green" as const },
-    { label: "Testing Required", tone: "amber" as const },
-    { label: "Ready for Production Configuration", tone: "blue" as const },
+    { label: "Manual Intake Ready", tone: "blue" as const },
+    { label: "Live Sync Disabled", tone: "amber" as const },
     { label: "Connected", tone: "green" as const },
     { label: "Error", tone: "red" as const },
   ];
@@ -43654,20 +43655,26 @@ function YelpLeadCaptureFoundationPanel() {
     {
       label: "WeatherTech Roofing LLC - Phoenix",
       accountKey: "weathertech-phoenix",
+      branch: "Phoenix",
       queue: "weathertech-roofing-phoenix",
-      status: "Registry ready",
+      status: "Partner access required",
+      capability: "Manual import and dry-run only",
     },
     {
       label: "WeatherTech Roofing LLC - Tucson",
       accountKey: "weathertech-tucson",
+      branch: "Tucson",
       queue: "weathertech-roofing-tucson",
-      status: "Registry ready",
+      status: "Partner access required",
+      capability: "Manual import and dry-run only",
     },
     {
       label: "IHC",
       accountKey: "ihc",
+      branch: "IHC",
       queue: "ihc-painting",
-      status: "Registry ready",
+      status: "Partner access required",
+      capability: "Manual import and dry-run only",
     },
   ];
 
@@ -43685,13 +43692,15 @@ function YelpLeadCaptureFoundationPanel() {
             Secure Yelp intake foundation
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Live Yelp accounts are not connected yet. The server endpoint,
-            account registry, signed-request model, dry-run preview, duplicate
-            checks, review routing, retry support, and safe logging path are
-            prepared for owner-approved Yelp setup.
+            Live Yelp accounts are not connected. Yelp Leads API and lead
+            webhooks require Yelp partner approval, OAuth authorization, and
+            business subscriptions. WeatherTech OS is prepared for safe
+            three-account routing, manual import, dry-run testing, duplicate
+            checks, review routing, retry support, and safe logging without
+            scraping or storing Yelp passwords.
           </p>
         </div>
-        <ProviderStatusBadge label="Credentials Required" tone="amber" />
+        <ProviderStatusBadge label="Live Sync Disabled" tone="amber" />
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
@@ -43708,7 +43717,7 @@ function YelpLeadCaptureFoundationPanel() {
         <ProfileStat label="Endpoint" value="/api/leads/yelp" />
         <ProfileStat label="Dry run" value="?dryRun=1" />
         <ProfileStat label="Accounts" value={accounts.length} />
-        <ProfileStat label="Live Yelp" value="Not Connected" />
+        <ProfileStat label="Live Yelp" value="Partner Required" />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
@@ -43725,12 +43734,19 @@ function YelpLeadCaptureFoundationPanel() {
                 <div>
                   <p className="font-bold text-slate-950">{account.label}</p>
                   <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Account key {account.accountKey}; queue {account.queue}.
-                    Private Yelp business IDs stay server-side in hosting
-                    environment variables.
+                    Account key {account.accountKey}; branch {account.branch};
+                    queue {account.queue}. Private Yelp business IDs and OAuth
+                    credentials stay server-side in hosting environment
+                    variables.
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Capability
+                  </p>
+                  <p className="mt-0.5 text-sm leading-6 text-slate-500">
+                    {account.capability}
                   </p>
                 </div>
-                <ProviderStatusBadge label={account.status} tone="green" />
+                <ProviderStatusBadge label={account.status} tone="amber" />
               </div>
             </div>
           ))}
@@ -43741,11 +43757,11 @@ function YelpLeadCaptureFoundationPanel() {
             Owner Setup Required
           </p>
           {[
-            "Confirm Yelp's production lead delivery method and payload fields.",
-            "Configure server-side Yelp signing secret environment variables in hosting.",
-            "Configure server-side Yelp account ID environment variables after account verification.",
-            "Run synthetic dry-run previews before signed live Yelp tests.",
-            "Run one signed test per Yelp account before marking Yelp connected.",
+            "Obtain Yelp partner approval and confirm Request-a-Quote eligibility for Phoenix, Tucson, and IHC.",
+            "Authorize each Yelp business through the official Yelp OAuth flow after scopes are enabled.",
+            "Configure server-side Yelp partner, OAuth, webhook, account ID, business ID, and signing secret variables in hosting.",
+            "Keep YELP_LIVE_SYNC_ENABLED and YELP_OUTBOUND_MESSAGING_ENABLED false until signed live tests pass.",
+            "Use manual intake or authorized Gmail notification review while waiting on Yelp partner access.",
           ].map((item) => (
             <div
               key={item}
@@ -43755,6 +43771,12 @@ function YelpLeadCaptureFoundationPanel() {
               <span>{item}</span>
             </div>
           ))}
+          <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-600">
+            Public Yelp APIs can support business-profile and limited review
+            readiness checks, but lead conversations, Request-a-Quote reads,
+            webhooks, and replies stay disabled until Yelp grants the official
+            partner access path.
+          </div>
         </div>
       </div>
     </section>

@@ -525,12 +525,13 @@ try {
   const futureProviderAdapters = routing.leadIntakeAdapterDefinitions.filter(
     (adapter) =>
       adapter.provider === "google_business_profile" ||
-      adapter.provider === "facebook",
+      adapter.provider === "facebook" ||
+      adapter.provider === "yelp",
   );
-  assertEqual(futureProviderAdapters.length, 2, "Future provider adapter contracts are registered");
+  assertEqual(futureProviderAdapters.length, 3, "Restricted provider adapter contracts are registered");
   assert(
     futureProviderAdapters.every((adapter) => adapter.status === "setup_required"),
-    "Future provider adapters remain setup-required and do not imply live connectivity",
+    "Restricted provider adapters remain setup-required and do not imply live connectivity",
   );
 
   const exactMatches = routing.detectLeadIntakeDuplicates(website, [

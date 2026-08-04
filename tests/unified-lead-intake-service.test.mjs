@@ -339,6 +339,114 @@ try {
   );
   assertEqual(leadMatchDb.state.leads.length, 1, "Duplicate lead intake does not insert a second lead");
 
+  const yelpCustomerMatchDb = createMockSupabase({
+    companies: [baseCompany],
+    customers: [
+      {
+        id: "customer-yelp-1",
+        company_id: baseCompany.id,
+        display_name: "Yelp Existing Customer",
+        contact_name: "Yelp Existing Customer",
+        phone: "+16025550105",
+        email: "yelp-existing@example.test",
+        property_address: "555 Yelp Match Way",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const yelpCustomerLead = leadIntake.normalizeYelpLeadBody({
+    business: "WeatherTech",
+    verifiedCompanyKey: "weathertech_roofing",
+    verifiedBranchKey: "weathertech_phoenix",
+    name: "Yelp Existing Customer",
+    phone: "(602) 555-0105",
+    email: "yelp-existing@example.test",
+    address: "555 Yelp Match Way",
+    city: "Phoenix",
+    serviceType: "roofing",
+    source: "WeatherTech Yelp",
+    yelpBusinessId: "TEST_YELP_BUSINESS",
+    yelpLeadId: "TEST_YELP_CUSTOMER_MATCH",
+  });
+  assert(yelpCustomerLead.lead, "Yelp customer-match lead normalizes");
+  const yelpCustomerResult = await leadIntake.processLeadIntake(
+    yelpCustomerMatchDb.client,
+    yelpCustomerLead.lead,
+  );
+  assertEqual(
+    yelpCustomerResult.customerId,
+    "customer-yelp-1",
+    "Yelp intake attaches to an existing customer",
+  );
+  assertEqual(
+    yelpCustomerMatchDb.state.leads.length,
+    0,
+    "Yelp existing customer match does not create a duplicate lead",
+  );
+  assertEqual(
+    yelpCustomerMatchDb.state.notifications[0]?.customer_id,
+    "customer-yelp-1",
+    "Yelp existing customer match creates a customer follow-up",
+  );
+
+  const yelpProviderDuplicateDb = createMockSupabase({
+    companies: [baseCompany],
+    leads: [
+      {
+        id: "lead-yelp-existing",
+        company_id: baseCompany.id,
+        contact_name: "Existing Yelp Lead",
+        phone: "+16025550106",
+        email: null,
+        property_address: "666 Yelp Duplicate Way",
+        source: "Yelp",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    integration_sync_logs: [
+      {
+        id: "sync-yelp-existing",
+        provider: "yelp",
+        event_type: "yelp.lead.created",
+        status: "succeeded",
+        related_table: "leads",
+        related_record_id: "lead-yelp-existing",
+        external_id: "YELP-DUPLICATE-LEAD",
+        request_fingerprint: "fingerprint-existing",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const yelpDuplicateLead = leadIntake.normalizeYelpLeadBody({
+    business: "WeatherTech",
+    verifiedCompanyKey: "weathertech_roofing",
+    verifiedBranchKey: "weathertech_phoenix",
+    name: "Existing Yelp Lead",
+    phone: "6025550106",
+    address: "666 Yelp Duplicate Way",
+    city: "Phoenix",
+    serviceType: "roofing",
+    source: "WeatherTech Yelp",
+    yelpBusinessId: "TEST_YELP_BUSINESS",
+    yelpLeadId: "YELP-DUPLICATE-LEAD",
+  });
+  assert(yelpDuplicateLead.lead, "Yelp duplicate lead normalizes");
+  const yelpDuplicateResult = await leadIntake.processLeadIntake(
+    yelpProviderDuplicateDb.client,
+    yelpDuplicateLead.lead,
+  );
+  assertEqual(
+    yelpDuplicateResult.duplicateOfLeadId,
+    "lead-yelp-existing",
+    "Yelp provider external ID prevents duplicate processing",
+  );
+  assertEqual(
+    yelpProviderDuplicateDb.state.leads.length,
+    1,
+    "Yelp provider duplicate does not insert a second lead",
+  );
+
   const invalidGmail = leadIntake.normalizeGmailLeadBody({});
   assertEqual(
     invalidGmail.lead,
