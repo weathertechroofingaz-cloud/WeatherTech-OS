@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Electronic Signatures Phase 1 - DocuSign / Dropbox Sign Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add electronic signatures provider foundation`
+- Summary:
+  - Added the disabled-by-default electronic signature provider foundation for DocuSign and Dropbox Sign.
+  - Documented official provider OAuth, envelope/signature request, status, signed-document download, webhook/callback, test-mode, and production-send boundaries.
+  - Added provider abstraction helpers, deterministic signature request drafts, Customer 360 event labels, Communications readiness, Integration Center provider cards, and provider constraint support without sending live signature requests, uploading documents to providers, committing credentials, or activating provider writes.
+
 ### QuickBooks Online Phase 1 - Accounting Integration Foundation
 
 - Commit: `<this sprint commit>`

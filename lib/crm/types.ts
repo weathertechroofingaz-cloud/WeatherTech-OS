@@ -206,6 +206,8 @@ export type PaymentStatus = "pending" | "posted" | "failed" | "refunded";
 export type NotificationChannel = "email" | "sms" | "in_app";
 export type NotificationStatus = "queued" | "sent" | "read" | "dismissed";
 export type IntegrationProvider =
+  | "docusign"
+  | "dropbox_sign"
   | "google_calendar"
   | "gmail"
   | "google_maps"

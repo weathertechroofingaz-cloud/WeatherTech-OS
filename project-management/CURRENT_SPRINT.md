@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-QuickBooks Online Phase 1 - Accounting Integration Foundation
+Electronic Signatures Phase 1 - DocuSign / Dropbox Sign Foundation
 
 ## Objective
 
-Build the production-ready QuickBooks Online accounting integration foundation for WeatherTech Roofing LLC and IHC so customer, estimate, invoice, payment, and sync-readiness activity can be mapped into the existing CRM, Customer 360, Financial workspace, Integration Center, and integration audit log without activating live accounting synchronization or creating accounting records in QuickBooks.
+Build a provider-agnostic electronic signature foundation for DocuSign and Dropbox Sign so WeatherTech OS can safely prepare future signature requests, status tracking, Customer 360 activity, audit logging, retries, and Integration Center readiness without activating live providers.
 
 ## Owner
 
@@ -26,24 +26,23 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Inspect current official QuickBooks Online API documentation before implementation.
-- Accurately document officially supported QuickBooks Online Accounting API capabilities, OAuth requirements, company `realmId` selection, customer, estimate, invoice, payment, query, batch, CDC, sandbox, webhook, rate-limit, and unsupported/payment-processing boundaries.
-- Reuse Customer 360, Unified Lead Intake, Estimates, Jobs, Financial workspace, Integration Center, `integration_sync_logs`, provider architecture, and company routing.
-- Support WeatherTech Roofing LLC and IHC company routing for future QuickBooks Online company connections.
-- Add QuickBooks Online OAuth readiness, company selection readiness, mapping helpers, duplicate-prevention architecture, retry architecture, and audit logging foundation.
+- Inspect current official DocuSign and Dropbox Sign API documentation before implementation.
+- Accurately document officially supported provider capabilities, OAuth requirements, envelope/signature request surfaces, signed-document download, webhook/callback support, test-mode behavior, and unsupported/live-send boundaries.
+- Reuse Customer 360, Estimates, Jobs, Documents, Unified Lead Intake, Integration Center, `integration_sync_logs`, and existing provider architecture.
+- Support WeatherTech Roofing LLC and IHC company mapping for future DocuSign and Dropbox Sign account connections.
+- Add provider abstraction, OAuth readiness, envelope/document readiness, signature request mapping, signed-document status tracking language, Customer 360 event labels, audit logging support, and retry architecture.
 - Add truthful Integration Center readiness states: Not configured, OAuth required, Ready, Production disabled, Connected, and Sync failed.
-- Surface Customer 360 activity language for estimate export, invoice export, payment received, sync completed, sync failed, and configuration required when integration logs exist.
-- Add focused QuickBooks foundation tests and update migration-integrity and browser regression coverage.
+- Add focused electronic signature foundation tests and update migration-integrity and browser regression coverage.
 - Update setup documentation, module registry, changelog, sprint records, and safe server-only environment placeholders.
 
 ## Explicit Exclusions
 
 - Do not redesign the UI.
-- Do not build a separate accounting system.
-- Do not activate live QuickBooks Online synchronization.
-- Do not create invoices, customers, estimates, payments, or any other accounting records in QuickBooks.
-- Do not process payments.
-- Do not implement QuickBooks Payments live flows.
+- Do not activate live DocuSign or Dropbox Sign providers.
+- Do not send live signature requests.
+- Do not upload documents to providers.
+- Do not perform provider writes.
+- Do not add OAuth token exchange routes or webhook ingestion routes in this foundation sprint.
 - Do not fake connected provider status.
 - Do not weaken authentication or RLS.
 - Do not commit secrets.
@@ -53,21 +52,21 @@ Joe Harris
 
 ## Completion Criteria
 
-- Official QuickBooks Online capability findings are documented in repository docs with links to official Intuit documentation.
-- QuickBooks Online environment placeholders are documented in `.env.example` without secrets.
-- QuickBooks Online provider metadata is registered with honest Integration Center readiness and live sync disabled by default.
-- QuickBooks Online mapping helpers support customer, estimate, invoice, and payment export payload readiness without making provider writes.
-- Duplicate keys and request fingerprints are deterministic for future retry-safe exports.
-- Integration audit logs can represent QuickBooks Online activity after the additive provider migration is applied.
-- Customer 360 and communications surfaces understand QuickBooks Online sync activity labels when logs exist.
-- No accounting writes, live sync, payment processing, fake connection states, credentials, or provider activation are introduced.
+- Official DocuSign and Dropbox Sign capability findings are documented in repository docs with links to official documentation.
+- DocuSign and Dropbox Sign environment placeholders are documented in `.env.example` without secrets.
+- DocuSign and Dropbox Sign provider metadata is registered with honest Integration Center readiness and live signature requests disabled by default.
+- Provider-agnostic helpers support duplicate-safe signature request draft payload readiness without making provider writes.
+- Signature status/event labels can represent requested, viewed, completed, declined, expired, sync failed, and configuration required activity.
+- Integration audit logs can represent DocuSign and Dropbox Sign activity after the additive provider migration is applied.
+- Customer 360 and communications surfaces understand electronic signature provider activity when records/logs exist.
+- No provider requests, document uploads, provider writes, live sync, fake connection states, credentials, or provider activation are introduced.
 - If a migration is required, it is additive, transactionally wrapped, and non-destructive.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- QuickBooks Online foundation tests pass.
-- Existing Unified Lead Intake, Website, Yelp, Twilio, Gmail, Google Calendar, security/company-access, and migration-integrity tests pass.
+- Electronic signature foundation tests pass.
+- Existing Unified Lead Intake, Website, Yelp, Twilio, Gmail, Google Calendar, Google Business Profile, QuickBooks Online, security/company-access, and migration-integrity tests pass.
 - Relevant signed-in browser regression passes.
 - Final scope audit confirms no excluded work or unrelated files were changed.
 - One focused conventional commit is created and pushed.
@@ -81,9 +80,9 @@ Joe Harris
 - Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before product development begins.
-- Inspect existing Customer 360, Unified Lead Intake, Estimates, Jobs, Financial workspace, Communications, Integration Center, Supabase repository, integration logging, environment conventions, setup docs, and browser regression patterns before editing.
-- Inspect current official QuickBooks Online documentation and document supported, OAuth-required, company-selection, webhook, sandbox, accounting-entity, and unsupported capability boundaries.
-- Run QuickBooks Online integration foundation tests.
+- Inspect existing Customer 360, Estimates, Jobs, Documents, Unified Lead Intake, Communications, Integration Center, Supabase repository, integration logging, environment conventions, setup docs, and browser regression patterns before editing.
+- Inspect current official DocuSign and Dropbox Sign documentation and document supported, OAuth-required, envelope/request, status, signed-file, webhook/callback, test-mode, and unsupported capability boundaries.
+- Run electronic signature foundation tests.
 - Run lead-intake routing tests.
 - Run unified lead-intake service tests.
 - Run Website integration foundation tests.
@@ -91,23 +90,25 @@ Joe Harris
 - Run existing Twilio communications tests.
 - Run existing Google Workspace/Gmail tests.
 - Run existing Google Calendar scheduling tests.
+- Run Google Business Profile tests.
+- Run QuickBooks Online tests.
 - Run security and company-access tests.
 - Run migration-integrity tests.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for QuickBooks readiness, Integration Center, Customer 360, Financial workspace, CRM, and existing provider foundations.
+- Run targeted signed-in browser regression for electronic signature readiness, Integration Center, Customer 360, Documents, CRM, and existing provider foundations.
 - Run full signed-in browser regression where supported.
 - Clean all disposable regression records.
 
 ## Planned Commit Message
 
-`feat: add QuickBooks Online integration foundation`
+`feat: add electronic signatures provider foundation`
 
 ## Blockers
 
-- Live QuickBooks Online API access, OAuth app credentials, company `realmId` mapping, token storage, webhook configuration, accounting export activation, QuickBooks Payments, and production accounting writes require owner-controlled Intuit setup and are outside this repository-only foundation sprint.
+Live DocuSign/Dropbox Sign API access, OAuth app credentials, account mapping, token storage, webhook/callback configuration, document upload, signed-file download, and production signature requests require owner-controlled provider setup and are outside this repository-only foundation sprint.
 
 ## Final Status
 

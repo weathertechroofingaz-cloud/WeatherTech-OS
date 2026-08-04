@@ -7162,12 +7162,24 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("realm id env var quickbooks_realm_id_ihc") &&
         text.includes("official capability boundary") &&
         text.includes("payment processing") &&
+        text.includes("electronic signatures") &&
+        text.includes("docusign and dropbox sign provider foundation") &&
+        text.includes("native signature capture remains the only active signature workflow") &&
+        text.includes("/api/integrations/docusign/oauth/callback") &&
+        text.includes("/api/integrations/dropbox-sign/oauth/callback") &&
+        text.includes("signature, impersonation") &&
+        text.includes("request_signature, basic_account_info") &&
+        text.includes("docusign_account_id_weathertech") &&
+        text.includes("dropbox_sign_account_id_ihc") &&
+        text.includes("live docusign and dropbox sign requests are disabled") &&
         [
           "twilio",
           "gmail",
           "google calendar",
           "google business profile",
           "quickbooks online",
+          "docusign",
+          "dropbox sign",
           "yelp",
           "website lead capture",
           "gohighlevel",
@@ -7183,12 +7195,14 @@ async function testSettingsIntegrationCenter(tab) {
           "crm sync",
           "photos",
           "documents",
+          "signatures",
           "payments",
           "ai",
           "webhooks",
         ].every((capability) => text.includes(capability)) &&
         Boolean(section?.querySelector('[data-testid="quickbooks-online-foundation"]')) &&
-        cards.length >= 9
+        Boolean(section?.querySelector('[data-testid="electronic-signatures-foundation"]')) &&
+        cards.length >= 11
       );
     },
     "settings integration center",
@@ -8295,10 +8309,7 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
     "dispatch foreman",
   );
   await withAcceptedConfirm(tab, () =>
-    clickUnique(
-      tab.playwright.locator('xpath=//*[@data-testid="dispatch-schedule-form"]//button[@type="submit"]'),
-      "Save dispatch changes",
-    ),
+    clickVisibleDomSubmitByText(tab, "Save dispatch changes", "Save dispatch changes"),
   );
   const dispatchedJob = await waitForAsync(
     async () => {

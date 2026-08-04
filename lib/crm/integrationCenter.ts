@@ -5,6 +5,13 @@ import type {
   IntegrationSyncLogRecord,
 } from "./types";
 import {
+  docusignOAuthCallbackPath,
+  docusignScopes,
+  dropboxSignOAuthCallbackPath,
+  dropboxSignScopes,
+  electronicSignatureEnvVars,
+} from "./electronicSignatureFoundation";
+import {
   quickBooksOnlineEnvVars,
   quickBooksOnlineOAuthCallbackPath,
   quickBooksOnlineScopes,
@@ -21,6 +28,7 @@ export type IntegrationCapability =
   | "crm_sync"
   | "photos"
   | "documents"
+  | "signatures"
   | "payments"
   | "ai"
   | "webhooks";
@@ -34,6 +42,8 @@ export type IntegrationProviderId =
   | "website_forms"
   | "gohighlevel"
   | "quickbooks_online"
+  | "docusign"
+  | "dropbox_sign"
   | "future_provider";
 
 export type IntegrationProviderFamily =
@@ -42,6 +52,7 @@ export type IntegrationProviderFamily =
   | "operations"
   | "automation"
   | "financial"
+  | "documents"
   | "future";
 
 export type IntegrationConnectionState = "connected" | "not_connected";
@@ -117,6 +128,7 @@ export type IntegrationProviderMetadata = {
     | "reviews"
     | "website"
     | "automation"
+    | "signature"
     | "future";
   requiresCredentials: boolean;
   supportsOAuth: boolean;
@@ -175,6 +187,7 @@ export const integrationCapabilityLabels: Record<IntegrationCapability, string> 
   crm_sync: "CRM sync",
   photos: "Photos",
   documents: "Documents",
+  signatures: "Signatures",
   payments: "Payments",
   ai: "AI",
   webhooks: "Webhooks",
@@ -958,6 +971,218 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       "Configure Intuit OAuth and company realmIds later. Live QuickBooks sync, accounting writes, and payment processing are disabled.",
   },
   {
+    id: "docusign",
+    label: "DocuSign",
+    shortLabel: "DocuSign",
+    family: "documents",
+    description:
+      "Electronic signature foundation for envelopes, signed-document status, audit logging, retry planning, and Customer 360 signature events.",
+    connectionProviders: ["docusign"],
+    capabilities: ["documents", "signatures", "crm_sync", "webhooks"],
+    iconKey: "signature",
+    requiresCredentials: true,
+    supportsOAuth: true,
+    supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description:
+          "Server-side DocuSign OAuth client credentials for future eSignature API access.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "account_mapping",
+        label: "Account mapping",
+        description:
+          "Maps WeatherTech Roofing LLC and IHC to their approved DocuSign account IDs.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "connect_webhook",
+        label: "Connect webhook validation",
+        description:
+          "Server-side webhook validation is required before envelope status events are trusted.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+      {
+        id: "production_gate",
+        label: "Production request gate",
+        description:
+          "Signature requests and provider writes must remain disabled until owner-approved activation.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description:
+          "Confirm DocuSign OAuth credentials, redirect URI, scopes, and account consent before API access.",
+      },
+      {
+        id: "account_mapping",
+        label: "Company account mapping check",
+        description:
+          "Verify each DocuSign account maps to WeatherTech Roofing LLC or IHC without cross-company access.",
+      },
+      {
+        id: "envelope_mapping",
+        label: "Envelope mapping check",
+        description:
+          "Validate documents, recipients, signature tabs, duplicate keys, and request fingerprints before sending.",
+      },
+      {
+        id: "connect_webhook",
+        label: "Connect webhook check",
+        description:
+          "Validate DocuSign Connect webhook authenticity before updating signature statuses.",
+      },
+      {
+        id: "write_gate",
+        label: "Provider write gate",
+        description:
+          "Confirm live envelope creation and send operations remain disabled until owner approval.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: docusignOAuthCallbackPath,
+      scopes: docusignScopes,
+      summary:
+        "DocuSign requires OAuth consent before WeatherTech OS can create envelopes, retrieve status, or download signed documents.",
+    },
+    connectionSteps: [
+      "Create or select the approved DocuSign developer app.",
+      `Configure ${electronicSignatureEnvVars.docusignClientId}, ${electronicSignatureEnvVars.docusignClientSecret}, and ${electronicSignatureEnvVars.docusignRedirectUri} server-side.`,
+      `Map ${electronicSignatureEnvVars.docusignAccountIdWeatherTech} and ${electronicSignatureEnvVars.docusignAccountIdIhc} after owner-controlled account authorization.`,
+      "Configure and verify Connect webhook signing before accepting envelope events.",
+      "Validate envelope drafts, status mapping, signed-document download, retries, and audit logs in sandbox.",
+      "Keep live signature requests and provider writes disabled until a future owner-approved activation sprint.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause DocuSign envelope sync without deleting WeatherTech OS documents or signature history.",
+    reconnectSummary:
+      "A future reconnect will refresh OAuth consent, revalidate account mapping, and rerun webhook and envelope checks.",
+    summaryWhenDisconnected:
+      "Configure DocuSign OAuth, account IDs, and Connect webhook validation later. Live envelope creation and signature sending are disabled.",
+  },
+  {
+    id: "dropbox_sign",
+    label: "Dropbox Sign",
+    shortLabel: "Dropbox Sign",
+    family: "documents",
+    description:
+      "Electronic signature foundation for signature requests, signed files, callbacks, status tracking, audit logging, and retry planning.",
+    connectionProviders: ["dropbox_sign"],
+    capabilities: ["documents", "signatures", "crm_sync", "webhooks"],
+    iconKey: "signature",
+    requiresCredentials: true,
+    supportsOAuth: true,
+    supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description:
+          "Server-side Dropbox Sign OAuth client credentials for future signature request API access.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "account_mapping",
+        label: "Account mapping",
+        description:
+          "Maps WeatherTech Roofing LLC and IHC to their approved Dropbox Sign account or app routing.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "callback_validation",
+        label: "Callback validation",
+        description:
+          "Server-side callback verification is required before signature request events are trusted.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+      {
+        id: "production_gate",
+        label: "Production request gate",
+        description:
+          "Signature requests and provider writes must remain disabled until owner-approved activation.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description:
+          "Confirm Dropbox Sign OAuth credentials, redirect URI, scopes, and app approval before API access.",
+      },
+      {
+        id: "account_mapping",
+        label: "Company account mapping check",
+        description:
+          "Verify each Dropbox Sign account maps to WeatherTech Roofing LLC or IHC without cross-company access.",
+      },
+      {
+        id: "signature_request_mapping",
+        label: "Signature request mapping check",
+        description:
+          "Validate documents, signers, metadata, duplicate keys, and request fingerprints before sending.",
+      },
+      {
+        id: "callback",
+        label: "Callback check",
+        description:
+          "Validate Dropbox Sign event hashes or callback signatures before updating signature statuses.",
+      },
+      {
+        id: "write_gate",
+        label: "Provider write gate",
+        description:
+          "Confirm live signature_request send operations remain disabled until owner approval.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: dropboxSignOAuthCallbackPath,
+      scopes: dropboxSignScopes,
+      summary:
+        "Dropbox Sign OAuth is required before WeatherTech OS can manage signature requests, callbacks, or signed files.",
+    },
+    connectionSteps: [
+      "Create or select the approved Dropbox Sign API app.",
+      `Configure ${electronicSignatureEnvVars.dropboxSignClientId}, ${electronicSignatureEnvVars.dropboxSignClientSecret}, and ${electronicSignatureEnvVars.dropboxSignRedirectUri} server-side.`,
+      `Map ${electronicSignatureEnvVars.dropboxSignAccountIdWeatherTech} and ${electronicSignatureEnvVars.dropboxSignAccountIdIhc} after owner-controlled account authorization.`,
+      "Configure and verify account or app callbacks before accepting signature request events.",
+      "Validate request drafts, test-mode boundaries, signed-file download, retries, and audit logs in sandbox.",
+      "Keep live signature requests and provider writes disabled until a future owner-approved activation sprint.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause Dropbox Sign request sync without deleting WeatherTech OS documents or signature history.",
+    reconnectSummary:
+      "A future reconnect will refresh OAuth consent, revalidate account mapping, and rerun callback and request checks.",
+    summaryWhenDisconnected:
+      "Configure Dropbox Sign OAuth, account mapping, and callback validation later. Live signature_request sending is disabled.",
+  },
+  {
     id: "future_provider",
     label: "Future Providers",
     shortLabel: "Future",
@@ -1092,6 +1317,12 @@ function getRelatedActivityCount(snapshot: CrmSnapshot, metadata: IntegrationPro
     return snapshot.integrationSyncLogs.filter((log) => log.provider === "quickbooks_online").length;
   }
 
+  if (metadata.id === "docusign" || metadata.id === "dropbox_sign") {
+    return snapshot.integrationSyncLogs.filter((log) =>
+      metadata.connectionProviders.includes(log.provider),
+    ).length;
+  }
+
   return 0;
 }
 
@@ -1133,6 +1364,14 @@ function getRelatedActivityLatestAt(snapshot: CrmSnapshot, metadata: Integration
     return getLatestTimestamp(
       snapshot.integrationSyncLogs
         .filter((log) => log.provider === "quickbooks_online")
+        .map((log) => log.completed_at ?? log.last_attempted_at ?? log.updated_at),
+    );
+  }
+
+  if (metadata.id === "docusign" || metadata.id === "dropbox_sign") {
+    return getLatestTimestamp(
+      snapshot.integrationSyncLogs
+        .filter((log) => metadata.connectionProviders.includes(log.provider))
         .map((log) => log.completed_at ?? log.last_attempted_at ?? log.updated_at),
     );
   }
@@ -1189,7 +1428,9 @@ function getConnectionSummary(
       (metadata.id === "website_forms" ||
         metadata.id === "yelp" ||
         metadata.id === "google_business_profile" ||
-        metadata.id === "quickbooks_online") &&
+        metadata.id === "quickbooks_online" ||
+        metadata.id === "docusign" ||
+        metadata.id === "dropbox_sign") &&
       (syncState.relatedActivityCount > 0 || syncState.total > 0)
     ) {
       return `${metadata.label} activity is being tracked, but no formal provider connection record exists.`;

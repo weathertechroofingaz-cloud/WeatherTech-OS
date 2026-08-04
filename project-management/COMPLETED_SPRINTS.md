@@ -4,6 +4,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Electronic Signatures Phase 1 - DocuSign / Dropbox Sign Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add electronic signatures provider foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added the disabled-by-default DocuSign and Dropbox Sign electronic signature provider foundation.
+  - Added provider abstraction helpers, OAuth/account readiness, signature request draft mapping, status event labels, retry planning, Integration Center readiness, Communications visibility, and audit-log provider support.
+  - Added additive provider constraint migration `0031_electronic_signatures_foundation.sql`.
+  - Kept live signature requests, document uploads, provider writes, OAuth token exchange, webhook ingestion, fake connection status, and credentials out of this sprint.
+
 ### Core Office Operations Hardening
 
 - Commit: `077b050088c150b80d89d244a7980613c65c1b61`

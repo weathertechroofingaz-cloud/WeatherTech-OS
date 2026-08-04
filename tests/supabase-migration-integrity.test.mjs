@@ -108,6 +108,10 @@ const expectedMigrations = [
     "0030_quickbooks_online_foundation.sql",
     "36c7d26eac4c2ae8a470b5540df4684c6f19fb2166bf8890ac3aa1dc56aeaaaa",
   ],
+  [
+    "0031_electronic_signatures_foundation.sql",
+    "d3d12e6c5f407481a728c8c05524f8738655a8bb1cad6299dc9937eb76f0f313",
+  ],
 ];
 
 const files = fs
@@ -160,7 +164,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0030 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0031 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -182,6 +186,7 @@ const gmailWorkspaceIndex = files.indexOf("0027_gmail_workspace_email_foundation
 const googleCalendarIndex = files.indexOf("0028_google_calendar_scheduling_foundation.sql");
 const googleBusinessProfileIndex = files.indexOf("0029_google_business_profile_foundation.sql");
 const quickBooksOnlineIndex = files.indexOf("0030_quickbooks_online_foundation.sql");
+const electronicSignaturesIndex = files.indexOf("0031_electronic_signatures_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -244,8 +249,16 @@ if (
   failures.push("QuickBooks Online migration must order after Google Business Profile foundation.");
 }
 
-if (quickBooksOnlineIndex !== files.length - 1) {
-  failures.push("QuickBooks Online foundation migration must remain last.");
+if (
+  quickBooksOnlineIndex === -1 ||
+  electronicSignaturesIndex === -1 ||
+  !(quickBooksOnlineIndex < electronicSignaturesIndex)
+) {
+  failures.push("Electronic Signatures migration must order after QuickBooks Online foundation.");
+}
+
+if (electronicSignaturesIndex !== files.length - 1) {
+  failures.push("Electronic Signatures foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -702,6 +715,11 @@ const integrationProvidersWithQuickBooks = [
   "quickbooks_online",
   ...integrationProvidersWithGbp,
 ].sort();
+const integrationProvidersWithElectronicSignatures = [
+  "docusign",
+  "dropbox_sign",
+  ...integrationProvidersWithQuickBooks,
+].sort();
 const leadSourceMappingProvidersWithGbp = [
   "google_business_profile",
   "gohighlevel",
@@ -837,6 +855,56 @@ if (!quickBooksOnlineMigration.includes("quickbooks_online")) {
   failures.push("0030 must add the QuickBooks Online provider key.");
 }
 
+const electronicSignaturesMigration = fs.readFileSync(
+  path.join(migrationsDir, "0031_electronic_signatures_foundation.sql"),
+  "utf8",
+);
+
+for (const constraintName of [
+  "integration_connections_provider_check",
+  "integration_sync_logs_provider_check",
+]) {
+  const providers = readProviderCheckValuesFromMigration({
+    migration: electronicSignaturesMigration,
+    migrationLabel: "0031",
+    constraintName,
+  });
+
+  if (
+    JSON.stringify(providers) !==
+    JSON.stringify(integrationProvidersWithElectronicSignatures)
+  ) {
+    failures.push(
+      `0031 ${constraintName} must allow exactly ${integrationProvidersWithElectronicSignatures.join(", ")}.`,
+    );
+  }
+
+  for (const requiredProvider of ["docusign", "dropbox_sign", "quickbooks_online"]) {
+    if (!providers.includes(requiredProvider)) {
+      failures.push(`0031 ${constraintName} must allow ${requiredProvider}.`);
+    }
+  }
+
+  if (providers.includes("unknown_provider")) {
+    failures.push(`0031 ${constraintName} must reject unknown_provider.`);
+  }
+}
+
+if (!electronicSignaturesMigration.trim().startsWith("begin;") ||
+    !electronicSignaturesMigration.trim().endsWith("commit;")) {
+  failures.push("0031 must be wrapped in an explicit transaction.");
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(electronicSignaturesMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(electronicSignaturesMigration)) {
+  failures.push("0031 must not add broad USING/WITH CHECK (true) RLS policies.");
+}
+
+if (!electronicSignaturesMigration.includes("docusign") ||
+    !electronicSignaturesMigration.includes("dropbox_sign")) {
+  failures.push("0031 must add DocuSign and Dropbox Sign provider keys.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -848,7 +916,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0030.",
+  "Verified raw filename order matches numeric order from 0001 through 0031.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -871,6 +939,9 @@ console.log(
 console.log(
   "Verified 0029_google_business_profile_foundation.sql precedes 0030_quickbooks_online_foundation.sql.",
 );
+console.log(
+  "Verified 0030_quickbooks_online_foundation.sql precedes 0031_electronic_signatures_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -886,6 +957,9 @@ console.log(
 );
 console.log(
   "Verified 0030 adds quickbooks_online to integration provider constraints without broad RLS policies.",
+);
+console.log(
+  "Verified 0031 adds docusign and dropbox_sign to integration provider constraints without broad RLS policies.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

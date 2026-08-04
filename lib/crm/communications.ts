@@ -33,6 +33,8 @@ export type CommunicationProvider =
   | "google_calendar"
   | "google_business"
   | "quickbooks"
+  | "docusign"
+  | "dropbox_sign"
   | "yelp"
   | "gohighlevel"
   | "website"
@@ -235,6 +237,8 @@ export const inboxProviderLabels: Record<CommunicationProvider, string> = {
   google_calendar: "Google Calendar",
   google_business: "Google Business Profile",
   quickbooks: "QuickBooks Online",
+  docusign: "DocuSign",
+  dropbox_sign: "Dropbox Sign",
   gohighlevel: "GoHighLevel",
   internal: "Internal",
   manual_unknown: "Manual/unknown",
@@ -444,6 +448,14 @@ function getInboxProviderFromText(value: string | null | undefined): Communicati
     return "quickbooks";
   }
 
+  if (normalized.includes("docusign")) {
+    return "docusign";
+  }
+
+  if (normalized.includes("dropboxsign") || normalized.includes("hellosign")) {
+    return "dropbox_sign";
+  }
+
   if (normalized.includes("twilio") || normalized.includes("sms")) {
     return "twilio";
   }
@@ -573,6 +585,14 @@ function getIntegrationInboxProvider(provider: IntegrationProvider): Communicati
 
   if (provider === "quickbooks_online") {
     return "quickbooks";
+  }
+
+  if (provider === "docusign") {
+    return "docusign";
+  }
+
+  if (provider === "dropbox_sign") {
+    return "dropbox_sign";
   }
 
   return "manual_unknown";
@@ -2280,17 +2300,20 @@ function getProviderConnection(
     provider === "google_calendar" ||
     provider === "gohighlevel" ||
     provider === "quickbooks" ||
+    provider === "docusign" ||
+    provider === "dropbox_sign" ||
     provider === "website" ||
     provider === "yelp" ||
     provider === "google_business"
   ) {
-    return connections.find((connection) =>
+    const connectionProvider =
       provider === "google_business"
-        ? connection.provider === "google_business_profile"
+        ? "google_business_profile"
         : provider === "quickbooks"
-          ? connection.provider === "quickbooks_online"
-        : connection.provider === provider,
-    );
+          ? "quickbooks_online"
+          : provider;
+
+    return connections.find((connection) => connection.provider === connectionProvider);
   }
 
   return undefined;
@@ -2339,6 +2362,16 @@ export function buildCommunicationProviderReadiness(
       provider: "quickbooks",
       label: "QuickBooks Online",
       detail: "Accounting sync logs are visible without creating QuickBooks customers, estimates, invoices, or payments.",
+    },
+    {
+      provider: "docusign",
+      label: "DocuSign",
+      detail: "Envelope readiness and signature status sync logs are visible without sending live signature requests.",
+    },
+    {
+      provider: "dropbox_sign",
+      label: "Dropbox Sign",
+      detail: "Signature request readiness and callback sync logs are visible without sending live signature requests.",
     },
     {
       provider: "website",

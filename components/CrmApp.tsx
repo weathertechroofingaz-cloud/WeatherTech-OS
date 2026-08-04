@@ -210,6 +210,18 @@ import {
   googleBusinessProfileOfficialCapabilities,
 } from "../lib/crm/googleBusinessProfileLeadCapture";
 import {
+  docusignApiBaseUrl,
+  docusignOAuthCallbackPath,
+  docusignScopes,
+  dropboxSignApiBaseUrl,
+  dropboxSignOAuthCallbackPath,
+  dropboxSignScopes,
+  electronicSignatureCompanySlots,
+  electronicSignatureOfficialCapabilities,
+  electronicSignatureProviderIds,
+  getElectronicSignatureProviderLabel,
+} from "../lib/crm/electronicSignatureFoundation";
+import {
   quickBooksOnlineApiBaseUrl,
   quickBooksOnlineCompanySlots,
   quickBooksOnlineOAuthCallbackPath,
@@ -4597,8 +4609,17 @@ function getDocumentLibraryDetails(
     },
     ...signatures.map((signature) => ({
       id: `signature-${signature.id}`,
-      label: signature.status === "signed" ? "Signature captured" : "Signature requested",
-      detail: signature.signer_name,
+      label:
+        signature.status === "signed"
+          ? "Signature completed"
+          : signature.status === "viewed"
+            ? "Signature viewed"
+            : signature.status === "declined"
+              ? "Signature declined"
+              : signature.status === "expired"
+                ? "Signature expired"
+                : "Signature requested",
+      detail: `${getElectronicSignatureProviderLabel(signature.provider)} - ${signature.signer_name}`,
       occurredAt: signature.signed_at ?? signature.updated_at,
     })),
     related.inspection
@@ -19411,6 +19432,8 @@ function getCustomerIntegrationProviders(providers: IntegrationProviderReadiness
     "website_forms",
     "google_business_profile",
     "yelp",
+    "docusign",
+    "dropbox_sign",
     "quickbooks_online",
   ];
 
@@ -39532,9 +39555,10 @@ const integrationCards = [
     detail: "Server-only token checks, location ID visibility, and sync-log placeholders.",
   },
   {
-    name: "DocuSign / Native signatures",
-    status: "Native active",
-    detail: "Built-in signature capture now works; DocuSign can be added as a provider.",
+    name: "DocuSign / Dropbox Sign / Native signatures",
+    status: "Foundation ready",
+    detail:
+      "Built-in signature capture works; DocuSign and Dropbox Sign provider mapping, status tracking, retries, and audit logs are prepared without live sending.",
   },
   {
     name: "QuickBooks Online",
@@ -43059,6 +43083,7 @@ const integrationProviderIconMap: Record<
   mail: Mail,
   phone: Phone,
   reviews: Star,
+  signature: Pencil,
   website: Globe2,
 };
 
@@ -44072,6 +44097,172 @@ function QuickBooksOnlineFoundationPanel() {
   );
 }
 
+function ElectronicSignatureFoundationPanel() {
+  const readinessStates = [
+    { label: "Not Configured", tone: "slate" as const },
+    { label: "OAuth Required", tone: "amber" as const },
+    { label: "Ready", tone: "blue" as const },
+    { label: "Production Disabled", tone: "amber" as const },
+    { label: "Connected", tone: "green" as const },
+    { label: "Sync Failed", tone: "red" as const },
+  ];
+  const getSignatureCapabilityTone = (
+    status: (typeof electronicSignatureOfficialCapabilities)[number]["status"],
+  ) => {
+    if (status === "supported") return "blue" as const;
+    if (status === "oauth_required" || status === "production_disabled") {
+      return "amber" as const;
+    }
+
+    return "slate" as const;
+  };
+  const providerSummaries = [
+    {
+      provider: "docusign" as const,
+      label: getElectronicSignatureProviderLabel("docusign"),
+      callback: docusignOAuthCallbackPath,
+      scopes: docusignScopes.join(", "),
+      apiBase: docusignApiBaseUrl,
+      accountEnvPrefix: "DOCUSIGN_ACCOUNT_ID",
+    },
+    {
+      provider: "dropbox_sign" as const,
+      label: getElectronicSignatureProviderLabel("dropbox_sign"),
+      callback: dropboxSignOAuthCallbackPath,
+      scopes: dropboxSignScopes.join(", "),
+      apiBase: dropboxSignApiBaseUrl,
+      accountEnvPrefix: "DROPBOX_SIGN_ACCOUNT_ID",
+    },
+  ];
+
+  return (
+    <section
+      className="rounded-lg border border-violet-200 bg-violet-50 p-5"
+      data-testid="electronic-signatures-foundation"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-violet-700">
+            Electronic Signatures
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            DocuSign and Dropbox Sign provider foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            WeatherTech OS is prepared for provider-agnostic signature request
+            mapping, envelope/request status tracking, signed-document status
+            events, audit logs, retries, webhooks, and Customer 360 activity.
+            Native signature capture remains the only active signature workflow;
+            live DocuSign and Dropbox Sign requests are disabled until
+            owner-controlled OAuth, webhook validation, sandbox testing, and
+            explicit activation are complete.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Production Disabled" tone="amber" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {readinessStates.map((state) => (
+          <ProviderStatusBadge
+            key={state.label}
+            label={state.label}
+            tone={state.tone}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="Providers" value={electronicSignatureProviderIds.length} />
+        <ProfileStat label="Companies" value={electronicSignatureCompanySlots.length} />
+        <ProfileStat label="Live requests" value="Disabled" />
+        <ProfileStat label="Provider writes" value="Disabled" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Provider Readiness
+          </p>
+          {providerSummaries.map((provider) => (
+            <div
+              key={provider.provider}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{provider.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    OAuth callback {provider.callback}; scopes {provider.scopes};
+                    API base {provider.apiBase}.
+                  </p>
+                </div>
+                <ProviderStatusBadge label="OAuth required" tone="amber" />
+              </div>
+              <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
+                Server-side account mapping uses{" "}
+                {`${provider.accountEnvPrefix}_WEATHERTECH`} and{" "}
+                {`${provider.accountEnvPrefix}_IHC`}.
+              </p>
+            </div>
+          ))}
+          <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <p className="font-bold text-slate-950">Company Mapping</p>
+            <div className="mt-3 grid gap-2">
+              {electronicSignatureCompanySlots.map((slot) => (
+                <div
+                  key={slot.key}
+                  className="flex flex-col gap-1 rounded-md bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <span className="font-semibold text-slate-900">{slot.label}</span>
+                  <span className="text-slate-500">
+                    DocuSign {slot.docusignAccountIdEnvVar}; Dropbox Sign{" "}
+                    {slot.dropboxSignAccountIdEnvVar}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Official Capability Boundary
+          </p>
+          {electronicSignatureOfficialCapabilities.map((capability) => (
+            <div
+              key={`${capability.provider}-${capability.key}`}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">
+                    {getElectronicSignatureProviderLabel(capability.provider)} -{" "}
+                    {capability.label}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    {capability.summary}
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={capability.status.replace(/_/g, " ")}
+                  tone={getSignatureCapabilityTone(capability.status)}
+                />
+              </div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm leading-6 text-amber-900">
+            Owner setup requires approved DocuSign and/or Dropbox Sign apps,
+            server-side OAuth credentials, company account mapping, webhook
+            verification, sandbox validation, provider-write gates, and explicit
+            production activation. No provider credentials are stored in browser
+            code and no live signature requests are sent from this foundation.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProviderActionButton({
   action,
   onClick,
@@ -44556,6 +44747,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <YelpLeadCaptureFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <ElectronicSignatureFoundationPanel />
       </div>
 
       <div className="mt-5">
