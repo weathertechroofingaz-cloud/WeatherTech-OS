@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### Production Deployment Phase 1 - Private Staging Deployment
+
+- Commit: `<this sprint commit>`
+- Message: `feat: prepare private staging deployment`
+- Summary:
+  - Added private staging health and readiness endpoints that report safe runtime/dependency status without exposing secrets or customer records.
+  - Added staging deployment metadata, environment and safety-gate inventory, owner setup documentation, Supabase Auth redirect guidance, monitoring/rollback runbook, and browser/test coverage.
+  - Did not deploy, run remote migrations, activate providers, change `.env.local`, alter DNS, commit credentials, weaken authentication/RLS, or fake deployment readiness.
+
 ### Production Activation Phase 1 - Guided Owner Setup and Launch Control
 
 - Commit: `<this sprint commit>`

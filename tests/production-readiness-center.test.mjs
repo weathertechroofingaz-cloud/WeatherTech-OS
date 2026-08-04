@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -319,7 +319,17 @@ try {
     );
   }
 
-  const readinessModule = await import(pathToFileURL(join(outDir, "productionReadiness.js")));
+  const compiledReadinessPath = [
+    join(outDir, "productionReadiness.js"),
+    join(outDir, "crm", "productionReadiness.js"),
+    join(outDir, "lib", "crm", "productionReadiness.js"),
+  ].find((candidate) => existsSync(candidate));
+
+  if (!compiledReadinessPath) {
+    throw new Error("Could not locate compiled production readiness module.");
+  }
+
+  const readinessModule = await import(pathToFileURL(compiledReadinessPath));
   const center = readinessModule.buildProductionReadinessCenter(emptySnapshot());
 
   assert(center.score > 0, "Production readiness score is calculated");
@@ -336,6 +346,26 @@ try {
   assert(
     center.blockers.some((blocker) => blocker.includes("Live integrations remain disabled")),
     "Live integration blocker is present",
+  );
+  assertEqual(
+    center.stagingDeploymentMetadata.healthEndpoint,
+    "/api/health",
+    "Health endpoint is exposed in deployment metadata",
+  );
+  assertEqual(
+    center.stagingDeploymentMetadata.readinessEndpoint,
+    "/api/readiness",
+    "Readiness endpoint is exposed in deployment metadata",
+  );
+  assertEqual(
+    center.stagingDeploymentMetadata.productionActivationStatus,
+    "not_granted",
+    "Production activation remains unapproved in browser metadata",
+  );
+  assertEqual(
+    center.stagingDeploymentMetadata.liveProviderWritesStatus,
+    "disabled",
+    "Provider writes remain disabled in browser metadata",
   );
   assert(
     center.requiredMigrations.includes("0031_electronic_signatures_foundation.sql"),
@@ -519,6 +549,19 @@ try {
   assert(
     unknownEnvironmentInventory.some((check) => check.status === "unknown"),
     "Browser-readiness environment inventory stays unknown until server-side validation",
+  );
+  [
+    "WTOS_DEPLOYMENT_ENV",
+    "WTOS_STAGING_URL",
+    "WTOS_PRODUCTION_APPROVED",
+    "WTOS_CUSTOMER_PORTAL_ENABLED",
+    "WTOS_AUTOMATED_CUSTOMER_NOTIFICATIONS_ENABLED",
+    "WTOS_PUBLIC_REGISTRATION_ENABLED",
+  ].forEach((envName) =>
+    assert(
+      unknownEnvironmentInventory.some((check) => check.name === envName),
+      `${envName} is included in the staging environment inventory`,
+    ),
   );
 
   const validatedEnvironmentInventory = readinessModule.buildProductionEnvironmentInventory({

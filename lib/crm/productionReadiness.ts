@@ -14,6 +14,10 @@ import {
   twilioEnvVars,
 } from "./integrations";
 import { googleBusinessProfileEnvVars } from "./googleBusinessProfileLeadCapture";
+import {
+  buildPrivateStagingEnvironmentMetadata,
+  type DeploymentEnvironmentMetadata,
+} from "../deployment/stagingReadiness";
 
 const websiteEnvVars = {
   enabled: "WEBSITE_INTAKE_ENABLED",
@@ -188,6 +192,7 @@ export type ProductionReadinessCenter = {
   scoreLabel: string;
   overallStatus: ProductionReadinessState;
   overallSummary: string;
+  stagingDeploymentMetadata: DeploymentEnvironmentMetadata;
   environmentStatus: ProductionReadinessCheck;
   migrationStatus: ProductionReadinessCheck;
   databaseStatus: ProductionReadinessCheck;
@@ -1336,11 +1341,23 @@ export function buildProductionEnvironmentInventory(
       "deployment",
       "Deployment and Supabase",
       [
+        { name: "WTOS_DEPLOYMENT_ENV", classification: "required_before_deployment" },
+        { name: "NEXT_PUBLIC_APP_ENV", classification: "optional" },
+        { name: "WTOS_DEPLOYMENT_PROVIDER", classification: "optional" },
+        { name: "WTOS_STAGING_URL", classification: "required_before_deployment" },
         { name: "NEXT_PUBLIC_SUPABASE_URL", classification: "required_before_deployment" },
         { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", classification: "required_before_deployment" },
         { name: "SUPABASE_SERVICE_ROLE_KEY", classification: "required_before_deployment" },
         { name: "NEXT_PUBLIC_APP_URL", classification: "required_before_deployment" },
+        { name: "WTOS_PRODUCTION_APPROVED", classification: "disabled_safety_flag" },
+        { name: "WTOS_CUSTOMER_PORTAL_ENABLED", classification: "disabled_safety_flag" },
+        {
+          name: "WTOS_AUTOMATED_CUSTOMER_NOTIFICATIONS_ENABLED",
+          classification: "disabled_safety_flag",
+        },
+        { name: "WTOS_PUBLIC_REGISTRATION_ENABLED", classification: "disabled_safety_flag" },
         { name: "PRODUCTION_HEALTHCHECK_URL", classification: "optional" },
+        { name: "MONITORING_HEALTHCHECK_URL", classification: "optional" },
       ],
       env,
     ),
@@ -2075,6 +2092,7 @@ export function buildProductionReadinessCenter(snapshot: CrmSnapshot): Productio
     overallStatus: blockers.length ? "production_disabled" : "ready_for_activation",
     overallSummary:
       "WeatherTech OS has a strong internal operating-system foundation, but production deployment and live integration activation remain gated by owner setup, migration verification, credentials, OAuth, webhooks, monitoring, and final regression evidence.",
+    stagingDeploymentMetadata: buildPrivateStagingEnvironmentMetadata(),
     environmentStatus,
     migrationStatus,
     databaseStatus,

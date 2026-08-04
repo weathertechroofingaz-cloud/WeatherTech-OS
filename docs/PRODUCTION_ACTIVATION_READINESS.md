@@ -37,6 +37,23 @@ The application includes a Production Readiness Center under the existing admini
 
 The center reports readiness conservatively. Missing credentials, OAuth setup, pending migration verification, missing webhook configuration, disabled production gates, absent monitoring, or missing regression evidence must not display as green.
 
+## Private Staging Deployment
+
+Production Deployment Phase 1 adds repository-side preparation for a private staging deployment. The staging deployment is for controlled owner and employee testing only; it is not final public production launch.
+
+Permanent staging runbook: [Private Staging Deployment](./PRIVATE_STAGING_DEPLOYMENT.md).
+
+Prepared staging readiness artifacts:
+
+- `GET /api/health` reports only process health and safe deployment metadata.
+- `GET /api/readiness` reports dependency readiness and returns a blocked status while staging prerequisites are incomplete.
+- Readiness checks distinguish runtime health, dependency readiness, and final production approval.
+- Readiness checks never return customer records, database credentials, provider tokens, stack traces, or secret values.
+- Live provider writes, public intake, customer portal access, public registration, automated customer notifications, accounting writes, calendar writes, and signature requests remain disabled by default.
+- Staging deployment status is not marked successful unless a real HTTPS staging URL, deployed commit, health check, readiness check, auth configuration, and browser regression evidence exist.
+
+The current repository environment does not contain a committed deployment-provider project file or deployment credentials. If the deployment provider requires login, billing, organization selection, or secret entry, the owner must complete that step outside the repository and then resume validation with the staging URL.
+
 ## Guided Launch Control
 
 Production Activation Phase 1 adds a launch-control layer to the existing Production Readiness Center. It is a guided owner setup and controlled-test workflow, not a deployment mechanism.
@@ -275,6 +292,18 @@ Before production activation, the owner must verify:
 - Website: validate HMAC, allowed origins, source IDs, abuse controls, and dry-run intake.
 - Monitoring: configure uptime, error, webhook, and provider failure alert destinations.
 - Backups: confirm database backup, restore, migration rollback, and launch rollback owners.
+
+## Staging Deployment Checklist
+
+- Hosting: owner-approved provider project selected, repository root confirmed, `main` branch selected, and Next.js build command set to `npm run build`.
+- Environment: staging variables configured in hosting provider settings, not committed to Git.
+- URL: provider-generated HTTPS staging URL recorded in `WTOS_STAGING_URL` and `NEXT_PUBLIC_APP_URL`.
+- Supabase: project reference, migration history, RLS behavior, and auth redirect URLs verified.
+- Health: `/api/health` returns `200` and reports process health only.
+- Readiness: `/api/readiness` returns truthful `ready`, `warning`, or `blocked` state without exposing secrets or records.
+- Browser: signed-in staging regression covers Dashboard, Customer 360, Leads, Estimates, Jobs, Inspections, Dispatch, Documents, Communications, Integration Center, Production Readiness Center, Website & Marketing, Financial workspace, provider-disabled states, and mobile smoke coverage.
+- Safety: live provider writes, public intake, public registration, customer portal, accounting writes, calendar writes, signature requests, and customer notifications remain disabled.
+- Rollback: previous deployment, disabled-provider flags, Supabase backup expectations, test-record cleanup, and rollback owner are documented.
 
 ## Readiness Verdict
 

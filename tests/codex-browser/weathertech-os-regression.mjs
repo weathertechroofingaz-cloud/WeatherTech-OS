@@ -6499,11 +6499,11 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
     estimateTitle,
   );
 
-  const savedEstimate = await findEstimateByTitle(env, estimateTitle);
-
-  if (!savedEstimate) {
-    throw new Error("Created estimate was not found through Supabase.");
-  }
+  const savedEstimate = await waitForAsync(
+    () => findEstimateByTitle(env, estimateTitle),
+    "created estimate persistence",
+    30000,
+  );
 
   if (savedEstimate.status !== "draft") {
     throw new Error(`Saved estimate status was ${savedEstimate.status}.`);
@@ -7262,7 +7262,7 @@ async function testSettingsIntegrationCenter(tab) {
   return result;
 }
 
-async function testProductionReadinessCenter(browser, tab) {
+async function testProductionReadinessCenter(browser, tab, baseUrl) {
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Readiness");
   await waitFor(
@@ -7281,6 +7281,12 @@ async function testProductionReadinessCenter(browser, tab) {
         text.includes("last validation") &&
         text.includes("last regression") &&
         text.includes("last migration") &&
+        text.includes("private staging deployment") &&
+        text.includes("health checks and safe deployment metadata") &&
+        text.includes("/api/health") &&
+        text.includes("/api/readiness") &&
+        text.includes("provider writes") &&
+        text.includes("production activation") &&
         text.includes("0031_electronic_signatures_foundation.sql") &&
         text.includes("remaining blockers") &&
         text.includes("do not deploy or activate") &&
@@ -7312,6 +7318,10 @@ async function testProductionReadinessCenter(browser, tab) {
         text.includes("environment readiness inventory") &&
         text.includes("server-side validation, redacted by design") &&
         text.includes("twilio_outbound_sms_enabled") &&
+        text.includes("wtos_deployment_env") &&
+        text.includes("wtos_staging_url") &&
+        text.includes("wtos_production_approved") &&
+        text.includes("wtos_customer_portal_enabled") &&
         text.includes("google_gmail_send_enabled") &&
         text.includes("quickbooks_accounting_writes_enabled") &&
         text.includes("three-company mapping guidance") &&
@@ -7360,6 +7370,45 @@ async function testProductionReadinessCenter(browser, tab) {
     "production readiness center",
     15000,
   );
+
+  const healthResponse = await fetch(new URL("/api/health", baseUrl), { cache: "no-store" });
+  const health = await healthResponse.json();
+  const readinessResponse = await fetch(new URL("/api/readiness", baseUrl), {
+    cache: "no-store",
+  });
+  const readiness = await readinessResponse.json();
+  const serializedEndpoints = JSON.stringify({ health, readiness }).toLowerCase();
+  const endpointResult = {
+    healthStatus: healthResponse.status,
+    readinessStatus: readinessResponse.status,
+    healthService: health?.service,
+    readinessService: readiness?.service,
+    readinessState: readiness?.status,
+    exposesSecrets:
+      serializedEndpoints.includes("service_role") ||
+      serializedEndpoints.includes("auth_token") ||
+      serializedEndpoints.includes("client_secret"),
+  };
+
+  if (endpointResult.healthStatus !== 200 || endpointResult.healthService !== "WeatherTech OS") {
+    throw new Error(
+      `Production health endpoint failed: ${JSON.stringify(endpointResult)}`,
+    );
+  }
+
+  if (
+    ![200, 503].includes(endpointResult.readinessStatus) ||
+    endpointResult.readinessService !== "WeatherTech OS" ||
+    !["ready", "blocked", "warning"].includes(endpointResult.readinessState)
+  ) {
+    throw new Error(
+      `Production readiness endpoint returned an invalid response: ${JSON.stringify(endpointResult)}`,
+    );
+  }
+
+  if (endpointResult.exposesSecrets) {
+    throw new Error("Production readiness endpoints expose secret-shaped values.");
+  }
 
   const desktopOverflow = await tab.playwright.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 8,
@@ -9570,10 +9619,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Restore inspection confirmation did not explain the action.");
   }
 
-  await clickVisibleDomButtonByText(
-    tab,
-    "Confirm restore",
+  await clickUnique(
+    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
     "Confirm restore inspection",
+    { retryTransientClick: true },
   );
   await waitForAsync(
     async () => {
@@ -10402,7 +10451,7 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("production-readiness")) {
       await record("Production Readiness Center reports deployment and provider activation blockers", () =>
-        testProductionReadinessCenter(browser, tab),
+        testProductionReadinessCenter(browser, tab, baseUrl),
       );
     }
 

@@ -25,6 +25,7 @@ Current repository tests include:
 - `tests/quickbooks-online-foundation.test.mjs` for QuickBooks Online official capability flags, OAuth/company readiness, duplicate-safe customer/estimate/invoice/payment mappings, production write gates, and Integration Center provider registration.
 - `tests/electronic-signatures-foundation.test.mjs` for DocuSign and Dropbox Sign official capability flags, OAuth/account readiness, duplicate-safe signature request drafts, disabled live request gates, Customer 360 event labels, provider retry planning, Communications readiness, and Integration Center provider registration.
 - `tests/production-readiness-center.test.mjs` for deployment readiness scoring, owner setup requirements, provider activation guides, guided launch-control sequence, launch gates, pending migration inventory, redacted environment readiness, three-company mapping guidance, controlled-test plans, migration checklist evidence, and non-green production activation gating.
+- `tests/staging-deployment-readiness.test.mjs` for private staging health/readiness metadata, required staging environment variables, secret redaction, disabled provider safety gates, Supabase reachability classification, production approval gating, and customer portal/public registration safety flags.
 - Additional validation may be embedded in browser regression flows.
 
 When a sprint changes routing, provider readiness, lead intake, deduplication, or pure helper logic, add or update targeted automated tests where practical.
@@ -62,7 +63,7 @@ Use targeted validation when a sprint changes a specific workflow:
 - Google Business Profile: three-location routing, OAuth-required state, dry-run/manual intake, disabled live sync, duplicate handling, review/reply honesty, and no live messaging.
 - QuickBooks Online: OAuth-required state, company realmId readiness, duplicate-safe mapping drafts, disabled live accounting sync, disabled accounting writes, disabled payment processing, and provider audit-log support.
 - Electronic Signatures: DocuSign and Dropbox Sign OAuth-required state, company account readiness, duplicate-safe signature request drafts, disabled live request/send gates, provider status labels, Customer 360 signature events, and provider audit-log support.
-- Production Readiness: deployment blocker honesty, guided launch sequence, launch-gate evidence, missing environment-variable guidance, pending migration verification, provider activation cards, three-company mapping guidance, controlled-test plans, provider activation guides, unified production checklist, Settings and Integration Center navigation, and no fake green/connected launch status.
+- Production Readiness: deployment blocker honesty, private staging health/readiness endpoints, guided launch sequence, launch-gate evidence, missing environment-variable guidance, pending migration verification, provider activation cards, three-company mapping guidance, controlled-test plans, provider activation guides, unified production checklist, Settings and Integration Center navigation, and no fake green/connected launch status.
 
 ## Manual QA Checklist
 

@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-Production Activation Phase 1 - Guided Owner Setup and Launch Control
+Production Deployment Phase 1 - Private Staging Deployment
 
 ## Objective
 
-Extend the existing Production Readiness Center into a guided owner setup and launch-control workflow for safe staged activation of WeatherTech OS without deploying, enabling live integrations, committing credentials, weakening authentication, or changing existing production workflows.
+Prepare WeatherTech OS for a private staging deployment that can be hosted at a real HTTPS URL for controlled owner and employee testing while keeping live integrations, public intake, outbound communications, accounting writes, calendar writes, signature requests, customer portal access, and final production behavior disabled.
 
 ## Owner
 
@@ -26,51 +26,47 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Reuse the existing Production Readiness Center rather than creating a second dashboard.
-- Add a guided production activation sequence that orders repository verification, Supabase migration validation, authentication, production deployment, production URL setup, monitoring, provider setup, controlled testing, internal pilot, and final owner approval.
-- Add provider activation cards for Supabase, Vercel or approved deployment provider, Twilio, Gmail / Google Workspace, Google Calendar, Website lead capture, Yelp, Google Business Profile, QuickBooks Online, DocuSign, and Dropbox Sign.
-- Show truthful states for not configured, owner action required, OAuth required, external approval required, production URL required, migration verification required, controlled testing required, blocked, active, and failed.
-- Add a pending migration inventory that distinguishes repository presence from verified remote production application.
-- Add a redacted environment readiness inventory that can be evaluated server-side without exposing secrets to browser code.
-- Add three-company/branch mapping guidance for WeatherTech Roofing LLC Phoenix, WeatherTech Roofing LLC Tucson, and IHC Painting.
-- Add controlled-test plans and launch gates with required evidence, stop conditions, rollback paths, and owner responsibilities.
-- Update production activation documentation, module registry, testing standard, changelog, and sprint-management records.
+- Inspect the current Next.js, Supabase, authentication, middleware, API route, environment, security-header, migration, and deployment configuration.
+- Reuse the existing Production Readiness Center rather than creating another dashboard.
+- Add server-side health and readiness endpoints for private staging.
+- Add a non-secret staging deployment metadata model.
+- Add a redacted staging environment inventory and disabled-provider safety checks.
+- Document the private staging deployment path, Supabase auth redirect requirements, health/readiness checks, monitoring, rollback, and controlled staging validation.
+- Update Production Readiness Center metadata, module documentation, testing documentation, changelog, and sprint records.
+- Validate the repository locally and prepare it for owner-controlled hosting-provider setup.
 
 ## Explicit Exclusions
 
-- Do not deploy.
-- Do not enable production credentials.
-- Do not activate live integrations.
-- Do not run Supabase `db push`, migration repair, or remote migration commands.
-- Do not add live provider writes, sends, sync, or customer automation.
-- Do not commit secrets or inspect secrets in browser code.
-- Do not create destructive migrations.
-- Do not create new migrations.
+- Do not activate live provider integrations.
+- Do not send real calls, SMS, email, calendar events, accounting writes, review replies, website leads, or signature requests.
+- Do not activate the customer portal.
+- Do not alter DNS or configure a custom domain.
+- Do not apply remote migrations or run migration repair.
+- Do not modify `.env.local`.
+- Do not commit credentials or expose secrets.
 - Do not weaken authentication or RLS.
-- Do not fake readiness, connected states, validation, migration status, provider health, or green deployment status.
-- Do not redesign the application.
-- Do not remove or redesign existing UI.
+- Do not create destructive migrations.
+- Do not fake deployment, connected, readiness, or production-approved status.
+- Do not redesign the UI.
+- Do not build unrelated product features.
 - Do not begin another sprint after completion.
 
 ## Completion Criteria
 
-- Production Readiness Center is accessible through existing administration navigation.
-- The center includes a guided launch-control sequence with explicit owner action, Codex responsibility, evidence, dependency, next-action, and stop-condition language.
-- Provider activation cards show setup guide paths, required credentials/mappings, controlled tests, rollback, disabled safety flags, and truthful non-active statuses unless real evidence exists.
-- Pending migrations show Git presence and migration-integrity-test inclusion without claiming verified live production application.
-- Environment variables are inventoried without exposing secret values to browser code.
-- WeatherTech Phoenix, WeatherTech Tucson, and IHC mappings remain owner-action-required until real provider identifiers are supplied outside the repository.
-- Controlled-test plans and launch gates block internal pilot and daily production use until evidence and owner approval exist.
-- Production readiness logic is reusable and covered by targeted automated tests.
-- Browser regression covers the Production Readiness Center and confirms it routes to existing Settings and Integration Center workflows.
-- Production activation documentation identifies the exact activation order, deployment blockers, pending migration inventory, owner actions, controlled tests, rollback, internal-pilot criteria, daily-production criteria, and intentionally disabled capabilities.
-- No live provider activation, deployment, production credential use, fake readiness, `.env.local` change, package change, schema/RLS change, remote migration command, or destructive migration is introduced.
+- Repository-side deployment audit is complete.
+- `/api/health` reports application runtime health without exposing secrets.
+- `/api/readiness` reports dependency readiness and blocks staging when required variables, auth evidence, migration evidence, regression evidence, Supabase reachability, or safety gates are not acceptable.
+- Production Readiness Center exposes safe staging deployment metadata and endpoint paths without reading browser secrets.
+- Staging environment variables and provider safety flags are documented in `.env.example` without real values.
+- Private staging deployment runbook documents provider setup, Supabase Auth redirects, migration verification, health/readiness checks, monitoring, rollback, controlled validation, and resume instructions.
+- No live deployment is claimed unless a supported authenticated deployment path exists.
+- No live provider activation, `.env.local` change, package change, schema/RLS change, remote migration command, DNS change, or credential commit is introduced.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Production readiness tests pass.
-- Existing regression suites and signed-in browser regression pass where supported.
+- Local Node regression tests pass.
+- Targeted and full signed-in browser regression pass where supported.
 - Final scope audit confirms no unrelated files or behavior changed.
 - One focused conventional commit is created and pushed.
 - Local `main` equals `origin/main`.
@@ -79,34 +75,37 @@ Joe Harris
 ## Validation Plan
 
 - Confirm [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) has been read.
-- Confirm approval status is exactly `Approved`.
+- Confirm explicit owner approval from the task request.
 - Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before product development begins.
-- Inspect existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, Financial workspace, provider readiness helpers, sprint workflow docs, production activation docs, and browser regression patterns before editing.
-- Run the production readiness center test.
-- Run security/company-access policy tests.
+- Run all local Node regression tests.
+- Run production readiness tests.
+- Run staging deployment readiness tests.
 - Run migration-integrity tests.
-- Run existing provider foundation tests that are touched by readiness coverage.
+- Run security/company-access policy tests.
+- Run provider-foundation tests.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for Production Readiness Center, Settings, Integration Center, Dashboard, and navigation.
+- Run targeted signed-in browser regression for Production Readiness Center, health/readiness endpoints, Settings, Integration Center, Dashboard, and navigation.
 - Run full signed-in browser regression where supported.
-- Clean all disposable regression records.
+- Confirm no disposable staging or regression records remain.
 
 ## Planned Commit Message
 
-`feat: add guided production launch control`
+`feat: prepare private staging deployment`
 
 ## Blockers
 
-Actual production deployment, live provider activation, production credentials, OAuth app approval, provider webhook configuration, provider IDs, monitoring, backups, production Supabase migration application/verification, and final owner production-use approval remain owner-controlled rollout steps outside this sprint.
+Actual private staging deployment remains blocked in this Codex environment unless the owner provides or authorizes deployment-provider authentication, billing/organization selection, provider-side environment-variable entry, and staging URL verification. Remote Supabase migration application and dashboard auth redirect changes remain owner-controlled external steps.
 
 ## Final Status
 
-Completed after validation, commit, push, remote synchronization, and clean working tree verification. Do not begin or promote another sprint without explicit owner approval.
+Repository preparation completed and validated. Commit, push, remote synchronization, and clean working tree verification are the remaining repository workflow steps.
+
+Private staging deployment itself remains blocked on owner-controlled deployment-provider setup, environment-variable entry, Supabase Auth redirect configuration, migration-history verification, and real staging URL validation. Codex must not claim staging is deployed until those external steps are completed and verified.
 
 ## Notes
 

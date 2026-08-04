@@ -40169,6 +40169,62 @@ function ProductionReadinessView({
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Private staging deployment
+            </p>
+            <h3 className="mt-1 text-xl font-bold text-slate-950">
+              Health checks and safe deployment metadata
+            </h3>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+              The browser view shows non-secret deployment expectations. The
+              staging runtime must verify the actual URL, commit, provider,
+              Supabase connectivity, and disabled provider gates through the
+              server-side readiness endpoints.
+            </p>
+          </div>
+          <ProviderStatusBadge label="Private staging only" tone="blue" />
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <ReadinessEvidenceCard
+            title="Environment"
+            value={readiness.stagingDeploymentMetadata.environmentName}
+          />
+          <ReadinessEvidenceCard
+            title="Deployment provider"
+            value={readiness.stagingDeploymentMetadata.deploymentProvider}
+          />
+          <ReadinessEvidenceCard
+            title="Deployment URL"
+            value={readiness.stagingDeploymentMetadata.deploymentUrl}
+          />
+          <ReadinessEvidenceCard
+            title="Commit"
+            value={readiness.stagingDeploymentMetadata.gitCommitHash}
+          />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <ReadinessEvidenceCard
+            title="Health endpoint"
+            value={readiness.stagingDeploymentMetadata.healthEndpoint}
+          />
+          <ReadinessEvidenceCard
+            title="Readiness endpoint"
+            value={readiness.stagingDeploymentMetadata.readinessEndpoint}
+          />
+          <ReadinessEvidenceCard
+            title="Provider writes"
+            value={readiness.stagingDeploymentMetadata.liveProviderWritesStatus}
+          />
+          <ReadinessEvidenceCard
+            title="Production activation"
+            value={readiness.stagingDeploymentMetadata.productionActivationStatus}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase text-red-700">
