@@ -210,6 +210,26 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Added additive provider constraint migration `0029_google_business_profile_foundation.sql`.
   - Kept live Google Business Profile sync, review replies, and customer messaging disabled by default and did not scrape Google, automate browser login, store Google passwords, send real review replies, modify `.env.local`, weaken authentication/RLS, or perform destructive migrations.
 
+### QuickBooks Online Phase 1 - Accounting Integration Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add QuickBooks Online integration foundation`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Added the QuickBooks Online accounting integration foundation for WeatherTech Roofing LLC and IHC.
+  - Added official capability documentation, server-only environment placeholders, Integration Center readiness, communications activity language, and duplicate-safe customer, estimate, invoice, and payment export-draft helpers.
+  - Added additive provider constraint migration `0030_quickbooks_online_foundation.sql` so integration connections and sync logs can reference `quickbooks_online`.
+  - Kept live QuickBooks sync, accounting writes, invoice creation, customer creation, payment processing, and webhook ingestion disabled by default and did not modify `.env.local`, expose credentials, weaken authentication/RLS, or perform destructive migrations.
+
 ## Recording Template
 
 ### Sprint Name

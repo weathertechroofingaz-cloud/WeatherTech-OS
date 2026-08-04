@@ -3464,9 +3464,14 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
 
   const desktopLayout = await tab.playwright.evaluate(() => ({
     visible: Boolean(document.querySelector('[data-testid="financial-operations-workspace"]')),
-    quickBooksHonest:
-      document.body.innerText.includes("No live sync is active") ||
-      document.body.innerText.includes("Not connected"),
+    quickBooksHonest: (() => {
+      const text = document.body.innerText.toLowerCase();
+      return (
+        text.includes("no live sync is active") ||
+        text.includes("no live accounting sync is active") ||
+        text.includes("not connected")
+      );
+    })(),
     attentionVisible: Boolean(document.querySelector('[data-testid="financial-attention-list"]')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
   }));
@@ -7147,16 +7152,28 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("weathertech roofing llc - phoenix gbp") &&
         text.includes("weathertech roofing llc - tucson gbp") &&
         text.includes("ihc painting gbp") &&
+        text.includes("quickbooks online") &&
+        text.includes("accounting integration foundation") &&
+        text.includes("invoice creation in quickbooks") &&
+        text.includes("payment processing are disabled") &&
+        text.includes("com.intuit.quickbooks.accounting") &&
+        text.includes("/api/integrations/quickbooks-online/oauth/callback") &&
+        text.includes("realm id env var quickbooks_realm_id_weathertech") &&
+        text.includes("realm id env var quickbooks_realm_id_ihc") &&
+        text.includes("official capability boundary") &&
+        text.includes("payment processing") &&
         [
           "twilio",
           "gmail",
           "google calendar",
           "google business profile",
+          "quickbooks online",
           "yelp",
           "website lead capture",
           "gohighlevel",
         ].every((provider) => text.includes(provider)) &&
         [
+          "accounting",
           "sms",
           "calling",
           "email",
@@ -7166,10 +7183,12 @@ async function testSettingsIntegrationCenter(tab) {
           "crm sync",
           "photos",
           "documents",
+          "payments",
           "ai",
           "webhooks",
         ].every((capability) => text.includes(capability)) &&
-        cards.length >= 8
+        Boolean(section?.querySelector('[data-testid="quickbooks-online-foundation"]')) &&
+        cards.length >= 9
       );
     },
     "settings integration center",

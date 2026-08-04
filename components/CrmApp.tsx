@@ -210,6 +210,14 @@ import {
   googleBusinessProfileOfficialCapabilities,
 } from "../lib/crm/googleBusinessProfileLeadCapture";
 import {
+  quickBooksOnlineApiBaseUrl,
+  quickBooksOnlineCompanySlots,
+  quickBooksOnlineOAuthCallbackPath,
+  quickBooksOnlineOfficialCapabilities,
+  quickBooksOnlineSandboxApiBaseUrl,
+  quickBooksOnlineScopes,
+} from "../lib/crm/quickbooksOnlineFoundation";
+import {
   twilioBusinessNumberRouteTemplates,
   twilioLiveFoundationChecklist,
   twilioLiveReadinessLabels,
@@ -19403,6 +19411,7 @@ function getCustomerIntegrationProviders(providers: IntegrationProviderReadiness
     "website_forms",
     "google_business_profile",
     "yelp",
+    "quickbooks_online",
   ];
 
   return supportedProviderIds
@@ -32004,7 +32013,7 @@ function InvoicesView({
           <FinancialMetricCard
             label="QuickBooks sync"
             value={financialSyncStateLabels[financialSummary.quickBooksState]}
-            detail="Provider-independent foundation only; no live sync is active"
+            detail="QuickBooks Online foundation only; no live accounting sync is active"
             tone={financialSummary.quickBooksState === "error" ? "amber" : "blue"}
           />
         </div>
@@ -39529,8 +39538,9 @@ const integrationCards = [
   },
   {
     name: "QuickBooks Online",
-    status: "Queued",
-    detail: "Invoice, payment, customer, and product/service synchronization.",
+    status: "Foundation ready",
+    detail:
+      "OAuth, company mapping, duplicate-safe customer/estimate/invoice/payment mapping, retries, and audit logging. Live accounting sync stays disabled.",
   },
   {
     name: "Stripe",
@@ -43042,6 +43052,7 @@ const integrationProviderIconMap: Record<
   IntegrationProviderMetadata["iconKey"],
   typeof Home
 > = {
+  accounting: ReceiptText,
   automation: Bot,
   calendar: CalendarClock,
   future: PlugZap,
@@ -43926,6 +43937,141 @@ function YelpLeadCaptureFoundationPanel() {
   );
 }
 
+function QuickBooksOnlineFoundationPanel() {
+  const readinessStates = [
+    { label: "Not Configured", tone: "slate" as const },
+    { label: "OAuth Required", tone: "amber" as const },
+    { label: "Ready", tone: "blue" as const },
+    { label: "Production Disabled", tone: "amber" as const },
+    { label: "Connected", tone: "green" as const },
+    { label: "Sync Failed", tone: "red" as const },
+  ];
+  const getCapabilityTone = (
+    status: (typeof quickBooksOnlineOfficialCapabilities)[number]["status"],
+  ) => {
+    if (status === "supported") return "blue" as const;
+    if (status === "oauth_required") return "amber" as const;
+    if (status === "production_disabled") return "amber" as const;
+
+    return "slate" as const;
+  };
+
+  return (
+    <section
+      className="rounded-lg border border-emerald-200 bg-emerald-50 p-5"
+      data-testid="quickbooks-online-foundation"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase text-emerald-700">
+            QuickBooks Online
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Accounting integration foundation
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            QuickBooks Online is prepared for OAuth readiness, company realmId
+            mapping, customer mapping, estimate mapping, invoice mapping,
+            payment mapping, duplicate prevention, retry planning, webhooks, and
+            integration audit logs. Live accounting synchronization, accounting
+            writes, invoice creation in QuickBooks, and payment processing are
+            disabled until owner-controlled Intuit setup and approval are
+            complete.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Production Disabled" tone="amber" />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {readinessStates.map((state) => (
+          <ProviderStatusBadge
+            key={state.label}
+            label={state.label}
+            tone={state.tone}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <ProfileStat label="OAuth callback" value={quickBooksOnlineOAuthCallbackPath} />
+        <ProfileStat label="Companies" value={quickBooksOnlineCompanySlots.length} />
+        <ProfileStat label="Scope" value={quickBooksOnlineScopes[0]} />
+        <ProfileStat label="Live accounting" value="Disabled" />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Company Mapping
+          </p>
+          {quickBooksOnlineCompanySlots.map((slot) => (
+            <div
+              key={slot.key}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-bold text-slate-950">{slot.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Realm ID env var {slot.realmIdEnvVar}; environment env var{" "}
+                    {slot.environmentEnvVar}; income account env var{" "}
+                    {slot.defaultIncomeAccountEnvVar}; deposit account env var{" "}
+                    {slot.defaultDepositAccountEnvVar}.
+                  </p>
+                </div>
+                <ProviderStatusBadge label="OAuth required" tone="amber" />
+              </div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-600">
+            API bases are prepared for sandbox and production:
+            <code className="ml-1 break-all font-semibold text-slate-950">
+              {quickBooksOnlineSandboxApiBaseUrl}
+            </code>{" "}
+            and{" "}
+            <code className="break-all font-semibold text-slate-950">
+              {quickBooksOnlineApiBaseUrl}
+            </code>
+            . No calls are made from this foundation.
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          <p className="text-sm font-bold uppercase text-slate-500">
+            Official Capability Boundary
+          </p>
+          {quickBooksOnlineOfficialCapabilities.map((capability) => (
+            <div
+              key={capability.key}
+              className="rounded-lg border border-slate-200 bg-white p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-slate-950">{capability.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    {capability.summary}
+                  </p>
+                </div>
+                <ProviderStatusBadge
+                  label={capability.status.replace(/_/g, " ")}
+                  tone={getCapabilityTone(capability.status)}
+                />
+              </div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm leading-6 text-amber-900">
+            Owner setup requires an Intuit Developer app, server-side OAuth
+            credentials, Accounting scope approval, company realmId selection,
+            account mapping, webhook verification, sandbox validation, and
+            explicit production activation. No QuickBooks credentials are stored
+            in browser code.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProviderActionButton({
   action,
   onClick,
@@ -44410,6 +44556,10 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <YelpLeadCaptureFoundationPanel />
+      </div>
+
+      <div className="mt-5">
+        <QuickBooksOnlineFoundationPanel />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">

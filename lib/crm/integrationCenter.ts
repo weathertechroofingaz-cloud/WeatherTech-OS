@@ -4,8 +4,14 @@ import type {
   IntegrationProvider,
   IntegrationSyncLogRecord,
 } from "./types";
+import {
+  quickBooksOnlineEnvVars,
+  quickBooksOnlineOAuthCallbackPath,
+  quickBooksOnlineScopes,
+} from "./quickbooksOnlineFoundation";
 
 export type IntegrationCapability =
+  | "accounting"
   | "sms"
   | "calling"
   | "email"
@@ -15,6 +21,7 @@ export type IntegrationCapability =
   | "crm_sync"
   | "photos"
   | "documents"
+  | "payments"
   | "ai"
   | "webhooks";
 
@@ -26,9 +33,16 @@ export type IntegrationProviderId =
   | "yelp"
   | "website_forms"
   | "gohighlevel"
+  | "quickbooks_online"
   | "future_provider";
 
-export type IntegrationProviderFamily = "communications" | "lead_intake" | "operations" | "automation" | "future";
+export type IntegrationProviderFamily =
+  | "communications"
+  | "lead_intake"
+  | "operations"
+  | "automation"
+  | "financial"
+  | "future";
 
 export type IntegrationConnectionState = "connected" | "not_connected";
 export type IntegrationReadinessState = "ready" | "requires_configuration" | "disabled";
@@ -96,6 +110,7 @@ export type IntegrationProviderMetadata = {
   connectionProviders: IntegrationProvider[];
   capabilities: IntegrationCapability[];
   iconKey:
+    | "accounting"
     | "phone"
     | "mail"
     | "calendar"
@@ -150,6 +165,7 @@ export type IntegrationConnectionWorkflow = {
 };
 
 export const integrationCapabilityLabels: Record<IntegrationCapability, string> = {
+  accounting: "Accounting",
   sms: "SMS",
   calling: "Calling",
   email: "Email",
@@ -159,6 +175,7 @@ export const integrationCapabilityLabels: Record<IntegrationCapability, string> 
   crm_sync: "CRM sync",
   photos: "Photos",
   documents: "Documents",
+  payments: "Payments",
   ai: "AI",
   webhooks: "Webhooks",
 };
@@ -827,6 +844,120 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       "Credentials Required before GoHighLevel validation or live sync workers can run.",
   },
   {
+    id: "quickbooks_online",
+    label: "QuickBooks Online",
+    shortLabel: "QuickBooks",
+    family: "financial",
+    description:
+      "Accounting integration foundation for customer, estimate, invoice, payment, sync-readiness, duplicate prevention, retry, and audit-log mapping.",
+    connectionProviders: ["quickbooks_online"],
+    capabilities: ["accounting", "crm_sync", "payments", "webhooks"],
+    iconKey: "accounting",
+    requiresCredentials: true,
+    supportsOAuth: true,
+    supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "oauth_client",
+        label: "OAuth client",
+        description:
+          "Server-side Intuit OAuth client credentials for QuickBooks Online Accounting API access.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "company_realm_ids",
+        label: "Company realm IDs",
+        description:
+          "Maps WeatherTech Roofing LLC and IHC to their approved QuickBooks Online company realmIds.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "account_mapping",
+        label: "Income and deposit accounts",
+        description:
+          "Future exports must map WeatherTech OS line items and payments to owner-approved QuickBooks accounts.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_verifier",
+        label: "Webhook verifier token",
+        description:
+          "Server-side token used to validate future QuickBooks Online webhook notifications.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+      {
+        id: "production_gate",
+        label: "Production sync gate",
+        description:
+          "Explicit owner-controlled flags must remain disabled until sandbox validation and approval are complete.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "oauth_consent",
+        label: "OAuth consent check",
+        description:
+          "Confirm Intuit OAuth credentials, redirect URI, Accounting scope, and company realmId before API access.",
+      },
+      {
+        id: "company_mapping",
+        label: "Company mapping check",
+        description:
+          "Verify each connected QuickBooks company maps to WeatherTech Roofing LLC or IHC without cross-company exports.",
+      },
+      {
+        id: "duplicate_prevention",
+        label: "Duplicate prevention check",
+        description:
+          "Require deterministic request fingerprints and stable document numbers before customer, estimate, invoice, or payment exports.",
+      },
+      {
+        id: "write_gate",
+        label: "Accounting write gate",
+        description:
+          "Confirm customer, estimate, invoice, and payment writes remain disabled until owner-approved production activation.",
+      },
+      {
+        id: "webhook",
+        label: "Webhook validation check",
+        description:
+          "Validate QuickBooks webhook signatures/tokens before accepting inbound sync events.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: true,
+      label: "OAuth required",
+      callbackPath: quickBooksOnlineOAuthCallbackPath,
+      scopes: quickBooksOnlineScopes,
+      summary:
+        "QuickBooks Online requires Intuit OAuth 2.0 consent with the Accounting scope and company realmId selection before live sync.",
+    },
+    connectionSteps: [
+      "Create an Intuit Developer app and configure server-side OAuth credentials.",
+      `Add ${quickBooksOnlineEnvVars.weatherTechRealmId} and ${quickBooksOnlineEnvVars.ihcRealmId} after owner-controlled company authorization.`,
+      "Map customers, estimates, invoices, payments, income accounts, and deposit accounts in sandbox.",
+      "Verify deterministic duplicate keys, request fingerprints, retries, and audit logs.",
+      "Keep production sync, accounting writes, and payment processing disabled until owner approval.",
+    ],
+    disconnectSummary:
+      "A future disconnect will pause QuickBooks Online sync without deleting WeatherTech OS accounting history.",
+    reconnectSummary:
+      "A future reconnect will refresh OAuth consent, revalidate company realmIds, and rerun duplicate-prevention checks.",
+    summaryWhenDisconnected:
+      "Configure Intuit OAuth and company realmIds later. Live QuickBooks sync, accounting writes, and payment processing are disabled.",
+  },
+  {
     id: "future_provider",
     label: "Future Providers",
     shortLabel: "Future",
@@ -957,6 +1088,10 @@ function getRelatedActivityCount(snapshot: CrmSnapshot, metadata: IntegrationPro
     return snapshot.integrationSyncLogs.filter((log) => log.provider === "gohighlevel").length;
   }
 
+  if (metadata.id === "quickbooks_online") {
+    return snapshot.integrationSyncLogs.filter((log) => log.provider === "quickbooks_online").length;
+  }
+
   return 0;
 }
 
@@ -991,6 +1126,14 @@ function getRelatedActivityLatestAt(snapshot: CrmSnapshot, metadata: Integration
       snapshot.leads
         .filter((lead) => sourceTextMatches(`${lead.source}\n${lead.notes ?? ""}`, ["yelp"]))
         .map((lead) => lead.updated_at),
+    );
+  }
+
+  if (metadata.id === "quickbooks_online") {
+    return getLatestTimestamp(
+      snapshot.integrationSyncLogs
+        .filter((log) => log.provider === "quickbooks_online")
+        .map((log) => log.completed_at ?? log.last_attempted_at ?? log.updated_at),
     );
   }
 
@@ -1045,7 +1188,8 @@ function getConnectionSummary(
     if (
       (metadata.id === "website_forms" ||
         metadata.id === "yelp" ||
-        metadata.id === "google_business_profile") &&
+        metadata.id === "google_business_profile" ||
+        metadata.id === "quickbooks_online") &&
       (syncState.relatedActivityCount > 0 || syncState.total > 0)
     ) {
       return `${metadata.label} activity is being tracked, but no formal provider connection record exists.`;

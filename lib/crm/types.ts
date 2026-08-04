@@ -209,6 +209,7 @@ export type IntegrationProvider =
   | "google_calendar"
   | "gmail"
   | "google_maps"
+  | "quickbooks_online"
   | "twilio"
   | "twilio_sms"
   | "gohighlevel"

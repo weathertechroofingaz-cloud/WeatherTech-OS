@@ -32,6 +32,7 @@ export type CommunicationProvider =
   | "gmail"
   | "google_calendar"
   | "google_business"
+  | "quickbooks"
   | "yelp"
   | "gohighlevel"
   | "website"
@@ -233,6 +234,7 @@ export const inboxProviderLabels: Record<CommunicationProvider, string> = {
   gmail: "Gmail",
   google_calendar: "Google Calendar",
   google_business: "Google Business Profile",
+  quickbooks: "QuickBooks Online",
   gohighlevel: "GoHighLevel",
   internal: "Internal",
   manual_unknown: "Manual/unknown",
@@ -438,6 +440,10 @@ function getInboxProviderFromText(value: string | null | undefined): Communicati
     return "gohighlevel";
   }
 
+  if (normalized.includes("quickbooks") || normalized.includes("accounting")) {
+    return "quickbooks";
+  }
+
   if (normalized.includes("twilio") || normalized.includes("sms")) {
     return "twilio";
   }
@@ -563,6 +569,10 @@ function getIntegrationInboxProvider(provider: IntegrationProvider): Communicati
 
   if (provider === "google_business_profile") {
     return "google_business";
+  }
+
+  if (provider === "quickbooks_online") {
+    return "quickbooks";
   }
 
   return "manual_unknown";
@@ -1382,7 +1392,9 @@ export function communicationItemMatchesAttentionFilter(
 export function getInboxProviderTone(provider: CommunicationProvider) {
   return provider === "website" || provider === "yelp" || provider === "google_business"
     ? "green"
-    : provider === "manual_unknown" || provider === "internal"
+    : provider === "quickbooks"
+      ? "amber"
+      : provider === "manual_unknown" || provider === "internal"
       ? "amber"
       : "blue";
 }
@@ -2267,6 +2279,7 @@ function getProviderConnection(
     provider === "gmail" ||
     provider === "google_calendar" ||
     provider === "gohighlevel" ||
+    provider === "quickbooks" ||
     provider === "website" ||
     provider === "yelp" ||
     provider === "google_business"
@@ -2274,6 +2287,8 @@ function getProviderConnection(
     return connections.find((connection) =>
       provider === "google_business"
         ? connection.provider === "google_business_profile"
+        : provider === "quickbooks"
+          ? connection.provider === "quickbooks_online"
         : connection.provider === provider,
     );
   }
@@ -2319,6 +2334,11 @@ export function buildCommunicationProviderReadiness(
       provider: "gohighlevel",
       label: "GoHighLevel",
       detail: "GoHighLevel dry-run and sync-log activity is visible without enabling automations.",
+    },
+    {
+      provider: "quickbooks",
+      label: "QuickBooks Online",
+      detail: "Accounting sync logs are visible without creating QuickBooks customers, estimates, invoices, or payments.",
     },
     {
       provider: "website",

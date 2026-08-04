@@ -104,6 +104,10 @@ const expectedMigrations = [
     "0029_google_business_profile_foundation.sql",
     "cd53500ead34d1a26ffb6189ff10204bf6f5bbb99f69225d8005bbbdc792e5a3",
   ],
+  [
+    "0030_quickbooks_online_foundation.sql",
+    "36c7d26eac4c2ae8a470b5540df4684c6f19fb2166bf8890ac3aa1dc56aeaaaa",
+  ],
 ];
 
 const files = fs
@@ -156,7 +160,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0028 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0030 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -177,6 +181,7 @@ const propertyIntelligenceIndex = files.indexOf("0026_property_intelligence_foun
 const gmailWorkspaceIndex = files.indexOf("0027_gmail_workspace_email_foundation.sql");
 const googleCalendarIndex = files.indexOf("0028_google_calendar_scheduling_foundation.sql");
 const googleBusinessProfileIndex = files.indexOf("0029_google_business_profile_foundation.sql");
+const quickBooksOnlineIndex = files.indexOf("0030_quickbooks_online_foundation.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -231,8 +236,16 @@ if (
   );
 }
 
-if (googleBusinessProfileIndex !== files.length - 1) {
-  failures.push("Google Business Profile foundation migration must remain last.");
+if (
+  googleBusinessProfileIndex === -1 ||
+  quickBooksOnlineIndex === -1 ||
+  !(googleBusinessProfileIndex < quickBooksOnlineIndex)
+) {
+  failures.push("QuickBooks Online migration must order after Google Business Profile foundation.");
+}
+
+if (quickBooksOnlineIndex !== files.length - 1) {
+  failures.push("QuickBooks Online foundation migration must remain last.");
 }
 
 for (const file of files) {
@@ -685,6 +698,10 @@ const integrationProvidersWithGbp = [
   "google_business_profile",
   ...supportedIntegrationProviders,
 ].sort();
+const integrationProvidersWithQuickBooks = [
+  "quickbooks_online",
+  ...integrationProvidersWithGbp,
+].sort();
 const leadSourceMappingProvidersWithGbp = [
   "google_business_profile",
   "gohighlevel",
@@ -767,6 +784,59 @@ if (googleBusinessProfileMigration.includes("unknown_provider")) {
   failures.push("0029 must not allow unknown_provider.");
 }
 
+const quickBooksOnlineMigration = fs.readFileSync(
+  path.join(migrationsDir, "0030_quickbooks_online_foundation.sql"),
+  "utf8",
+);
+
+for (const constraintName of [
+  "integration_connections_provider_check",
+  "integration_sync_logs_provider_check",
+]) {
+  const providers = readProviderCheckValuesFromMigration({
+    migration: quickBooksOnlineMigration,
+    migrationLabel: "0030",
+    constraintName,
+  });
+
+  if (JSON.stringify(providers) !== JSON.stringify(integrationProvidersWithQuickBooks)) {
+    failures.push(
+      `0030 ${constraintName} must allow exactly ${integrationProvidersWithQuickBooks.join(", ")}.`,
+    );
+  }
+
+  for (const requiredProvider of [
+    "google_business_profile",
+    "quickbooks_online",
+    "twilio",
+    "twilio_sms",
+    "website",
+    "yelp",
+  ]) {
+    if (!providers.includes(requiredProvider)) {
+      failures.push(`0030 ${constraintName} must allow ${requiredProvider}.`);
+    }
+  }
+
+  if (providers.includes("unknown_provider")) {
+    failures.push(`0030 ${constraintName} must reject unknown_provider.`);
+  }
+}
+
+if (!quickBooksOnlineMigration.trim().startsWith("begin;") ||
+    !quickBooksOnlineMigration.trim().endsWith("commit;")) {
+  failures.push("0030 must be wrapped in an explicit transaction.");
+}
+
+if (/using\s*\(\s*true\s*\)/i.test(quickBooksOnlineMigration) ||
+    /with\s+check\s*\(\s*true\s*\)/i.test(quickBooksOnlineMigration)) {
+  failures.push("0030 must not add broad USING/WITH CHECK (true) RLS policies.");
+}
+
+if (!quickBooksOnlineMigration.includes("quickbooks_online")) {
+  failures.push("0030 must add the QuickBooks Online provider key.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -778,7 +848,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0029.",
+  "Verified raw filename order matches numeric order from 0001 through 0030.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -798,6 +868,9 @@ console.log(
 console.log(
   "Verified 0028_google_calendar_scheduling_foundation.sql precedes 0029_google_business_profile_foundation.sql.",
 );
+console.log(
+  "Verified 0029_google_business_profile_foundation.sql precedes 0030_quickbooks_online_foundation.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -810,6 +883,9 @@ console.log(
 );
 console.log(
   "Verified 0029 adds google_business_profile to integration, source mapping, and lead intake provider constraints.",
+);
+console.log(
+  "Verified 0030 adds quickbooks_online to integration provider constraints without broad RLS policies.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

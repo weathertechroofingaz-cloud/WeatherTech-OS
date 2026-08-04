@@ -19,7 +19,10 @@ Current repository tests include:
 
 - `tests/lead-intake-routing.test.mjs` for lead intake routing, source matching, signature helpers, and duplicate policy behavior.
 - `tests/unified-lead-intake-service.test.mjs` for canonical intake deduplication, existing customer/lead matching, provider logging, and follow-up behavior.
+- `tests/website-integration-foundation.test.mjs` for Website source routing, form support, signatures, production gates, attribution, consent preservation, and safe lead intake normalization.
 - `tests/yelp-integration-foundation.test.mjs` for Yelp account routing, official capability flags, disabled live boundaries, signature helpers, safe logging, and three-account readiness.
+- `tests/google-business-profile-foundation.test.mjs` for Google Business Profile location routing, official capability flags, OAuth/PubSub readiness, disabled live boundaries, safe logging, and three-location readiness.
+- `tests/quickbooks-online-foundation.test.mjs` for QuickBooks Online official capability flags, OAuth/company readiness, duplicate-safe customer/estimate/invoice/payment mappings, production write gates, and Integration Center provider registration.
 - Additional validation may be embedded in browser regression flows.
 
 When a sprint changes routing, provider readiness, lead intake, deduplication, or pure helper logic, add or update targeted automated tests where practical.
@@ -54,6 +57,8 @@ Use targeted validation when a sprint changes a specific workflow:
 - Integrations: readiness cards, connection architecture, no fake connectivity.
 - Website & Marketing: source routing, provider honesty, existing-workspace navigation.
 - Yelp: three-account routing, partner-required state, dry-run/manual intake, disabled live sync, duplicate handling, and no outbound messaging.
+- Google Business Profile: three-location routing, OAuth-required state, dry-run/manual intake, disabled live sync, duplicate handling, review/reply honesty, and no live messaging.
+- QuickBooks Online: OAuth-required state, company realmId readiness, duplicate-safe mapping drafts, disabled live accounting sync, disabled accounting writes, disabled payment processing, and provider audit-log support.
 
 ## Manual QA Checklist
 

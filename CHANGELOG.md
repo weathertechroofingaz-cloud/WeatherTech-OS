@@ -4,6 +4,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### QuickBooks Online Phase 1 - Accounting Integration Foundation
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add QuickBooks Online integration foundation`
+- Summary:
+  - Added the disabled-by-default QuickBooks Online accounting integration foundation for WeatherTech Roofing LLC and IHC.
+  - Documented official Intuit OAuth, Accounting API, scopes, webhooks, CDC retry, customer/estimate/invoice/payment mapping, and Payments API boundaries.
+  - Added duplicate-safe export-draft helpers, Integration Center readiness, communications activity language, and provider constraint support without creating QuickBooks records, processing payments, activating sync, or committing credentials.
+
 ### Google Business Profile Phase 1 - Multi-Location Integration Foundation
 
 - Commit: `<this sprint commit>`
