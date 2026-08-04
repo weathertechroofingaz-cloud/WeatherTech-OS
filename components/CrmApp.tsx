@@ -187,6 +187,14 @@ import {
   type IntegrationReadinessState,
 } from "../lib/crm/integrationCenter";
 import {
+  buildProductionReadinessCenter,
+  productionReadinessStateLabel,
+  type ProductionActivationGuide,
+  type ProductionChecklistGroup,
+  type ProductionReadinessCheck,
+  type ProductionReadinessTone,
+} from "../lib/crm/productionReadiness";
+import {
   goHighLevelLiveSyncStatusLabels,
   goHighLevelPhaseOneGuardrails,
   goHighLevelReadinessEndpoint,
@@ -458,6 +466,7 @@ type WorkspaceView =
   | "analytics"
   | "notifications"
   | "integrations"
+  | "productionReadiness"
   | "settings";
 
 type NavigationItem = {
@@ -547,6 +556,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     items: [
       { view: "documents", label: "Documents", icon: FileText },
       { view: "integrations", label: "Integrations", icon: ShieldCheck },
+      { view: "productionReadiness", label: "Readiness", icon: CheckCircle2 },
       { view: "settings", label: "Settings", icon: Building2 },
     ],
   },
@@ -6117,6 +6127,13 @@ function CrmWorkspace({
             />
           ) : null}
 
+          {view === "productionReadiness" ? (
+            <ProductionReadinessView
+              snapshot={scopedSnapshot}
+              onViewChange={onViewChange}
+            />
+          ) : null}
+
           {view === "settings" ? (
             <SettingsView snapshot={snapshot} onViewChange={onViewChange} />
           ) : null}
@@ -7390,6 +7407,17 @@ function buildCommandPaletteItems(
       keywords: "settings integrations providers company configuration",
       view: "settings",
       icon: Building2,
+      actionLabel: "Open",
+    },
+    {
+      id: "command-open-production-readiness",
+      kind: "command",
+      group: "Pinned favorites",
+      label: "Open Production Readiness",
+      detail: "Review deployment readiness, owner setup, migrations, and activation guides.",
+      keywords: "production readiness deployment activation checklist migrations oauth credentials regression",
+      view: "productionReadiness",
+      icon: CheckCircle2,
       actionLabel: "Open",
     },
     {
@@ -40036,6 +40064,371 @@ function getGoHighLevelReadinessStatusTone(
   }
 
   return "blue";
+}
+
+function ProductionReadinessView({
+  snapshot,
+  onViewChange,
+}: {
+  snapshot: CrmSnapshot;
+  onViewChange: (view: WorkspaceView) => void;
+}) {
+  const readiness = useMemo(() => buildProductionReadinessCenter(snapshot), [snapshot]);
+  const providerBlockers = readiness.providerChecks.filter(
+    (check) =>
+      check.status === "credentials_required" ||
+      check.status === "oauth_required" ||
+      check.status === "sync_failed" ||
+      check.status === "owner_setup_required",
+  );
+  const readySubsystems = readiness.subsystemChecks.filter(
+    (check) => check.status === "ready_for_activation",
+  ).length;
+
+  return (
+    <div className="space-y-5" data-testid="production-readiness-center">
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Production Readiness Center
+            </p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-950">
+              Safe deployment and staged activation
+            </h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-500">
+              A read-only launch control center for WeatherTech OS. It reviews
+              the existing CRM, Customer 360, dashboard, office operations,
+              dispatch, inspections, jobs, documents, website intake, provider
+              foundations, customer portal, and financial workspace without
+              deploying or enabling live integrations.
+            </p>
+          </div>
+          <ProviderStatusBadge label="No live activation" tone="blue" />
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+            <p className="text-xs font-semibold uppercase text-slate-500">
+              Overall readiness
+            </p>
+            <p className="mt-2 text-5xl font-black tracking-tight text-slate-950">
+              {readiness.scoreLabel}
+            </p>
+            <div className="mt-3">
+              <ProviderStatusBadge
+                label={productionReadinessStateLabel(readiness.overallStatus)}
+                tone="blue"
+              />
+            </div>
+            <p className="mt-4 text-sm leading-6 text-slate-600">
+              {readiness.overallSummary}
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <ReadinessStatCard
+              label="Environment status"
+              value={productionReadinessStateLabel(readiness.environmentStatus.status)}
+              check={readiness.environmentStatus}
+            />
+            <ReadinessStatCard
+              label="Required migrations"
+              value={readiness.requiredMigrations.length}
+              check={readiness.migrationStatus}
+            />
+            <ReadinessStatCard
+              label="Provider blockers"
+              value={providerBlockers.length}
+              check={readiness.integrationStatus}
+            />
+            <ReadinessStatCard
+              label="Subsystems ready"
+              value={`${readySubsystems}/${readiness.subsystemChecks.length}`}
+              check={readiness.databaseStatus}
+            />
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-3">
+          <ReadinessEvidenceCard title="Last validation" value={readiness.lastValidation} />
+          <ReadinessEvidenceCard title="Last regression" value={readiness.lastRegression} />
+          <ReadinessEvidenceCard title="Last migration" value={readiness.lastMigration} />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-red-700">
+              Remaining blockers
+            </p>
+            <h3 className="mt-1 text-xl font-bold text-slate-950">
+              Do not deploy or activate until these are resolved
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => onViewChange("settings")}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            Open Settings
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {readiness.blockers.map((blocker) => (
+            <div
+              key={blocker}
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900"
+            >
+              {blocker}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Provider readiness
+            </p>
+            <h3 className="mt-1 text-xl font-bold text-slate-950">
+              Truthful activation state by provider
+            </h3>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+              Provider states are derived from existing connection records, sync
+              logs, and the registered Integration Center foundation. Missing
+              server credentials are not inspected in browser code.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onViewChange("integrations")}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <PlugZap className="h-4 w-4" />
+            Open Integration Center
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.providerChecks.map((check) => (
+            <ReadinessCheckCard key={check.id} check={check} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-amber-700">
+            Pending owner setup
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Production activation tasks still outside the app
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            These items require owner-controlled accounts, production hosting,
+            provider consoles, or launch decisions. WeatherTech OS records them
+            honestly instead of pretending the system is ready.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          {readiness.pendingOwnerSetup.slice(0, 12).map((item) => (
+            <div
+              key={item}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700"
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Production activation guides
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Required owner setup by provider
+          </h3>
+        </div>
+        <div className="mt-5 grid gap-4">
+          {readiness.activationGuides.map((guide) => (
+            <ActivationGuideCard key={guide.id} guide={guide} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold uppercase text-sky-700">
+            Unified production checklist
+          </p>
+          <h3 className="mt-1 text-xl font-bold text-slate-950">
+            Deployment readiness checks
+          </h3>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {readiness.deploymentChecklist.map((group) => (
+            <ChecklistGroupCard key={group.id} group={group} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase text-sky-700">
+              Subsystems reviewed
+            </p>
+            <h3 className="mt-1 text-xl font-bold text-slate-950">
+              Existing workspaces included in the deployment audit
+            </h3>
+          </div>
+          <ProviderStatusBadge label="Read-only audit" tone="blue" />
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {readiness.subsystemChecks.map((check) => (
+            <ReadinessCheckCard key={check.id} check={check} compact />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function readinessToneToBadge(tone: ProductionReadinessTone): ProviderBadgeTone {
+  return tone;
+}
+
+function ReadinessStatCard({
+  label,
+  value,
+  check,
+}: {
+  label: string;
+  value: string | number;
+  check: ProductionReadinessCheck;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
+        </div>
+        <ProviderStatusBadge
+          label={productionReadinessStateLabel(check.status)}
+          tone={readinessToneToBadge(check.tone)}
+        />
+      </div>
+      <p className="mt-3 text-sm leading-6 text-slate-600">{check.summary}</p>
+    </div>
+  );
+}
+
+function ReadinessEvidenceCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
+      <p className="mt-2 text-sm font-semibold leading-6 text-slate-800">{value}</p>
+    </div>
+  );
+}
+
+function ReadinessCheckCard({
+  check,
+  compact = false,
+}: {
+  check: ProductionReadinessCheck;
+  compact?: boolean;
+}) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-bold text-slate-950">{check.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{check.summary}</p>
+        </div>
+        <ProviderStatusBadge
+          label={productionReadinessStateLabel(check.status)}
+          tone={readinessToneToBadge(check.tone)}
+        />
+      </div>
+      {!compact ? (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <ReadinessList title="Required actions" items={check.requiredActions} />
+          <ReadinessList title="Evidence" items={check.evidence} />
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {check.evidence.slice(0, 2).map((item) => (
+            <span
+              key={item}
+              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600"
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ReadinessList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
+      <ul className="mt-2 space-y-2 text-sm leading-6 text-slate-600">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2">
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ActivationGuideCard({ guide }: { guide: ProductionActivationGuide }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-lg font-bold text-slate-950">{guide.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            Production Activation Guide for {guide.providers.join(", ")}.
+          </p>
+        </div>
+        <ProviderStatusBadge label="Owner setup required" tone="amber" />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <ReadinessList title="Owner actions" items={guide.requiredOwnerActions} />
+        <ReadinessList title="Credentials" items={guide.requiredCredentials} />
+        <ReadinessList title="OAuth setup" items={guide.oauthSetup} />
+        <ReadinessList title="External approvals" items={guide.externalApprovals} />
+        <ReadinessList title="Testing sequence" items={guide.testingSequence} />
+        <ReadinessList title="Rollback procedure" items={guide.rollbackProcedure} />
+      </div>
+    </article>
+  );
+}
+
+function ChecklistGroupCard({ group }: { group: ProductionChecklistGroup }) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="text-lg font-bold text-slate-950">{group.label}</p>
+      <div className="mt-4 grid gap-3">
+        {group.items.map((item) => (
+          <ReadinessCheckCard key={item.id} check={item} />
+        ))}
+      </div>
+    </article>
+  );
 }
 
 function countGoHighLevelResourceMode(

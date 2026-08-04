@@ -25,6 +25,7 @@ const DEFAULT_GROUPS = [
   "themes",
   "layout",
   "settings",
+  "production-readiness",
   "documents",
   "customer-portal",
   "financial",
@@ -7261,6 +7262,128 @@ async function testSettingsIntegrationCenter(tab) {
   return result;
 }
 
+async function testProductionReadinessCenter(browser, tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Readiness");
+  await waitFor(
+    tab,
+    () => {
+      const section = document.querySelector('[data-testid="production-readiness-center"]');
+      const text = section?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("production readiness center") &&
+        text.includes("safe deployment and staged activation") &&
+        text.includes("overall readiness") &&
+        text.includes("environment status") &&
+        text.includes("required migrations") &&
+        text.includes("provider blockers") &&
+        text.includes("last validation") &&
+        text.includes("last regression") &&
+        text.includes("last migration") &&
+        text.includes("0031_electronic_signatures_foundation.sql") &&
+        text.includes("remaining blockers") &&
+        text.includes("do not deploy or activate") &&
+        text.includes("pending owner setup") &&
+        text.includes("production activation guides") &&
+        text.includes("unified production checklist") &&
+        text.includes("deployment readiness checks") &&
+        text.includes("database and supabase") &&
+        text.includes("authentication") &&
+        text.includes("security") &&
+        text.includes("monitoring") &&
+        text.includes("backups") &&
+        text.includes("browser regression status") &&
+        text.includes("missing server credentials are not inspected in browser code") &&
+        text.includes("no live activation") &&
+        [
+          "twilio",
+          "gmail / google workspace",
+          "google calendar",
+          "google business profile",
+          "yelp",
+          "website",
+          "quickbooks online",
+          "electronic signatures",
+        ].every((provider) => text.includes(provider)) &&
+        [
+          "crm",
+          "customer 360",
+          "dashboard",
+          "office operations",
+          "dispatch",
+          "inspections",
+          "jobs",
+          "documents",
+          "customer portal",
+          "financial workspace",
+        ].every((subsystem) => text.includes(subsystem))
+      );
+    },
+    "production readiness center",
+    15000,
+  );
+
+  const desktopOverflow = await tab.playwright.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth + 8,
+  );
+  if (desktopOverflow) {
+    throw new Error("Production Readiness Center has horizontal overflow on desktop.");
+  }
+
+  const viewport = await browser.capabilities.get("viewport");
+  await viewport.set({ width: 390, height: 844 });
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="production-readiness-center"]')),
+    "production readiness center mobile render",
+    10000,
+  );
+  const mobileOverflow = await tab.playwright.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth + 8,
+  );
+  await viewport.set(LAPTOP_VIEWPORT);
+
+  if (mobileOverflow) {
+    throw new Error("Production Readiness Center has horizontal overflow on mobile.");
+  }
+
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Open Integration Center" }),
+    "open integration center from production readiness",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText.toLowerCase();
+      return (
+        text.includes("integration hub") &&
+        text.includes("real-world service connections") &&
+        text.includes("google calendar") &&
+        text.includes("gmail / google workspace email foundation") &&
+        text.includes("twilio") &&
+        text.includes("gohighlevel live synchronization foundation")
+      );
+    },
+    "production readiness routes to integration center",
+    10000,
+  );
+
+  await clickNav(tab, "Readiness");
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Open Settings" }),
+    "open settings from production readiness",
+  );
+  await waitFor(
+    tab,
+    () => document.body.innerText.toLowerCase().includes("settings"),
+    "production readiness routes to settings",
+    10000,
+  );
+
+  return { desktopOverflow, mobileOverflow };
+}
+
 async function testWebsiteMarketingFoundation(browser, tab) {
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Website & Marketing");
@@ -10217,6 +10340,12 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("settings")) {
       await record("Settings Integration Center displays provider readiness", () =>
         testSettingsIntegrationCenter(tab),
+      );
+    }
+
+    if (enabledGroups.has("production-readiness")) {
+      await record("Production Readiness Center reports deployment and provider activation blockers", () =>
+        testProductionReadinessCenter(browser, tab),
       );
     }
 

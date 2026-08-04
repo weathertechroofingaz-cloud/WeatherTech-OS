@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-Electronic Signatures Phase 1 - DocuSign / Dropbox Sign Foundation
+Production Activation & Deployment Readiness
 
 ## Objective
 
-Build a provider-agnostic electronic signature foundation for DocuSign and Dropbox Sign so WeatherTech OS can safely prepare future signature requests, status tracking, Customer 360 activity, audit logging, retries, and Integration Center readiness without activating live providers.
+Prepare WeatherTech OS for safe production deployment and staged live activation without deploying, enabling live integrations, committing credentials, weakening authentication, or changing existing production workflows.
 
 ## Owner
 
@@ -26,49 +26,44 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Inspect current official DocuSign and Dropbox Sign API documentation before implementation.
-- Accurately document officially supported provider capabilities, OAuth requirements, envelope/signature request surfaces, signed-document download, webhook/callback support, test-mode behavior, and unsupported/live-send boundaries.
-- Reuse Customer 360, Estimates, Jobs, Documents, Unified Lead Intake, Integration Center, `integration_sync_logs`, and existing provider architecture.
-- Support WeatherTech Roofing LLC and IHC company mapping for future DocuSign and Dropbox Sign account connections.
-- Add provider abstraction, OAuth readiness, envelope/document readiness, signature request mapping, signed-document status tracking language, Customer 360 event labels, audit logging support, and retry architecture.
-- Add truthful Integration Center readiness states: Not configured, OAuth required, Ready, Production disabled, Connected, and Sync failed.
-- Add focused electronic signature foundation tests and update migration-integrity and browser regression coverage.
-- Update setup documentation, module registry, changelog, sprint records, and safe server-only environment placeholders.
+- Review existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, and Financial workspace readiness.
+- Build a Production Readiness Center that truthfully reports overall readiness, environment status, required migrations, pending owner setup, OAuth/credential requirements, production-disabled states, ready-for-activation states, connected states when records genuinely indicate them, health status, last validation, last regression, and last migration.
+- Add Production Activation Guides for Twilio, Gmail, Google Calendar, Google Business Profile, Yelp, Website, QuickBooks Online, and Electronic Signatures.
+- Add deployment readiness checks for missing environment variables, pending migrations, missing OAuth configuration, missing webhook secrets, missing provider IDs, database readiness, integration readiness, and browser regression status.
+- Create a unified production checklist covering Database, Supabase, Authentication, Integrations, Security, Documents, Customer Portal, Financial, Communications, Website, Monitoring, and Backups.
+- Reuse existing application architecture, navigation, design language, provider registry concepts, company scoping, and browser regression patterns.
+- Update sprint-management documentation after completion.
 
 ## Explicit Exclusions
 
-- Do not redesign the UI.
-- Do not activate live DocuSign or Dropbox Sign providers.
-- Do not send live signature requests.
-- Do not upload documents to providers.
-- Do not perform provider writes.
-- Do not add OAuth token exchange routes or webhook ingestion routes in this foundation sprint.
-- Do not fake connected provider status.
+- Do not deploy.
+- Do not enable production credentials.
+- Do not activate live integrations.
+- Do not add live provider writes, sends, sync, or customer automation.
+- Do not commit secrets or inspect secrets in browser code.
+- Do not create destructive migrations.
 - Do not weaken authentication or RLS.
-- Do not commit secrets.
-- Do not modify `.env.local`.
-- Do not perform destructive migrations.
+- Do not fake readiness, connected states, validation, migration status, provider health, or green deployment status.
+- Do not redesign the application.
+- Do not remove or redesign existing UI.
 - Do not begin another sprint after completion.
 
 ## Completion Criteria
 
-- Official DocuSign and Dropbox Sign capability findings are documented in repository docs with links to official documentation.
-- DocuSign and Dropbox Sign environment placeholders are documented in `.env.example` without secrets.
-- DocuSign and Dropbox Sign provider metadata is registered with honest Integration Center readiness and live signature requests disabled by default.
-- Provider-agnostic helpers support duplicate-safe signature request draft payload readiness without making provider writes.
-- Signature status/event labels can represent requested, viewed, completed, declined, expired, sync failed, and configuration required activity.
-- Integration audit logs can represent DocuSign and Dropbox Sign activity after the additive provider migration is applied.
-- Customer 360 and communications surfaces understand electronic signature provider activity when records/logs exist.
-- No provider requests, document uploads, provider writes, live sync, fake connection states, credentials, or provider activation are introduced.
-- If a migration is required, it is additive, transactionally wrapped, and non-destructive.
+- Production Readiness Center is accessible through existing administration navigation.
+- The center reviews the approved subsystems and truthfully reports production-disabled, owner-setup, credential, OAuth, migration, validation, regression, and readiness blockers.
+- Each requested provider has an activation guide with required owner actions, credentials, OAuth setup, external approvals, testing sequence, and rollback procedure.
+- The unified production checklist includes database/Supabase, authentication/security, integrations, documents, customer portal, financial, communications, website, monitoring, backups, and browser regression readiness.
+- Production readiness logic is reusable and covered by targeted automated tests.
+- Browser regression covers the Production Readiness Center and confirms it routes to existing Settings and Integration Center workflows.
+- No live provider activation, deployment, production credential use, fake readiness, `.env.local` change, package change, schema/RLS change, or destructive migration is introduced.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Electronic signature foundation tests pass.
-- Existing Unified Lead Intake, Website, Yelp, Twilio, Gmail, Google Calendar, Google Business Profile, QuickBooks Online, security/company-access, and migration-integrity tests pass.
-- Relevant signed-in browser regression passes.
-- Final scope audit confirms no excluded work or unrelated files were changed.
+- Production readiness tests pass.
+- Existing regression suites and signed-in browser regression pass where supported.
+- Final scope audit confirms no unrelated files or behavior changed.
 - One focused conventional commit is created and pushed.
 - Local `main` equals `origin/main`.
 - Working tree is clean.
@@ -80,39 +75,30 @@ Joe Harris
 - Confirm the working tree is clean before product development begins.
 - Confirm the current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before product development begins.
-- Inspect existing Customer 360, Estimates, Jobs, Documents, Unified Lead Intake, Communications, Integration Center, Supabase repository, integration logging, environment conventions, setup docs, and browser regression patterns before editing.
-- Inspect current official DocuSign and Dropbox Sign documentation and document supported, OAuth-required, envelope/request, status, signed-file, webhook/callback, test-mode, and unsupported capability boundaries.
-- Run electronic signature foundation tests.
-- Run lead-intake routing tests.
-- Run unified lead-intake service tests.
-- Run Website integration foundation tests.
-- Run Yelp integration foundation tests.
-- Run existing Twilio communications tests.
-- Run existing Google Workspace/Gmail tests.
-- Run existing Google Calendar scheduling tests.
-- Run Google Business Profile tests.
-- Run QuickBooks Online tests.
-- Run security and company-access tests.
+- Inspect existing CRM, Customer 360, Dashboard, Office Operations, Dispatch, Inspections, Jobs, Documents, Website, Yelp, Google Business Profile, Gmail / Google Workspace, Google Calendar, Twilio, QuickBooks Online, Electronic Signatures, Integration Center, Customer Portal, Financial workspace, provider readiness helpers, sprint workflow docs, and browser regression patterns before editing.
+- Run the production readiness center test.
+- Run security/company-access policy tests.
 - Run migration-integrity tests.
+- Run existing provider foundation tests that are touched by readiness coverage.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for electronic signature readiness, Integration Center, Customer 360, Documents, CRM, and existing provider foundations.
+- Run targeted signed-in browser regression for Production Readiness Center, Settings, Integration Center, Dashboard, and navigation.
 - Run full signed-in browser regression where supported.
 - Clean all disposable regression records.
 
 ## Planned Commit Message
 
-`feat: add electronic signatures provider foundation`
+`feat: add production readiness center`
 
 ## Blockers
 
-Live DocuSign/Dropbox Sign API access, OAuth app credentials, account mapping, token storage, webhook/callback configuration, document upload, signed-file download, and production signature requests require owner-controlled provider setup and are outside this repository-only foundation sprint.
+Actual production deployment, live provider activation, production credentials, OAuth app approval, provider webhook configuration, provider IDs, monitoring, backups, and final production Supabase verification remain owner-controlled rollout steps outside this sprint.
 
 ## Final Status
 
-Completed after validation, commit, push, and remote synchronization.
+In progress until validation, commit, push, remote synchronization, and clean working tree verification complete.
 
 ## Notes
 
