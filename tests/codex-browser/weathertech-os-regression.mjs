@@ -3311,10 +3311,23 @@ async function testAiToolsOperatingBrain(browser, tab) {
 
       return (
         text.includes("weathertech os operating brain") &&
-        text.includes("ai tools 2.1") &&
+        text.includes("ai command center 3.0") &&
+        text.includes("ai tools 2.1 foundation") &&
+        text.includes("morning executive briefing") &&
+        text.includes("executive operating brain") &&
+        text.includes("specialized advisors") &&
+        text.includes("roofing operations") &&
+        text.includes("painting operations") &&
+        text.includes("office manager") &&
+        text.includes("production manager") &&
+        text.includes("executive recommendations") &&
+        text.includes("verified facts") &&
+        text.includes("reasoning") &&
+        text.includes("missing information") &&
+        text.includes("expected business impact") &&
+        text.includes("ai confidence") &&
+        text.includes("short-term session memory") &&
         text.includes("live provider readiness") &&
-        text.includes("ai provider not configured") &&
-        text.includes("ai_enabled=false") &&
         text.includes("no fake ai output") &&
         text.includes("usage and cost controls") &&
         text.includes("controlled test mode") &&
@@ -3337,7 +3350,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
         text.includes("production disabled")
       );
     },
-    "AI Tools 2.1 workspace",
+    "AI Command Center 3.0 workspace",
     15000,
   );
 
@@ -3428,6 +3441,10 @@ async function testAiToolsOperatingBrain(browser, tab) {
   const desktopLayout = await tab.playwright.evaluate(() => ({
     visible: Boolean(document.querySelector('[data-testid="ai-tools-2-workspace"]')),
     hasCommandBar: Boolean(document.querySelector('[data-testid="ai-command-bar"]')),
+    hasCommandCenter: Boolean(document.querySelector('[data-testid="ai-command-center-3"]')),
+    hasAdvisorModes: Boolean(document.querySelector('[data-testid="ai-advisor-modes"]')),
+    hasExecutiveRecommendations: Boolean(document.querySelector('[data-testid="ai-executive-recommendations"]')),
+    hasSessionMemory: Boolean(document.querySelector('[data-testid="ai-session-memory"]')),
     hasDisabledState: Boolean(document.querySelector('[data-testid="ai-disabled-state"]')),
     hasPilotControls: Boolean(document.querySelector('[data-testid="ai-live-pilot-controls"]')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
@@ -3436,10 +3453,14 @@ async function testAiToolsOperatingBrain(browser, tab) {
   if (
     !desktopLayout.visible ||
     !desktopLayout.hasCommandBar ||
+    !desktopLayout.hasCommandCenter ||
+    !desktopLayout.hasAdvisorModes ||
+    !desktopLayout.hasExecutiveRecommendations ||
+    !desktopLayout.hasSessionMemory ||
     !desktopLayout.hasDisabledState ||
     !desktopLayout.hasPilotControls
   ) {
-    throw new Error("AI Tools desktop layout did not render its core regions.");
+    throw new Error("AI Command Center desktop layout did not render its core regions.");
   }
 
   if (desktopLayout.hasHorizontalOverflow) {
@@ -3454,6 +3475,8 @@ async function testAiToolsOperatingBrain(browser, tab) {
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
     hasCommandBar: Boolean(document.querySelector('[data-testid="ai-command-bar"]')),
+    hasCommandCenter: Boolean(document.querySelector('[data-testid="ai-command-center-3"]')),
+    hasAdvisorModes: Boolean(document.querySelector('[data-testid="ai-advisor-modes"]')),
     hasPilotControls: Boolean(document.querySelector('[data-testid="ai-live-pilot-controls"]')),
     hasApprovalGates: Boolean(document.querySelector('[data-testid="ai-approval-gates"]')),
   }));
@@ -3462,10 +3485,12 @@ async function testAiToolsOperatingBrain(browser, tab) {
   if (
     !mobileLayout.visible ||
     !mobileLayout.hasCommandBar ||
+    !mobileLayout.hasCommandCenter ||
+    !mobileLayout.hasAdvisorModes ||
     !mobileLayout.hasPilotControls ||
     !mobileLayout.hasApprovalGates
   ) {
-    throw new Error("AI Tools workspace did not render at mobile width.");
+    throw new Error("AI Command Center workspace did not render at mobile width.");
   }
 
   if (mobileLayout.scrollWidth > mobileLayout.viewportWidth + 8) {
@@ -10695,7 +10720,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("ai-tools")) {
-      await record("AI Tools 2.1 shows controlled live-provider readiness and grounded approval-gated responses", () =>
+      await record("AI Command Center 3.0 shows executive recommendations, advisor modes, and grounded approval-gated responses", () =>
         testAiToolsOperatingBrain(browser, tab),
       );
     }

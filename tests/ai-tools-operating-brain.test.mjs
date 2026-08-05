@@ -295,6 +295,23 @@ try {
         updated_at: "2026-08-03T12:00:00.000Z",
       },
     ],
+    materialOrders: [
+      {
+        id: "material-wt",
+        company_id: wtCompanyId,
+        property_id: null,
+        job_id: "job-wt",
+        supplier_name: "Phoenix Roofing Supply",
+        status: "partial",
+        requested_date: "2026-08-01",
+        expected_delivery_date: "2026-08-03",
+        delivery_address: "100 Roof Way",
+        total: 4200,
+        notes: "Tile order partially received.",
+        created_at: "2026-08-01T12:00:00.000Z",
+        updated_at: "2026-08-03T12:00:00.000Z",
+      },
+    ],
     scopeTemplates: [
       {
         id: "template-wt",
@@ -368,6 +385,66 @@ try {
       wtModel.approvalGates.includes("creating an invoice"),
     "AI workspace exposes irreversible-action approval gates",
   );
+  assertEqual(
+    wtModel.commandCenter.generatedAt,
+    now,
+    "AI Command Center carries the deterministic generation timestamp",
+  );
+  assert(
+    wtModel.commandCenter.morningBriefing.includes("critical") &&
+      wtModel.commandCenter.morningBriefing.includes("$"),
+    "AI Command Center creates an executive briefing with risk and revenue context",
+  );
+  assert(
+    wtModel.commandCenter.recommendations.length >= 5,
+    "AI Command Center builds recommendations from visible CRM priority items",
+  );
+  assert(
+    wtModel.commandCenter.recommendations.every(
+      (recommendation) => recommendation.companyId === wtCompanyId,
+    ),
+    "AI Command Center recommendations must not include another company in selected-company scope",
+  );
+  assert(
+    wtModel.commandCenter.recommendations.every(
+      (recommendation) =>
+        recommendation.verifiedFacts.length > 0 &&
+        recommendation.reasoning.length > 0 &&
+        recommendation.expectedBusinessImpact.length > 0 &&
+        recommendation.confidence >= 45 &&
+        recommendation.confidence <= 96 &&
+        recommendation.suggestedNextAction.requiredConfirmation,
+    ),
+    "AI Command Center recommendations include explainability, impact, confidence, and preview-only actions",
+  );
+  assert(
+    wtModel.commandCenter.recommendations.every(
+      (recommendation) =>
+        recommendation.assumptions.some((assumption) =>
+          assumption.includes("No unverified"),
+        ),
+    ),
+    "AI Command Center separates verified facts from assumptions",
+  );
+  assert(
+    wtModel.commandCenter.advisorModes.map((advisor) => advisor.key).includes("owner") &&
+      wtModel.commandCenter.advisorModes.map((advisor) => advisor.key).includes("roofing_operations") &&
+      wtModel.commandCenter.advisorModes.map((advisor) => advisor.key).includes("painting_operations") &&
+      wtModel.commandCenter.advisorModes.map((advisor) => advisor.key).includes("finance"),
+    "AI Command Center exposes specialized advisor modes",
+  );
+  assert(
+    wtModel.commandCenter.materialShortages.some((recommendation) =>
+      recommendation.title.includes("Phoenix Roofing Supply"),
+    ),
+    "AI Command Center surfaces real material-readiness recommendations",
+  );
+  assert(
+    wtModel.commandCenter.invoicePaymentIssues.some((recommendation) =>
+      recommendation.verifiedFacts.some((fact) => fact.includes("INV-WT-001") || fact.includes("invoices:")),
+    ),
+    "AI Command Center grounds invoice/payment recommendations in CRM records",
+  );
 
   const allModel = aiTools.buildAiWorkspaceModel(snapshot, {
     companyId: "all",
@@ -379,6 +456,11 @@ try {
   assert(
     allModel.scopeWriter.some((draft) => draft.companyId === ihcCompanyId),
     "All-companies scope includes IHC assistant context",
+  );
+  assert(
+    allModel.commandCenter.advisorModes.find((advisor) => advisor.key === "painting_operations")
+      ?.recommendationCount > 0,
+    "All-companies scope includes painting advisor recommendations when IHC records are visible",
   );
 
   const invoiceAnswer = aiTools.answerAiCommand({
@@ -449,7 +531,7 @@ try {
     "Sensitive labels are redacted from AI-visible text",
   );
 
-  console.log("AI Tools 2.0 operating brain regression passed.");
+  console.log("AI Command Center 3.0 operating brain regression passed.");
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }

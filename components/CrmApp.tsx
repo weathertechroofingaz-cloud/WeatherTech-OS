@@ -141,7 +141,9 @@ import {
 import {
   answerAiCommand,
   buildAiWorkspaceModel,
+  type AiAdvisorModeKey,
   type AiAssistantDraft,
+  type AiCommandCenterRecommendation,
   type AiGroundedResponse,
   type AiPriorityItem,
   type AiRecommendedAction,
@@ -33818,6 +33820,13 @@ type AiToolsViewProps = {
   onError: (message: string) => void;
 };
 
+type AiCommandCenterFilterState = {
+  customerId: string;
+  jobId: string;
+  employeeId: string;
+  propertyKey: string;
+};
+
 function AiToolsView({
   client,
   snapshot,
@@ -33844,6 +33853,14 @@ function AiToolsView({
   const [aiConversationId, setAiConversationId] = useState<string | null>(null);
   const [previousAiResponseId, setPreviousAiResponseId] = useState<string | null>(null);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
+  const [activeAiAdvisor, setActiveAiAdvisor] = useState<AiAdvisorModeKey>("owner");
+  const [aiCommandCenterFilters, setAiCommandCenterFilters] =
+    useState<AiCommandCenterFilterState>({
+      customerId: "all",
+      jobId: "all",
+      employeeId: "all",
+      propertyKey: "all",
+    });
   const aiCommandAbortRef = useRef<AbortController | null>(null);
 
   const aiWorkspace = useMemo(
@@ -33878,6 +33895,15 @@ function AiToolsView({
     }
   }, [estimateSourceId, snapshot.estimates]);
 
+  useEffect(() => {
+    setAiCommandCenterFilters({
+      customerId: "all",
+      jobId: "all",
+      employeeId: "all",
+      propertyKey: "all",
+    });
+  }, [activeCompanyId]);
+
   const selectedTemplate = snapshot.scopeTemplates.find(
     (template) => template.id === scopeTemplateId,
   );
@@ -33888,6 +33914,68 @@ function AiToolsView({
   const selectedEstimateItems = selectedEstimate
     ? snapshot.estimateLineItems.filter((item) => item.estimate_id === selectedEstimate.id)
     : [];
+  const filteredCommandCenterRecommendations = useMemo(
+    () =>
+      aiWorkspace.commandCenter.recommendations.filter((recommendation) => {
+        if (!aiRecommendationMatchesAdvisor(activeAiAdvisor, recommendation)) {
+          return false;
+        }
+
+        if (
+          aiCommandCenterFilters.customerId !== "all" &&
+          recommendation.filters.customerId !== aiCommandCenterFilters.customerId
+        ) {
+          return false;
+        }
+
+        if (
+          aiCommandCenterFilters.jobId !== "all" &&
+          recommendation.filters.jobId !== aiCommandCenterFilters.jobId
+        ) {
+          return false;
+        }
+
+        if (
+          aiCommandCenterFilters.employeeId !== "all" &&
+          recommendation.filters.employeeId !== aiCommandCenterFilters.employeeId
+        ) {
+          return false;
+        }
+
+        if (
+          aiCommandCenterFilters.propertyKey !== "all" &&
+          recommendation.filters.propertyKey !== aiCommandCenterFilters.propertyKey
+        ) {
+          return false;
+        }
+
+        return true;
+      }),
+    [activeAiAdvisor, aiCommandCenterFilters, aiWorkspace.commandCenter.recommendations],
+  );
+  const aiSessionMemory = useMemo(
+    () => [
+      {
+        label: "Active customer",
+        value: selectedCustomer?.display_name ?? "No customer selected",
+      },
+      {
+        label: "Active estimate",
+        value: selectedEstimate?.title ?? "No estimate selected",
+      },
+      {
+        label: "Active job",
+        value:
+          filteredCommandCenterRecommendations.find((recommendation) => recommendation.jobLabel)
+            ?.jobLabel ?? "No job context selected",
+      },
+      {
+        label: "Previous AI responses",
+        value: `${aiResponses.length} in this session`,
+      },
+    ],
+    [aiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
+  );
 
   const runAiCommandPrompt = async (prompt: string) => {
     const cleanPrompt = prompt.trim();
@@ -34167,13 +34255,13 @@ function AiToolsView({
               WeatherTech OS Operating Brain
             </p>
             <h2 className="mt-2 text-2xl font-bold text-slate-950">
-              AI Tools 2.1
+              AI Command Center 3.0
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Company-aware intelligence for priorities, proposals, scopes, inspections,
-              production, communications, documents, readiness, and finance. Live provider
-              testing stays disabled until owner-approved server credentials and usage
-              controls are configured.
+              Company-aware intelligence for owner priorities, advisor modes, grounded
+              recommendations, proposal and scope drafting, production, communications,
+              documents, readiness, and finance. Built on the existing AI Tools 2.1
+              foundation with action execution disabled.
             </p>
           </div>
           <AiProviderCard model={aiWorkspace} readiness={aiPilotResult?.readiness ?? null} />
@@ -34242,6 +34330,16 @@ function AiToolsView({
             {aiPilotError}
           </p>
         ) : null}
+
+        <AiCommandCenterPanel
+          model={aiWorkspace}
+          activeAdvisor={activeAiAdvisor}
+          onAdvisorChange={setActiveAiAdvisor}
+          filters={aiCommandCenterFilters}
+          onFiltersChange={setAiCommandCenterFilters}
+          recommendations={filteredCommandCenterRecommendations}
+          sessionMemory={aiSessionMemory}
+        />
 
         <AiPilotControlPanel
           result={aiPilotResult}
@@ -34547,6 +34645,508 @@ function AiToolsView({
       </section>
     </div>
   );
+}
+
+function AiCommandCenterPanel({
+  model,
+  activeAdvisor,
+  onAdvisorChange,
+  filters,
+  onFiltersChange,
+  recommendations,
+  sessionMemory,
+}: {
+  model: AiWorkspaceModel;
+  activeAdvisor: AiAdvisorModeKey;
+  onAdvisorChange: (advisor: AiAdvisorModeKey) => void;
+  filters: AiCommandCenterFilterState;
+  onFiltersChange: (filters: AiCommandCenterFilterState) => void;
+  recommendations: AiCommandCenterRecommendation[];
+  sessionMemory: Array<{ label: string; value: string }>;
+}) {
+  const dashboard = model.commandCenter;
+  const activeAdvisorMode =
+    dashboard.advisorModes.find((advisor) => advisor.key === activeAdvisor) ??
+    dashboard.advisorModes[0];
+
+  return (
+    <section
+      className="mt-5 grid w-full min-w-0 max-w-[calc(100vw-4rem)] gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:max-w-none"
+      data-testid="ai-command-center-3"
+    >
+      <div
+        className="grid min-w-0 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:grid-cols-[minmax(0,1fr)_360px]"
+        data-testid="ai-command-center-briefing"
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <AiStatusBadge label="Executive operating brain" tone="blue" />
+            <AiStatusBadge label="Preview only" tone="amber" />
+            <AiStatusBadge label={model.companyScopeLabel} tone="slate" />
+          </div>
+          <h3 className="mt-3 text-2xl font-bold text-slate-950">
+            Morning executive briefing
+          </h3>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            {dashboard.morningBriefing} Each recommendation separates verified CRM
+            facts from assumptions and missing information before suggesting a next action.
+          </p>
+        </div>
+        <div className="grid min-w-0 gap-3 sm:grid-cols-3">
+          <AiCommandCenterMetric
+            label="Health"
+            value={`${dashboard.healthScore}%`}
+            detail="Lower when critical items stack up"
+            tone={dashboard.healthScore >= 80 ? "green" : dashboard.healthScore >= 60 ? "amber" : "red"}
+          />
+          <AiCommandCenterMetric
+            label="AI confidence"
+            value={`${dashboard.confidenceAverage}%`}
+            detail="Grounding quality"
+            tone={dashboard.confidenceAverage >= 75 ? "green" : "amber"}
+          />
+          <AiCommandCenterMetric
+            label="Actions"
+            value={String(dashboard.recommendations.length)}
+            detail="Preview-only"
+            tone={dashboard.recommendations.length ? "blue" : "green"}
+          />
+        </div>
+      </div>
+
+      <div
+        className="grid min-w-0 gap-3 rounded-2xl border border-slate-200 bg-white p-4"
+        data-testid="ai-advisor-modes"
+      >
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Specialized advisors</h3>
+            <p className="text-sm text-slate-500">
+              One grounded CRM context, different executive lenses.
+            </p>
+          </div>
+          {activeAdvisorMode ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Active: {activeAdvisorMode.focus}
+            </p>
+          ) : null}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {dashboard.advisorModes.map((advisor) => {
+            const active = advisor.key === activeAdvisor;
+
+            return (
+              <button
+                key={advisor.key}
+                type="button"
+                onClick={() => onAdvisorChange(advisor.key)}
+                className={`rounded-2xl border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${
+                  active
+                    ? "border-sky-300 bg-sky-50 shadow-sm"
+                    : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-semibold text-slate-950">{advisor.label}</p>
+                  <AiStatusBadge
+                    label={`${advisor.recommendationCount} recs`}
+                    tone={advisor.recommendationCount ? "blue" : "slate"}
+                  />
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-600">{advisor.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div
+        className="grid min-w-0 gap-3 rounded-2xl border border-slate-200 bg-white p-4 lg:grid-cols-5"
+        data-testid="ai-command-center-filters"
+      >
+        <AiCommandCenterFilterLabel label="Company">
+          <div className="w-full min-w-0 truncate rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            {model.companyScopeLabel}
+          </div>
+        </AiCommandCenterFilterLabel>
+        <AiCommandCenterSelect
+          label="Customer"
+          value={filters.customerId}
+          options={dashboard.filterOptions.customers}
+          onChange={(customerId) => onFiltersChange({ ...filters, customerId })}
+        />
+        <AiCommandCenterSelect
+          label="Job"
+          value={filters.jobId}
+          options={dashboard.filterOptions.jobs}
+          onChange={(jobId) => onFiltersChange({ ...filters, jobId })}
+        />
+        <AiCommandCenterSelect
+          label="Employee"
+          value={filters.employeeId}
+          options={dashboard.filterOptions.employees}
+          onChange={(employeeId) => onFiltersChange({ ...filters, employeeId })}
+        />
+        <AiCommandCenterSelect
+          label="Property"
+          value={filters.propertyKey}
+          options={dashboard.filterOptions.properties}
+          onChange={(propertyKey) => onFiltersChange({ ...filters, propertyKey })}
+        />
+      </div>
+
+      <div className="grid min-w-0 gap-3 xl:grid-cols-3">
+        <AiCommandCenterBucket
+          title="Highest-priority leads"
+          emptyLabel="No high-priority lead recommendations in this scope."
+          items={dashboard.highestPriorityLeads}
+        />
+        <AiCommandCenterBucket
+          title="Estimates needing follow-up"
+          emptyLabel="No estimate follow-up recommendations in this scope."
+          items={dashboard.estimatesNeedingFollowUp}
+        />
+        <AiCommandCenterBucket
+          title="Jobs requiring attention"
+          emptyLabel="No job-risk recommendations in this scope."
+          items={dashboard.jobsRequiringAttention}
+        />
+        <AiCommandCenterBucket
+          title="Scheduling conflicts"
+          emptyLabel="No scheduling conflict recommendations in this scope."
+          items={dashboard.schedulingConflicts}
+        />
+        <AiCommandCenterBucket
+          title="Inspection gaps"
+          emptyLabel="No inspection gap recommendations in this scope."
+          items={dashboard.inspectionGaps}
+        />
+        <AiCommandCenterBucket
+          title="Production bottlenecks"
+          emptyLabel="No production bottleneck recommendations in this scope."
+          items={dashboard.productionBottlenecks}
+        />
+        <AiCommandCenterBucket
+          title="Invoice and payment issues"
+          emptyLabel="No invoice or payment recommendations in this scope."
+          items={dashboard.invoicePaymentIssues}
+        />
+        <AiCommandCenterBucket
+          title="Material shortages"
+          emptyLabel="No material readiness recommendations in this scope."
+          items={dashboard.materialShortages}
+        />
+        <AiCommandCenterBucket
+          title="Revenue opportunities"
+          emptyLabel="No revenue opportunity recommendations in this scope."
+          items={dashboard.revenueOpportunities}
+        />
+      </div>
+
+      <div
+        className="grid min-w-0 gap-4 rounded-2xl border border-slate-200 bg-white p-4 xl:grid-cols-[minmax(0,1fr)_320px]"
+        data-testid="ai-executive-recommendations"
+      >
+        <div>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">
+                Executive recommendations
+              </h3>
+              <p className="text-sm text-slate-500">
+                Filtered by advisor and current CRM context. Verified facts, reasoning,
+                missing information, supporting documents, expected business impact, and
+                actions remain previews.
+              </p>
+            </div>
+            <AiStatusBadge label={`${recommendations.length} visible`} tone="blue" />
+          </div>
+          <div className="mt-4 grid gap-3">
+            {recommendations.length ? (
+              recommendations.slice(0, 8).map((recommendation) => (
+                <AiRecommendationCard
+                  key={recommendation.id}
+                  recommendation={recommendation}
+                />
+              ))
+            ) : (
+              <EmptyState label="No AI Command Center recommendations match these filters." />
+            )}
+          </div>
+        </div>
+        <aside
+          className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+          data-testid="ai-session-memory"
+        >
+          <h3 className="text-base font-bold text-slate-950">Short-term session memory</h3>
+          <p className="mt-1 text-sm leading-5 text-slate-500">
+            This memory is only for the current workspace session and does not create
+            permanent customer facts.
+          </p>
+          <dl className="mt-4 grid gap-3">
+            {sessionMemory.map((item) => (
+              <div key={item.label} className="rounded-xl bg-white p-3">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {item.label}
+                </dt>
+                <dd className="mt-1 text-sm font-semibold text-slate-950">{item.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function AiCommandCenterMetric({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "blue" | "amber" | "red" | "green";
+}) {
+  const toneClass =
+    tone === "red"
+      ? "border-red-200 bg-red-50 text-red-950"
+      : tone === "amber"
+      ? "border-amber-200 bg-amber-50 text-amber-950"
+      : tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+      : "border-sky-200 bg-sky-50 text-sky-950";
+
+  return (
+    <div className={`rounded-2xl border p-3 ${toneClass}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide opacity-75">{label}</p>
+      <p className="mt-2 text-xl font-bold">{value}</p>
+      <p className="mt-1 text-[11px] leading-4 opacity-80">{detail}</p>
+    </div>
+  );
+}
+
+function AiCommandCenterFilterLabel({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid min-w-0 gap-1 text-sm">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function AiCommandCenterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ id: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <AiCommandCenterFilterLabel label={label}>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+      >
+        <option value="all">All {label.toLowerCase()}</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </AiCommandCenterFilterLabel>
+  );
+}
+
+function AiCommandCenterBucket({
+  title,
+  emptyLabel,
+  items,
+}: {
+  title: string;
+  emptyLabel: string;
+  items: AiCommandCenterRecommendation[];
+}) {
+  return (
+    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-bold text-slate-950">{title}</h3>
+        <AiStatusBadge label={String(items.length)} tone={items.length ? "blue" : "slate"} />
+      </div>
+      <div className="mt-3 grid gap-2">
+        {items.length ? (
+          items.slice(0, 3).map((item) => (
+            <div key={item.id} className="min-w-0 rounded-xl bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-sm font-semibold text-slate-950">{item.title}</p>
+                <span className="shrink-0 text-xs font-bold text-slate-500">
+                  {item.confidence}%
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                {item.suggestedNextAction.label}: {item.expectedBusinessImpact}
+              </p>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-sm leading-5 text-slate-500">
+            {emptyLabel}
+          </p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function AiRecommendationCard({
+  recommendation,
+}: {
+  recommendation: AiCommandCenterRecommendation;
+}) {
+  const priorityTone =
+    recommendation.priority === "critical"
+      ? "red"
+      : recommendation.priority === "high"
+      ? "amber"
+      : recommendation.priority === "medium"
+      ? "blue"
+      : "slate";
+
+  return (
+    <article
+      className="grid min-w-0 gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[minmax(0,1fr)_280px]"
+      data-testid="ai-recommendation-card"
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <AiStatusBadge label={recommendation.priority} tone={priorityTone} />
+          <AiStatusBadge label={`${recommendation.confidence}% AI confidence`} tone="blue" />
+          <AiStatusBadge label={recommendation.companyName} tone="slate" />
+        </div>
+        <h4 className="mt-3 text-base font-bold text-slate-950">{recommendation.title}</h4>
+        <p className="mt-1 text-sm leading-6 text-slate-600">{recommendation.summary}</p>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <AiRecommendationList
+            title="Verified facts"
+            items={recommendation.verifiedFacts}
+          />
+          <AiRecommendationList
+            title="Missing information"
+            items={recommendation.missingInformation}
+          />
+          <AiRecommendationList
+            title="Supporting documents"
+            items={
+              recommendation.supportingDocuments.length
+                ? recommendation.supportingDocuments.map((record) => record.label)
+                : ["No supporting documents linked."]
+            }
+          />
+          <AiRecommendationList
+            title="Assumptions"
+            items={recommendation.assumptions}
+          />
+        </div>
+      </div>
+      <div className="grid gap-3 rounded-xl bg-white p-3 text-sm text-slate-600">
+        <div>
+          <p className="font-semibold text-slate-950">Reasoning</p>
+          <p className="mt-1 leading-5">{recommendation.reasoning}</p>
+        </div>
+        <div>
+          <p className="font-semibold text-slate-950">Suggested next action</p>
+          <p className="mt-1 leading-5">{recommendation.suggestedNextAction.label}</p>
+          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs font-semibold leading-5 text-amber-800">
+            Action preview only: {recommendation.suggestedNextAction.preview}
+          </p>
+        </div>
+        <div>
+          <p className="font-semibold text-slate-950">Expected business impact</p>
+          <p className="mt-1 leading-5">{recommendation.expectedBusinessImpact}</p>
+        </div>
+        <AiSourceList
+          title="Verified CRM records"
+          records={recommendation.supportingRecords}
+          compact
+        />
+      </div>
+    </article>
+  );
+}
+
+function AiRecommendationList({
+  title,
+  items,
+}: {
+  title: string;
+  items: string[];
+}) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-950">{title}</p>
+      <ul className="mt-2 space-y-1 text-sm leading-5 text-slate-600">
+        {items.slice(0, 4).map((item) => (
+          <li key={item}>- {item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function aiRecommendationMatchesAdvisor(
+  advisor: AiAdvisorModeKey,
+  recommendation: AiCommandCenterRecommendation,
+) {
+  const text = [
+    recommendation.title,
+    recommendation.summary,
+    recommendation.companyName,
+    recommendation.propertyLabel,
+    recommendation.reasoning,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (advisor === "owner") return true;
+  if (advisor === "sales") return ["lead", "estimate"].includes(recommendation.category);
+  if (advisor === "office_manager") {
+    return ["lead", "estimate", "inspection", "financial", "integration", "customer"].includes(
+      recommendation.category,
+    );
+  }
+  if (advisor === "production_manager") {
+    return ["job", "schedule", "inspection", "production", "material"].includes(
+      recommendation.category,
+    );
+  }
+  if (advisor === "finance") return recommendation.category === "financial";
+  if (advisor === "customer_success") {
+    return ["customer", "financial", "inspection", "integration"].includes(recommendation.category);
+  }
+  if (advisor === "marketing") {
+    return recommendation.category === "lead" || /website|yelp|google business|gbp|campaign/.test(text);
+  }
+  if (advisor === "roofing_operations") {
+    return /weathertech|roof|tile|foam|leak|shingle|inspection|warranty|material/.test(text);
+  }
+
+  return /ihc|paint|painting|color|hoa|cabinet|stucco|drywall/.test(text);
 }
 
 function AiProviderCard({
@@ -34948,13 +35548,15 @@ function AiStatusBadge({
   tone,
 }: {
   label: string;
-  tone: "blue" | "amber" | "red" | "slate";
+  tone: "blue" | "amber" | "red" | "green" | "slate";
 }) {
   const toneClass =
     tone === "red"
       ? "border-red-200 bg-red-50 text-red-700"
       : tone === "amber"
       ? "border-amber-200 bg-amber-50 text-amber-700"
+      : tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : tone === "blue"
       ? "border-sky-200 bg-sky-50 text-sky-700"
       : "border-slate-200 bg-slate-50 text-slate-600";

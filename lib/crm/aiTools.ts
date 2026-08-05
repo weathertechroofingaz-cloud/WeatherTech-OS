@@ -12,6 +12,7 @@ import type {
   InvoiceRecord,
   JobRecord,
   LeadRecord,
+  MaterialOrderRecord,
   ProposalAuditEventRecord,
   ScheduleEventRecord,
   ScopeCategory,
@@ -167,10 +168,97 @@ export type AiProviderReadiness = {
   capabilities: string[];
 };
 
+export type AiAdvisorModeKey =
+  | "owner"
+  | "roofing_operations"
+  | "painting_operations"
+  | "sales"
+  | "office_manager"
+  | "production_manager"
+  | "finance"
+  | "customer_success"
+  | "marketing";
+
+export type AiCommandCenterRecommendation = {
+  id: string;
+  priority: AiPriority;
+  category:
+    | "lead"
+    | "estimate"
+    | "job"
+    | "schedule"
+    | "inspection"
+    | "production"
+    | "financial"
+    | "material"
+    | "customer"
+    | "integration";
+  title: string;
+  summary: string;
+  companyId: string | null;
+  companyName: string;
+  customerLabel: string | null;
+  jobLabel: string | null;
+  employeeLabel: string | null;
+  propertyLabel: string | null;
+  verifiedFacts: string[];
+  reasoning: string;
+  assumptions: string[];
+  missingInformation: string[];
+  supportingRecords: AiSourceRecord[];
+  supportingDocuments: AiSourceRecord[];
+  suggestedNextAction: AiRecommendedAction;
+  expectedBusinessImpact: string;
+  confidence: number;
+  filters: {
+    companyId: string | null;
+    customerId: string | null;
+    jobId: string | null;
+    employeeId: string | null;
+    propertyKey: string | null;
+  };
+};
+
+export type AiAdvisorMode = {
+  key: AiAdvisorModeKey;
+  label: string;
+  description: string;
+  focus: string;
+  recommendationCount: number;
+  averageConfidence: number;
+  topRecommendationId: string | null;
+};
+
+export type AiCommandCenterDashboard = {
+  generatedAt: string;
+  morningBriefing: string;
+  healthScore: number;
+  confidenceAverage: number;
+  highestPriorityLeads: AiCommandCenterRecommendation[];
+  estimatesNeedingFollowUp: AiCommandCenterRecommendation[];
+  jobsRequiringAttention: AiCommandCenterRecommendation[];
+  schedulingConflicts: AiCommandCenterRecommendation[];
+  inspectionGaps: AiCommandCenterRecommendation[];
+  productionBottlenecks: AiCommandCenterRecommendation[];
+  invoicePaymentIssues: AiCommandCenterRecommendation[];
+  materialShortages: AiCommandCenterRecommendation[];
+  revenueOpportunities: AiCommandCenterRecommendation[];
+  recommendations: AiCommandCenterRecommendation[];
+  advisorModes: AiAdvisorMode[];
+  filterOptions: {
+    companies: Array<{ id: string; label: string }>;
+    customers: Array<{ id: string; label: string }>;
+    jobs: Array<{ id: string; label: string }>;
+    employees: Array<{ id: string; label: string }>;
+    properties: Array<{ id: string; label: string }>;
+  };
+};
+
 export type AiWorkspaceModel = {
   generatedAt: string;
   companyScopeLabel: string;
   provider: AiProviderReadiness;
+  commandCenter: AiCommandCenterDashboard;
   executiveBrief: AiExecutiveBrief;
   priorityItems: AiPriorityItem[];
   savedAnalyses: AiAssistantDraft[];
@@ -277,6 +365,10 @@ export function buildAiWorkspaceModel(
   const companyScopeLabel = getCompanyScopeLabel(snapshot, options.companyId, options.companyMap);
   const priorityItems = buildAiPriorityItems(authorizedSnapshot, { ...options, now });
   const executiveBrief = buildExecutiveBrief(authorizedSnapshot, priorityItems, now);
+  const commandCenter = buildAiCommandCenterDashboard(authorizedSnapshot, priorityItems, {
+    ...options,
+    now,
+  });
   const scopeWriter = buildScopeWriterDrafts(authorizedSnapshot);
   const estimateAssistant = buildEstimateAssistantDrafts(authorizedSnapshot);
   const proposalIntelligence = buildProposalIntelligence(authorizedSnapshot);
@@ -293,6 +385,7 @@ export function buildAiWorkspaceModel(
     generatedAt: now,
     companyScopeLabel,
     provider: aiProviderReadiness,
+    commandCenter,
     executiveBrief,
     priorityItems,
     savedAnalyses: buildSavedAnalysisPreviews(authorizedSnapshot, priorityItems),
@@ -613,6 +706,41 @@ export function buildAiPriorityItems(
     }
   }
 
+  for (const order of authorizedSnapshot.materialOrders) {
+    if (["draft", "ordered", "partial"].includes(order.status)) {
+      const source = materialOrderSource(order);
+      push({
+        id: `material-order-${order.id}`,
+        priority: order.status === "partial" ? "high" : "medium",
+        score: scoreFromFactors({
+          urgency: order.status === "partial" ? 22 : 14,
+          overdue: order.expected_delivery_date && order.expected_delivery_date < today ? 14 : 0,
+          value: order.total,
+          ageDays: ageInDays(order.updated_at, now),
+        }),
+        title: `${order.supplier_name} material order needs readiness review`,
+        summary: `${order.status.replace("_", " ")} material order worth ${money(order.total)}`,
+        reason:
+          order.expected_delivery_date && order.expected_delivery_date < today
+            ? `Expected delivery date was ${order.expected_delivery_date}.`
+            : "Material readiness should be confirmed before production continues.",
+        category: "production",
+        companyId: order.company_id,
+        owner: null,
+        dueAt: order.expected_delivery_date,
+        ageDays: ageInDays(order.updated_at, now),
+        source,
+        supportingFields: {
+          status: order.status,
+          supplier_name: order.supplier_name,
+          expected_delivery_date: order.expected_delivery_date,
+          total: order.total,
+        },
+        suggestedAction: action("open_record", "Open materials", source, order.company_id, "Confirm material status through the existing Materials workflow."),
+      });
+    }
+  }
+
   for (const inspection of authorizedSnapshot.inspections) {
     const awaitingReport =
       inspection.status === "completed" &&
@@ -775,6 +903,614 @@ function buildExecutiveBrief(
     ],
     recommendations: priorityItems.slice(0, 6),
   };
+}
+
+const aiAdvisorModeDefinitions: Array<{
+  key: AiAdvisorModeKey;
+  label: string;
+  description: string;
+  focus: string;
+}> = [
+  {
+    key: "owner",
+    label: "Owner",
+    description: "Prioritizes cash, customer risk, production risk, and next owner decisions.",
+    focus: "Business-wide action",
+  },
+  {
+    key: "roofing_operations",
+    label: "Roofing Operations",
+    description: "Highlights roof inspections, replacements, repairs, crews, materials, and weather-sensitive work.",
+    focus: "Roofing execution",
+  },
+  {
+    key: "painting_operations",
+    label: "Painting Operations",
+    description: "Highlights IHC painting leads, estimates, production handoffs, color readiness, and walkthroughs.",
+    focus: "Painting execution",
+  },
+  {
+    key: "sales",
+    label: "Sales",
+    description: "Prioritizes new leads, stale estimates, proposals, and revenue conversion opportunities.",
+    focus: "Pipeline movement",
+  },
+  {
+    key: "office_manager",
+    label: "Office Manager",
+    description: "Focuses on follow-ups, missing data, customer waiting time, documents, and inbox risk.",
+    focus: "Office throughput",
+  },
+  {
+    key: "production_manager",
+    label: "Production Manager",
+    description: "Focuses on jobs, crews, scheduling, blockers, inspection handoffs, and material readiness.",
+    focus: "Production control",
+  },
+  {
+    key: "finance",
+    label: "Finance",
+    description: "Focuses on unpaid invoices, deposits, collections, and revenue needing action.",
+    focus: "Cash collection",
+  },
+  {
+    key: "customer_success",
+    label: "Customer Success",
+    description: "Focuses on response obligations, warranty callbacks, documents, and clear next steps.",
+    focus: "Customer trust",
+  },
+  {
+    key: "marketing",
+    label: "Marketing",
+    description: "Focuses on lead sources, website/Yelp/GBP intake, campaign attribution, and follow-up health.",
+    focus: "Demand capture",
+  },
+];
+
+function buildAiCommandCenterDashboard(
+  snapshot: CrmSnapshot,
+  priorityItems: AiPriorityItem[],
+  options: AiBuildOptions & { now: string },
+): AiCommandCenterDashboard {
+  const recommendations = priorityItems
+    .map((item) => buildCommandCenterRecommendation(item, snapshot, options))
+    .sort(sortCommandCenterRecommendations);
+  const criticalCount = recommendations.filter((item) => item.priority === "critical").length;
+  const highCount = recommendations.filter((item) => item.priority === "high").length;
+  const revenueAtRisk = priorityItems
+    .filter((item) => {
+      const category = inferCommandCenterCategory(item);
+      return category === "estimate" || category === "financial";
+    })
+    .reduce((total, item) => total + numericImpactFromSupportingFields(item), 0);
+  const confidenceAverage = recommendations.length
+    ? Math.round(
+        recommendations.reduce((total, item) => total + item.confidence, 0) /
+          recommendations.length,
+      )
+    : 100;
+  const healthScore = clampNumber(
+    100 - criticalCount * 18 - highCount * 9 - Math.max(0, recommendations.length - 8) * 2,
+    1,
+    100,
+  );
+
+  return {
+    generatedAt: options.now,
+    morningBriefing: recommendations.length
+      ? `${criticalCount} critical and ${highCount} high-priority item${criticalCount + highCount === 1 ? "" : "s"} need review. ${money(revenueAtRisk)} is attached to estimates, proposals, invoices, or deposits that need action.`
+      : "No urgent AI recommendations were found in the current authorized WeatherTech OS snapshot.",
+    healthScore,
+    confidenceAverage,
+    highestPriorityLeads: recommendations
+      .filter((item) => item.category === "lead")
+      .slice(0, 5),
+    estimatesNeedingFollowUp: recommendations
+      .filter((item) => item.category === "estimate")
+      .slice(0, 5),
+    jobsRequiringAttention: recommendations
+      .filter((item) => item.category === "job" || item.category === "production")
+      .slice(0, 5),
+    schedulingConflicts: recommendations
+      .filter((item) => item.category === "schedule")
+      .slice(0, 5),
+    inspectionGaps: recommendations
+      .filter((item) => item.category === "inspection")
+      .slice(0, 5),
+    productionBottlenecks: recommendations
+      .filter((item) => item.category === "production" || item.category === "material")
+      .slice(0, 5),
+    invoicePaymentIssues: recommendations
+      .filter((item) => item.category === "financial")
+      .slice(0, 5),
+    materialShortages: recommendations
+      .filter((item) => item.category === "material")
+      .slice(0, 5),
+    revenueOpportunities: recommendations
+      .filter((item) => item.category === "lead" || item.category === "estimate" || item.category === "financial")
+      .slice(0, 5),
+    recommendations,
+    advisorModes: aiAdvisorModeDefinitions.map((advisor) => {
+      const advisorRecommendations = recommendations.filter((recommendation) =>
+        advisorMatchesRecommendation(advisor.key, recommendation),
+      );
+
+      return {
+        ...advisor,
+        recommendationCount: advisorRecommendations.length,
+        averageConfidence: advisorRecommendations.length
+          ? Math.round(
+              advisorRecommendations.reduce((total, item) => total + item.confidence, 0) /
+                advisorRecommendations.length,
+            )
+          : confidenceAverage,
+        topRecommendationId: advisorRecommendations[0]?.id ?? null,
+      };
+    }),
+    filterOptions: buildCommandCenterFilterOptions(snapshot, recommendations),
+  };
+}
+
+function buildCommandCenterRecommendation(
+  item: AiPriorityItem,
+  snapshot: CrmSnapshot,
+  options: AiBuildOptions,
+): AiCommandCenterRecommendation {
+  const category = inferCommandCenterCategory(item);
+  const companyName = companyNameFor(item.companyId, snapshot, options.companyMap);
+  const customer = findRecommendationCustomer(snapshot, item);
+  const job = findRecommendationJob(snapshot, item);
+  const employee = findRecommendationEmployee(snapshot, item);
+  const propertyLabel = findRecommendationPropertyLabel(snapshot, item, customer, job);
+  const supportingRecords = uniqueSources([
+    item.source,
+    customer ? customerSource(customer) : null,
+    job ? jobSource(job) : null,
+  ]);
+  const supportingDocuments = findSupportingDocuments(snapshot, item, customer, job).map(documentSource);
+  const missingInformation = missingInformationForRecommendation(item, category, customer, job);
+  const verifiedFacts = verifiedFactsForRecommendation(item, companyName, propertyLabel);
+
+  return {
+    id: `ai-command-center-${item.id}`,
+    priority: item.priority,
+    category,
+    title: item.title,
+    summary: item.summary,
+    companyId: item.companyId,
+    companyName,
+    customerLabel: customer?.display_name ?? null,
+    jobLabel: job?.title ?? null,
+    employeeLabel: employee?.full_name ?? item.owner,
+    propertyLabel,
+    verifiedFacts,
+    reasoning: reasoningForRecommendation(item, category),
+    assumptions: ["No unverified customer, pricing, measurement, warranty, schedule, or payment facts were inferred."],
+    missingInformation,
+    supportingRecords,
+    supportingDocuments,
+    suggestedNextAction: item.suggestedAction,
+    expectedBusinessImpact: expectedImpactForRecommendation(item, category),
+    confidence: confidenceForRecommendation(item, missingInformation, supportingRecords, supportingDocuments),
+    filters: {
+      companyId: item.companyId,
+      customerId: customer?.id ?? null,
+      jobId: job?.id ?? null,
+      employeeId: employee?.id ?? item.owner,
+      propertyKey: propertyLabel,
+    },
+  };
+}
+
+function inferCommandCenterCategory(item: AiPriorityItem): AiCommandCenterRecommendation["category"] {
+  if (item.source.table === "leads") return "lead";
+  if (item.source.table === "estimates" || item.source.table === "estimate_proposal_revisions") return "estimate";
+  if (item.source.table === "inspections") return "inspection";
+  if (item.source.table === "invoices") return "financial";
+  if (item.source.table === "material_orders") return "material";
+  if (item.source.table === "integration_sync_logs") return "integration";
+  if (item.source.table === "jobs") {
+    const searchable = `${item.title} ${item.summary} ${item.reason}`.toLowerCase();
+    if (searchable.includes("crew") || searchable.includes("schedul")) return "schedule";
+    return item.reason.toLowerCase().includes("blocked") ? "production" : "job";
+  }
+
+  return item.category === "customer" ? "customer" : "production";
+}
+
+function sortCommandCenterRecommendations(
+  left: AiCommandCenterRecommendation,
+  right: AiCommandCenterRecommendation,
+) {
+  const priorityRank: Record<AiPriority, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+  const priorityDelta = priorityRank[right.priority] - priorityRank[left.priority];
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  return right.confidence - left.confidence;
+}
+
+function advisorMatchesRecommendation(
+  advisor: AiAdvisorModeKey,
+  recommendation: AiCommandCenterRecommendation,
+) {
+  const searchable = [
+    recommendation.title,
+    recommendation.summary,
+    recommendation.companyName,
+    recommendation.propertyLabel,
+    recommendation.reasoning,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (advisor === "owner") return true;
+  if (advisor === "sales") return recommendation.category === "lead" || recommendation.category === "estimate";
+  if (advisor === "office_manager") {
+    return ["lead", "estimate", "inspection", "financial", "integration", "customer"].includes(
+      recommendation.category,
+    );
+  }
+  if (advisor === "production_manager") {
+    return ["job", "schedule", "inspection", "production", "material"].includes(
+      recommendation.category,
+    );
+  }
+  if (advisor === "finance") return recommendation.category === "financial";
+  if (advisor === "customer_success") {
+    return ["customer", "financial", "inspection", "integration"].includes(recommendation.category);
+  }
+  if (advisor === "marketing") {
+    return recommendation.category === "lead" || /website|yelp|google business|gbp|campaign/.test(searchable);
+  }
+  if (advisor === "roofing_operations") {
+    return /weathertech|roof|tile|foam|leak|shingle|inspection|warranty|material/.test(searchable);
+  }
+
+  return /ihc|paint|painting|color|hoa|cabinet|stucco|drywall/.test(searchable);
+}
+
+function buildCommandCenterFilterOptions(
+  snapshot: CrmSnapshot,
+  recommendations: AiCommandCenterRecommendation[],
+): AiCommandCenterDashboard["filterOptions"] {
+  const recommendationCompanyIds = new Set(
+    recommendations.map((recommendation) => recommendation.companyId).filter(Boolean) as string[],
+  );
+  const companies = snapshot.companies
+    .filter((company) => recommendationCompanyIds.size === 0 || recommendationCompanyIds.has(company.id))
+    .map((company) => ({ id: company.id, label: company.name }));
+  const customers = snapshot.customers.map((customer) => ({
+    id: customer.id,
+    label: customer.display_name,
+  }));
+  const jobs = snapshot.jobs.map((job) => ({ id: job.id, label: job.title }));
+  const employees = snapshot.employees.map((employee) => ({
+    id: employee.id,
+    label: employee.full_name,
+  }));
+  const propertyLabels = new Map<string, string>();
+
+  for (const property of snapshot.properties) {
+    propertyLabels.set(property.id, `${property.display_name} - ${property.address}`);
+  }
+
+  for (const recommendation of recommendations) {
+    if (recommendation.propertyLabel) {
+      propertyLabels.set(recommendation.propertyLabel, recommendation.propertyLabel);
+    }
+  }
+
+  return {
+    companies,
+    customers,
+    jobs,
+    employees,
+    properties: Array.from(propertyLabels.entries()).map(([id, label]) => ({ id, label })),
+  };
+}
+
+function verifiedFactsForRecommendation(
+  item: AiPriorityItem,
+  companyName: string,
+  propertyLabel: string | null,
+) {
+  const facts = [
+    `Company: ${companyName}`,
+    `Source record: ${item.source.safeReference}`,
+    `Current workflow stage: ${String(item.supportingFields.status ?? item.category).replace(/_/g, " ")}`,
+    `Priority: ${item.priority}`,
+  ];
+
+  if (item.dueAt) {
+    facts.push(`Due or scheduled: ${item.dueAt}`);
+  }
+
+  if (item.ageDays > 0) {
+    facts.push(`Age: ${item.ageDays} day${item.ageDays === 1 ? "" : "s"}`);
+  }
+
+  const value = numericImpactFromSupportingFields(item);
+  if (value > 0) {
+    facts.push(`Visible value: ${money(value)}`);
+  }
+
+  if (propertyLabel) {
+    facts.push(`Property: ${propertyLabel}`);
+  }
+
+  return facts;
+}
+
+function reasoningForRecommendation(
+  item: AiPriorityItem,
+  category: AiCommandCenterRecommendation["category"],
+) {
+  const prefix =
+    category === "financial"
+      ? "Cash movement is time-sensitive."
+      : category === "lead" || category === "estimate"
+      ? "Sales momentum decays when follow-up is delayed."
+      : category === "job" || category === "schedule" || category === "production"
+      ? "Production risk can create customer, crew, and margin problems."
+      : category === "inspection"
+      ? "Inspection gaps block estimate or production handoff."
+      : category === "material"
+      ? "Material uncertainty can delay crews and revenue."
+      : "This item affects operational trust or readiness.";
+
+  return `${prefix} ${item.reason}`;
+}
+
+function missingInformationForRecommendation(
+  item: AiPriorityItem,
+  category: AiCommandCenterRecommendation["category"],
+  customer: CustomerRecord | null,
+  job: JobRecord | null,
+) {
+  const missing = new Set<string>();
+
+  if (!customer) missing.add("confirmed customer link");
+  if (!item.owner) missing.add("assigned owner");
+  if (!item.dueAt) missing.add("confirmed due date or scheduled time");
+  if (category === "lead") missing.add("qualification decision and next contact outcome");
+  if (category === "estimate") missing.add("customer approval or signature outcome");
+  if (category === "job" || category === "schedule" || category === "production") {
+    if (!job?.crew_name) missing.add("confirmed crew assignment");
+    if (!job?.scheduled_start && !job?.start_date) missing.add("confirmed production schedule");
+    missing.add("material, document, and customer-readiness confirmation");
+  }
+  if (category === "inspection") missing.add("completed findings, measurements, photos, and report status");
+  if (category === "financial") missing.add("verified customer payment intent and approved collection message");
+  if (category === "material") missing.add("confirmed delivery status and production dependency");
+  if (category === "integration") missing.add("owner-approved provider configuration status");
+
+  return Array.from(missing);
+}
+
+function expectedImpactForRecommendation(
+  item: AiPriorityItem,
+  category: AiCommandCenterRecommendation["category"],
+) {
+  if (category === "financial") {
+    return "Improves cash collection visibility and reduces the chance of missed invoice follow-up.";
+  }
+
+  if (category === "lead" || category === "estimate") {
+    return `Protects pipeline conversion and visible revenue up to ${money(numericImpactFromSupportingFields(item))}.`;
+  }
+
+  if (category === "job" || category === "schedule" || category === "production" || category === "material") {
+    return "Reduces production delay risk, crew confusion, customer callbacks, and margin leakage.";
+  }
+
+  if (category === "inspection") {
+    return "Keeps inspection-to-estimate handoff moving and reduces office rework.";
+  }
+
+  return "Improves operational clarity while keeping all write actions owner-approved.";
+}
+
+function confidenceForRecommendation(
+  item: AiPriorityItem,
+  missingInformation: string[],
+  supportingRecords: AiSourceRecord[],
+  supportingDocuments: AiSourceRecord[],
+) {
+  return clampNumber(
+    60 +
+      Math.min(22, Math.round(item.score / 4)) +
+      Math.min(8, Object.keys(item.supportingFields).length * 2) +
+      supportingRecords.length * 2 +
+      Math.min(4, supportingDocuments.length) -
+      missingInformation.length * 3,
+    45,
+    96,
+  );
+}
+
+function numericImpactFromSupportingFields(item: {
+  supportingFields?: Record<string, string | number | boolean | null>;
+}) {
+  const fields = item.supportingFields ?? {};
+  const candidates = [
+    fields.estimated_value,
+    fields.total,
+    fields.balance_due,
+    fields.deposit_amount,
+  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  return candidates[0] ?? 0;
+}
+
+function findRecommendationCustomer(snapshot: CrmSnapshot, item: AiPriorityItem) {
+  if (item.source.table === "leads") {
+    const lead = snapshot.leads.find((candidate) => candidate.id === item.source.id);
+    if (lead?.customer_id) {
+      return snapshot.customers.find((customer) => customer.id === lead.customer_id) ?? null;
+    }
+    return snapshot.customers.find((customer) =>
+      [customer.email, customer.phone, customer.property_address]
+        .filter(Boolean)
+        .some((value) => value === lead?.email || value === lead?.phone || value === lead?.property_address),
+    ) ?? null;
+  }
+
+  if (item.source.table === "customers") {
+    return snapshot.customers.find((customer) => customer.id === item.source.id) ?? null;
+  }
+
+  if (item.source.table === "estimates") {
+    const estimate = snapshot.estimates.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === estimate?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "estimate_proposal_revisions") {
+    const proposal = snapshot.proposalRevisions.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === proposal?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "jobs") {
+    const job = snapshot.jobs.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === job?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "inspections") {
+    const inspection = snapshot.inspections.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === inspection?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "invoices") {
+    const invoice = snapshot.invoices.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === invoice?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "documents") {
+    const document = snapshot.documents.find((candidate) => candidate.id === item.source.id);
+    return snapshot.customers.find((customer) => customer.id === document?.customer_id) ?? null;
+  }
+
+  if (item.source.table === "material_orders") {
+    const order = snapshot.materialOrders.find((candidate) => candidate.id === item.source.id);
+    const job = snapshot.jobs.find((candidate) => candidate.id === order?.job_id);
+    return snapshot.customers.find((customer) => customer.id === job?.customer_id) ?? null;
+  }
+
+  return null;
+}
+
+function findRecommendationJob(snapshot: CrmSnapshot, item: AiPriorityItem) {
+  if (item.source.table === "jobs") {
+    return snapshot.jobs.find((job) => job.id === item.source.id) ?? null;
+  }
+
+  if (item.source.table === "material_orders") {
+    const order = snapshot.materialOrders.find((candidate) => candidate.id === item.source.id);
+    return snapshot.jobs.find((job) => job.id === order?.job_id) ?? null;
+  }
+
+  if (item.source.table === "documents") {
+    const document = snapshot.documents.find((candidate) => candidate.id === item.source.id);
+    return snapshot.jobs.find((job) => job.id === document?.job_id) ?? null;
+  }
+
+  if (item.source.table === "invoices") {
+    const invoice = snapshot.invoices.find((candidate) => candidate.id === item.source.id);
+    return snapshot.jobs.find((job) => job.id === invoice?.job_id) ?? null;
+  }
+
+  return null;
+}
+
+function findRecommendationEmployee(snapshot: CrmSnapshot, item: AiPriorityItem) {
+  if (!item.owner) {
+    return null;
+  }
+
+  return snapshot.employees.find((employee) => employee.id === item.owner) ?? null;
+}
+
+function findRecommendationPropertyLabel(
+  snapshot: CrmSnapshot,
+  item: AiPriorityItem,
+  customer: CustomerRecord | null,
+  job: JobRecord | null,
+) {
+  const propertyId =
+    snapshot.leads.find((lead) => item.source.table === "leads" && lead.id === item.source.id)?.property_id ??
+    snapshot.estimates.find((estimate) => item.source.table === "estimates" && estimate.id === item.source.id)?.property_id ??
+    snapshot.jobs.find((candidate) => candidate.id === job?.id)?.property_id ??
+    snapshot.inspections.find((inspection) => item.source.table === "inspections" && inspection.id === item.source.id)?.property_id ??
+    snapshot.documents.find((document) => item.source.table === "documents" && document.id === item.source.id)?.property_id ??
+    null;
+  const property = snapshot.properties.find((candidate) => candidate.id === propertyId);
+
+  if (property) {
+    return `${property.display_name} - ${property.address}`;
+  }
+
+  if (job?.property_address) return job.property_address;
+  if (customer?.property_address) return customer.property_address;
+
+  const lead = snapshot.leads.find((candidate) => candidate.id === item.source.id);
+  if (lead?.property_address) return lead.property_address;
+
+  const inspection = snapshot.inspections.find((candidate) => candidate.id === item.source.id);
+  return inspection?.property_address ?? null;
+}
+
+function findSupportingDocuments(
+  snapshot: CrmSnapshot,
+  item: AiPriorityItem,
+  customer: CustomerRecord | null,
+  job: JobRecord | null,
+) {
+  return snapshot.documents
+    .filter((document) => {
+      if (document.company_id !== item.companyId) return false;
+      if (customer?.id && document.customer_id === customer.id) return true;
+      if (job?.id && document.job_id === job.id) return true;
+      if (item.source.table === "estimates" && document.estimate_id === item.source.id) return true;
+      if (item.source.table === "inspections" && document.inspection_id === item.source.id) return true;
+      return false;
+    })
+    .slice(0, 3);
+}
+
+function uniqueSources(records: Array<AiSourceRecord | null>) {
+  const seen = new Set<string>();
+  const output: AiSourceRecord[] = [];
+
+  for (const record of records) {
+    if (!record) continue;
+    const key = `${record.table}:${record.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(record);
+  }
+
+  return output;
+}
+
+function companyNameFor(
+  companyId: string | null,
+  snapshot: CrmSnapshot,
+  companyMap?: Map<string, CompanyRecord>,
+) {
+  if (!companyId) return "All authorized companies";
+  return companyMap?.get(companyId)?.name ??
+    snapshot.companies.find((company) => company.id === companyId)?.name ??
+    "Selected company";
+}
+
+function clampNumber(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }
 
 function buildScopeWriterDrafts(snapshot: CrmSnapshot): AiAssistantDraft[] {
@@ -1317,6 +2053,16 @@ function invoiceSource(invoice: InvoiceRecord) {
 
 function documentSource(document: DocumentRecord) {
   return source("documents", document.id, document.title, document.company_id, "Documents");
+}
+
+function materialOrderSource(order: MaterialOrderRecord) {
+  return source(
+    "material_orders",
+    order.id,
+    `${order.supplier_name} ${order.status}`,
+    order.company_id,
+    "Materials",
+  );
 }
 
 function integrationSource(log: IntegrationSyncLogRecord) {
