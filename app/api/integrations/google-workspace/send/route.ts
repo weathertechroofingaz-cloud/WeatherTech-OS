@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
@@ -6,8 +7,10 @@ import {
   decryptGoogleToken,
   encryptGoogleToken,
   GMAIL_EMAIL_SEND_EVENT_TYPE,
+  getGoogleWorkspaceConfigCheckResult,
   refreshGoogleAccessToken,
   sendGmailEmail,
+  validateGmailOutboundRecipients,
   validateGmailOwnerApproval,
   type GmailOutboundAttachment,
 } from "../../../../../lib/googleWorkspace/serverClient";
@@ -202,6 +205,27 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const recipientValidation = validateGmailOutboundRecipients(message);
+
+  if (!recipientValidation.ok) {
+    return NextResponse.json(
+      { ok: false, sent: false, message: recipientValidation.message },
+      { status: 409 },
+    );
+  }
+
+  if (!getGoogleWorkspaceConfigCheckResult().credentials.gmailSendEnabled) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message:
+          "No email was sent. GOOGLE_GMAIL_SEND_ENABLED must be explicitly enabled for controlled live sending.",
+      },
+      { status: 409 },
+    );
+  }
+
   const { data: credential } = message.integration_connection_id
     ? await serviceClient
         .from("gmail_mailbox_credentials")
@@ -269,17 +293,51 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const approvedAt = new Date().toISOString();
+  const sendAttemptId = randomUUID();
+  const approvalMetadata = {
+    ...(message.metadata ?? {}),
+    approvalState: "owner_approved",
+    approvedBy: userResult.user.id,
+    approvedAt,
+    sendAttemptId,
+    sendClaimedAt: approvedAt,
+  };
+  const { data: claimedMessage, error: claimError } = await serviceClient
+    .from("email_messages")
+    .update({
+      sync_status: "syncing",
+      metadata: approvalMetadata,
+      last_error: null,
+    })
+    .eq("id", message.id)
+    .eq("company_id", message.company_id)
+    .eq("status", "queued")
+    .eq("sync_status", "queued")
+    .select("*")
+    .maybeSingle();
+
+  if (claimError || !claimedMessage) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message:
+          "This email is already being delivered or is no longer pending owner approval. No duplicate send was attempted.",
+      },
+      { status: 409 },
+    );
+  }
+
   const result = await sendGmailEmail({
-    message,
+    message: claimedMessage,
     accessToken: refresh.accessToken,
     attachments,
   });
   const now = new Date().toISOString();
   const metadata = {
-    ...(message.metadata ?? {}),
+    ...approvalMetadata,
     approvalState: result.sent ? "sent" : "owner_approved",
-    approvedBy: userResult.user.id,
-    approvedAt: now,
     attachmentCountDelivered: attachments.length,
   };
 
@@ -295,7 +353,8 @@ export async function POST(request: NextRequest) {
         last_error: null,
         metadata,
       })
-      .eq("id", message.id);
+      .eq("id", message.id)
+      .eq("sync_status", "syncing");
 
     if (message.estimate_id) {
       await serviceClient
@@ -326,11 +385,12 @@ export async function POST(request: NextRequest) {
       .from("email_messages")
       .update({
         status: result.attempted ? "failed" : message.status,
-        sync_status: result.attempted ? "failed" : message.sync_status,
+        sync_status: result.attempted ? "failed" : "queued",
         last_error: result.message,
         metadata,
       })
-      .eq("id", message.id);
+      .eq("id", message.id)
+      .eq("sync_status", "syncing");
   }
 
   await serviceClient.from("integration_sync_logs").insert({

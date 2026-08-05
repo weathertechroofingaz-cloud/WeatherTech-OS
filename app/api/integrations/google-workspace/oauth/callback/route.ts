@@ -6,6 +6,7 @@ import {
   fetchGmailProfile,
   GMAIL_OAUTH_EVENT_TYPE,
   hashGoogleOAuthState,
+  validateGoogleWorkspaceAccountDomain,
 } from "../../../../../../lib/googleWorkspace/serverClient";
 import {
   fetchGoogleUserInfo,
@@ -125,6 +126,23 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const { data: claimedState, error: stateClaimError } = await serviceClient
+    .from("gmail_oauth_states")
+    .update({ consumed_at: new Date().toISOString() })
+    .eq("id", stateRecord.id)
+    .is("consumed_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (stateClaimError || !claimedState) {
+    return NextResponse.redirect(
+      safeRedirectUrl(request, redirectPath, {
+        [redirectKey]: "error",
+        reason: "oauth_state_invalid",
+      }),
+    );
+  }
+
   if (oauthError || !code) {
     await recordOAuthFailure({
       serviceClient,
@@ -193,6 +211,25 @@ export async function GET(request: NextRequest) {
         safeRedirectUrl(request, redirectPath, {
           calendar: "error",
           reason: "profile_failed",
+        }),
+      );
+    }
+
+    const domainCheck = validateGoogleWorkspaceAccountDomain(profile.emailAddress);
+
+    if (!domainCheck.ok) {
+      await recordOAuthFailure({
+        serviceClient,
+        stateId: stateRecord.id,
+        companyId: stateRecord.company_id,
+        message: domainCheck.message,
+        requestFingerprint: stateHash,
+        provider: oauthProvider,
+      });
+      return NextResponse.redirect(
+        safeRedirectUrl(request, redirectPath, {
+          calendar: "error",
+          reason: "workspace_domain_mismatch",
         }),
       );
     }
@@ -302,10 +339,6 @@ export async function GET(request: NextRequest) {
       },
       { onConflict: "integration_connection_id" },
     );
-    await serviceClient
-      .from("gmail_oauth_states")
-      .update({ consumed_at: new Date().toISOString() })
-      .eq("id", stateRecord.id);
     await serviceClient.from("integration_sync_logs").insert({
       company_id: stateRecord.company_id,
       integration_connection_id: connection.id,
@@ -350,6 +383,25 @@ export async function GET(request: NextRequest) {
       safeRedirectUrl(request, redirectPath, {
         gmail: "error",
         reason: "profile_failed",
+      }),
+    );
+  }
+
+  const domainCheck = validateGoogleWorkspaceAccountDomain(profile.emailAddress);
+
+  if (!domainCheck.ok) {
+    await recordOAuthFailure({
+      serviceClient,
+      stateId: stateRecord.id,
+      companyId: stateRecord.company_id,
+      message: domainCheck.message,
+      requestFingerprint: stateHash,
+      provider: oauthProvider,
+    });
+    return NextResponse.redirect(
+      safeRedirectUrl(request, redirectPath, {
+        gmail: "error",
+        reason: "workspace_domain_mismatch",
       }),
     );
   }
@@ -455,10 +507,6 @@ export async function GET(request: NextRequest) {
     },
     { onConflict: "integration_connection_id" },
   );
-  await serviceClient
-    .from("gmail_oauth_states")
-    .update({ consumed_at: new Date().toISOString() })
-    .eq("id", stateRecord.id);
   await serviceClient.from("integration_sync_logs").insert({
     company_id: stateRecord.company_id,
     integration_connection_id: connection.id,

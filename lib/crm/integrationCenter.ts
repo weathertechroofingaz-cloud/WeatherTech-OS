@@ -338,7 +338,6 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       scopes: [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/gmail.compose",
       ],
       summary:
         "OAuth callback, mailbox sync, and safe send boundaries exist; owner Google Cloud configuration is required before live mailbox access.",

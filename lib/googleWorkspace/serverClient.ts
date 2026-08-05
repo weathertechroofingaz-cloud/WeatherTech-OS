@@ -165,45 +165,10 @@ export type GmailSendResult =
       error: string;
     };
 
-export type GmailDraftResult =
-  | {
-      attempted: false;
-      created: false;
-      status: "disabled" | "missing_token" | "missing_message" | "configuration_missing";
-      message: string;
-    }
-  | {
-      attempted: true;
-      created: true;
-      status: "created";
-      message: string;
-      gmailDraftId: string | null;
-      gmailMessageId: string | null;
-      gmailThreadId: string | null;
-    }
-  | {
-      attempted: true;
-      created: false;
-      status: "failed";
-      message: string;
-      error: string;
-    };
-
 type GmailSendResponse = {
   id?: unknown;
   threadId?: unknown;
   message?: unknown;
-  error?: {
-    message?: unknown;
-  };
-};
-
-type GmailDraftResponse = {
-  id?: unknown;
-  message?: {
-    id?: unknown;
-    threadId?: unknown;
-  };
   error?: {
     message?: unknown;
   };
@@ -221,8 +186,14 @@ export type GmailOwnerApprovalCheck = {
     | "approved"
     | "owner_required"
     | "explicit_approval_required"
+    | "approval_submission_required"
     | "outbound_required"
     | "already_sent";
+  message: string;
+};
+
+export type GmailRecipientValidation = {
+  ok: boolean;
   message: string;
 };
 
@@ -381,17 +352,14 @@ export function createGoogleOAuthState({
 }
 
 export function buildGoogleOAuthAuthorizationRequest({
-  companyId,
   state,
   loginHint,
   scopes = googleWorkspaceSupportedScopes,
 }: {
-  companyId: string;
   state?: GoogleOAuthState;
   loginHint?: string | null;
   scopes?: string[];
 }): GoogleOAuthAuthorizationRequest {
-  const config = getGoogleWorkspaceConfigCheckResult();
   const oauthState = state ?? createGoogleOAuthState();
   const clientId = getServerEnv(googleWorkspaceEnvVars.clientId);
   const redirectUri = getServerEnv(googleWorkspaceEnvVars.redirectUri);
@@ -417,12 +385,10 @@ export function buildGoogleOAuthAuthorizationRequest({
     params.set("hd", workspaceDomain);
   }
 
-  params.set("wtos_company_id", companyId);
-
   return {
     ...oauthState,
     authorizationUrl: `${GOOGLE_AUTH_URL}?${params.toString()}`,
-    scopes: config.scopes,
+    scopes: [...scopes],
   };
 }
 
@@ -436,6 +402,36 @@ export function normalizeGmailEmailAddress(value: string | null | undefined) {
   const emailMatch = email.match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/i);
 
   return emailMatch?.[0].toLowerCase() ?? null;
+}
+
+export function validateGoogleWorkspaceAccountDomain(emailAddress: string) {
+  const configuredDomain = getServerEnv(googleWorkspaceEnvVars.workspaceDomain)
+    ?.replace(/^@/, "")
+    .toLowerCase();
+  const normalizedEmail = normalizeGmailEmailAddress(emailAddress);
+  const accountDomain = normalizedEmail?.split("@")[1] ?? null;
+
+  if (!configuredDomain) {
+    return {
+      ok: true as const,
+      restricted: false,
+      message: "No Google Workspace domain restriction is configured.",
+    };
+  }
+
+  if (accountDomain === configuredDomain) {
+    return {
+      ok: true as const,
+      restricted: true,
+      message: "The authorized Google account matches the configured Workspace domain.",
+    };
+  }
+
+  return {
+    ok: false as const,
+    restricted: true,
+    message: "The authorized Google account is outside the configured Workspace domain.",
+  };
 }
 
 function normalizeEmailList(values: Array<string | null | undefined>) {
@@ -1014,6 +1010,14 @@ export function validateGmailOwnerApproval({
     return { ok: false, status: "already_sent", message: "This email was already sent." };
   }
 
+  if (message.status !== "queued" || message.sync_status !== "queued") {
+    return {
+      ok: false,
+      status: "approval_submission_required",
+      message: "Submit this email for owner approval before confirming Gmail delivery.",
+    };
+  }
+
   if (!isOwner) {
     return {
       ok: false,
@@ -1031,6 +1035,39 @@ export function validateGmailOwnerApproval({
   }
 
   return { ok: true, status: "approved", message: "Owner approval confirmed." };
+}
+
+export function validateGmailOutboundRecipients(
+  message: EmailMessageRecord,
+): GmailRecipientValidation {
+  const toRecipients = message.to_emails?.length
+    ? message.to_emails
+    : message.to_email
+      ? [message.to_email]
+      : [];
+  const optionalRecipients = [
+    ...(message.cc_emails ?? []),
+    ...(message.cc_email ? [message.cc_email] : []),
+    ...(message.bcc_emails ?? []),
+    ...(message.reply_to_emails ?? []),
+  ];
+
+  if (!toRecipients.length) {
+    return { ok: false, message: "Add at least one valid recipient before sending." };
+  }
+
+  if (
+    [...toRecipients, ...optionalRecipients].some(
+      (recipient) => !normalizeGmailEmailAddress(recipient),
+    )
+  ) {
+    return {
+      ok: false,
+      message: "Every To, Cc, Bcc, and Reply-To value must contain a valid email address.",
+    };
+  }
+
+  return { ok: true, message: "Outbound recipients are valid." };
 }
 
 export function encryptionKeyIsConfigured() {
@@ -1330,95 +1367,6 @@ export async function sendGmailEmail({
       status: "failed",
       message: "Gmail send failed.",
       error: error instanceof Error ? error.message : "Gmail send API returned an error.",
-    };
-  }
-}
-
-export async function createGmailDraft({
-  message,
-  accessToken,
-  attachments = [],
-  fetchImpl = fetch,
-}: {
-  message: EmailMessageRecord | null;
-  accessToken: string | null;
-  attachments?: GmailOutboundAttachment[];
-  fetchImpl?: FetchLike;
-}): Promise<GmailDraftResult> {
-  if (!getGoogleWorkspaceConfigCheckResult().ok) {
-    return {
-      attempted: false,
-      created: false,
-      status: "configuration_missing",
-      message: "Google Workspace configuration is incomplete. No Gmail draft was created.",
-    };
-  }
-
-  if (!message) {
-    return {
-      attempted: false,
-      created: false,
-      status: "missing_message",
-      message: "No email message was provided.",
-    };
-  }
-
-  if (!accessToken) {
-    return {
-      attempted: false,
-      created: false,
-      status: "missing_token",
-      message: "No authorized Gmail mailbox token is available. No Gmail draft was created.",
-    };
-  }
-
-  try {
-    const response = await fetchImpl(`${GMAIL_API_BASE_URL}/users/me/drafts`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: {
-          raw: buildGmailRawMessage(message, attachments),
-          threadId: message.gmail_thread_id ?? undefined,
-        },
-      }),
-    });
-    const payload = (await response.json()) as GmailDraftResponse;
-
-    if (!response.ok) {
-      return {
-        attempted: true,
-        created: false,
-        status: "failed",
-        message: "Gmail draft creation failed.",
-        error:
-          typeof payload.error?.message === "string"
-            ? payload.error.message
-            : "Gmail draft API returned an error.",
-      };
-    }
-
-    return {
-      attempted: true,
-      created: true,
-      status: "created",
-      message: "Gmail draft created.",
-      gmailDraftId: typeof payload.id === "string" ? payload.id : null,
-      gmailMessageId:
-        typeof payload.message?.id === "string" ? payload.message.id : null,
-      gmailThreadId:
-        typeof payload.message?.threadId === "string" ? payload.message.threadId : null,
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      created: false,
-      status: "failed",
-      message: "Gmail draft creation failed.",
-      error: error instanceof Error ? error.message : "Gmail draft API returned an error.",
     };
   }
 }

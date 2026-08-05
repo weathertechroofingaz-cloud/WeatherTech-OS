@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -128,7 +128,6 @@ try {
   assert(
       readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.readonly") &&
       readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.send") &&
-      readyConfig.scopes.includes("https://www.googleapis.com/auth/gmail.compose") &&
       readyConfig.scopes.includes("https://www.googleapis.com/auth/calendar.events") &&
       readyConfig.scopes.includes("https://www.googleapis.com/auth/calendar.calendarlist.readonly") &&
       readyConfig.scopes.includes("openid"),
@@ -174,9 +173,9 @@ try {
     "OAuth state hash matches the raw state",
   );
   const oauthRequest = serverClient.buildGoogleOAuthAuthorizationRequest({
-    companyId: "company-weathertech",
     state: oauthState,
     loginHint: "sales@weathertech.example",
+    scopes: integrations.gmailScopes,
   });
   const oauthUrl = new URL(oauthRequest.authorizationUrl);
   assertEqual(
@@ -188,6 +187,34 @@ try {
   assertEqual(oauthUrl.searchParams.get("code_challenge_method"), "S256", "OAuth uses PKCE S256");
   assertEqual(oauthUrl.searchParams.get("login_hint"), "sales@weathertech.example", "OAuth keeps login hint");
   assertEqual(oauthUrl.searchParams.get("hd"), "weathertech.example", "OAuth preserves workspace domain hint");
+  assertEqual(
+    oauthUrl.searchParams.get("scope"),
+    integrations.gmailScopes.join(" "),
+    "Gmail OAuth requests only the exact running Gmail scopes",
+  );
+  assertEqual(
+    oauthUrl.searchParams.has("wtos_company_id"),
+    false,
+    "Gmail OAuth does not expose internal company ids to Google",
+  );
+  assertEqual(
+    integrations.gmailScopes.includes("https://www.googleapis.com/auth/gmail.compose"),
+    false,
+    "Supabase-backed drafts do not require the restricted Gmail compose scope",
+  );
+
+  assertEqual(
+    serverClient.validateGoogleWorkspaceAccountDomain(
+      "sales@weathertech.example",
+    ).ok,
+    true,
+    "Configured Workspace domain accepts a matching mailbox",
+  );
+  assertEqual(
+    serverClient.validateGoogleWorkspaceAccountDomain("owner@gmail.com").ok,
+    false,
+    "Configured Workspace domain rejects an outside mailbox",
+  );
 
   assertEqual(
     serverClient.normalizeGmailEmailAddress("Jane Homeowner <Jane@Example.COM>"),
@@ -442,6 +469,9 @@ try {
   const approvalMessage = {
     direction: "outbound",
     status: "queued",
+    sync_status: "queued",
+    to_email: "owner@example.com",
+    to_emails: ["owner@example.com"],
   };
   assertEqual(
     serverClient.validateGmailOwnerApproval({
@@ -469,6 +499,63 @@ try {
     }).ok,
     true,
     "Explicit company-owner approval unlocks controlled send",
+  );
+  assertEqual(
+    serverClient.validateGmailOwnerApproval({
+      message: { ...approvalMessage, status: "draft", sync_status: "local" },
+      isOwner: true,
+      approvalAction: "owner_approved_send",
+    }).status,
+    "approval_submission_required",
+    "A draft cannot bypass submission for owner approval",
+  );
+  assertEqual(
+    serverClient.validateGmailOutboundRecipients(approvalMessage).ok,
+    true,
+    "A valid owner-controlled recipient passes server validation",
+  );
+  assertEqual(
+    serverClient.validateGmailOutboundRecipients({
+      ...approvalMessage,
+      to_email: "not-an-email",
+      to_emails: ["not-an-email"],
+    }).ok,
+    false,
+    "Malformed recipients are rejected before Gmail delivery",
+  );
+
+  const sendRouteSource = readFileSync(
+    join(cwd, "app/api/integrations/google-workspace/send/route.ts"),
+    "utf8",
+  );
+  const oauthStartRouteSource = readFileSync(
+    join(cwd, "app/api/integrations/google-workspace/oauth/start/route.ts"),
+    "utf8",
+  );
+  const oauthCallbackRouteSource = readFileSync(
+    join(cwd, "app/api/integrations/google-workspace/oauth/callback/route.ts"),
+    "utf8",
+  );
+  assert(
+    sendRouteSource.includes('.eq("status", "queued")') &&
+      sendRouteSource.includes('.eq("sync_status", "queued")') &&
+      sendRouteSource.includes('sync_status: "syncing"') &&
+      sendRouteSource.includes("No duplicate send was attempted"),
+    "Send route atomically claims a queued approval before calling Gmail",
+  );
+  assert(
+    oauthStartRouteSource.includes('.eq("role", "owner")') &&
+      oauthStartRouteSource.includes("A company owner must authorize") &&
+      !oauthStartRouteSource.includes("...gmailIdentityScopes"),
+    "Only a company owner can start Gmail OAuth with the minimum Gmail scope set",
+  );
+  assert(
+    oauthCallbackRouteSource.includes("validateGoogleWorkspaceAccountDomain") &&
+      oauthCallbackRouteSource.includes("workspace_domain_mismatch") &&
+      oauthCallbackRouteSource.includes('.is("consumed_at", null)') &&
+      oauthCallbackRouteSource.indexOf('.is("consumed_at", null)') <
+        oauthCallbackRouteSource.indexOf("exchangeGoogleOAuthCode({"),
+    "OAuth callback enforces the optional Workspace domain and atomically consumes state before code exchange",
   );
 
   const estimatePdf = serverClient.buildEstimatePdfAttachment({

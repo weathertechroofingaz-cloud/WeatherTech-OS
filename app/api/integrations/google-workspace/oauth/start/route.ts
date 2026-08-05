@@ -10,7 +10,7 @@ import {
   GOOGLE_CALENDAR_DISCOVERY_EVENT_TYPE,
   googleCalendarSupportedScopes,
 } from "../../../../../../lib/googleWorkspace/calendar";
-import { gmailIdentityScopes, gmailScopes } from "../../../../../../lib/crm/integrations";
+import { gmailScopes } from "../../../../../../lib/crm/integrations";
 import type { CompanyRecord } from "../../../../../../lib/crm/types";
 
 export const dynamic = "force-dynamic";
@@ -111,13 +111,31 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const { data: ownerMembership } = await client
+    .from("company_memberships")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("user_id", userResult.user.id)
+    .eq("role", "owner")
+    .maybeSingle();
+
+  if (!ownerMembership) {
+    return NextResponse.json(
+      {
+        ok: false,
+        authorizationUrl: null,
+        message: `A company owner must authorize the ${providerLabel} connection.`,
+      },
+      { status: 403 },
+    );
+  }
+
   const requestDetails = buildGoogleOAuthAuthorizationRequest({
-    companyId,
     loginHint: getRequestString(body.loginHint),
     scopes:
       provider === "google_calendar"
         ? googleCalendarSupportedScopes
-        : [...gmailIdentityScopes, ...gmailScopes],
+        : gmailScopes,
   });
   const redirectPath = sanitizeRedirectPath(getRequestString(body.redirectPath));
   const mailboxLabel =

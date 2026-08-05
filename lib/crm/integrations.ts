@@ -33,7 +33,6 @@ export const googleCalendarReadOnlyScopes = [
 export const gmailScopes = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.compose",
 ];
 
 export const gmailIdentityScopes = ["openid", "email", "profile"];
