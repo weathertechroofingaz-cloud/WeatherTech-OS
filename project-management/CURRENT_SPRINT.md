@@ -10,11 +10,11 @@ This sprint was explicitly owner-approved in the Codex task request and must use
 
 ## Sprint Name
 
-AI Tools 2.1 - Live Provider Connection, Command Execution, and Controlled AI Pilot
+Production Connections Phase 1
 
 ## Objective
 
-Turn the existing AI Tools 2.0 Operating System Brain into a controlled internal AI pilot for WeatherTech Roofing LLC and IHC Painting. The sprint must prepare server-side live AI provider connectivity, answer grounded natural-language questions using authorized WeatherTech OS data, generate useful drafts, and prepare actions behind explicit approval gates without activating production AI automation.
+Begin connecting WeatherTech OS to real production services safely while preserving existing Customer Portal, Estimates, AI Command Center, CRM, company isolation, and approval-only AI behavior.
 
 ## Owner
 
@@ -22,70 +22,68 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-05.
+2026-08-04.
 
 ## Owner-Approved Scope
 
-- Reuse and extend the existing AI Tools workspace only.
-- Preserve the AI Scope Writer and AI Estimate Assistant.
-- Add provider-neutral server-side AI provider abstraction for OpenAI, Anthropic, or disabled mode.
-- Support model selection, structured output, tool/action proposals, provider health, safe provider-disabled behavior, timeout handling, retry limits, token limits, usage metadata, and cost controls.
-- Add live AI readiness states for migration, provider configuration, API keys, usage limits, controlled testing, provider connectivity, provider failures, and production-disabled state.
-- Retrieve authorized internal context from existing CRM, Customer 360, Leads, Customers, Inspections, Estimates, Proposal Builder 2.0, Jobs, Calendar, Dispatch, Photos, Materials, Invoices, Change Orders, Documents, Communications, Analytics, Weather, Integration Center, and Production Readiness data.
-- Enforce company access and role access server-side before AI context is prepared.
-- Treat retrieved records as untrusted content and block prompt-injection, secret-exposure, live-send, payment, deployment, migration, schedule, and provider-write requests.
-- Add a useful AI command experience with follow-up state, safe cancellation, source records, missing-data warnings, proposed next actions, and approval requirements.
-- Add action previews for drafts and recommendations while keeping execution disabled.
-- Add usage, cost, provider, audit, and saved-work readiness to the AI Tools and Production Readiness surfaces.
-- Add safe `.env.example` placeholders and permanent documentation for AI provider setup, controlled testing, migration status, rollback, and production activation requirements.
-- Add mocked-provider automated regression coverage and targeted AI Tools browser regression coverage.
+- Connect and validate one provider at a time.
+- Start with Production Supabase verification before any other provider work.
+- Proceed in this priority order only after the previous provider is verified:
+  - Production Supabase verification
+  - Document storage
+  - Stripe payments
+  - Business email
+  - SMS
+  - Google Calendar
+  - QuickBooks
+- Verify required production configuration without printing or committing secrets.
+- Preserve existing Customer Portal workflows.
+- Preserve existing Estimate and Proposal workflows.
+- Preserve the existing AI Command Center.
+- Keep all AI actions approval-only.
+- Keep `AI_ACTION_EXECUTION_ENABLED=false`.
+- Validate each provider before moving to the next provider.
+- Run full regression after each integration.
+- Commit only after validation passes.
+- Report screenshots, validation results, commit hash, and remaining blockers.
 
 ## Explicit Exclusions
 
-- Do not create another AI page.
-- Do not create another AI Command Center.
-- Do not create a duplicate AI navigation item.
-- Do not remove the existing Scope Writer.
-- Do not remove the existing Estimate Assistant.
-- Do not broadly redesign the application.
+- Do not begin a later provider before the current provider is verified.
 - Do not deploy.
-- Do not enter real AI credentials into source files.
-- Do not commit API keys.
+- Do not apply migrations unless the provider step explicitly requires it and the target project, deployment path, and rollback/safety conditions are verified.
+- Do not modify production data manually.
+- Do not print, log, or commit secrets.
 - Do not modify `.env.local`.
-- Do not apply remote Supabase migrations from Codex during this sprint.
-- Do not send real email or SMS.
-- Do not send proposals or signature requests.
-- Do not process payments or create QuickBooks records.
-- Do not change schedules or assign crews automatically.
-- Do not execute external-provider actions.
-- Do not fabricate prices, measurements, quantities, warranties, dates, payment states, provider states, customer facts, or hidden reasoning.
+- Do not enable automatic AI execution.
+- Do not send live communications without explicit approval.
+- Do not activate live payments without explicit approval.
 - Do not weaken authentication, RLS, company isolation, or approval gates.
-- Do not begin another sprint after completion.
+- Do not redesign the UI.
+- Do not add unrelated CRM features or new modules.
+- Do not break existing workflows.
 
 ## Completion Criteria
 
-- Existing AI Tools workspace is labeled and validated as AI Tools 2.1.
-- Provider-neutral server-side AI pilot service exists.
-- `/api/ai-tools/command` accepts authenticated commands and returns grounded, approval-gated results.
-- OpenAI and Anthropic provider adapters are covered by mocked tests.
-- Provider-disabled behavior remains truthful when no owner-controlled credentials are configured.
-- Context retrieval enforces company scope and avoids secrets.
-- Prompt-injection and unsafe-command blocking are tested.
-- Action previews require explicit human review and do not execute workflows.
-- Usage and cost controls block unrestricted AI usage.
-- Production Readiness reports AI provider setup requirements honestly.
-- Migration `0033_ai_tools_operating_brain.sql` remains not remotely applied by Codex.
-- Documentation records provider setup, safe test mode, migration status, supported commands, action previews, approval gates, audit logging, cost controls, prompt-injection defense, limitations, rollback, and production activation requirements.
-- Browser regression includes AI Tools 2.1 coverage.
+- Production Supabase verification is completed first.
+- Every connected provider is validated before moving to the next provider.
+- Customer Portal still works.
+- Estimates and Proposal Builder still work.
+- AI Command Center still works.
+- Automatic AI execution remains disabled.
+- No secrets are committed or exposed.
+- No unapproved production data changes are made.
+- Full regression passes after each integration.
 - `npm run type-check` passes.
 - `npm run lint` passes.
 - `npm run build` passes.
 - `git diff --check` passes.
-- Relevant local Node regression tests pass.
-- Final scope audit confirms no unrelated files or behavior changed.
-- One focused conventional commit is created and pushed.
+- Relevant provider-specific automated tests pass.
+- Targeted browser validation passes for each connected provider.
+- Final scope audit confirms no unrelated changes.
+- One focused conventional commit is created only after validation passes.
 - Local `main` equals `origin/main`.
-- Working tree is clean.
+- Working tree is clean except for any explicitly documented local-only files.
 
 ## Validation Plan
 
@@ -93,32 +91,39 @@ Joe Harris
 - Confirm explicit owner approval from the task request.
 - Confirm current local branch is `main`.
 - Confirm local `HEAD` matches `origin/main` before development begins.
-- Run AI Tools operating-brain tests.
-- Run AI Tools live-provider pilot tests.
-- Run migration integrity tests.
-- Run security/company-access policy tests.
-- Run provider-foundation tests where applicable.
-- Run Proposal Builder 2.0 tests.
+- Confirm the working tree is clean or every local-only file is explicitly documented.
+- Confirm there is no interrupted Git operation.
+- For Production Supabase verification:
+  - Verify the linked Supabase project is the intended WeatherTech OS project before any remote action.
+  - Verify migration state without applying migrations unless separately safe and required.
+  - Verify storage readiness before document-storage activation.
+  - Verify anonymous and authenticated access behavior remains safe.
+- For each later provider:
+  - Verify official provider capability and production setup requirements.
+  - Verify required configuration is present without printing values.
+  - Verify provider stays disabled until safe activation gates pass.
+  - Run targeted provider tests and direct browser validation.
 - Run `npm run type-check`.
 - Run `npm run lint`.
 - Run `npm run build`.
 - Run `git diff --check`.
-- Run targeted signed-in browser regression for AI Tools and related workspaces.
-- Run full signed-in browser regression where supported.
-- Confirm no disposable AI Tools regression records remain.
+- Run relevant automated tests.
+- Run full signed-in browser regression after each integration where supported.
+- Capture screenshots for owner review.
 
 ## Planned Commit Message
 
-`feat: add ai tools live provider pilot`
+`feat: connect production services phase 1`
 
 ## Blockers
 
-Live AI provider activation remains blocked until owner-controlled provider selection, server-side credentials, model limits, token/cost budgets, safety settings, controlled testing, migration deployment, and explicit production activation approval are complete.
+- Do not begin Production Connections until repository housekeeping confirms this sprint file is current and the Supabase CLI project files are either committed or explicitly documented as local-only.
+- Any missing production credentials, owner-controlled OAuth setup, billing decision, destructive database change, live communication, live payment, or deployment approval must stop the sprint until owner action is provided.
 
 ## Final Status
 
-Completed and validated through the final repository workflow. The sprint commit and push are recorded in Git history and in [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md).
+Approved and awaiting implementation.
 
 ## Notes
 
-Use [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) as the mandatory lifecycle for this sprint. Do not promote [NEXT_SPRINT.md](./NEXT_SPRINT.md) or begin another sprint unless the owner explicitly approves that action.
+Use [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) as the mandatory lifecycle for this sprint. Connect one provider at a time and stop before the next provider if validation, safety, or owner-approval gates fail.
