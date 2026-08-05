@@ -148,6 +148,12 @@ import {
   type AiSourceRecord,
   type AiWorkspaceModel,
 } from "../lib/crm/aiTools";
+import type {
+  AiActionPreview,
+  AiPilotCommandResult,
+  AiPilotReadiness,
+  AiUsageCheck,
+} from "../lib/crm/aiProvider";
 import {
   buildCommunicationProviderReadiness,
   buildUnifiedInboxItems,
@@ -33832,6 +33838,13 @@ function AiToolsView({
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
   const [aiCommand, setAiCommand] = useState("");
   const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
+  const [aiPilotResult, setAiPilotResult] = useState<AiPilotCommandResult | null>(null);
+  const [aiPilotError, setAiPilotError] = useState("");
+  const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
+  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
+  const [previousAiResponseId, setPreviousAiResponseId] = useState<string | null>(null);
+  const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
+  const aiCommandAbortRef = useRef<AbortController | null>(null);
 
   const aiWorkspace = useMemo(
     () =>
@@ -33876,14 +33889,19 @@ function AiToolsView({
     ? snapshot.estimateLineItems.filter((item) => item.estimate_id === selectedEstimate.id)
     : [];
 
-  const runAiCommand = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!aiCommand.trim()) {
+  const runAiCommandPrompt = async (prompt: string) => {
+    const cleanPrompt = prompt.trim();
+    if (!cleanPrompt || isAiCommandRunning) {
       return;
     }
 
-    const response = answerAiCommand({
-      prompt: aiCommand,
+    setAiPilotError("");
+    setIsAiCommandRunning(true);
+    const controller = new AbortController();
+    aiCommandAbortRef.current = controller;
+
+    const fallbackResponse = answerAiCommand({
+      prompt: cleanPrompt,
       snapshot,
       options: {
         companyId: activeCompanyId,
@@ -33891,8 +33909,67 @@ function AiToolsView({
         userRole: "office",
       },
     });
-    setAiResponses((current) => [response, ...current].slice(0, 5));
+
+    try {
+      const response = await fetch("/api/ai-tools/command", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt: cleanPrompt,
+          companyId: activeCompanyId,
+          conversationId: aiConversationId,
+          previousResponseId: previousAiResponseId,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`AI pilot endpoint returned ${response.status}.`);
+      }
+
+      const result = (await response.json()) as AiPilotCommandResult;
+      setAiPilotResult(result);
+      setAiConversationId(result.conversation.id);
+      setPreviousAiResponseId(result.conversation.previousResponseId);
+      setAiResponses((current) => [result.response, ...current].slice(0, 6));
+      setReviewedActionIds({});
+    } catch (currentError) {
+      if (controller.signal.aborted) {
+        setAiPilotError("AI request canceled. No action was taken.");
+      } else {
+        setAiPilotError(
+          `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
+        );
+        setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
+        setAiPilotResult(null);
+        setReviewedActionIds({});
+      }
+    } finally {
+      if (aiCommandAbortRef.current === controller) {
+        aiCommandAbortRef.current = null;
+      }
+      setIsAiCommandRunning(false);
+    }
+  };
+
+  const runAiCommand = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!aiCommand.trim()) {
+      return;
+    }
+
+    void runAiCommandPrompt(aiCommand);
     setAiCommand("");
+  };
+
+  const cancelAiCommand = () => {
+    aiCommandAbortRef.current?.abort();
+  };
+
+  const markActionReviewed = (id: string, decision: "approved" | "rejected") => {
+    setReviewedActionIds((current) => ({ ...current, [id]: decision }));
   };
 
   const generateScope = () => {
@@ -34090,15 +34167,16 @@ function AiToolsView({
               WeatherTech OS Operating Brain
             </p>
             <h2 className="mt-2 text-2xl font-bold text-slate-950">
-              AI Tools 2.0
+              AI Tools 2.1
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
               Company-aware intelligence for priorities, proposals, scopes, inspections,
-              production, communications, documents, readiness, and finance. Live AI is
-              disabled until an owner-approved provider is configured.
+              production, communications, documents, readiness, and finance. Live provider
+              testing stays disabled until owner-approved server credentials and usage
+              controls are configured.
             </p>
           </div>
-          <AiProviderCard model={aiWorkspace} />
+          <AiProviderCard model={aiWorkspace} readiness={aiPilotResult?.readiness ?? null} />
         </div>
 
         <form
@@ -34122,11 +34200,22 @@ function AiToolsView({
             </div>
             <button
               type="submit"
+              disabled={isAiCommandRunning}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
             >
               <WandSparkles className="h-4 w-4" />
-              Analyze
+              {isAiCommandRunning ? "Analyzing" : "Analyze"}
             </button>
+            {isAiCommandRunning ? (
+              <button
+                type="button"
+                onClick={cancelAiCommand}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </button>
+            ) : null}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {[
@@ -34138,18 +34227,8 @@ function AiToolsView({
               <button
                 key={prompt}
                 type="button"
-                onClick={() => {
-                  const response = answerAiCommand({
-                    prompt,
-                    snapshot,
-                    options: {
-                      companyId: activeCompanyId,
-                      companyMap,
-                      userRole: "office",
-                    },
-                  });
-                  setAiResponses((current) => [response, ...current].slice(0, 5));
-                }}
+                onClick={() => void runAiCommandPrompt(prompt)}
+                disabled={isAiCommandRunning}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-sky-200 hover:text-sky-700"
               >
                 {prompt}
@@ -34158,7 +34237,23 @@ function AiToolsView({
           </div>
         </form>
 
-        <AiGroundedResponsePanel response={aiResponses[0] ?? null} />
+        {aiPilotError ? (
+          <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+            {aiPilotError}
+          </p>
+        ) : null}
+
+        <AiPilotControlPanel
+          result={aiPilotResult}
+          latestResponse={aiResponses[0] ?? null}
+        />
+
+        <AiGroundedResponsePanel
+          response={aiResponses[0] ?? null}
+          actionPreviews={aiPilotResult?.actionPreviews ?? []}
+          reviewedActionIds={reviewedActionIds}
+          onReviewAction={markActionReviewed}
+        />
       </section>
 
       <section
@@ -34454,7 +34549,19 @@ function AiToolsView({
   );
 }
 
-function AiProviderCard({ model }: { model: AiWorkspaceModel }) {
+function AiProviderCard({
+  model,
+  readiness,
+}: {
+  model: AiWorkspaceModel;
+  readiness: AiPilotReadiness | null;
+}) {
+  const label = readiness?.label ?? model.provider.label;
+  const summary = readiness?.summary ?? model.provider.summary;
+  const providerLabel = readiness
+    ? `${readiness.provider} / ${readiness.model}`
+    : "disabled / not selected";
+
   return (
     <div
       className="rounded-2xl border border-amber-200 bg-amber-50 p-4"
@@ -34463,20 +34570,99 @@ function AiProviderCard({ model }: { model: AiWorkspaceModel }) {
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
         <div>
-          <p className="font-semibold text-amber-950">{model.provider.label}</p>
-          <p className="mt-1 text-sm leading-5 text-amber-900">{model.provider.summary}</p>
+          <p className="font-semibold text-amber-950">{label}</p>
+          <p className="mt-1 text-sm leading-5 text-amber-900">{summary}</p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+            {providerLabel}
+          </p>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <AiStatusBadge label="AI_ENABLED=false" tone="amber" />
+        <AiStatusBadge
+          label={readiness?.state.replace(/_/g, " ") ?? "AI_ENABLED=false"}
+          tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+        />
         <AiStatusBadge label="No fake AI output" tone="slate" />
-        <AiStatusBadge label="Owner setup required" tone="amber" />
+        <AiStatusBadge
+          label={readiness?.migrationStatus ?? "Owner setup required"}
+          tone={readiness?.migrationStatus === "applied" ? "blue" : "amber"}
+        />
       </div>
     </div>
   );
 }
 
-function AiGroundedResponsePanel({ response }: { response: AiGroundedResponse | null }) {
+function AiPilotControlPanel({
+  result,
+  latestResponse,
+}: {
+  result: AiPilotCommandResult | null;
+  latestResponse: AiGroundedResponse | null;
+}) {
+  const usage = result?.usage;
+  const readiness = result?.readiness;
+  const sourceCount = result?.context.records.length ?? latestResponse?.supportingRecords.length ?? 0;
+
+  return (
+    <div
+      className="mt-4 grid gap-3 lg:grid-cols-3"
+      data-testid="ai-live-pilot-controls"
+    >
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="text-sm font-semibold text-slate-950">Live provider readiness</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {readiness?.summary ??
+            "No server-side AI pilot result yet. Ask a command to test provider readiness."}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AiStatusBadge
+            label={readiness?.state.replace(/_/g, " ") ?? "not tested"}
+            tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+          />
+          <AiStatusBadge
+            label={readiness?.productionDisabled === false ? "production enabled" : "production disabled"}
+            tone="slate"
+          />
+        </div>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="text-sm font-semibold text-slate-950">Usage and cost controls</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {usage?.reason ?? "Daily budgets, per-user limits, per-company limits, token caps, timeout, and retry limits are required before live testing."}
+        </p>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+          <span>Request tokens: {usage?.estimatedRequestTokens ?? 0}</span>
+          <span>Max response: {usage?.maxResponseTokens ?? 0}</span>
+          <span>Budget: ${usage?.dailyBudgetUsd ?? 0}</span>
+          <span>Estimated: ${usage?.estimatedCostUsd ?? 0}</span>
+        </div>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="text-sm font-semibold text-slate-950">Controlled test mode</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {sourceCount} source record{sourceCount === 1 ? "" : "s"} prepared for grounded answering.
+          Actions remain preview-only and cannot send, schedule, invoice, deploy, or apply migrations.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AiStatusBadge label="approval gates active" tone="amber" />
+          <AiStatusBadge label="prompt-injection screened" tone="blue" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AiGroundedResponsePanel({
+  response,
+  actionPreviews = [],
+  reviewedActionIds = {},
+  onReviewAction,
+}: {
+  response: AiGroundedResponse | null;
+  actionPreviews?: AiActionPreview[];
+  reviewedActionIds?: Record<string, "approved" | "rejected">;
+  onReviewAction?: (id: string, decision: "approved" | "rejected") => void;
+}) {
   if (!response) {
     return (
       <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
@@ -34519,7 +34705,12 @@ function AiGroundedResponsePanel({ response }: { response: AiGroundedResponse | 
             ))}
           </ul>
         </div>
-        <AiActionList actions={response.actions} />
+        <AiActionList
+          actions={response.actions}
+          actionPreviews={actionPreviews}
+          reviewedActionIds={reviewedActionIds}
+          onReviewAction={onReviewAction}
+        />
       </div>
     </div>
   );
@@ -34688,18 +34879,62 @@ function AiSourceList({
   );
 }
 
-function AiActionList({ actions }: { actions: AiRecommendedAction[] }) {
+function AiActionList({
+  actions,
+  actionPreviews = [],
+  reviewedActionIds = {},
+  onReviewAction,
+}: {
+  actions: AiRecommendedAction[];
+  actionPreviews?: AiActionPreview[];
+  reviewedActionIds?: Record<string, "approved" | "rejected">;
+  onReviewAction?: (id: string, decision: "approved" | "rejected") => void;
+}) {
+  const previewsById = new Map(actionPreviews.map((preview) => [preview.id, preview]));
+
   return (
     <div>
       <p className="text-sm font-semibold text-slate-950">Recommended actions</p>
       {actions.length ? (
         <ul className="mt-2 space-y-2 text-sm text-slate-600">
-          {actions.map((actionItem) => (
-            <li key={actionItem.id}>
-              {actionItem.label}
-              {actionItem.requiredConfirmation ? " - confirmation required" : ""}
+          {actions.map((actionItem) => {
+            const preview = previewsById.get(actionItem.id);
+            const reviewedState = reviewedActionIds[actionItem.id];
+
+            return (
+            <li key={actionItem.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="font-semibold text-slate-950">{actionItem.label}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                {actionItem.requiredConfirmation ? "Confirmation required. " : ""}
+                {actionItem.reason}
+              </p>
+              {preview ? (
+                <div className="mt-2 rounded-lg bg-white p-2 text-xs text-slate-600">
+                  <p>Fields affected: {preview.fieldsAffected.join(", ") || "none"}</p>
+                  <p>Status: {reviewedState ? `${reviewedState} preview only` : preview.status.replace(/_/g, " ")}</p>
+                </div>
+              ) : null}
+              {onReviewAction ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onReviewAction(actionItem.id, "approved")}
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  >
+                    Approve preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onReviewAction(actionItem.id, "rejected")}
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : null}
             </li>
-          ))}
+          );
+          })}
         </ul>
       ) : (
         <p className="mt-2 text-sm text-slate-500">No write actions proposed.</p>

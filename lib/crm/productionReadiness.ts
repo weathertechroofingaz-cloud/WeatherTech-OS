@@ -217,7 +217,7 @@ export type ProductionReadinessCenter = {
   blockers: string[];
 };
 
-const latestRequiredMigration = "0031_electronic_signatures_foundation.sql";
+const latestRequiredMigration = "0033_ai_tools_operating_brain.sql";
 
 const providerIdsForActivation = new Set<IntegrationProviderId>([
   "twilio",
@@ -306,6 +306,24 @@ const providerGuideEnv = {
     goHighLevelEnvVars.weatherTechLocationId,
     goHighLevelEnvVars.ihcLocationId,
   ],
+  ai: [
+    "AI_ENABLED",
+    "AI_PROVIDER",
+    "AI_MODEL",
+    "AI_OPENAI_API_KEY",
+    "AI_ANTHROPIC_API_KEY",
+    "AI_DAILY_BUDGET_USD",
+    "AI_DAILY_REQUEST_LIMIT",
+    "AI_PER_USER_DAILY_REQUEST_LIMIT",
+    "AI_PER_COMPANY_DAILY_REQUEST_LIMIT",
+    "AI_MAX_REQUEST_TOKENS",
+    "AI_MAX_RESPONSE_TOKENS",
+    "AI_TIMEOUT_MS",
+    "AI_RETRY_LIMIT",
+    "AI_STREAMING_ENABLED",
+    "AI_STRUCTURED_OUTPUT_ENABLED",
+    "AI_ACTION_EXECUTION_ENABLED",
+  ],
 };
 
 const setupDocumentPaths = {
@@ -317,6 +335,7 @@ const setupDocumentPaths = {
   website: "docs/WEBSITE_INTEGRATION_PHASE_1_SETUP.md",
   quickbooks: "docs/QUICKBOOKS_ONLINE_PHASE_1_SETUP.md",
   signatures: "docs/ELECTRONIC_SIGNATURES_PHASE_1_SETUP.md",
+  aiTools: "docs/AI_TOOLS_2_LIVE_PROVIDER_PILOT.md",
   production: "docs/PRODUCTION_ACTIVATION_READINESS.md",
 };
 
@@ -547,6 +566,16 @@ const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
     remoteStatus: "remote_status_unknown",
     requiredAction: "Verify DocuSign and Dropbox Sign provider constraints before sandbox signature tests.",
   },
+  {
+    id: "ai-tools-operating-brain",
+    filename: "0033_ai_tools_operating_brain.sql",
+    area: "AI Tools controlled pilot",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction: "Verify AI saved analyses, audit events, and usage limit tables before controlled live-provider testing.",
+  },
 ];
 
 export function launchControlStateLabel(status: LaunchControlState) {
@@ -761,6 +790,35 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
       "Disable signature request and provider write gates.",
       "Pause DocuSign/Dropbox Sign connection records.",
       "Keep native signature records intact in WeatherTech OS.",
+    ],
+  },
+  {
+    id: "ai-tools",
+    label: "AI Tools controlled pilot",
+    providers: [],
+    requiredOwnerActions: [
+      "Approve the AI provider, model, and controlled internal pilot users.",
+      "Configure server-only AI credentials in the approved hosting environment.",
+      "Approve strict budget, request, token, timeout, retry, and audit controls before testing.",
+    ],
+    requiredCredentials: providerGuideEnv.ai,
+    oauthSetup: [
+      "OAuth is not used by the current AI Tools pilot; server-side provider API keys and disabled-by-default action gates are required.",
+    ],
+    externalApprovals: [
+      "Provider account access, internal pilot approval, data-usage review, and migration 0033 verification are required before testing.",
+    ],
+    testingSequence: [
+      "Apply and verify migration 0033 in the correct Supabase project after owner approval.",
+      "Set provider credentials and limits in the server runtime.",
+      "Run controlled prompts against company-scoped records.",
+      "Verify usage logging, prompt-safety blocking, and preview-only action gates.",
+    ],
+    rollbackProcedure: [
+      "Set AI_ENABLED=false.",
+      "Remove provider API keys from the hosting environment.",
+      "Keep AI_ACTION_EXECUTION_ENABLED=false.",
+      "Confirm AI Tools returns provider-disabled or provider-not-configured readiness.",
     ],
   },
 ];
@@ -1161,6 +1219,40 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       ],
       evidenceFields: productionEvidenceFields,
     },
+    {
+      id: "ai-tools",
+      label: "AI Tools controlled pilot",
+      status: "controlled_testing_required",
+      summary:
+        "AI Tools 2.1 can use a server-side provider only after migration 0033, credentials, model selection, usage limits, and explicit owner-controlled testing are configured.",
+      setupDocumentPath: setupDocumentPaths.aiTools,
+      requiredBeforeActivation: [
+        "Apply and verify migration 0033.",
+        "Choose OpenAI, Anthropic, or another owner-approved provider.",
+        "Configure server-only API credentials in hosting.",
+        "Set daily budget, request limits, token limits, timeout, and retry limits.",
+        "Keep external action execution disabled.",
+      ],
+      requiredMappings: [
+        "WeatherTech Roofing LLC AI company scope",
+        "IHC Painting AI company scope",
+        "Authorized internal user roles",
+      ],
+      controlledTestPlan: [
+        "Run provider readiness without exposing credentials.",
+        "Ask grounded commands for each company scope.",
+        "Verify prompt-injection blocks.",
+        "Verify action previews require approval and do not execute.",
+        "Verify AI audit logging after migration 0033 is applied.",
+      ],
+      rollbackSummary: [
+        "Set AI_ENABLED=false.",
+        "Remove provider API keys from hosting environment.",
+        "Do not delete AI audit records unless the owner approves a retention action.",
+      ],
+      disabledSafetyFlags: ["AI_ENABLED", "AI_ACTION_EXECUTION_ENABLED"],
+      evidenceFields: productionEvidenceFields,
+    },
   ];
 }
 
@@ -1456,6 +1548,21 @@ export function buildProductionEnvironmentInventory(
       ],
       env,
     ),
+    buildEnvironmentGroup(
+      "ai-tools",
+      "AI Tools controlled pilot",
+      [
+        ...providerGuideEnv.ai.map((name) => ({
+          name,
+          classification: name.includes("API_KEY")
+            ? "required_before_provider_connection" as const
+            : name === "AI_ENABLED" || name === "AI_ACTION_EXECUTION_ENABLED"
+              ? "disabled_safety_flag" as const
+              : "required_before_provider_connection" as const,
+        })),
+      ],
+      env,
+    ),
   ];
 }
 
@@ -1713,6 +1820,7 @@ function buildEnvironmentStatus(): ProductionReadinessCheck {
       ...providerGuideEnv.goHighLevel,
       ...providerGuideEnv.quickbooks,
       ...providerGuideEnv.signatures,
+      ...providerGuideEnv.ai,
     ]),
   ).sort();
 

@@ -64,3 +64,7 @@ To be provided or selected after implementation with an accurate conventional co
 ## Promotion Rule
 
 Codex must never automatically promote this file. Promotion requires an explicit owner instruction naming the sprint and approving the transfer into [CURRENT_SPRINT.md](./CURRENT_SPRINT.md).
+
+## Last Review
+
+After AI Tools 2.1 completion, no next product-development sprint has been selected or approved in this file. Status remains `Awaiting owner direction`.

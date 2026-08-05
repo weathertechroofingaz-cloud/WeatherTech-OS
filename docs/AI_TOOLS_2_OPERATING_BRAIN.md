@@ -2,11 +2,13 @@
 
 ## Purpose
 
-AI Tools 2.0 extends the existing AI Tools workspace into a safe operating-brain foundation for WeatherTech Roofing LLC and IHC Painting. It is designed to help internal users understand priorities, risks, missing information, and next actions across the existing WeatherTech OS modules without activating a paid or live AI provider.
+AI Tools 2.0 extended the existing AI Tools workspace into a safe operating-brain foundation for WeatherTech Roofing LLC and IHC Painting. It helps internal users understand priorities, risks, missing information, and next actions across the existing WeatherTech OS modules without requiring a paid or live AI provider.
+
+AI Tools 2.1 builds on this foundation with a controlled live-provider pilot. See [AI Tools 2.1 - Live Provider Pilot](./AI_TOOLS_2_LIVE_PROVIDER_PILOT.md) for server-side provider readiness, cost controls, action previews, and activation requirements.
 
 ## Current Mode
 
-Live AI is disabled.
+Live AI remains disabled by default.
 
 Current behavior is intentionally limited to:
 
@@ -16,9 +18,9 @@ Current behavior is intentionally limited to:
 - Human-review approval gates for every irreversible action.
 - Clear missing-information and production-disabled labels.
 
-AI Tools 2.0 does not:
+AI Tools does not:
 
-- Call OpenAI, Anthropic, or another model provider.
+- Call OpenAI, Anthropic, or another model provider unless owner-controlled server credentials, provider selection, usage limits, and `AI_ENABLED=true` are configured in the approved runtime.
 - Send SMS, email, signature requests, proposal packets, invoices, or payment links.
 - Change prices, warranties, job schedules, crew assignments, invoices, payments, migrations, provider settings, or deployment state.
 - Claim a provider is connected or production-ready.
@@ -26,7 +28,7 @@ AI Tools 2.0 does not:
 
 ## Architecture
 
-Core logic lives in [aiTools.ts](../lib/crm/aiTools.ts).
+Rule-based operating-brain logic lives in [aiTools.ts](../lib/crm/aiTools.ts). Controlled live-provider pilot logic lives in [aiProvider.ts](../lib/crm/aiProvider.ts).
 
 The helper layer builds:
 
@@ -44,7 +46,7 @@ The UI remains in the existing AI Tools workspace inside [CrmApp.tsx](../compone
 
 ## Company And Role Scoping
 
-AI Tools 2.0 uses the existing company-scope filtering from [companyScope.ts](../lib/crm/companyScope.ts). Selected-company intelligence is restricted before recommendations, command answers, drafts, and context counts are derived.
+AI Tools uses the existing company-scope filtering from [companyScope.ts](../lib/crm/companyScope.ts). Selected-company intelligence is restricted before recommendations, command answers, provider context, drafts, and context counts are derived.
 
 Role-aware behavior is conservative:
 
@@ -99,13 +101,14 @@ Codex did not apply this migration remotely during the sprint.
 AI Tools 2.0 is covered by:
 
 - [ai-tools-operating-brain.test.mjs](../tests/ai-tools-operating-brain.test.mjs)
+- [ai-tools-live-provider.test.mjs](../tests/ai-tools-live-provider.test.mjs)
 - [supabase-migration-integrity.test.mjs](../tests/supabase-migration-integrity.test.mjs)
 - The `ai-tools` group in [weathertech-os-regression.mjs](../tests/codex-browser/weathertech-os-regression.mjs)
 
 Validation must continue to confirm:
 
 - Company isolation.
-- Provider-disabled honesty.
+- Provider-disabled honesty and controlled live-provider readiness.
 - Read-only command behavior.
 - Prompt-injection blocking.
 - Human approval gates.

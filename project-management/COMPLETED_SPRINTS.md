@@ -4,6 +4,27 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### AI Tools 2.1 - Live Provider Connection, Command Execution, and Controlled AI Pilot
+
+- Commit: `<this sprint commit>`
+- Message: `feat: add ai tools live provider pilot`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Validation:
+  - Build: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - `git diff --check`: `pass`
+  - Automated tests: `pass`
+  - Browser validation: `pass`
+- Notes:
+  - Extended the existing AI Tools workspace into a controlled live-provider pilot without creating a second AI page or navigation item.
+  - Added authenticated server-side AI command handling, provider-neutral OpenAI/Anthropic readiness, structured-output parsing, authorized context retrieval, prompt-safety blocking, usage/cost controls, safe cancellation, provider health, and follow-up command state.
+  - Added approval-gated action previews that can be reviewed in the UI but cannot execute customer communications, schedules, invoices, payments, migrations, deployments, or provider writes.
+  - Added Production Readiness Center AI activation guidance, `.env.example` placeholders, permanent provider-pilot documentation, and mocked-provider automated regression coverage.
+  - Did not enter credentials, activate live AI providers, apply migration `0033_ai_tools_operating_brain.sql` remotely, modify `.env.local`, send communications, change schedules, create financial records, weaken RLS, or fake connected provider state.
+
 ### AI Tools 2.0 - WeatherTech OS Operating System Brain
 
 - Commit: `<this sprint commit>`

@@ -107,7 +107,7 @@ export type AiPriorityItem = {
 export type AiGroundedResponse = {
   id: string;
   taskType: AiTaskType;
-  mode: "rule_based_insight" | "provider_disabled" | "safety_block";
+  mode: "rule_based_insight" | "provider_disabled" | "safety_block" | "live_provider";
   prompt: string;
   answer: string;
   supportingRecords: AiSourceRecord[];
@@ -153,7 +153,14 @@ export type AiExecutiveBrief = {
 export type AiProviderReadiness = {
   provider: AiProviderKey;
   label: string;
-  status: "disabled" | "configuration_required" | "ready_for_controlled_testing";
+  status:
+    | "disabled"
+    | "configuration_required"
+    | "api_key_missing"
+    | "usage_limit_reached"
+    | "ready_for_controlled_testing"
+    | "provider_connected"
+    | "provider_test_failed";
   summary: string;
   productionDisabled: boolean;
   requiredOwnerSetup: string[];

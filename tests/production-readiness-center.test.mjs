@@ -368,7 +368,7 @@ try {
     "Provider writes remain disabled in browser metadata",
   );
   assert(
-    center.requiredMigrations.includes("0031_electronic_signatures_foundation.sql"),
+    center.requiredMigrations.includes("0033_ai_tools_operating_brain.sql"),
     "Latest required migration is tracked",
   );
 
@@ -382,6 +382,7 @@ try {
     "Website",
     "QuickBooks Online",
     "Electronic Signatures",
+    "AI Tools controlled pilot",
   ].forEach((label) => assert(guideLabels.includes(label), `${label} guide is present`));
 
   const requiredCredentialNames = center.activationGuides.flatMap(
@@ -396,6 +397,8 @@ try {
     "QUICKBOOKS_CLIENT_ID",
     "DOCUSIGN_CLIENT_ID",
     "DROPBOX_SIGN_CLIENT_ID",
+    "AI_OPENAI_API_KEY",
+    "AI_ANTHROPIC_API_KEY",
   ].forEach((envName) =>
     assert(requiredCredentialNames.includes(envName), `${envName} is included in owner setup`),
   );
@@ -475,6 +478,7 @@ try {
     "QuickBooks Online",
     "DocuSign",
     "Dropbox Sign",
+    "AI Tools controlled pilot",
   ].forEach((label) => assert(providerCardLabels.includes(label), `${label} provider activation card exists`));
 
   assert(
@@ -493,6 +497,7 @@ try {
     "0029_google_business_profile_foundation.sql",
     "0030_quickbooks_online_foundation.sql",
     "0031_electronic_signatures_foundation.sql",
+    "0033_ai_tools_operating_brain.sql",
   ].forEach((filename) => assert(migrationNames.includes(filename), `${filename} migration is inventoried`));
   assert(
     center.migrationInventory.every(
@@ -557,6 +562,8 @@ try {
     "WTOS_CUSTOMER_PORTAL_ENABLED",
     "WTOS_AUTOMATED_CUSTOMER_NOTIFICATIONS_ENABLED",
     "WTOS_PUBLIC_REGISTRATION_ENABLED",
+    "AI_ENABLED",
+    "AI_ACTION_EXECUTION_ENABLED",
   ].forEach((envName) =>
     assert(
       unknownEnvironmentInventory.some((check) => check.name === envName),

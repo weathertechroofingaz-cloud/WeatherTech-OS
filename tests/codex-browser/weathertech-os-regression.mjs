@@ -3311,11 +3311,14 @@ async function testAiToolsOperatingBrain(browser, tab) {
 
       return (
         text.includes("weathertech os operating brain") &&
-        text.includes("ai tools 2.0") &&
-        text.includes("live ai is disabled") &&
+        text.includes("ai tools 2.1") &&
+        text.includes("live provider readiness") &&
         text.includes("ai provider not configured") &&
         text.includes("ai_enabled=false") &&
         text.includes("no fake ai output") &&
+        text.includes("usage and cost controls") &&
+        text.includes("controlled test mode") &&
+        text.includes("approval gates active") &&
         text.includes("daily intelligence summary") &&
         text.includes("urgent alerts and recommended actions") &&
         text.includes("ai scope writer 2.0") &&
@@ -3334,7 +3337,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
         text.includes("production disabled")
       );
     },
-    "AI Tools 2.0 workspace",
+    "AI Tools 2.1 workspace",
     15000,
   );
 
@@ -3359,6 +3362,22 @@ async function testAiToolsOperatingBrain(browser, tab) {
     "AI grounded read-only response",
     15000,
   );
+
+  const approvePreview = tab.playwright.locator('button:has-text("Approve preview")').first();
+  if ((await approvePreview.count()) > 0) {
+    await approvePreview.click({ timeoutMs: 10000 });
+    await waitFor(
+      tab,
+      () => {
+        const response = document.querySelector('[data-testid="ai-grounded-response"]');
+        const text = response?.textContent?.toLowerCase() ?? "";
+
+        return text.includes("approved preview only");
+      },
+      "AI action preview approval remains preview-only",
+      10000,
+    );
+  }
 
   await tab.playwright
     .locator("#ai-command-input")
@@ -3410,10 +3429,16 @@ async function testAiToolsOperatingBrain(browser, tab) {
     visible: Boolean(document.querySelector('[data-testid="ai-tools-2-workspace"]')),
     hasCommandBar: Boolean(document.querySelector('[data-testid="ai-command-bar"]')),
     hasDisabledState: Boolean(document.querySelector('[data-testid="ai-disabled-state"]')),
+    hasPilotControls: Boolean(document.querySelector('[data-testid="ai-live-pilot-controls"]')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
   }));
 
-  if (!desktopLayout.visible || !desktopLayout.hasCommandBar || !desktopLayout.hasDisabledState) {
+  if (
+    !desktopLayout.visible ||
+    !desktopLayout.hasCommandBar ||
+    !desktopLayout.hasDisabledState ||
+    !desktopLayout.hasPilotControls
+  ) {
     throw new Error("AI Tools desktop layout did not render its core regions.");
   }
 
@@ -3429,11 +3454,17 @@ async function testAiToolsOperatingBrain(browser, tab) {
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
     hasCommandBar: Boolean(document.querySelector('[data-testid="ai-command-bar"]')),
+    hasPilotControls: Boolean(document.querySelector('[data-testid="ai-live-pilot-controls"]')),
     hasApprovalGates: Boolean(document.querySelector('[data-testid="ai-approval-gates"]')),
   }));
   await viewport.set(LAPTOP_VIEWPORT);
 
-  if (!mobileLayout.visible || !mobileLayout.hasCommandBar || !mobileLayout.hasApprovalGates) {
+  if (
+    !mobileLayout.visible ||
+    !mobileLayout.hasCommandBar ||
+    !mobileLayout.hasPilotControls ||
+    !mobileLayout.hasApprovalGates
+  ) {
     throw new Error("AI Tools workspace did not render at mobile width.");
   }
 
@@ -8669,12 +8700,12 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
     testJob.id,
     "dispatch job select",
   );
-  await fillUnique(
+  await fillDateUnique(
     tab.playwright.locator('[data-testid="dispatch-scheduled-start"]'),
     dispatchStartInput,
     "dispatch scheduled start",
   );
-  await fillUnique(
+  await fillDateUnique(
     tab.playwright.locator('[data-testid="dispatch-scheduled-end"]'),
     dispatchEndInput,
     "dispatch scheduled end",
@@ -8733,12 +8764,12 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
   progress("dispatch:save:done");
 
   progress("dispatch:reschedule:start");
-  await fillUnique(
+  await fillDateUnique(
     tab.playwright.locator('[data-testid="dispatch-scheduled-start"]'),
     rescheduledStartInput,
     "dispatch rescheduled start",
   );
-  await fillUnique(
+  await fillDateUnique(
     tab.playwright.locator('[data-testid="dispatch-scheduled-end"]'),
     rescheduledEndInput,
     "dispatch rescheduled end",
@@ -9801,10 +9832,11 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     '[data-testid="inspection-confirm-restore-button"]',
     "Confirm restore inspection button",
   );
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-confirm-restore-button"]'),
+  await clickVisibleDomButtonByText(
+    tab,
+    "Confirm restore",
     "Confirm restore inspection",
-    { retryTransientClick: true },
+    15000,
   );
   await waitForAsync(
     async () => {
@@ -10663,7 +10695,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("ai-tools")) {
-      await record("AI Tools 2.0 shows grounded provider-disabled operating brain responses", () =>
+      await record("AI Tools 2.1 shows controlled live-provider readiness and grounded approval-gated responses", () =>
         testAiToolsOperatingBrain(browser, tab),
       );
     }
