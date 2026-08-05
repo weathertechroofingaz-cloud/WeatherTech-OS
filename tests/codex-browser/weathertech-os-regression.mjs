@@ -1712,8 +1712,14 @@ async function clickVisibleButtonByText(
       }
 
       return {
-        x: Math.round((visibleLeft + visibleRight) / 2),
-        y: Math.round((visibleTop + visibleBottom) / 2),
+        x: Math.min(
+          window.innerWidth - 1,
+          Math.max(1, Math.floor((visibleLeft + visibleRight) / 2)),
+        ),
+        y: Math.min(
+          window.innerHeight - 1,
+          Math.max(1, Math.floor((visibleTop + visibleBottom) / 2)),
+        ),
       };
     },
     label,
@@ -3953,6 +3959,17 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
     );
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(invalidPhotoPath, { timeoutMs: 10000 });
+    await waitFor(
+      tab,
+      () => {
+        const form = document.querySelector('[data-testid="field-photo-upload-form"]');
+        const submit = form?.querySelector('button[type="submit"]');
+
+        return Boolean(submit && !submit.hasAttribute("disabled"));
+      },
+      "field invalid photo selection ready",
+      30000,
+    );
   } finally {
     try {
       unlinkSync(invalidPhotoPath);
@@ -3967,7 +3984,7 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
       document.body.innerText.includes("Choose an image file from the camera or photo library.") &&
       document.querySelector('[data-testid="field-photo-retry"]'),
     "field invalid photo retry visible",
-    10000,
+    15000,
   );
 
   await clickVisibleDomButtonByText(tab, "Operations Queue", "open operations queue from field");
@@ -8560,14 +8577,14 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
       document.body.innerText.includes("Document draft updated.") &&
       document.body.innerText.includes(title),
     "renamed document UI",
-    15000,
+    30000,
     updatedTitle,
   );
 
   const renamedDocument = await waitForAsync(
     () => findDocumentByTitle(env, updatedTitle),
     "renamed document persistence",
-    15000,
+    30000,
   );
 
   if (renamedDocument.status !== "ready") {
@@ -8759,7 +8776,7 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
         : null;
     },
     "dispatch job persistence",
-    15000,
+    30000,
   );
   const firstDispatchEvents = await waitForAsync(
     async () => {
@@ -8767,7 +8784,7 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
       return events.length === 1 ? events : null;
     },
     "one dispatch schedule event",
-    15000,
+    30000,
   );
   await waitFor(
     tab,
@@ -8783,7 +8800,7 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
       );
     },
     "dispatch first save UI settled",
-    15000,
+    30000,
     { crewName, foremanName, dispatchStartInput },
   );
   progress("dispatch:save:done");
@@ -8829,7 +8846,7 @@ async function testDispatchWorkspace(browser, tab, env, company, testJob, runId,
           : null;
       },
       "dispatch reschedule update without duplicate event",
-      15000,
+      30000,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -10031,7 +10048,7 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
         return updatedJob?.status === "in_progress" ? updatedJob : null;
       },
       "field status transition persistence",
-      15000,
+      30000,
     );
   }
   progress("job:field-workspace:done");

@@ -12044,6 +12044,7 @@ function DispatchWorkspacePanel({
   onViewChange,
   onFilterChange,
   onSaveDispatch,
+  onDispatchJobChange,
   onSelectJob,
   onOpenJobTab,
   onOpenCalendar,
@@ -12074,6 +12075,7 @@ function DispatchWorkspacePanel({
     value: string,
   ) => void;
   onSaveDispatch: (event: FormEvent<HTMLFormElement>) => void;
+  onDispatchJobChange: (job: JobRecord) => void;
   onSelectJob: (job: JobRecord) => void;
   onOpenJobTab: (job: JobRecord, tab: JobWorkspaceTab) => void;
   onOpenCalendar: () => void;
@@ -12353,7 +12355,14 @@ function DispatchWorkspacePanel({
               <select
                 name="job_id"
                 data-testid="dispatch-job-select"
-                defaultValue={dispatchFormJob?.id ?? ""}
+                value={dispatchFormJob?.id ?? ""}
+                onChange={(event) => {
+                  const job = snapshot.jobs.find((item) => item.id === event.target.value);
+
+                  if (job) {
+                    onDispatchJobChange(job);
+                  }
+                }}
                 required
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
               >
@@ -26886,6 +26895,14 @@ function JobsView({
     });
   };
 
+  const handleSelectDispatchJob = (job: JobRecord) => {
+    setSelectedJobId(job.id);
+    setJobFormCompanyId(job.company_id);
+    setJobFormServiceType(job.service_type);
+    setEditingTaskId(null);
+    setProductionAction(null);
+  };
+
   const handleProductionBoardFilterChange = (
     key: "search" | "company" | "location" | "crew" | "foreman" | "material" | "inspection",
     value: string,
@@ -27315,6 +27332,7 @@ function JobsView({
             onViewChange={setDispatchView}
             onFilterChange={handleDispatchFilterChange}
             onSaveDispatch={handleSaveDispatchSchedule}
+            onDispatchJobChange={handleSelectDispatchJob}
             onSelectJob={handleSelectJob}
             onOpenJobTab={handleSelectJobAndOpenTab}
             onOpenCalendar={() => onViewChange("calendar")}
