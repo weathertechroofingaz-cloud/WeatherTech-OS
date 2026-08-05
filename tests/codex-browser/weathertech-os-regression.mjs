@@ -5762,6 +5762,75 @@ async function testUnifiedInboxSearchAndFilters(
   };
 }
 
+async function testGoogleWorkspaceOwnerApprovalFoundation(tab) {
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Integrations");
+
+  await waitFor(
+    tab,
+    () => {
+      const foundation = document.querySelector(
+        '[data-testid="google-workspace-email-foundation"]',
+      );
+      const mailboxSelect = document.querySelector(
+        '[data-testid="gmail-company-mailbox-select"]',
+      );
+      const recipientOverride = document.querySelector(
+        'input[placeholder="Recipient override (uses linked customer if blank)"]',
+      );
+      const text = document.body.innerText.toLowerCase();
+      const mailboxNames = mailboxSelect
+        ? Array.from(mailboxSelect.querySelectorAll("option")).map((option) =>
+            (option.textContent ?? "").toLowerCase(),
+          )
+        : [];
+
+      return (
+        Boolean(foundation) &&
+        mailboxNames.some((name) => name.includes("weathertech roofing")) &&
+        mailboxNames.some((name) => name.includes("ihc painting")) &&
+        text.includes("server-side oauth") &&
+        text.includes("live send") &&
+        text.includes("submit for owner approval") &&
+        Boolean(recipientOverride)
+      );
+    },
+    "Google Workspace company mailbox and owner approval controls",
+    15000,
+  );
+
+  const state = await tab.playwright.evaluate(() => {
+    const foundation = document.querySelector(
+      '[data-testid="google-workspace-email-foundation"]',
+    );
+    const mailboxSelect = document.querySelector(
+      '[data-testid="gmail-company-mailbox-select"]',
+    );
+    const sourceSelect = Array.from(document.querySelectorAll("select")).find((select) =>
+      Array.from(select.options).some((option) =>
+        (option.textContent ?? "").includes("Follow-up"),
+      ),
+    );
+
+    return {
+      foundationVisible: Boolean(foundation),
+      mailboxCount: mailboxSelect?.querySelectorAll("option").length ?? 0,
+      sourceOptions: sourceSelect
+        ? Array.from(sourceSelect.options).map((option) => option.textContent ?? "")
+        : [],
+      hasApprovalSubmit: Array.from(document.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Submit for owner approval",
+      ),
+    };
+  });
+
+  if (!state.foundationVisible || state.mailboxCount < 2 || !state.hasApprovalSubmit) {
+    throw new Error("Google Workspace owner approval controls did not render completely.");
+  }
+
+  return state;
+}
+
 async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNameColumn, progress) {
   const websiteExternalId = `${TEST_PREFIX} ${runId} WEBSITE EXT`;
   const websiteLeadName = `${TEST_PREFIX} ${runId} WEBSITE INTAKE`;
@@ -10805,6 +10874,10 @@ export async function runWeatherTechOsRegression({
             progress,
           );
         });
+
+        await record("Google Workspace email remains company-scoped and owner-approved", () =>
+          testGoogleWorkspaceOwnerApprovalFoundation(tab),
+        );
       }
 
     if (shouldRunSalesPipelineWorkflow) {

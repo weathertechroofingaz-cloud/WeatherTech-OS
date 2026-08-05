@@ -110,12 +110,12 @@ export const googleWorkspaceEndpoints: GoogleWorkspaceEndpoint[] = [
   },
   {
     id: "send",
-    label: "Safe Gmail send",
+    label: "Owner-approved Gmail send",
     path: googleWorkspaceEnvVars.sendEndpoint,
     method: "POST",
     liveEnabled: false,
     summary:
-      "Sends only when a connected mailbox exists and GOOGLE_GMAIL_SEND_ENABLED is explicitly enabled.",
+      "Refreshes the server-side OAuth token and sends only after an authorized company owner explicitly approves delivery and GOOGLE_GMAIL_SEND_ENABLED is enabled.",
   },
   {
     id: "calendar_discovery",
@@ -162,9 +162,11 @@ export const googleWorkspaceOptionalEnvVars = [
 
 export const googleWorkspacePhaseOneGuardrails = [
   "OAuth codes, access tokens, refresh tokens, and Google client secrets stay server-side.",
+  "Gmail access tokens are refreshed server-side before delivery; encrypted refresh credentials never enter browser code.",
   "Mailbox sync writes Gmail message metadata and sanitized previews into the existing CRM communication model.",
   "Unknown inbound Gmail messages are preserved for manual review rather than creating duplicate customers.",
-  "Outbound Gmail send remains disabled unless GOOGLE_GMAIL_SEND_ENABLED is explicitly enabled.",
+  "Estimate, proposal, inspection, appointment, and AI-generated emails remain Supabase drafts until a company owner submits and explicitly approves them.",
+  "Only an authorized company owner can send, and outbound Gmail remains disabled unless GOOGLE_GMAIL_SEND_ENABLED is explicitly enabled.",
   "Google Calendar writes remain disabled unless GOOGLE_CALENDAR_WRITE_ENABLED is explicitly enabled.",
   "Calendar discovery and sync use server-side OAuth tokens and never expose provider credentials to browser code.",
   "Automated tests use mocks and never connect to or send through a real Gmail account.",

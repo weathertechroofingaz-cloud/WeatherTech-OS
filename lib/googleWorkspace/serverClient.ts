@@ -17,6 +17,7 @@ import type {
   Database,
   EmailMessageInput,
   EmailMessageRecord,
+  EstimateLineItemRecord,
   EstimateRecord,
   GmailEmailAttachmentInsert,
   GmailEmailThreadInsert,
@@ -206,6 +207,23 @@ type GmailDraftResponse = {
   error?: {
     message?: unknown;
   };
+};
+
+export type GmailOutboundAttachment = {
+  fileName: string;
+  mimeType: string;
+  content: Buffer;
+};
+
+export type GmailOwnerApprovalCheck = {
+  ok: boolean;
+  status:
+    | "approved"
+    | "owner_required"
+    | "explicit_approval_required"
+    | "outbound_required"
+    | "already_sent";
+  message: string;
 };
 
 type TokenRefreshResponse = {
@@ -789,19 +807,230 @@ export function buildGmailMessageImportPlan({
   };
 }
 
-export function buildGmailRawMessage(message: EmailMessageRecord) {
-  const lines = [
-    `To: ${message.to_email}`,
-    message.cc_email ? `Cc: ${message.cc_email}` : null,
-    message.from_email ? `From: ${message.from_email}` : null,
-    `Subject: ${message.subject.replace(/\r?\n/g, " ")}`,
+function sanitizeHeaderValue(value: string) {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+export function buildGmailHtmlBody(body: string) {
+  const paragraphs = body
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map(
+      (paragraph) =>
+        `<p style="margin:0 0 16px;line-height:1.6">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`,
+    )
+    .join("");
+
+  return `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:16px">${paragraphs}</body></html>`;
+}
+
+function wrapBase64(value: Buffer) {
+  return value
+    .toString("base64")
+    .match(/.{1,76}/g)
+    ?.join("\r\n") ?? "";
+}
+
+export function buildGmailRawMessage(
+  message: EmailMessageRecord,
+  attachments: GmailOutboundAttachment[] = [],
+) {
+  const alternativeBoundary = `wtos-alt-${crypto.randomBytes(12).toString("hex")}`;
+  const mixedBoundary = `wtos-mixed-${crypto.randomBytes(12).toString("hex")}`;
+  const recipients = message.to_emails?.length
+    ? message.to_emails
+    : [message.to_email];
+  const ccRecipients = message.cc_emails?.length
+    ? message.cc_emails
+    : message.cc_email
+      ? [message.cc_email]
+      : [];
+  const headers = [
+    `To: ${recipients.map(sanitizeHeaderValue).join(", ")}`,
+    ccRecipients.length
+      ? `Cc: ${ccRecipients.map(sanitizeHeaderValue).join(", ")}`
+      : null,
+    message.bcc_emails?.length
+      ? `Bcc: ${message.bcc_emails.map(sanitizeHeaderValue).join(", ")}`
+      : null,
+    message.reply_to_emails?.length
+      ? `Reply-To: ${message.reply_to_emails.map(sanitizeHeaderValue).join(", ")}`
+      : null,
+    message.from_email ? `From: ${sanitizeHeaderValue(message.from_email)}` : null,
+    `Subject: ${sanitizeHeaderValue(message.subject)}`,
     "MIME-Version: 1.0",
+    attachments.length
+      ? `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`
+      : `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+    "",
+  ].filter((line): line is string => line !== null);
+  const alternative = [
+    `--${alternativeBoundary}`,
     "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
     "",
     message.body,
-  ].filter((line): line is string => line !== null);
+    `--${alternativeBoundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    buildGmailHtmlBody(message.body),
+    `--${alternativeBoundary}--`,
+  ];
+  const mimeLines = attachments.length
+    ? [
+        ...headers,
+        `--${mixedBoundary}`,
+        `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+        "",
+        ...alternative,
+        ...attachments.flatMap((attachment) => [
+          `--${mixedBoundary}`,
+          `Content-Type: ${sanitizeHeaderValue(attachment.mimeType)}; name="${sanitizeHeaderValue(attachment.fileName)}"`,
+          "Content-Transfer-Encoding: base64",
+          `Content-Disposition: attachment; filename="${sanitizeHeaderValue(attachment.fileName)}"`,
+          "",
+          wrapBase64(attachment.content),
+        ]),
+        `--${mixedBoundary}--`,
+      ]
+    : [...headers, ...alternative];
 
-  return base64UrlEncode(Buffer.from(lines.join("\r\n"), "utf8"));
+  return base64UrlEncode(Buffer.from(mimeLines.join("\r\n"), "utf8"));
+}
+
+function escapePdfText(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function safePdfFileName(value: string) {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${normalized || "estimate"}.pdf`;
+}
+
+export function buildEstimatePdfAttachment({
+  estimate,
+  lineItems,
+  companyName,
+  customerName,
+  fileName,
+}: {
+  estimate: EstimateRecord;
+  lineItems: EstimateLineItemRecord[];
+  companyName: string;
+  customerName: string | null;
+  fileName?: string | null;
+}): GmailOutboundAttachment {
+  const money = (value: number) => `$${value.toFixed(2)}`;
+  const lines = [
+    companyName,
+    estimate.title,
+    customerName ? `Prepared for: ${customerName}` : null,
+    `Estimate date: ${estimate.issue_date}`,
+    "",
+    ...lineItems.slice(0, 24).map(
+      (item) => `${item.description}  ${item.quantity} ${item.unit}  ${money(item.total)}`,
+    ),
+    "",
+    `Subtotal: ${money(estimate.subtotal)}`,
+    `Tax: ${money(estimate.tax_total)}`,
+    `Total: ${money(estimate.total)}`,
+    estimate.notes ? `Notes: ${estimate.notes}` : null,
+  ].filter((line): line is string => line !== null);
+  const content = [
+    "BT",
+    "/F1 12 Tf",
+    "72 742 Td",
+    ...lines.flatMap((line, index) => [
+      ...(index ? ["0 -18 Td"] : []),
+      `(${escapePdfText(line.slice(0, 110))}) Tj`,
+    ]),
+    "ET",
+  ].join("\n");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(content, "utf8")} >>\nstream\n${content}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf, "utf8"));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+
+  const xrefOffset = Buffer.byteLength(pdf, "utf8");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  pdf += offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
+    .join("");
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+  return {
+    fileName: fileName?.trim() || safePdfFileName(estimate.title),
+    mimeType: "application/pdf",
+    content: Buffer.from(pdf, "utf8"),
+  };
+}
+
+export function validateGmailOwnerApproval({
+  message,
+  isOwner,
+  approvalAction,
+}: {
+  message: EmailMessageRecord;
+  isOwner: boolean;
+  approvalAction: string | null;
+}): GmailOwnerApprovalCheck {
+  if ((message.direction ?? "outbound") !== "outbound") {
+    return {
+      ok: false,
+      status: "outbound_required",
+      message: "Only outbound WeatherTech OS email drafts can be approved for sending.",
+    };
+  }
+
+  if (message.status === "sent") {
+    return { ok: false, status: "already_sent", message: "This email was already sent." };
+  }
+
+  if (!isOwner) {
+    return {
+      ok: false,
+      status: "owner_required",
+      message: "A company owner must approve every outbound customer email.",
+    };
+  }
+
+  if (approvalAction !== "owner_approved_send") {
+    return {
+      ok: false,
+      status: "explicit_approval_required",
+      message: "Explicit owner approval is required before Gmail delivery.",
+    };
+  }
+
+  return { ok: true, status: "approved", message: "Owner approval confirmed." };
 }
 
 export function encryptionKeyIsConfigured() {
@@ -1014,10 +1243,12 @@ export async function fetchGmailProfile({
 export async function sendGmailEmail({
   message,
   accessToken,
+  attachments = [],
   fetchImpl = fetch,
 }: {
   message: EmailMessageRecord | null;
   accessToken: string | null;
+  attachments?: GmailOutboundAttachment[];
   fetchImpl?: FetchLike;
 }): Promise<GmailSendResult> {
   if (!getGoogleWorkspaceConfigCheckResult().ok) {
@@ -1065,7 +1296,7 @@ export async function sendGmailEmail({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        raw: buildGmailRawMessage(message),
+        raw: buildGmailRawMessage(message, attachments),
         threadId: message.gmail_thread_id ?? undefined,
       }),
     });
@@ -1106,10 +1337,12 @@ export async function sendGmailEmail({
 export async function createGmailDraft({
   message,
   accessToken,
+  attachments = [],
   fetchImpl = fetch,
 }: {
   message: EmailMessageRecord | null;
   accessToken: string | null;
+  attachments?: GmailOutboundAttachment[];
   fetchImpl?: FetchLike;
 }): Promise<GmailDraftResult> {
   if (!getGoogleWorkspaceConfigCheckResult().ok) {
@@ -1148,7 +1381,7 @@ export async function createGmailDraft({
       },
       body: JSON.stringify({
         message: {
-          raw: buildGmailRawMessage(message),
+          raw: buildGmailRawMessage(message, attachments),
           threadId: message.gmail_thread_id ?? undefined,
         },
       }),

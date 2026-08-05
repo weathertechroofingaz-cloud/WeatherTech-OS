@@ -287,6 +287,11 @@ import {
   type EstimateTemplate,
 } from "../lib/crm/estimateTemplates";
 import {
+  buildAiGeneratedEmailDraft,
+  buildGoogleWorkspaceEmailDraft,
+  type GoogleWorkspaceEmailDraftKind,
+} from "../lib/googleWorkspace/emailDrafts";
+import {
   buildJobInputFromEstimate,
   getJobDisplayAddress,
   getJobDisplayBusiness,
@@ -34074,8 +34079,50 @@ function AiToolsView({
     aiCommandAbortRef.current?.abort();
   };
 
-  const markActionReviewed = (id: string, decision: "approved" | "rejected") => {
-    setReviewedActionIds((current) => ({ ...current, [id]: decision }));
+  const markActionReviewed = async (
+    action: AiRecommendedAction,
+    decision: "approved" | "rejected",
+  ) => {
+    if (decision === "rejected" || action.type !== "draft_email") {
+      setReviewedActionIds((current) => ({ ...current, [action.id]: decision }));
+      return;
+    }
+
+    const response = aiResponses[0];
+    if (!response) {
+      onError("Run an AI email drafting command before creating a review draft.");
+      return;
+    }
+
+    const companyId = action.companyId;
+    const gmailConnection = snapshot.integrationConnections.find(
+      (connection) =>
+        connection.provider === "gmail" && connection.company_id === companyId,
+    );
+    const plan = buildAiGeneratedEmailDraft({
+      snapshot,
+      action,
+      response,
+      integrationConnectionId: gmailConnection?.id ?? null,
+    });
+
+    if (!plan.ok) {
+      onError(plan.error);
+      return;
+    }
+
+    try {
+      await createEmailMessage(client, plan.input);
+      setReviewedActionIds((current) => ({ ...current, [action.id]: "approved" }));
+      await onReload();
+      onNotice(
+        "AI email draft created in Communications. Owner approval is still required before Gmail delivery.",
+      );
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(currentError, "Unable to create the AI email draft."),
+      );
+    }
   };
 
   const generateScope = () => {
@@ -35279,7 +35326,10 @@ function AiGroundedResponsePanel({
   response: AiGroundedResponse | null;
   actionPreviews?: AiActionPreview[];
   reviewedActionIds?: Record<string, "approved" | "rejected">;
-  onReviewAction?: (id: string, decision: "approved" | "rejected") => void;
+  onReviewAction?: (
+    action: AiRecommendedAction,
+    decision: "approved" | "rejected",
+  ) => void | Promise<void>;
 }) {
   if (!response) {
     return (
@@ -35506,7 +35556,10 @@ function AiActionList({
   actions: AiRecommendedAction[];
   actionPreviews?: AiActionPreview[];
   reviewedActionIds?: Record<string, "approved" | "rejected">;
-  onReviewAction?: (id: string, decision: "approved" | "rejected") => void;
+  onReviewAction?: (
+    action: AiRecommendedAction,
+    decision: "approved" | "rejected",
+  ) => void | Promise<void>;
 }) {
   const previewsById = new Map(actionPreviews.map((preview) => [preview.id, preview]));
 
@@ -35536,14 +35589,16 @@ function AiActionList({
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => onReviewAction(actionItem.id, "approved")}
+                    onClick={() => void onReviewAction(actionItem, "approved")}
                     className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                   >
-                    Approve preview
+                    {actionItem.type === "draft_email"
+                      ? "Create approval draft"
+                      : "Approve preview"}
                   </button>
                   <button
                     type="button"
-                    onClick={() => onReviewAction(actionItem.id, "rejected")}
+                    onClick={() => void onReviewAction(actionItem, "rejected")}
                     className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                   >
                     Reject
@@ -42836,6 +42891,9 @@ function IntegrationsView({
   onNotice,
   onError,
 }: IntegrationsViewProps) {
+  const [gmailCompanyId, setGmailCompanyId] = useState(
+    snapshot.companies[0]?.id ?? "",
+  );
   const googleConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "google_calendar",
   );
@@ -42856,9 +42914,14 @@ function IntegrationsView({
   const gmailConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "gmail",
   );
-  const primaryGmailConnection = gmailConnections[0];
-  const emailSummary = getEmailOutboxSummary(snapshot.emailMessages);
-  const previewEmail = snapshot.emailMessages[0];
+  const primaryGmailConnection =
+    gmailConnections.find((connection) => connection.company_id === gmailCompanyId) ??
+    null;
+  const gmailCompanyMessages = snapshot.emailMessages.filter(
+    (message) => message.company_id === gmailCompanyId,
+  );
+  const emailSummary = getEmailOutboxSummary(gmailCompanyMessages);
+  const previewEmail = gmailCompanyMessages[0];
   const emailPreviewPayload = previewEmail
     ? buildGmailSendPreview(previewEmail)
     : null;
@@ -42925,6 +42988,8 @@ function IntegrationsView({
   const [sendingGmailMessageId, setSendingGmailMessageId] = useState<string | null>(
     null,
   );
+  const [pendingGmailApprovalMessageId, setPendingGmailApprovalMessageId] =
+    useState<string | null>(null);
   const selectedGoHighLevelLead =
     snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
     snapshot.leads[0] ??
@@ -43046,6 +43111,19 @@ function IntegrationsView({
       lastSyncAt: calendar.last_successful_sync_at ?? calendar.last_sync_at,
       lastError: calendar.last_error,
     }));
+
+  useEffect(() => {
+    if (!snapshot.companies.length) {
+      setGmailCompanyId("");
+      return;
+    }
+
+    if (snapshot.companies.some((company) => company.id === gmailCompanyId)) {
+      return;
+    }
+
+    setGmailCompanyId(snapshot.companies[0].id);
+  }, [gmailCompanyId, snapshot.companies]);
 
   useEffect(() => {
     if (!snapshot.leads.length) {
@@ -43569,45 +43647,109 @@ function IntegrationsView({
     const toEmail = getFormString(formData, "to_email");
     const subjectOverride = getOptionalFormString(formData, "subject");
     const bodyOverride = getOptionalFormString(formData, "body");
-    const intent = getFormString(formData, "intent", "draft");
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const intent =
+      submitter instanceof HTMLButtonElement && submitter.name === "intent"
+        ? submitter.value
+        : getFormString(formData, "intent", "draft");
     const customer = snapshot.customers.find((item) => item.id === customerId);
-    const estimate = snapshot.estimates.find((item) => item.id === sourceId);
-    const invoice = snapshot.invoices.find((item) => item.id === sourceId);
+    const invoice = category === "invoice"
+      ? snapshot.invoices.find((item) => item.id === sourceId)
+      : null;
+    const resolvedRecipientEmail = toEmail || customer?.email || "";
     const resolvedCompany = companyMap.get(companyId)?.name ?? "WeatherTech OS";
+    const gmailConnection = gmailConnections.find(
+      (connection) => connection.company_id === companyId,
+    );
+    const draftKind = (
+      category === "estimate"
+        ? "estimate_delivery"
+        : category === "proposal"
+          ? "proposal_delivery"
+          : category === "inspection"
+            ? "inspection_confirmation"
+            : category === "schedule"
+              ? "appointment_reminder"
+              : null
+    ) as Exclude<GoogleWorkspaceEmailDraftKind, "ai_generated"> | null;
+    const plannedDraft = draftKind
+      ? buildGoogleWorkspaceEmailDraft({
+          snapshot,
+          kind: draftKind,
+          companyId,
+          sourceId,
+          customerId,
+          recipientEmail: resolvedRecipientEmail,
+          subjectOverride,
+          bodyOverride,
+          integrationConnectionId: gmailConnection?.id ?? null,
+        })
+      : null;
+
+    if (plannedDraft && !plannedDraft.ok) {
+      onError(plannedDraft.error);
+      return;
+    }
+
+    if (!plannedDraft && !resolvedRecipientEmail) {
+      onError("Add a recipient email or select a customer with an email address.");
+      return;
+    }
 
     const subject =
       subjectOverride ??
-      (estimate
-        ? `${estimate.title} estimate`
-        : invoice
-          ? `${invoice.invoice_number} invoice`
-          : `Follow-up from ${resolvedCompany}`);
+      (invoice
+        ? `${invoice.invoice_number} invoice`
+        : `Follow-up from ${resolvedCompany}`);
     const body =
       bodyOverride ??
-      (estimate
-        ? `Hi ${customer?.contact_name ?? "there"},\n\nYour estimate for ${estimate.title} is ready. The current total is ${formatMoney(estimate.total)}. Please reply with questions or approval so we can reserve the production schedule.\n\nThank you,\n${resolvedCompany}`
-        : invoice
-          ? `Hi ${customer?.contact_name ?? "there"},\n\nYour invoice ${invoice.invoice_number} for ${invoice.title} is ready. The balance due is ${formatMoney(invoice.balance_due)}.\n\nThank you,\n${resolvedCompany}`
-          : `Hi ${customer?.contact_name ?? "there"},\n\nFollowing up from ${resolvedCompany}. Reply here if you have any questions or need a schedule update.\n\nThank you,\n${resolvedCompany}`);
+      (invoice
+        ? `Hi ${customer?.contact_name ?? "there"},\n\nYour invoice ${invoice.invoice_number} for ${invoice.title} is ready. The balance due is ${formatMoney(invoice.balance_due)}.\n\nThank you,\n${resolvedCompany}`
+        : `Hi ${customer?.contact_name ?? "there"},\n\nFollowing up from ${resolvedCompany}. Reply here if you have any questions or need a schedule update.\n\nThank you,\n${resolvedCompany}`);
+    const baseInput = plannedDraft?.ok
+      ? plannedDraft.input
+      : {
+          company_id: companyId,
+          customer_id: customerId,
+          invoice_id: invoice?.id ?? null,
+          document_id: null,
+          integration_connection_id: gmailConnection?.id ?? null,
+          category: invoice ? ("invoice" as const) : ("follow_up" as const),
+          status: "draft" as const,
+          direction: "outbound" as const,
+          to_email: resolvedRecipientEmail,
+          subject,
+          body,
+          metadata: {
+            draftType: invoice ? "invoice_delivery" : "manual_follow_up",
+            approvalState: "draft",
+            requiresOwnerApproval: true,
+            generatedBy: "weathertech_template",
+          },
+        };
+    const submittedAt = new Date().toISOString();
+    const input =
+      intent === "queue"
+        ? {
+            ...baseInput,
+            status: "queued" as const,
+            queued_at: submittedAt,
+            sync_status: "queued" as const,
+            metadata: {
+              ...(baseInput.metadata ?? {}),
+              approvalState: "pending_owner_approval",
+              submittedForApprovalAt: submittedAt,
+            },
+          }
+        : baseInput;
 
     try {
-      await createEmailMessage(client, {
-        company_id: companyId,
-        customer_id: customerId,
-        estimate_id: estimate?.id ?? null,
-        invoice_id: invoice?.id ?? null,
-        document_id: null,
-        integration_connection_id: primaryGmailConnection?.id ?? null,
-        category:
-          category === "estimate" || category === "invoice"
-            ? category
-            : "follow_up",
-        status: intent === "queue" ? "queued" : "draft",
-        to_email: toEmail,
-        subject,
-        body,
-      });
-      onNotice(intent === "queue" ? "Email queued for Gmail." : "Email draft saved.");
+      await createEmailMessage(client, input);
+      onNotice(
+        intent === "queue"
+          ? "Email submitted for owner approval. Nothing was sent."
+          : "Email draft saved. Owner approval is required before sending.",
+      );
       await onReload();
       form.reset();
     } catch (error) {
@@ -43863,13 +44005,21 @@ function IntegrationsView({
   };
 
   const queueEmailMessage = async (message: EmailMessageRecord) => {
+    const submittedAt = new Date().toISOString();
     try {
       await updateEmailMessage(client, message.id, {
         status: "queued",
-        queued_at: new Date().toISOString(),
+        queued_at: submittedAt,
+        sync_status: "queued",
+        metadata: {
+          ...(message.metadata ?? {}),
+          approvalState: "pending_owner_approval",
+          submittedForApprovalAt: submittedAt,
+          requiresOwnerApproval: true,
+        },
         last_error: null,
       });
-      onNotice("Email queued for Gmail.");
+      onNotice("Email submitted for owner approval. Nothing was sent.");
       await onReload();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not queue email.");
@@ -43886,12 +44036,15 @@ function IntegrationsView({
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ emailMessageId: message.id }),
+        body: JSON.stringify({
+          emailMessageId: message.id,
+          approvalAction: "owner_approved_send",
+        }),
       });
       const result = (await response.json()) as GmailSendApiResult;
 
       if (response.ok && result.sent) {
-        onNotice("Gmail confirmed the email was sent.");
+        onNotice("Owner approval recorded. Gmail confirmed the email was sent.");
       } else {
         onError(result.result?.message ?? "Gmail send is not available yet.");
       }
@@ -43901,6 +44054,7 @@ function IntegrationsView({
       onError(error instanceof Error ? error.message : "Could not send email with Gmail.");
     } finally {
       setSendingGmailMessageId(null);
+      setPendingGmailApprovalMessageId(null);
     }
   };
 
@@ -44168,6 +44322,8 @@ function IntegrationsView({
                 </p>
                 <select
                   name="company_id"
+                  value={gmailCompanyId}
+                  onChange={(event) => setGmailCompanyId(event.target.value)}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm"
                 >
                   {snapshot.companies.map((company) => (
@@ -44286,8 +44442,22 @@ function IntegrationsView({
                 company mailboxes without exposing Google credentials in the browser.
               </p>
             </div>
-            {primaryGmailConnection ? (
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Gmail company mailbox"
+                value={gmailCompanyId}
+                onChange={(event) => setGmailCompanyId(event.target.value)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                data-testid="gmail-company-mailbox-select"
+              >
+                {snapshot.companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              {primaryGmailConnection ? (
+                <>
                 <Badge
                   label={integrationStatusLabel(primaryGmailConnection.status)}
                   tone={getIntegrationStatusTone(primaryGmailConnection.status)}
@@ -44308,8 +44478,11 @@ function IntegrationsView({
                   <RefreshCcw className="h-4 w-4" />
                   {isSyncingGmail ? "Syncing" : "Manual sync"}
                 </button>
-              </div>
-            ) : null}
+                </>
+              ) : (
+                <Badge label="Mailbox not mapped" tone="amber" />
+              )}
+            </div>
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-4">
@@ -44454,7 +44627,7 @@ function IntegrationsView({
               <p className="text-sm font-bold text-slate-950">Gmail activity</p>
             </div>
             <div className="divide-y divide-slate-200">
-              {snapshot.emailMessages.map((message) => (
+              {gmailCompanyMessages.map((message) => (
                 <article
                   key={message.id}
                   className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto]"
@@ -44504,31 +44677,69 @@ function IntegrationsView({
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                    {message.status !== "queued" && message.status !== "sent" ? (
+                    {message.direction !== "inbound" &&
+                    message.status !== "queued" &&
+                    message.status !== "sent" ? (
                       <button
                         type="button"
                         onClick={() => void queueEmailMessage(message)}
                         className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
                         <Mail className="h-4 w-4" />
-                        Queue
+                        Submit for owner approval
                       </button>
                     ) : null}
-                    {message.status !== "sent" ? (
+                    {message.direction !== "inbound" && message.status === "queued" ? (
                       <button
                         type="button"
-                        onClick={() => void sendEmailWithGmail(message)}
+                        onClick={() => setPendingGmailApprovalMessageId(message.id)}
                         disabled={sendingGmailMessageId === message.id}
                         className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                       >
                         <CheckCircle2 className="h-4 w-4" />
-                        {sendingGmailMessageId === message.id ? "Sending" : "Send with Gmail"}
+                        {sendingGmailMessageId === message.id ? "Sending" : "Approve & send"}
                       </button>
                     ) : null}
                   </div>
+                  {pendingGmailApprovalMessageId === message.id ? (
+                    <div
+                      role="alertdialog"
+                      aria-label="Approve Gmail email delivery"
+                      className="rounded-lg border border-amber-200 bg-amber-50 p-4 lg:col-span-2"
+                      data-testid="gmail-owner-approval-dialog"
+                    >
+                      <p className="font-bold text-amber-950">
+                        Approve and send this customer email?
+                      </p>
+                      <p className="mt-1 text-sm text-amber-900">
+                        This is the owner approval gate. Gmail delivery, HTML formatting,
+                        and any listed attachments will begin only after confirmation.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPendingGmailApprovalMessageId(null)}
+                          className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900"
+                        >
+                          Keep pending
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void sendEmailWithGmail(message)}
+                          disabled={sendingGmailMessageId === message.id}
+                          className="rounded-md bg-amber-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                          data-testid="gmail-confirm-owner-send"
+                        >
+                          {sendingGmailMessageId === message.id
+                            ? "Sending"
+                            : "Confirm owner approval & send"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </article>
               ))}
-              {!snapshot.emailMessages.length ? (
+              {!gmailCompanyMessages.length ? (
                 <div className="p-4">
                   <EmptyState label="No Gmail drafts or queued sends yet." />
                 </div>
@@ -44600,6 +44811,8 @@ function IntegrationsView({
             <form onSubmit={handleCreateEmailMessage} className="mt-4 grid gap-3">
               <select
                 name="company_id"
+                value={gmailCompanyId}
+                onChange={(event) => setGmailCompanyId(event.target.value)}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
                 {snapshot.companies.map((company) => (
@@ -44613,34 +44826,60 @@ function IntegrationsView({
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
                 <option value="">No linked customer</option>
-                {snapshot.customers.map((customer) => (
+                {snapshot.customers
+                  .filter((customer) => customer.company_id === gmailCompanyId)
+                  .map((customer) => (
                   <option key={customer.id} value={customer.id}>
                     {customer.display_name}
                   </option>
-                ))}
+                  ))}
               </select>
               <select
                 name="source_key"
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
               >
                 <option value="follow_up:none">Follow-up</option>
-                {snapshot.estimates.map((estimate) => (
+                {snapshot.estimates
+                  .filter((estimate) => estimate.company_id === gmailCompanyId)
+                  .map((estimate) => (
                   <option key={estimate.id} value={`estimate:${estimate.id}`}>
-                    Estimate · {estimate.title}
+                    Estimate delivery · {estimate.title}
                   </option>
-                ))}
-                {snapshot.invoices.map((invoice) => (
+                  ))}
+                {snapshot.proposalRevisions
+                  .filter((proposal) => proposal.company_id === gmailCompanyId)
+                  .map((proposal) => (
+                    <option key={proposal.id} value={`proposal:${proposal.id}`}>
+                      Proposal delivery · {proposal.proposal_number}
+                    </option>
+                  ))}
+                {snapshot.inspections
+                  .filter((inspection) => inspection.company_id === gmailCompanyId)
+                  .map((inspection) => (
+                    <option key={inspection.id} value={`inspection:${inspection.id}`}>
+                      Inspection confirmation · {inspection.title}
+                    </option>
+                  ))}
+                {snapshot.scheduleEvents
+                  .filter((event) => event.company_id === gmailCompanyId)
+                  .map((event) => (
+                    <option key={event.id} value={`schedule:${event.id}`}>
+                      Appointment reminder · {event.title}
+                    </option>
+                  ))}
+                {snapshot.invoices
+                  .filter((invoice) => invoice.company_id === gmailCompanyId)
+                  .map((invoice) => (
                   <option key={invoice.id} value={`invoice:${invoice.id}`}>
                     Invoice · {invoice.invoice_number}
                   </option>
-                ))}
+                  ))}
               </select>
               <input
-                required
                 name="to_email"
                 type="email"
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Recipient email"
+                placeholder="Recipient override (uses linked customer if blank)"
               />
               <input
                 name="subject"
@@ -44667,7 +44906,7 @@ function IntegrationsView({
                   value="queue"
                   className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                 >
-                  Queue send
+                  Submit for owner approval
                 </button>
               </div>
             </form>

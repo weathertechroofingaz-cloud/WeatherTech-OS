@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
+  buildEstimatePdfAttachment,
   createServiceSupabaseClient,
   decryptGoogleToken,
+  encryptGoogleToken,
   GMAIL_EMAIL_SEND_EVENT_TYPE,
+  refreshGoogleAccessToken,
   sendGmailEmail,
+  validateGmailOwnerApproval,
+  type GmailOutboundAttachment,
 } from "../../../../../lib/googleWorkspace/serverClient";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +17,7 @@ export const runtime = "nodejs";
 
 type SendBody = {
   emailMessageId?: unknown;
+  approvalAction?: unknown;
 };
 
 async function getJsonBody(request: NextRequest): Promise<SendBody> {
@@ -25,6 +31,115 @@ async function getJsonBody(request: NextRequest): Promise<SendBody> {
 
 function getRequestString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getMetadataString(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function loadOutboundAttachments({
+  serviceClient,
+  message,
+}: {
+  serviceClient: NonNullable<ReturnType<typeof createServiceSupabaseClient>>;
+  message: NonNullable<Awaited<ReturnType<typeof loadEmailMessage>>>;
+}) {
+  const attachments: GmailOutboundAttachment[] = [];
+
+  if (message.document_id) {
+    const { data: document } = await serviceClient
+      .from("documents")
+      .select("*")
+      .eq("id", message.document_id)
+      .eq("company_id", message.company_id)
+      .maybeSingle();
+
+    if (document?.storage_path) {
+      const { data, error } = await serviceClient.storage
+        .from(document.storage_bucket ?? "customer-documents")
+        .download(document.storage_path);
+
+      if (error || !data) {
+        throw new Error("The approved document attachment could not be loaded from Storage.");
+      }
+
+      attachments.push({
+        fileName: document.file_name ?? `${document.title}.pdf`,
+        mimeType: document.mime_type ?? "application/octet-stream",
+        content: Buffer.from(await data.arrayBuffer()),
+      });
+    }
+  }
+
+  const hasPdf = attachments.some((attachment) => attachment.mimeType === "application/pdf");
+
+  if (message.estimate_id && !hasPdf) {
+    const [{ data: estimate }, { data: lineItems }, { data: company }, { data: customer }] =
+      await Promise.all([
+        serviceClient
+          .from("estimates")
+          .select("*")
+          .eq("id", message.estimate_id)
+          .eq("company_id", message.company_id)
+          .maybeSingle(),
+        serviceClient
+          .from("estimate_line_items")
+          .select("*")
+          .eq("estimate_id", message.estimate_id)
+          .order("sort_order", { ascending: true }),
+        serviceClient
+          .from("companies")
+          .select("*")
+          .eq("id", message.company_id)
+          .maybeSingle(),
+        message.customer_id
+          ? serviceClient
+              .from("customers")
+              .select("*")
+              .eq("id", message.customer_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+
+    if (!estimate || !company) {
+      throw new Error("The estimate PDF attachment could not be generated from CRM records.");
+    }
+
+    const proposalNumber = getMetadataString(message.metadata, "proposalNumber");
+    attachments.push(
+      buildEstimatePdfAttachment({
+        estimate,
+        lineItems: lineItems ?? [],
+        companyName: company.name,
+        customerName: customer?.display_name ?? null,
+        fileName: proposalNumber ? `${proposalNumber}.pdf` : null,
+      }),
+    );
+  }
+
+  const totalBytes = attachments.reduce(
+    (total, attachment) => total + attachment.content.byteLength,
+    0,
+  );
+
+  if (totalBytes > 18 * 1024 * 1024) {
+    throw new Error("Email attachments exceed the controlled 18 MB delivery limit.");
+  }
+
+  return attachments;
+}
+
+async function loadEmailMessage(
+  serviceClient: NonNullable<ReturnType<typeof createServiceSupabaseClient>>,
+  emailMessageId: string,
+) {
+  const { data } = await serviceClient
+    .from("email_messages")
+    .select("*")
+    .eq("id", emailMessageId)
+    .single();
+  return data;
 }
 
 export async function POST(request: NextRequest) {
@@ -49,6 +164,7 @@ export async function POST(request: NextRequest) {
 
   const body = await getJsonBody(request);
   const emailMessageId = getRequestString(body.emailMessageId);
+  const approvalAction = getRequestString(body.approvalAction);
 
   if (!emailMessageId) {
     return NextResponse.json(
@@ -57,11 +173,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: message } = await client
-    .from("email_messages")
-    .select("*")
-    .eq("id", emailMessageId)
-    .single();
+  const message = await loadEmailMessage(serviceClient, emailMessageId);
 
   if (!message) {
     return NextResponse.json(
@@ -70,21 +182,109 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const { data: ownerMembership } = await client
+    .from("company_memberships")
+    .select("id, role")
+    .eq("company_id", message.company_id)
+    .eq("user_id", userResult.user.id)
+    .eq("role", "owner")
+    .maybeSingle();
+  const approval = validateGmailOwnerApproval({
+    message,
+    isOwner: Boolean(ownerMembership),
+    approvalAction,
+  });
+
+  if (!approval.ok) {
+    return NextResponse.json(
+      { ok: false, sent: false, approval, message: approval.message },
+      { status: approval.status === "owner_required" ? 403 : 409 },
+    );
+  }
+
   const { data: credential } = message.integration_connection_id
     ? await serviceClient
         .from("gmail_mailbox_credentials")
         .select("*")
         .eq("integration_connection_id", message.integration_connection_id)
+        .eq("company_id", message.company_id)
         .maybeSingle()
     : { data: null };
-  const accessToken = credential?.encrypted_access_token
-    ? decryptGoogleToken(credential.encrypted_access_token)
-    : null;
-  const result = await sendGmailEmail({ message, accessToken });
+  if (!credential?.encrypted_refresh_token || credential.revoked_at) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message: "Reconnect the company Gmail mailbox before sending.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const refresh = await refreshGoogleAccessToken({
+    refreshToken: decryptGoogleToken(credential.encrypted_refresh_token),
+  });
+
+  if (!refresh.ok || !refresh.accessToken) {
+    await serviceClient
+      .from("integration_connections")
+      .update({
+        status: "needs_reauth",
+        last_error: refresh.error,
+        last_failure_at: new Date().toISOString(),
+      })
+      .eq("id", credential.integration_connection_id);
+    return NextResponse.json(
+      { ok: false, sent: false, message: refresh.error },
+      { status: 409 },
+    );
+  }
+
+  await serviceClient
+    .from("gmail_mailbox_credentials")
+    .update({
+      encrypted_access_token: encryptGoogleToken(refresh.accessToken),
+      token_expires_at: refresh.expiresAt,
+      token_type: refresh.tokenType,
+      scopes: refresh.scope.length ? refresh.scope : credential.scopes,
+      last_refreshed_at: new Date().toISOString(),
+    })
+    .eq("id", credential.id);
+
+  let attachments: GmailOutboundAttachment[] = [];
+
+  try {
+    attachments = await loadOutboundAttachments({ serviceClient, message });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "The approved email attachments could not be prepared.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const result = await sendGmailEmail({
+    message,
+    accessToken: refresh.accessToken,
+    attachments,
+  });
   const now = new Date().toISOString();
+  const metadata = {
+    ...(message.metadata ?? {}),
+    approvalState: result.sent ? "sent" : "owner_approved",
+    approvedBy: userResult.user.id,
+    approvedAt: now,
+    attachmentCountDelivered: attachments.length,
+  };
 
   if (result.sent) {
-    await client
+    await serviceClient
       .from("email_messages")
       .update({
         status: "sent",
@@ -93,15 +293,42 @@ export async function POST(request: NextRequest) {
         gmail_thread_id: result.gmailThreadId,
         sync_status: "sent",
         last_error: null,
+        metadata,
       })
       .eq("id", message.id);
+
+    if (message.estimate_id) {
+      await serviceClient
+        .from("estimates")
+        .update({ status: "sent" })
+        .eq("id", message.estimate_id)
+        .eq("company_id", message.company_id);
+    }
+
+    const proposalRevisionId = getMetadataString(message.metadata, "proposalRevisionId");
+    if (proposalRevisionId) {
+      await serviceClient
+        .from("estimate_proposal_revisions")
+        .update({ status: "sent", sent_at: now, immutable_after_at: now })
+        .eq("id", proposalRevisionId)
+        .eq("company_id", message.company_id);
+    }
+
+    if (message.document_id) {
+      await serviceClient
+        .from("documents")
+        .update({ status: "sent" })
+        .eq("id", message.document_id)
+        .eq("company_id", message.company_id);
+    }
   } else {
-    await client
+    await serviceClient
       .from("email_messages")
       .update({
-        status: "failed",
-        sync_status: "failed",
+        status: result.attempted ? "failed" : message.status,
+        sync_status: result.attempted ? "failed" : message.sync_status,
         last_error: result.message,
+        metadata,
       })
       .eq("id", message.id);
   }
@@ -121,6 +348,9 @@ export async function POST(request: NextRequest) {
       hasMailbox: Boolean(message.integration_connection_id),
       sendAttempted: result.attempted,
       recipients: message.to_emails?.length ?? 1,
+      ownerApproval: true,
+      attachmentCount: attachments.length,
+      htmlFormatting: true,
     },
     response_summary: {
       sent: result.sent,

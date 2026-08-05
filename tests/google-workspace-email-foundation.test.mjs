@@ -56,6 +56,7 @@ try {
     [
       "lib/googleWorkspace/serverClient.ts",
       "lib/googleWorkspace/foundation.ts",
+      "lib/googleWorkspace/emailDrafts.ts",
       "lib/crm/integrations.ts",
       "lib/crm/leadRouting.ts",
       "lib/crm/leadIntake.ts",
@@ -87,6 +88,9 @@ try {
   );
   const foundation = await import(
     pathToFileURL(join(outDir, "googleWorkspace", "foundation.js"))
+  );
+  const emailDrafts = await import(
+    pathToFileURL(join(outDir, "googleWorkspace", "emailDrafts.js"))
   );
   const integrations = await import(pathToFileURL(join(outDir, "crm", "integrations.js")));
   const leadIntake = await import(pathToFileURL(join(outDir, "crm", "leadIntake.js")));
@@ -407,9 +411,242 @@ try {
   assertEqual(sentSend.sent, true, "Enabled Gmail send can report provider-confirmed send");
   assertEqual(sentSend.gmailMessageId, "sent-1", "Gmail send result preserves provider id");
 
+  let refreshRequestBody = "";
+  const refreshed = await serverClient.refreshGoogleAccessToken({
+    refreshToken: "refresh-token",
+    fetchImpl: async (url, init) => {
+      assertEqual(
+        String(url),
+        "https://oauth2.googleapis.com/token",
+        "Token refresh uses Google's OAuth token endpoint",
+      );
+      refreshRequestBody = String(init?.body);
+      return new Response(
+        JSON.stringify({
+          access_token: "refreshed-access-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: "https://www.googleapis.com/auth/gmail.send",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  assertEqual(refreshed.ok, true, "Refresh token flow returns a new Gmail access token");
+  assert(
+    refreshRequestBody.includes("grant_type=refresh_token") &&
+      refreshRequestBody.includes("refresh_token=refresh-token"),
+    "Refresh token request uses OAuth refresh_token grant",
+  );
+
+  const approvalMessage = {
+    direction: "outbound",
+    status: "queued",
+  };
+  assertEqual(
+    serverClient.validateGmailOwnerApproval({
+      message: approvalMessage,
+      isOwner: false,
+      approvalAction: "owner_approved_send",
+    }).status,
+    "owner_required",
+    "Non-owner users cannot approve outbound Gmail",
+  );
+  assertEqual(
+    serverClient.validateGmailOwnerApproval({
+      message: approvalMessage,
+      isOwner: true,
+      approvalAction: null,
+    }).status,
+    "explicit_approval_required",
+    "Owner sends require an explicit approval action",
+  );
+  assertEqual(
+    serverClient.validateGmailOwnerApproval({
+      message: approvalMessage,
+      isOwner: true,
+      approvalAction: "owner_approved_send",
+    }).ok,
+    true,
+    "Explicit company-owner approval unlocks controlled send",
+  );
+
+  const estimatePdf = serverClient.buildEstimatePdfAttachment({
+    estimate: {
+      title: "Roof replacement",
+      issue_date: "2026-08-05",
+      subtotal: 10000,
+      tax_total: 850,
+      total: 10850,
+      notes: "Customer-safe estimate notes",
+    },
+    lineItems: [
+      {
+        description: "Roofing system",
+        quantity: 1,
+        unit: "job",
+        total: 10000,
+      },
+    ],
+    companyName: "WeatherTech Roofing LLC",
+    customerName: "Jane Homeowner",
+  });
+  assertEqual(estimatePdf.mimeType, "application/pdf", "Estimate attachment is a PDF");
+  assert(
+    estimatePdf.content.subarray(0, 8).toString("utf8").startsWith("%PDF-1.4"),
+    "Estimate attachment contains a valid PDF header",
+  );
+  const rawWithPdf = serverClient.buildGmailRawMessage(
+    {
+      to_email: "jane@example.com",
+      to_emails: ["jane@example.com"],
+      cc_email: null,
+      from_email: "sales@weathertech.example",
+      subject: "Roof estimate",
+      body: "Hi Jane,\n\nYour <estimate> is ready.",
+    },
+    [estimatePdf],
+  );
+  const decodedWithPdf = Buffer.from(
+    rawWithPdf.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64",
+  ).toString("utf8");
+  assert(
+    decodedWithPdf.includes("multipart/mixed") &&
+      decodedWithPdf.includes("multipart/alternative"),
+    "Gmail MIME contains mixed attachments and text/HTML alternatives",
+  );
+  assert(
+    decodedWithPdf.includes("Content-Type: application/pdf") &&
+      decodedWithPdf.includes(estimatePdf.content.toString("base64").slice(0, 40)),
+    "Gmail MIME carries the generated estimate PDF attachment",
+  );
+  assert(
+    decodedWithPdf.includes("text/html") &&
+      decodedWithPdf.includes("Your &lt;estimate&gt; is ready."),
+    "HTML delivery escapes customer text and preserves formatting",
+  );
+
+  const draftSnapshot = {
+    companies: [{ id: "company-weathertech", name: "WeatherTech Roofing LLC" }],
+    customers: [
+      {
+        id: "customer-1",
+        company_id: "company-weathertech",
+        contact_name: "Jane",
+        display_name: "Jane Homeowner",
+        email: "jane@example.com",
+        property_address: "100 Main St",
+      },
+      {
+        id: "customer-2",
+        company_id: "company-weathertech",
+        contact_name: "Wrong Customer",
+        display_name: "Wrong Customer",
+        email: "wrong-customer@example.com",
+        property_address: "200 Other St",
+      },
+    ],
+    leads: [],
+    jobs: [],
+    estimates: [
+      {
+        id: "estimate-1",
+        company_id: "company-weathertech",
+        customer_id: "customer-1",
+        property_id: "property-1",
+        title: "Roof replacement",
+        total: 10850,
+      },
+    ],
+    proposalRevisions: [
+      {
+        id: "proposal-1",
+        company_id: "company-weathertech",
+        customer_id: "customer-1",
+        lead_id: null,
+        property_id: "property-1",
+        estimate_id: "estimate-1",
+        proposal_number: "WT-1001",
+        title: "Roof proposal",
+        accepted_total: 10850,
+        base_total: 10850,
+      },
+    ],
+    inspections: [
+      {
+        id: "inspection-1",
+        company_id: "company-weathertech",
+        customer_id: "customer-1",
+        lead_id: null,
+        job_id: null,
+        estimate_id: null,
+        property_id: "property-1",
+        schedule_event_id: null,
+        title: "Roof inspection",
+        scheduled_start: "2026-08-07T16:00:00.000Z",
+        property_address: "100 Main St",
+      },
+    ],
+    scheduleEvents: [
+      {
+        id: "schedule-1",
+        company_id: "company-weathertech",
+        customer_id: "customer-1",
+        lead_id: null,
+        job_id: null,
+        property_id: "property-1",
+        title: "Production walkthrough",
+        start_at: "2026-08-08T16:00:00.000Z",
+        location: "100 Main St",
+      },
+    ],
+    documents: [],
+    invoices: [],
+    emailMessages: [],
+  };
+  for (const [kind, sourceId] of [
+    ["estimate_delivery", "estimate-1"],
+    ["proposal_delivery", "proposal-1"],
+    ["inspection_confirmation", "inspection-1"],
+    ["appointment_reminder", "schedule-1"],
+  ]) {
+    const plan = emailDrafts.buildGoogleWorkspaceEmailDraft({
+      snapshot: draftSnapshot,
+      kind,
+      companyId: "company-weathertech",
+      sourceId,
+      integrationConnectionId: "connection-1",
+    });
+    assertEqual(plan.ok, true, `${kind} creates a Supabase-backed email draft`);
+    assertEqual(plan.input.status, "draft", `${kind} never sends automatically`);
+    assertEqual(
+      plan.input.metadata.approvalState,
+      "draft",
+      `${kind} is routed through owner approval`,
+    );
+  }
+  const sourceLinkedEstimateDraft = emailDrafts.buildGoogleWorkspaceEmailDraft({
+    snapshot: draftSnapshot,
+    kind: "estimate_delivery",
+    companyId: "company-weathertech",
+    sourceId: "estimate-1",
+    customerId: "customer-2",
+  });
+  assertEqual(
+    sourceLinkedEstimateDraft.input.customer_id,
+    "customer-1",
+    "Estimate delivery keeps the source-linked customer instead of a mismatched form selection",
+  );
+  assertEqual(
+    sourceLinkedEstimateDraft.input.to_email,
+    "jane@example.com",
+    "Estimate delivery uses the source-linked customer email by default",
+  );
+
   restoreEnv(originalEnv);
   console.log("Google Workspace email foundation check passed.");
-  console.log("Verified OAuth readiness, Gmail scopes, message import, matching, attachments, token encryption, and disabled send guardrails.");
+  console.log("Verified OAuth, token refresh, owner approval, mailbox-scoped drafts, HTML MIME, PDF attachments, and controlled Gmail send.");
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }
