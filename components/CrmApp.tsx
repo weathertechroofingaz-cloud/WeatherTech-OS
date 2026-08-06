@@ -310,6 +310,7 @@ import {
   calendarSyncStatusLabel,
   canRetryIntegrationSyncLog,
   countSmsSegments,
+  createGmailOutboundPayloadFingerprint,
   createPayloadFingerprint,
   emailCategoryLabel,
   emailMessageStatusLabel,
@@ -34114,7 +34115,10 @@ function AiToolsView({
     }
 
     try {
-      await createEmailMessage(client, plan.input);
+      await createEmailMessage(client, {
+        ...plan.input,
+        from_email: gmailConnection?.account_email ?? null,
+      });
       setReviewedActionIds((current) => ({ ...current, [action.id]: "approved" }));
       await onReload();
       onNotice(
@@ -43688,6 +43692,16 @@ function IntegrationsView({
     const gmailConnection = gmailConnections.find(
       (connection) => connection.company_id === companyId,
     );
+
+    if (
+      intent === "queue" &&
+      (!gmailConnection ||
+        gmailConnection.status !== "connected" ||
+        !gmailConnection.account_email)
+    ) {
+      onError("Connect the selected company Gmail mailbox before submitting for approval.");
+      return;
+    }
     const draftKind = (
       category === "estimate"
         ? "estimate_delivery"
@@ -43733,7 +43747,7 @@ function IntegrationsView({
       (invoice
         ? `Hi ${customer?.contact_name ?? "there"},\n\nYour invoice ${invoice.invoice_number} for ${invoice.title} is ready. The balance due is ${formatMoney(invoice.balance_due)}.\n\nThank you,\n${resolvedCompany}`
         : `Hi ${customer?.contact_name ?? "there"},\n\nFollowing up from ${resolvedCompany}. Reply here if you have any questions or need a schedule update.\n\nThank you,\n${resolvedCompany}`);
-    const baseInput = plannedDraft?.ok
+    const baseDraftInput = plannedDraft?.ok
       ? plannedDraft.input
       : {
           company_id: companyId,
@@ -43754,7 +43768,13 @@ function IntegrationsView({
             generatedBy: "weathertech_template",
           },
         };
+    const baseInput = {
+      ...baseDraftInput,
+      integration_connection_id: gmailConnection?.id ?? null,
+      from_email: gmailConnection?.account_email ?? null,
+    };
     const submittedAt = new Date().toISOString();
+    const pendingPayloadHash = createGmailOutboundPayloadFingerprint(baseInput);
     const input =
       intent === "queue"
         ? {
@@ -43766,6 +43786,7 @@ function IntegrationsView({
               ...(baseInput.metadata ?? {}),
               approvalState: "pending_owner_approval",
               submittedForApprovalAt: submittedAt,
+              pendingPayloadHash,
             },
           }
         : baseInput;
@@ -44065,8 +44086,29 @@ function IntegrationsView({
 
   const queueEmailMessage = async (message: EmailMessageRecord) => {
     const submittedAt = new Date().toISOString();
+    const gmailConnection = gmailConnections.find(
+      (connection) =>
+        connection.id === message.integration_connection_id &&
+        connection.company_id === message.company_id &&
+        connection.status === "connected" &&
+        Boolean(connection.account_email),
+    );
+
+    if (!gmailConnection?.account_email) {
+      onError("Connect the message company Gmail mailbox before submitting for approval.");
+      return;
+    }
+
+    const queuedMessage = {
+      ...message,
+      integration_connection_id: gmailConnection.id,
+      from_email: gmailConnection.account_email,
+    };
+    const pendingPayloadHash = createGmailOutboundPayloadFingerprint(queuedMessage);
     try {
       await updateEmailMessage(client, message.id, {
+        integration_connection_id: gmailConnection.id,
+        from_email: gmailConnection.account_email,
         status: "queued",
         queued_at: submittedAt,
         sync_status: "queued",
@@ -44075,6 +44117,7 @@ function IntegrationsView({
           approvalState: "pending_owner_approval",
           submittedForApprovalAt: submittedAt,
           requiresOwnerApproval: true,
+          pendingPayloadHash,
         },
         last_error: null,
       });
@@ -44609,6 +44652,13 @@ function IntegrationsView({
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
                 Draft, queue, sync, and safely associate customer email through
                 company mailboxes without exposing Google credentials in the browser.
+              </p>
+              <p
+                className="mt-2 text-sm font-semibold text-amber-700"
+                data-testid="gmail-owner-approval-policy"
+              >
+                Every live Gmail send requires explicit owner approval. Drafts never send
+                automatically.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

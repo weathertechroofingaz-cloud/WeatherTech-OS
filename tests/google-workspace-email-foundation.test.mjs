@@ -202,6 +202,18 @@ try {
     false,
     "Supabase-backed drafts do not require the restricted Gmail compose scope",
   );
+  assertEqual(
+    integrations.hasRequiredGmailSendScopes(integrations.gmailScopes),
+    true,
+    "Gmail delivery requires the connected mailbox read and send scopes",
+  );
+  assertEqual(
+    integrations.hasRequiredGmailSendScopes([
+      "https://www.googleapis.com/auth/gmail.send",
+    ]),
+    false,
+    "Gmail delivery fails closed when duplicate-protection lookup scope is missing",
+  );
 
   assertEqual(
     serverClient.validateGoogleWorkspaceAccountDomain(
@@ -397,18 +409,67 @@ try {
   assertEqual(fetchCalled, false, "Disabled Gmail send does not call Gmail");
 
   process.env.GOOGLE_GMAIL_SEND_ENABLED = "true";
+  const sendFixture = {
+    id: "email-message-1",
+    company_id: "company-1",
+    integration_connection_id: "connection-1",
+    customer_id: null,
+    estimate_id: null,
+    invoice_id: null,
+    document_id: null,
+    category: "estimate",
+    status: "queued",
+    direction: "outbound",
+    to_email: "jane@example.com",
+    to_emails: ["jane@example.com"],
+    cc_email: null,
+    cc_emails: [],
+    bcc_emails: [],
+    reply_to_emails: [],
+    from_email: "sales@weathertech.example",
+    subject: "Estimate\nInjected",
+    body: "Your estimate is ready.",
+    gmail_message_id: null,
+    gmail_thread_id: "gmail-thread-1",
+    queued_at: null,
+    sent_at: null,
+    last_error: null,
+    created_at: "2026-08-06T12:00:00.000Z",
+    updated_at: "2026-08-06T12:00:00.000Z",
+  };
+  const approvedPayloadHash = integrations.createGmailOutboundPayloadFingerprint(sendFixture);
+  assertEqual(
+    approvedPayloadHash,
+    integrations.createGmailOutboundPayloadFingerprint({ ...sendFixture }),
+    "Identical Gmail approval payloads have a stable fingerprint",
+  );
+  assert(
+    approvedPayloadHash !==
+      integrations.createGmailOutboundPayloadFingerprint({
+        ...sendFixture,
+        subject: "Changed after approval",
+      }),
+    "Changing a queued Gmail payload invalidates its approval fingerprint",
+  );
+  const expectedIdempotencyKey = serverClient.createGmailIdempotencyKey(sendFixture);
   const sentSend = await serverClient.sendGmailEmail({
-    message: {
-      to_email: "jane@example.com",
-      cc_email: null,
-      from_email: "sales@weathertech.example",
-      subject: "Estimate\nInjected",
-      body: "Your estimate is ready.",
-      gmail_thread_id: "gmail-thread-1",
-    },
+    message: sendFixture,
     accessToken: "access-token",
     fetchImpl: async (url, init) => {
       fetchCalled = true;
+      if (String(url).includes("/users/me/messages?")) {
+        assert(
+          new URL(String(url)).searchParams.get("q")?.includes("in:sent") &&
+            new URL(String(url)).searchParams
+              .get("q")
+              ?.includes('subject:"Estimate Injected"'),
+          "Gmail duplicate protection searches recent sent messages by approved subject",
+        );
+        return new Response(JSON.stringify({ messages: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       assert(
         String(url).endsWith("/users/me/messages/send"),
         "Enabled Gmail send uses the Gmail messages.send endpoint",
@@ -428,6 +489,12 @@ try {
         decodedRaw.includes("Subject: Estimate Injected"),
         "Raw Gmail subject strips header newlines",
       );
+      assert(
+        decodedRaw.includes(
+          `X-WeatherTech-OS-Idempotency-Key: ${expectedIdempotencyKey}`,
+        ),
+        "Raw Gmail message includes the deterministic custom idempotency header",
+      );
       return new Response(JSON.stringify({ id: "sent-1", threadId: "gmail-thread-1" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -437,6 +504,126 @@ try {
   assertEqual(fetchCalled, true, "Enabled Gmail send calls Gmail mock");
   assertEqual(sentSend.sent, true, "Enabled Gmail send can report provider-confirmed send");
   assertEqual(sentSend.gmailMessageId, "sent-1", "Gmail send result preserves provider id");
+  assertEqual(sentSend.providerSendAttempts, 1, "Successful Gmail delivery performs one POST");
+
+  let duplicatePostCount = 0;
+  const duplicateSend = await serverClient.sendGmailEmail({
+    message: sendFixture,
+    accessToken: "access-token",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/users/me/messages/send")) {
+        duplicatePostCount += 1;
+      }
+      if (String(url).includes("/users/me/messages/sent-existing?")) {
+        return new Response(
+          JSON.stringify({
+            threadId: "thread-existing",
+            payload: {
+              headers: [
+                { name: "Subject", value: sendFixture.subject },
+                {
+                  name: "X-WeatherTech-OS-Idempotency-Key",
+                  value: expectedIdempotencyKey,
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ messages: [{ id: "sent-existing", threadId: "thread-existing" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  assertEqual(duplicateSend.sent, true, "A provider-confirmed prior send reconciles as sent");
+  assertEqual(
+    duplicateSend.duplicatePrevented,
+    true,
+    "A matching provider idempotency header is reported as duplicate prevention",
+  );
+  assertEqual(duplicatePostCount, 0, "Duplicate reconciliation never repeats the Gmail POST");
+
+  let failurePostCount = 0;
+  const providerFailure = await serverClient.sendGmailEmail({
+    message: { ...sendFixture, id: "email-message-provider-failure" },
+    accessToken: "access-token",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/users/me/messages/send")) {
+        failurePostCount += 1;
+        return new Response(JSON.stringify({ error: { message: "Provider unavailable" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assertEqual(providerFailure.sent, false, "A Gmail provider failure is surfaced to the CRM");
+  assertEqual(failurePostCount, 1, "A provider failure never triggers a duplicate-prone POST retry");
+
+  let retryPhase = "first";
+  let retryPostCount = 0;
+  const ambiguousFixture = { ...sendFixture, id: "email-message-ambiguous" };
+  const ambiguousIdempotencyKey =
+    serverClient.createGmailIdempotencyKey(ambiguousFixture);
+  const ambiguousFetch = async (url) => {
+    if (String(url).endsWith("/users/me/messages/send")) {
+      retryPostCount += 1;
+      return new Response(JSON.stringify({ error: { message: "Gateway timeout" } }), {
+        status: 504,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (String(url).includes("/users/me/messages/sent-after-timeout?")) {
+      return new Response(
+        JSON.stringify({
+          threadId: "thread-after-timeout",
+          payload: {
+            headers: [
+              { name: "Subject", value: ambiguousFixture.subject },
+              {
+                name: "X-WeatherTech-OS-Idempotency-Key",
+                value: ambiguousIdempotencyKey,
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify(
+        retryPhase === "retry"
+          ? { messages: [{ id: "sent-after-timeout", threadId: "thread-after-timeout" }] }
+          : { messages: [] },
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const ambiguousFirstAttempt = await serverClient.sendGmailEmail({
+    message: ambiguousFixture,
+    accessToken: "access-token",
+    fetchImpl: ambiguousFetch,
+  });
+  assertEqual(ambiguousFirstAttempt.sent, false, "An ambiguous provider failure stays failed");
+  retryPhase = "retry";
+  const ambiguousRetry = await serverClient.sendGmailEmail({
+    message: ambiguousFixture,
+    accessToken: "access-token",
+    fetchImpl: ambiguousFetch,
+  });
+  assertEqual(ambiguousRetry.sent, true, "An owner retry reconciles a provider-confirmed send");
+  assertEqual(
+    ambiguousRetry.duplicatePrevented,
+    true,
+    "Retry reconciliation prevents a second customer email",
+  );
+  assertEqual(retryPostCount, 1, "The owner retry does not issue a second Gmail POST");
 
   let refreshRequestBody = "";
   const refreshed = await serverClient.refreshGoogleAccessToken({
@@ -542,6 +729,14 @@ try {
       sendRouteSource.includes('sync_status: "syncing"') &&
       sendRouteSource.includes("No duplicate send was attempted"),
     "Send route atomically claims a queued approval before calling Gmail",
+  );
+  assert(
+    sendRouteSource.includes('.select("user_id, company_id, role")') &&
+      sendRouteSource.includes('.eq("provider", "gmail")') &&
+      sendRouteSource.includes("hasRequiredGmailSendScopes") &&
+      sendRouteSource.includes("pendingPayloadHash") &&
+      sendRouteSource.includes("createGmailOutboundPayloadFingerprint"),
+    "Send route enforces the real owner schema, company mailbox mapping, scopes, and approved payload",
   );
   assert(
     oauthStartRouteSource.includes('.eq("role", "owner")') &&

@@ -226,6 +226,87 @@ export function createPayloadFingerprint(payload: GoogleCalendarEventPayload) {
   return `gcal-${Math.abs(hash).toString(16)}`;
 }
 
+type GmailOutboundPayloadSource = Pick<
+  EmailMessageRecord,
+  | "company_id"
+  | "integration_connection_id"
+  | "customer_id"
+  | "lead_id"
+  | "job_id"
+  | "property_id"
+  | "estimate_id"
+  | "invoice_id"
+  | "document_id"
+  | "category"
+  | "from_email"
+  | "to_email"
+  | "to_emails"
+  | "cc_email"
+  | "cc_emails"
+  | "bcc_emails"
+  | "reply_to_emails"
+  | "subject"
+  | "body"
+  | "gmail_thread_id"
+>;
+
+function createStableTextFingerprint(prefix: string, payload: unknown) {
+  const serialized = JSON.stringify(payload);
+  let hash = 2166136261;
+
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `${prefix}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Fingerprints the exact owner-approved Gmail payload. Server delivery rejects a
+ * queued message if any delivery field changes after it enters approval.
+ */
+export function createGmailOutboundPayloadFingerprint(
+  message: Partial<GmailOutboundPayloadSource>,
+) {
+  const toEmails = message.to_emails?.length
+    ? message.to_emails
+    : message.to_email
+      ? [message.to_email]
+      : [];
+  const ccEmails = message.cc_emails?.length
+    ? message.cc_emails
+    : message.cc_email
+      ? [message.cc_email]
+      : [];
+
+  return createStableTextFingerprint("gmail-v1", {
+    companyId: message.company_id ?? null,
+    integrationConnectionId: message.integration_connection_id ?? null,
+    customerId: message.customer_id ?? null,
+    leadId: message.lead_id ?? null,
+    jobId: message.job_id ?? null,
+    propertyId: message.property_id ?? null,
+    estimateId: message.estimate_id ?? null,
+    invoiceId: message.invoice_id ?? null,
+    documentId: message.document_id ?? null,
+    category: message.category ?? null,
+    fromEmail: message.from_email?.trim().toLowerCase() ?? null,
+    toEmails,
+    ccEmails,
+    bccEmails: message.bcc_emails ?? [],
+    replyToEmails: message.reply_to_emails ?? [],
+    subject: message.subject ?? null,
+    body: message.body ?? null,
+    gmailThreadId: message.gmail_thread_id ?? null,
+  });
+}
+
+export function hasRequiredGmailSendScopes(scopes: string[] | null | undefined) {
+  const scopeSet = new Set(scopes ?? []);
+  return gmailScopes.every((scope) => scopeSet.has(scope));
+}
+
 export function getCalendarSyncRecord(
   event: ScheduleEventRecord,
   connection: IntegrationConnectionRecord | undefined,

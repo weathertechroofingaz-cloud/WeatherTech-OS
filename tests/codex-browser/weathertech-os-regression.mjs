@@ -7900,7 +7900,7 @@ async function testWebsiteMarketingFoundation(browser, tab) {
         text.includes("gmail / google workspace email foundation") &&
         text.includes("production google workspace foundation") &&
         text.includes("server-side oauth") &&
-        text.includes("live send disabled") &&
+        (text.includes("live send disabled") || text.includes("live send enabled")) &&
         text.includes("/api/integrations/google-workspace/oauth/callback") &&
         text.includes("check readiness") &&
         text.includes("connect with google") &&
@@ -7947,6 +7947,34 @@ async function testWebsiteMarketingFoundation(browser, tab) {
 
   if (!calendarFoundationState.hasPayloadPreview) {
     throw new Error("Google Calendar foundation no longer shows the event payload preview.");
+  }
+
+  const gmailFoundationState = await tab.playwright.evaluate(() => {
+    const section = document.querySelector('[data-testid="google-workspace-email-foundation"]');
+    const text = section?.textContent?.toLowerCase() ?? "";
+    const pageText = document.body.innerText.toLowerCase();
+
+    return {
+      visible: Boolean(section),
+      statesSendMode: text.includes("live send disabled") || text.includes("live send enabled"),
+      hasOwnerApprovalPolicy: Boolean(
+        document.querySelector('[data-testid="gmail-owner-approval-policy"]'),
+      ),
+      createsDrafts: pageText.includes("save draft"),
+      submitsForApproval: pageText.includes("submit for owner approval"),
+      statesNoAutomaticSend: pageText.includes("drafts never send automatically"),
+    };
+  });
+
+  if (
+    !gmailFoundationState.visible ||
+    !gmailFoundationState.statesSendMode ||
+    !gmailFoundationState.hasOwnerApprovalPolicy ||
+    !gmailFoundationState.createsDrafts ||
+    !gmailFoundationState.submitsForApproval ||
+    !gmailFoundationState.statesNoAutomaticSend
+  ) {
+    throw new Error("Gmail foundation no longer exposes the draft and owner-approval workflow.");
   }
 
   await clickNav(tab, "Website & Marketing");

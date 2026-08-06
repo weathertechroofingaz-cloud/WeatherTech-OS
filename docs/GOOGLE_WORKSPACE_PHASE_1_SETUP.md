@@ -6,9 +6,9 @@ Do not commit Google client secrets, OAuth codes, access tokens, refresh tokens,
 
 ## Activation boundary
 
-Codex can validate repository behavior without Google credentials. The owner must personally complete Google Cloud setup, enter secrets, authorize each mailbox, enable the send gate for a controlled test, approve that test, and later approve production deployment.
+Codex can validate repository behavior without Google credentials. The owner must personally complete Google Cloud setup, enter secrets, authorize each mailbox, enable the send gate, and approve every individual message. Enabling the gate never enables automatic customer email.
 
-Keep `GOOGLE_GMAIL_SEND_ENABLED=false` until the owner explicitly authorizes one internal test. No customer email may be used for activation testing.
+For a new environment, keep `GOOGLE_GMAIL_SEND_ENABLED=false` until the owner explicitly authorizes controlled sending. In an activated environment it may remain `true`, because each message still requires a company-owner submission and a second explicit confirmation. Use only owner-controlled recipients for activation testing.
 
 ## Exact server environment
 
@@ -173,7 +173,7 @@ Prepare this test but do not execute it until the owner explicitly authorizes en
 12. Verify a second send/retry is blocked and cannot create a duplicate.
 13. Force or wait for access-token expiry, then repeat with a new synthetic draft to verify refresh-token operation.
 14. Confirm AI-generated content remains a Supabase draft until the same owner submission and approval gates are completed.
-15. Set `GOOGLE_GMAIL_SEND_ENABLED=false` again unless the owner separately approves continued production sending.
+15. Leave `GOOGLE_GMAIL_SEND_ENABLED=true` only in an owner-approved environment. Set it to `false` for an immediate global pause.
 
 ## Security behavior
 
@@ -187,6 +187,9 @@ Prepare this test but do not execute it until the owner explicitly authorizes en
 - Recipient addresses are validated server-side and header newlines are removed.
 - Supabase Storage attachments are loaded only through company-scoped document records.
 - Each queued approval is atomically claimed as `syncing` before Gmail is called, blocking concurrent or retry duplicates.
+- The exact recipient, subject, body, source links, attachments, company, and mailbox mapping are fingerprinted at submission. Any later change invalidates approval and requires review.
+- Every CRM message has a deterministic `X-WeatherTech-OS-Idempotency-Key` MIME header. WeatherTech OS scans matching recent Sent metadata before delivery and after ambiguous provider failures, so an owner retry reconciles a prior provider send instead of issuing a second send. Gmail-generated RFC `Message-ID` values are not used as application idempotency keys.
+- Provider failures never trigger an automatic Gmail POST retry. The record returns to a visible failed or pending state for a new owner-controlled attempt.
 - AI creates drafts only and cannot invoke the send route automatically.
 - Integration logs contain identifiers and safe summaries, not OAuth tokens or message bodies.
 

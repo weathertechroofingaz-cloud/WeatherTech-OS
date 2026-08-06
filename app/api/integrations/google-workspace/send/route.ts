@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
+  createGmailOutboundPayloadFingerprint,
+  hasRequiredGmailSendScopes,
+} from "../../../../../lib/crm/integrations";
+import {
   buildEstimatePdfAttachment,
   createServiceSupabaseClient,
   decryptGoogleToken,
@@ -187,7 +191,7 @@ export async function POST(request: NextRequest) {
 
   const { data: ownerMembership } = await client
     .from("company_memberships")
-    .select("id, role")
+    .select("user_id, company_id, role")
     .eq("company_id", message.company_id)
     .eq("user_id", userResult.user.id)
     .eq("role", "owner")
@@ -221,6 +225,49 @@ export async function POST(request: NextRequest) {
         sent: false,
         message:
           "No email was sent. GOOGLE_GMAIL_SEND_ENABLED must be explicitly enabled for controlled live sending.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const approvedPayloadHash = getMetadataString(message.metadata, "pendingPayloadHash");
+  const currentPayloadHash = createGmailOutboundPayloadFingerprint(message);
+
+  if (!approvedPayloadHash || approvedPayloadHash !== currentPayloadHash) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message:
+          "The queued email changed after approval submission. Review and submit it again before sending.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const { data: connection } = message.integration_connection_id
+    ? await serviceClient
+        .from("integration_connections")
+        .select("*")
+        .eq("id", message.integration_connection_id)
+        .eq("company_id", message.company_id)
+        .eq("provider", "gmail")
+        .maybeSingle()
+    : { data: null };
+
+  if (
+    !connection ||
+    connection.status !== "connected" ||
+    !connection.account_email ||
+    !hasRequiredGmailSendScopes(connection.scopes) ||
+    message.from_email?.trim().toLowerCase() !== connection.account_email.trim().toLowerCase()
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        sent: false,
+        message:
+          "The selected company mailbox is not connected with the required Gmail permissions.",
       },
       { status: 409 },
     );
@@ -302,11 +349,15 @@ export async function POST(request: NextRequest) {
     approvedAt,
     sendAttemptId,
     sendClaimedAt: approvedAt,
+    approvedPayloadHash: currentPayloadHash,
   };
   const { data: claimedMessage, error: claimError } = await serviceClient
     .from("email_messages")
     .update({
       sync_status: "syncing",
+      from_email: connection.account_email,
+      provider_account_id: connection.external_account_id ?? connection.account_email,
+      provider_payload_hash: currentPayloadHash,
       metadata: approvalMetadata,
       last_error: null,
     })
@@ -330,7 +381,11 @@ export async function POST(request: NextRequest) {
   }
 
   const result = await sendGmailEmail({
-    message: claimedMessage,
+    message: {
+      ...claimedMessage,
+      from_email: connection.account_email,
+      provider_account_id: connection.external_account_id ?? connection.account_email,
+    },
     accessToken: refresh.accessToken,
     attachments,
   });
@@ -339,6 +394,10 @@ export async function POST(request: NextRequest) {
     ...approvalMetadata,
     approvalState: result.sent ? "sent" : "owner_approved",
     attachmentCountDelivered: attachments.length,
+    gmailIdempotencyKey: result.idempotencyKey,
+    providerSendAttempts: result.providerSendAttempts,
+    duplicatePrevented: result.duplicatePrevented,
+    reconciledFromProvider: result.reconciled,
   };
 
   if (result.sent) {
@@ -393,6 +452,18 @@ export async function POST(request: NextRequest) {
       .eq("sync_status", "syncing");
   }
 
+  await serviceClient
+    .from("integration_connections")
+    .update({
+      last_sync_at: now,
+      last_successful_sync_at: result.sent ? now : connection.last_successful_sync_at,
+      last_failure_at: result.sent ? connection.last_failure_at : now,
+      last_error: result.sent ? null : result.message,
+    })
+    .eq("id", connection.id)
+    .eq("company_id", message.company_id)
+    .eq("provider", "gmail");
+
   await serviceClient.from("integration_sync_logs").insert({
     company_id: message.company_id,
     integration_connection_id: message.integration_connection_id,
@@ -407,6 +478,7 @@ export async function POST(request: NextRequest) {
       emailMessageId: message.id,
       hasMailbox: Boolean(message.integration_connection_id),
       sendAttempted: result.attempted,
+      providerSendAttempts: result.providerSendAttempts,
       recipients: message.to_emails?.length ?? 1,
       ownerApproval: true,
       attachmentCount: attachments.length,
@@ -416,6 +488,8 @@ export async function POST(request: NextRequest) {
       sent: result.sent,
       status: result.status,
       gmailThreadId: result.sent ? result.gmailThreadId : null,
+      duplicatePrevented: result.duplicatePrevented,
+      reconciledFromProvider: result.reconciled,
     },
     error_code: result.sent ? null : result.status,
     error_message: result.sent ? null : result.message,

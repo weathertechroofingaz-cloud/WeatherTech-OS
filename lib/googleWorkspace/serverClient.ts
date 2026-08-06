@@ -142,28 +142,27 @@ export type GmailImportPlan = {
   providerPayloadHash: string;
 };
 
-export type GmailSendResult =
-  | {
-      attempted: false;
-      sent: false;
-      status: "disabled" | "missing_token" | "missing_message" | "configuration_missing";
-      message: string;
-    }
-  | {
-      attempted: true;
-      sent: true;
-      status: "sent";
-      message: string;
-      gmailMessageId: string | null;
-      gmailThreadId: string | null;
-    }
-  | {
-      attempted: true;
-      sent: false;
-      status: "failed";
-      message: string;
-      error: string;
-    };
+export type GmailSendResult = {
+  attempted: boolean;
+  sent: boolean;
+  status:
+    | "disabled"
+    | "missing_token"
+    | "missing_message"
+    | "configuration_missing"
+    | "idempotency_check_failed"
+    | "failed"
+    | "sent"
+    | "reconciled";
+  message: string;
+  gmailMessageId: string | null;
+  gmailThreadId: string | null;
+  providerSendAttempts: number;
+  duplicatePrevented: boolean;
+  reconciled: boolean;
+  idempotencyKey: string | null;
+  error?: string;
+};
 
 type GmailSendResponse = {
   id?: unknown;
@@ -447,6 +446,10 @@ function normalizeEmailList(values: Array<string | null | undefined>) {
 
 function getHeaderValue(message: GmailApiMessage, headerName: string) {
   const headers = message.payload?.headers ?? [];
+  return getGmailHeaderValue(headers, headerName);
+}
+
+function getGmailHeaderValue(headers: GmailHeader[], headerName: string) {
   const match = headers.find(
     (header) =>
       typeof header.name === "string" &&
@@ -841,6 +844,7 @@ function wrapBase64(value: Buffer) {
 export function buildGmailRawMessage(
   message: EmailMessageRecord,
   attachments: GmailOutboundAttachment[] = [],
+  idempotencyKey?: string | null,
 ) {
   const alternativeBoundary = `wtos-alt-${crypto.randomBytes(12).toString("hex")}`;
   const mixedBoundary = `wtos-mixed-${crypto.randomBytes(12).toString("hex")}`;
@@ -864,6 +868,9 @@ export function buildGmailRawMessage(
       ? `Reply-To: ${message.reply_to_emails.map(sanitizeHeaderValue).join(", ")}`
       : null,
     message.from_email ? `From: ${sanitizeHeaderValue(message.from_email)}` : null,
+    idempotencyKey
+      ? `X-WeatherTech-OS-Idempotency-Key: ${sanitizeHeaderValue(idempotencyKey)}`
+      : null,
     `Subject: ${sanitizeHeaderValue(message.subject)}`,
     "MIME-Version: 1.0",
     attachments.length
@@ -904,6 +911,16 @@ export function buildGmailRawMessage(
     : [...headers, ...alternative];
 
   return base64UrlEncode(Buffer.from(mimeLines.join("\r\n"), "utf8"));
+}
+
+export function createGmailIdempotencyKey(message: EmailMessageRecord) {
+  const identity = [
+    message.company_id,
+    message.integration_connection_id ?? "unmapped",
+    message.id,
+  ].join(":");
+  const digest = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 40);
+  return `wtos-${digest}`;
 }
 
 function escapePdfText(value: string) {
@@ -1288,41 +1305,207 @@ export async function sendGmailEmail({
   attachments?: GmailOutboundAttachment[];
   fetchImpl?: FetchLike;
 }): Promise<GmailSendResult> {
+  const unavailableResult = (
+    status: Extract<
+      GmailSendResult["status"],
+      "configuration_missing" | "disabled" | "missing_message" | "missing_token"
+    >,
+    messageText: string,
+  ): GmailSendResult => ({
+    attempted: false,
+    sent: false,
+    status,
+    message: messageText,
+    gmailMessageId: null,
+    gmailThreadId: null,
+    providerSendAttempts: 0,
+    duplicatePrevented: false,
+    reconciled: false,
+    idempotencyKey: null,
+  });
+
   if (!getGoogleWorkspaceConfigCheckResult().ok) {
-    return {
-      attempted: false,
-      sent: false,
-      status: "configuration_missing",
-      message: "Google Workspace configuration is incomplete. No email was sent.",
-    };
+    return unavailableResult(
+      "configuration_missing",
+      "Google Workspace configuration is incomplete. No email was sent.",
+    );
   }
 
   if (!getBooleanEnvValue(googleWorkspaceEnvVars.gmailSendEnabled)) {
-    return {
-      attempted: false,
-      sent: false,
-      status: "disabled",
-      message:
-        "No email was sent. GOOGLE_GMAIL_SEND_ENABLED must be explicitly enabled for controlled live sending.",
-    };
+    return unavailableResult(
+      "disabled",
+      "No email was sent. GOOGLE_GMAIL_SEND_ENABLED must be explicitly enabled for controlled live sending.",
+    );
   }
 
   if (!message) {
-    return {
-      attempted: false,
-      sent: false,
-      status: "missing_message",
-      message: "No email message was provided.",
-    };
+    return unavailableResult("missing_message", "No email message was provided.");
   }
 
   if (!accessToken) {
+    return unavailableResult(
+      "missing_token",
+      "No authorized Gmail mailbox token is available. No email was sent.",
+    );
+  }
+
+  const idempotencyKey = createGmailIdempotencyKey(message);
+  const createdAt = Date.parse(message.created_at);
+  const searchAfter = Math.max(
+    0,
+    Math.floor((Number.isFinite(createdAt) ? createdAt : Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000) -
+      24 * 60 * 60,
+  );
+  const searchableSubject = message.subject
+    .replace(/["\\{}\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+  const findProviderMessage = async (attempts: number, retryOnNoMatch = false) => {
+    let lastError = "Gmail idempotency lookup failed.";
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const params = new URLSearchParams({
+          maxResults: "100",
+          includeSpamTrash: "true",
+          q: [
+            "in:sent",
+            `after:${searchAfter}`,
+            searchableSubject ? `subject:\"${searchableSubject}\"` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        });
+        const response = await fetchImpl(
+          `${GMAIL_API_BASE_URL}/users/me/messages?${params.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          },
+        );
+        const payload = (await response.json().catch(() => ({}))) as {
+          messages?: Array<{ id?: unknown; threadId?: unknown }>;
+          error?: { message?: unknown };
+        };
+
+        if (response.ok) {
+          const candidates = (payload.messages ?? []).filter(
+            (candidate): candidate is { id: string; threadId?: unknown } =>
+              typeof candidate.id === "string",
+          );
+
+          for (const candidate of candidates) {
+            const metadataParams = new URLSearchParams({ format: "metadata" });
+            metadataParams.append("metadataHeaders", "X-WeatherTech-OS-Idempotency-Key");
+            metadataParams.append("metadataHeaders", "Subject");
+            const metadataResponse = await fetchImpl(
+              `${GMAIL_API_BASE_URL}/users/me/messages/${encodeURIComponent(candidate.id)}?${metadataParams.toString()}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  Accept: "application/json",
+                },
+              },
+            );
+            const metadataPayload = (await metadataResponse.json().catch(() => ({}))) as {
+              payload?: { headers?: GmailHeader[] };
+              threadId?: unknown;
+              error?: { message?: unknown };
+            };
+
+            if (!metadataResponse.ok) {
+              throw new Error(
+                typeof metadataPayload.error?.message === "string"
+                  ? metadataPayload.error.message
+                  : "Gmail idempotency metadata lookup returned an error.",
+              );
+            }
+
+            const headers = metadataPayload.payload?.headers ?? [];
+            const providerKey = getGmailHeaderValue(
+              headers,
+              "X-WeatherTech-OS-Idempotency-Key",
+            );
+            const providerSubject = getGmailHeaderValue(headers, "Subject");
+
+            if (providerKey === idempotencyKey && providerSubject === message.subject) {
+              return {
+                ok: true as const,
+                match: {
+                  id: candidate.id,
+                  threadId:
+                    typeof metadataPayload.threadId === "string"
+                      ? metadataPayload.threadId
+                      : typeof candidate.threadId === "string"
+                        ? candidate.threadId
+                        : null,
+                },
+              };
+            }
+          }
+
+          if (!retryOnNoMatch || attempt + 1 >= attempts) {
+            return { ok: true as const, match: null };
+          }
+        }
+
+        if (!response.ok) {
+          lastError =
+            typeof payload.error?.message === "string"
+              ? payload.error.message
+              : "Gmail idempotency lookup returned an error.";
+          if (response.status !== 429 && response.status < 500) {
+            break;
+          }
+        }
+      } catch (error) {
+        lastError =
+          error instanceof Error ? error.message : "Gmail idempotency lookup failed.";
+      }
+
+      if (attempt + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+    }
+
+    return { ok: false as const, match: null, error: lastError };
+  };
+
+  const reconciledResult = (match: { id: string; threadId: string | null }): GmailSendResult => ({
+    attempted: false,
+    sent: true,
+    status: "reconciled",
+    message: "Gmail already contains this approved message. No duplicate send was attempted.",
+    gmailMessageId: match.id,
+    gmailThreadId: match.threadId,
+    providerSendAttempts: 0,
+    duplicatePrevented: true,
+    reconciled: true,
+    idempotencyKey,
+  });
+  const preflight = await findProviderMessage(2);
+
+  if (!preflight.ok) {
     return {
       attempted: false,
       sent: false,
-      status: "missing_token",
-      message: "No authorized Gmail mailbox token is available. No email was sent.",
+      status: "idempotency_check_failed",
+      message: "Gmail delivery was stopped because duplicate protection could not be verified.",
+      error: preflight.error,
+      gmailMessageId: null,
+      gmailThreadId: null,
+      providerSendAttempts: 0,
+      duplicatePrevented: false,
+      reconciled: false,
+      idempotencyKey,
     };
+  }
+
+  if (preflight.match) {
+    return reconciledResult(preflight.match);
   }
 
   try {
@@ -1333,13 +1516,22 @@ export async function sendGmailEmail({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        raw: buildGmailRawMessage(message, attachments),
+        raw: buildGmailRawMessage(message, attachments, idempotencyKey),
         threadId: message.gmail_thread_id ?? undefined,
       }),
     });
-    const payload = (await response.json()) as GmailSendResponse;
+    const payload = (await response.json().catch(() => ({}))) as GmailSendResponse;
 
     if (!response.ok) {
+      const reconciliation = await findProviderMessage(3, true);
+      if (reconciliation.ok && reconciliation.match) {
+        return {
+          ...reconciledResult(reconciliation.match),
+          attempted: true,
+          providerSendAttempts: 1,
+        };
+      }
+
       return {
         attempted: true,
         sent: false,
@@ -1349,6 +1541,12 @@ export async function sendGmailEmail({
           typeof payload.error?.message === "string"
             ? payload.error.message
             : "Gmail send API returned an error.",
+        gmailMessageId: null,
+        gmailThreadId: null,
+        providerSendAttempts: 1,
+        duplicatePrevented: false,
+        reconciled: false,
+        idempotencyKey,
       };
     }
 
@@ -1359,14 +1557,33 @@ export async function sendGmailEmail({
       message: "Gmail message sent.",
       gmailMessageId: typeof payload.id === "string" ? payload.id : null,
       gmailThreadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      providerSendAttempts: 1,
+      duplicatePrevented: false,
+      reconciled: false,
+      idempotencyKey,
     };
   } catch (error) {
+    const reconciliation = await findProviderMessage(3, true);
+    if (reconciliation.ok && reconciliation.match) {
+      return {
+        ...reconciledResult(reconciliation.match),
+        attempted: true,
+        providerSendAttempts: 1,
+      };
+    }
+
     return {
       attempted: true,
       sent: false,
       status: "failed",
       message: "Gmail send failed.",
       error: error instanceof Error ? error.message : "Gmail send API returned an error.",
+      gmailMessageId: null,
+      gmailThreadId: null,
+      providerSendAttempts: 1,
+      duplicatePrevented: false,
+      reconciled: false,
+      idempotencyKey,
     };
   }
 }
