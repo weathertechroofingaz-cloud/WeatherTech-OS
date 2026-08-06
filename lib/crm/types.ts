@@ -111,6 +111,16 @@ export type JobStatus =
   | "canceled"
   | "closed";
 export type JobTaskStatus = "todo" | "in_progress" | "done";
+export type OfficeTaskPriority = "low" | "normal" | "high" | "urgent";
+export type OfficeTaskStatus = "open" | "snoozed" | "completed";
+export type OfficeTaskSourceType =
+  | "new_lead"
+  | "scheduled_inspection"
+  | "completed_inspection"
+  | "sent_estimate"
+  | "unsigned_estimate"
+  | "scheduled_job"
+  | "completed_job";
 export type ScheduleEventType =
   | "inspection"
   | "estimate"
@@ -833,6 +843,30 @@ export type JobTaskRecord = {
   description: string | null;
   status: JobTaskStatus;
   sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OfficeTaskRecord = {
+  id: string;
+  company_id: string;
+  customer_id: string | null;
+  property_id: string | null;
+  assigned_employee_id: string | null;
+  lead_id: string | null;
+  inspection_id: string | null;
+  estimate_id: string | null;
+  job_id: string | null;
+  source_type: OfficeTaskSourceType;
+  automation_key: string;
+  title: string;
+  notes: string | null;
+  priority: OfficeTaskPriority;
+  due_at: string;
+  status: OfficeTaskStatus;
+  snoozed_until: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2168,6 +2202,17 @@ export type JobTaskInput = {
   sort_order?: number;
 };
 
+export type OfficeTaskUpdate = {
+  assigned_employee_id?: string | null;
+  priority?: OfficeTaskPriority;
+  due_at?: string;
+  notes?: string | null;
+  status?: OfficeTaskStatus;
+  snoozed_until?: string | null;
+  completed_at?: string | null;
+  completed_by?: string | null;
+};
+
 export type JobNoteInput = {
   job_id: string;
   note: string;
@@ -3210,6 +3255,15 @@ export type JobTaskInsert = JobTaskInput & {
   updated_at?: string;
 };
 
+export type OfficeTaskInsert = Omit<
+  OfficeTaskRecord,
+  "id" | "created_at" | "updated_at"
+> & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type JobNoteInsert = JobNoteInput & {
   id?: string;
   created_at?: string;
@@ -3506,6 +3560,7 @@ export type CrmSnapshot = {
   scopes: ScopeRecord[];
   jobs: JobRecord[];
   jobTasks: JobTaskRecord[];
+  officeTasks: OfficeTaskRecord[];
   jobNotes: JobNoteRecord[];
   jobMaterials: JobMaterialRecord[];
   scheduleEvents: ScheduleEventRecord[];
@@ -3637,6 +3692,12 @@ export type Database = {
         Row: JobTaskRecord;
         Insert: JobTaskInsert;
         Update: Partial<Database["public"]["Tables"]["job_tasks"]["Insert"]>;
+        Relationships: [];
+      };
+      office_tasks: {
+        Row: OfficeTaskRecord;
+        Insert: OfficeTaskInsert;
+        Update: OfficeTaskUpdate;
         Relationships: [];
       };
       job_notes: {

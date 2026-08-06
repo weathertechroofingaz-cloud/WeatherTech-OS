@@ -120,6 +120,14 @@ const expectedMigrations = [
     "0033_ai_tools_operating_brain.sql",
     "f73eab951eaa4229314391f1eb5d49711c8dcbfce0f4ed3af4fabfb2ecfed73e",
   ],
+  [
+    "0034_office_operations_daily_task_queue.sql",
+    "e4fa070552f16aa92dabd8ffe15ecbdad0f7b5fa9a671f2091bf989ad81c68cd",
+  ],
+  [
+    "0035_office_task_source_delete_cascade.sql",
+    "768bb6177263ee5a217a1c732e66a77f85a5e7c6330013c91e28d0af970ce277",
+  ],
 ];
 
 const files = fs
@@ -172,7 +180,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0033 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0035 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -197,6 +205,8 @@ const quickBooksOnlineIndex = files.indexOf("0030_quickbooks_online_foundation.s
 const electronicSignaturesIndex = files.indexOf("0031_electronic_signatures_foundation.sql");
 const proposalBuilderIndex = files.indexOf("0032_estimate_proposal_builder_v2.sql");
 const aiToolsIndex = files.indexOf("0033_ai_tools_operating_brain.sql");
+const officeTasksIndex = files.indexOf("0034_office_operations_daily_task_queue.sql");
+const officeTaskCascadeIndex = files.indexOf("0035_office_task_source_delete_cascade.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -283,8 +293,14 @@ if (
   failures.push("AI Tools 2.0 migration must order after Estimate Proposal Builder 2.0.");
 }
 
-if (aiToolsIndex !== files.length - 1) {
-  failures.push("AI Tools 2.0 migration must remain last.");
+if (
+  aiToolsIndex === -1 ||
+  officeTasksIndex === -1 ||
+  officeTaskCascadeIndex === -1 ||
+  !(aiToolsIndex < officeTasksIndex && officeTasksIndex < officeTaskCascadeIndex) ||
+  officeTaskCascadeIndex !== files.length - 1
+) {
+  failures.push("Office Operations migrations must order after AI Tools 2.0 and remain last.");
 }
 
 for (const file of files) {
@@ -1140,7 +1156,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0033.",
+  "Verified raw filename order matches numeric order from 0001 through 0035.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -1171,6 +1187,12 @@ console.log(
 );
 console.log(
   "Verified 0032_estimate_proposal_builder_v2.sql precedes 0033_ai_tools_operating_brain.sql.",
+);
+console.log(
+  "Verified 0033_ai_tools_operating_brain.sql precedes 0034_office_operations_daily_task_queue.sql.",
+);
+console.log(
+  "Verified 0034_office_operations_daily_task_queue.sql precedes 0035_office_task_source_delete_cascade.sql.",
 );
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(

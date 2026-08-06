@@ -2752,7 +2752,35 @@ async function testDashboardLiveMode(tab) {
   return state;
 }
 
-async function testOfficeOperationsWorkspace(browser, tab) {
+async function testOfficeOperationsWorkspace(browser, tab, env, seededJob) {
+  const scheduledStart = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const scheduledEnd = new Date(scheduledStart.getTime() + 8 * 60 * 60 * 1000);
+
+  await restRequest(env, `jobs?id=eq.${seededJob.id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      scheduled_start: scheduledStart.toISOString(),
+      scheduled_end: scheduledEnd.toISOString(),
+    }),
+  });
+  await restRequest(env, `jobs?id=eq.${seededJob.id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ scheduled_start: null, scheduled_end: null }),
+  });
+  const generatedTasks = await restRequest(
+    env,
+    `office_tasks?select=id,status,source_type&job_id=eq.${seededJob.id}&source_type=eq.scheduled_job&limit=1`,
+  );
+  const generatedTask = generatedTasks[0] ?? null;
+
+  if (!generatedTask) {
+    throw new Error("Scheduled job did not automatically generate an office task.");
+  }
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Operations");
 
@@ -2764,6 +2792,11 @@ async function testOfficeOperationsWorkspace(browser, tab) {
 
       return (
         text.includes("daily operations command center") &&
+        text.includes("office follow-up owned in one place") &&
+        text.includes("overdue") &&
+        text.includes("today") &&
+        text.includes("upcoming") &&
+        text.includes("completed") &&
         text.includes("daily workflow handoff") &&
         text.includes("lead intake, inspections, estimates, production, billing, and warranty") &&
         text.includes("jobs starting today") &&
@@ -2810,6 +2843,7 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     const queue = document.querySelector('[data-testid="operations-intelligence-queue"]');
     const scheduling = document.querySelector('[data-testid="scheduling-intelligence-dispatch"]');
     const workflowHandoff = workspace?.querySelector('[data-testid="daily-workflow-handoff"]');
+    const dailyTaskQueue = workspace?.querySelector('[data-testid="office-daily-task-queue"]');
     const queueRows = [...document.querySelectorAll('[data-testid="operations-queue-row"]')];
     const schedulingAlerts = [...document.querySelectorAll('[data-testid="scheduling-alert-row"]')];
     const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -2854,6 +2888,9 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     return {
       visible: Boolean(workspace),
       workflowVisible: Boolean(workflowHandoff),
+      dailyTaskQueueVisible: Boolean(dailyTaskQueue),
+      dailyTaskSectionCount:
+        dailyTaskQueue?.querySelectorAll('[data-testid^="office-task-section-"]').length ?? 0,
       queueVisible: Boolean(queue),
       schedulingVisible: Boolean(scheduling),
       schedulingText: scheduling?.textContent?.toLowerCase() ?? "",
@@ -2883,6 +2920,26 @@ async function testOfficeOperationsWorkspace(browser, tab) {
   if (!desktopLayout.workflowVisible) {
     throw new Error("Office Operations daily workflow handoff did not render.");
   }
+
+  if (!desktopLayout.dailyTaskQueueVisible || desktopLayout.dailyTaskSectionCount !== 4) {
+    throw new Error("Office daily task queue did not render all four timing sections.");
+  }
+
+  const generatedTaskCardSelector =
+    `[data-testid="office-task-card"][data-task-id="${generatedTask.id}"]`;
+  const generatedTaskCard = tab.playwright.locator(generatedTaskCardSelector);
+  await waitForUniqueLocator(generatedTaskCard, "generated office task card");
+  await generatedTaskCard
+    .getByRole("button", { name: "Complete", exact: true })
+    .click();
+  await waitFor(
+    tab,
+    (selector) =>
+      document.querySelector(selector)?.getAttribute("data-status") === "completed",
+    "office task completion persistence",
+    20000,
+    generatedTaskCardSelector,
+  );
 
   if (!desktopLayout.queueVisible) {
     throw new Error("Operations Queue did not render.");
@@ -2974,9 +3031,20 @@ async function testOfficeOperationsWorkspace(browser, tab) {
       throw new Error("Scheduling alert did not expose a target workflow.");
     }
 
+    await tab.playwright.evaluate((index) => {
+      document
+        .querySelectorAll('[data-testid="scheduling-alert-row"]')
+        .item(index)
+        ?.scrollIntoView({ block: "center", behavior: "auto" });
+    }, routedSchedulingAlert.index);
+    await tab.playwright.waitForTimeout(250);
+
     await clickUnique(
-      tab.playwright.locator('[data-testid="scheduling-alert-row"]').nth(routedSchedulingAlert.index),
+      tab.playwright
+        .locator('[data-testid="scheduling-alert-row"]')
+        .nth(routedSchedulingAlert.index),
       "scheduling alert route",
+      { retryTransientClick: true },
     );
     await waitFor(
       tab,
@@ -3001,6 +3069,14 @@ async function testOfficeOperationsWorkspace(browser, tab) {
     );
 
     await clickNav(tab, "Operations");
+    await waitFor(
+      tab,
+      () =>
+        Boolean(document.querySelector('[data-testid="office-operations-command-center"]')) &&
+        Boolean(document.querySelector('[data-testid="operations-queue-priority-filter"]')),
+      "operations workspace after scheduling alert route",
+      15000,
+    );
   }
 
   await selectUnique(
@@ -10806,7 +10882,7 @@ export async function runWeatherTechOsRegression({
 
       if (enabledGroups.has("operations")) {
         await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
-          testOfficeOperationsWorkspace(browser, tab),
+          testOfficeOperationsWorkspace(browser, tab, env, seededJob),
         );
       }
 

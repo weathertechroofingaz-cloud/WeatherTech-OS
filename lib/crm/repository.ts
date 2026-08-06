@@ -62,6 +62,8 @@ import type {
   MaterialOrderRecord,
   NotificationInput,
   NotificationRecord,
+  OfficeTaskRecord,
+  OfficeTaskUpdate,
   PaymentInput,
   PaymentRecord,
   PropertyInput,
@@ -489,6 +491,7 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     estimateLineItems: [],
     scopeTemplates: [],
     jobTasks: [],
+    officeTasks: [],
     jobNotes: [],
     jobMaterials: [],
     scheduleEvents: [],
@@ -582,6 +585,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     scopes,
     jobs,
     jobTasks,
+    officeTasks,
     jobNotes,
     jobMaterials,
     scheduleEvents,
@@ -649,6 +653,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true }),
+    client
+      .from("office_tasks")
+      .select("*")
+      .order("due_at", { ascending: true }),
     client.from("job_notes").select("*").order("created_at", { ascending: false }),
     client.from("job_materials").select("*").order("created_at", { ascending: false }),
     client
@@ -798,6 +806,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["scopes", scopes],
     ["jobs", jobs],
     ["job_tasks", jobTasks],
+    ...(officeTasks.error && !isOptionalTableMissingError(officeTasks.error)
+      ? [["office_tasks", officeTasks] as [string, { error: unknown }]]
+      : []),
     ["job_notes", jobNotes],
     ["job_materials", jobMaterials],
     ["schedule_events", scheduleEvents],
@@ -907,6 +918,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     scopes: requireRows("scopes", scopes),
     jobs: requireRows("jobs", jobs),
     jobTasks: requireRows("job_tasks", jobTasks),
+    officeTasks: optionalRows(
+      "office_tasks",
+      officeTasks as CrmListResult<OfficeTaskRecord>,
+    ),
     jobNotes: requireRows("job_notes", jobNotes),
     jobMaterials: requireRows("job_materials", jobMaterials),
     scheduleEvents: requireRows("schedule_events", scheduleEvents),
@@ -1549,6 +1564,25 @@ export async function updateJobTask(
 ): Promise<JobTaskRecord> {
   const { data, error } = await client
     .from("job_tasks")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateOfficeTask(
+  client: CrmClient,
+  id: string,
+  input: OfficeTaskUpdate,
+): Promise<OfficeTaskRecord> {
+  const { data, error } = await client
+    .from("office_tasks")
     .update(input)
     .eq("id", id)
     .select("*")

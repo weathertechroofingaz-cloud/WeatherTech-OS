@@ -87,6 +87,7 @@ export function scopeCrmSnapshotByCompany(
     scopes,
     jobs,
     jobTasks: snapshot.jobTasks.filter((task) => jobIds.has(task.job_id)),
+    officeTasks: byCompany(snapshot.officeTasks ?? [], companyId),
     jobNotes: snapshot.jobNotes.filter((note) => jobIds.has(note.job_id)),
     jobMaterials: snapshot.jobMaterials.filter((material) =>
       jobIds.has(material.job_id),

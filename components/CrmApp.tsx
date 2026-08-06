@@ -108,6 +108,7 @@ import {
   updateLead,
   updateMaterialOrder,
   updateNotification,
+  updateOfficeTask,
   reorderJobTasks,
   updateScheduleEvent,
   updateSignature,
@@ -361,6 +362,15 @@ import {
 } from "../lib/crm/financialOperations";
 import type { OperationsQueueItem } from "../lib/crm/operationsQueue";
 import {
+  buildOfficeTaskActionUpdate,
+  canManageOfficeTask,
+  filterOfficeTasks,
+  groupOfficeTasks,
+  officeTaskPriorityLabels,
+  officeTaskStatusLabels,
+  type OfficeTaskTiming,
+} from "../lib/crm/officeTasks";
+import {
   colorSelectionStatusLabel,
   colorSelectionStatuses,
   dunnEdwardsProductLines,
@@ -450,6 +460,9 @@ import type {
   NotificationInput,
   NotificationRecord,
   NotificationStatus,
+  OfficeTaskPriority,
+  OfficeTaskRecord,
+  OfficeTaskUpdate,
   PaymentInput,
   PaymentRecord,
   PaintFinish,
@@ -5896,10 +5909,17 @@ function CrmWorkspace({
 
             {view === "operations" ? (
               <OfficeOperationsView
+                client={client}
+                isDemoMode={isDemoMode}
                 snapshot={scopedSnapshot}
                 companyMap={companyMap}
                 activeCompanyId={selectedCompanyId}
+                user={user}
+                onReload={onScrollPreservingReload}
+                onDemoSnapshotChange={onDemoSnapshotChange}
                 onViewChange={onViewChange}
+                onNotice={onNotice}
+                onError={onError}
               />
             ) : null}
 
@@ -10626,17 +10646,31 @@ function DashboardInlineEmptyState({
 }
 
 type OfficeOperationsViewProps = {
+  client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
+  user: User | null;
+  onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onViewChange: (view: WorkspaceView) => void;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
 };
 
 function OfficeOperationsView({
+  client,
+  isDemoMode,
   snapshot,
   companyMap,
   activeCompanyId,
+  user,
+  onReload,
+  onDemoSnapshotChange,
   onViewChange,
+  onNotice,
+  onError,
 }: OfficeOperationsViewProps) {
   const data = useMemo(
     () => buildOfficeOperationsData(snapshot, companyMap),
@@ -10750,6 +10784,19 @@ function OfficeOperationsView({
         </div>
       </section>
 
+      <OfficeDailyTaskQueue
+        client={client}
+        isDemoMode={isDemoMode}
+        snapshot={snapshot}
+        companyMap={companyMap}
+        user={user}
+        onReload={onReload}
+        onDemoSnapshotChange={onDemoSnapshotChange}
+        onViewChange={onViewChange}
+        onNotice={onNotice}
+        onError={onError}
+      />
+
       <DailyWorkflowHandoffPanel
         title="Daily workflow handoff"
         detail="The next live step across lead intake, inspections, estimates, production, billing, and warranty."
@@ -10849,6 +10896,487 @@ function OfficeOperationsView({
       ))}
     </div>
   );
+}
+
+type OfficeDailyTaskQueueProps = {
+  client: CrmClient;
+  isDemoMode: boolean;
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  user: User | null;
+  onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+  onViewChange: (view: WorkspaceView) => void;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+};
+
+const officeTaskSectionDetails: {
+  id: OfficeTaskTiming;
+  title: string;
+  detail: string;
+}[] = [
+  {
+    id: "overdue",
+    title: "Overdue",
+    detail: "Past-due follow-up that needs an owner decision now.",
+  },
+  {
+    id: "today",
+    title: "Today",
+    detail: "Work due today in Arizona time.",
+  },
+  {
+    id: "upcoming",
+    title: "Upcoming",
+    detail: "Future work and snoozed tasks in due-date order.",
+  },
+  {
+    id: "completed",
+    title: "Completed",
+    detail: "Recently completed work that can be reopened when needed.",
+  },
+];
+
+function OfficeDailyTaskQueue({
+  client,
+  isDemoMode,
+  snapshot,
+  companyMap,
+  user,
+  onReload,
+  onDemoSnapshotChange,
+  onViewChange,
+  onNotice,
+  onError,
+}: OfficeDailyTaskQueueProps) {
+  const [priorityFilter, setPriorityFilter] = useState<OfficeTaskPriority | "all">(
+    "all",
+  );
+  const [assigneeFilter, setAssigneeFilter] = useState<
+    string | "all" | "unassigned"
+  >("all");
+  const [search, setSearch] = useState("");
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+  const officeTasks = useMemo(() => snapshot.officeTasks ?? [], [snapshot.officeTasks]);
+  const filteredTasks = useMemo(
+    () =>
+      filterOfficeTasks(officeTasks, {
+        assignedEmployeeId: assigneeFilter,
+        priority: priorityFilter,
+        search,
+      }),
+    [assigneeFilter, officeTasks, priorityFilter, search],
+  );
+  const sections = useMemo(() => groupOfficeTasks(filteredTasks), [filteredTasks]);
+  const activeEmployees = useMemo(
+    () => snapshot.employees.filter((employee) => employee.is_active),
+    [snapshot.employees],
+  );
+  const userHasMembership = Boolean(
+    user && snapshot.companyMemberships.some((membership) => membership.user_id === user.id),
+  );
+  const canEditTask = useCallback(
+    (task: OfficeTaskRecord) =>
+      isDemoMode ||
+      Boolean(
+        user &&
+          (canManageOfficeTask(
+            snapshot.companyMemberships,
+            user.id,
+            task.company_id,
+          ) ||
+            !userHasMembership),
+      ),
+    [isDemoMode, snapshot.companyMemberships, user, userHasMembership],
+  );
+  const handleUpdate = useCallback(
+    async (task: OfficeTaskRecord, update: OfficeTaskUpdate, successMessage: string) => {
+      setBusyTaskId(task.id);
+      onError("");
+
+      try {
+        if (isDemoMode) {
+          const updatedAt = new Date().toISOString();
+          onDemoSnapshotChange((currentSnapshot) => ({
+            ...currentSnapshot,
+            officeTasks: (currentSnapshot.officeTasks ?? []).map((currentTask) =>
+              currentTask.id === task.id
+                ? { ...currentTask, ...update, updated_at: updatedAt }
+                : currentTask,
+            ),
+          }));
+        } else {
+          await updateOfficeTask(client, task.id, update);
+          await onReload();
+        }
+
+        onNotice(successMessage);
+      } catch (currentError) {
+        onError(getCaughtErrorMessage(currentError, "Unable to update office task."));
+      } finally {
+        setBusyTaskId(null);
+      }
+    },
+    [client, isDemoMode, onDemoSnapshotChange, onError, onNotice, onReload],
+  );
+  const totalActive = officeTasks.filter((task) => task.status !== "completed").length;
+
+  return (
+    <section
+      className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_22px_60px_-46px_rgba(15,23,42,0.72)] ring-1 ring-slate-950/5"
+      data-testid="office-daily-task-queue"
+    >
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <DashboardCompactHeader
+          eyebrow="Daily Task Queue"
+          title="Office follow-up owned in one place"
+          detail="Tasks are generated from live CRM stage changes and stay linked to the existing company, customer, property, and source record."
+          tone="amber"
+        />
+        <div className="flex flex-wrap gap-2">
+          <Badge label={`${totalActive} active`} tone={totalActive ? "amber" : "green"} />
+          <Badge label={`${sections.overdue.length} overdue`} tone={sections.overdue.length ? "amber" : "green"} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-3">
+        <label className="grid gap-1 text-xs font-bold uppercase tracking-wide text-slate-500">
+          Search
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Task or notes"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-950 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            data-testid="office-task-search"
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-bold uppercase tracking-wide text-slate-500">
+          Priority
+          <select
+            value={priorityFilter}
+            onChange={(event) =>
+              setPriorityFilter(event.target.value as OfficeTaskPriority | "all")
+            }
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-950 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            data-testid="office-task-priority-filter"
+          >
+            <option value="all">All priorities</option>
+            {Object.entries(officeTaskPriorityLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs font-bold uppercase tracking-wide text-slate-500">
+          Assigned employee
+          <select
+            value={assigneeFilter}
+            onChange={(event) => setAssigneeFilter(event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-950 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            data-testid="office-task-assignee-filter"
+          >
+            <option value="all">All employees</option>
+            <option value="unassigned">Unassigned</option>
+            {activeEmployees.map((employee) => (
+              <option key={employee.id} value={employee.id}>{employee.full_name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        {officeTaskSectionDetails.map((section) => {
+          const tasks = sections[section.id];
+
+          return (
+            <section
+              key={section.id}
+              className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+              data-testid={`office-task-section-${section.id}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-950">{section.title}</h3>
+                  <p className="mt-1 text-xs font-medium leading-5 text-slate-500">
+                    {section.detail}
+                  </p>
+                </div>
+                <Badge
+                  label={String(tasks.length)}
+                  tone={section.id === "overdue" && tasks.length ? "amber" : "blue"}
+                />
+              </div>
+
+              <div className="mt-3 grid gap-3">
+                {tasks.length ? (
+                  tasks.slice(0, section.id === "completed" ? 20 : 50).map((task) => (
+                    <OfficeTaskCard
+                      key={task.id}
+                      task={task}
+                      companyMap={companyMap}
+                      customers={snapshot.customers}
+                      properties={snapshot.properties}
+                      employees={activeEmployees.filter(
+                        (employee) => employee.company_id === task.company_id,
+                      )}
+                      canEdit={canEditTask(task)}
+                      isBusy={busyTaskId === task.id}
+                      onUpdate={handleUpdate}
+                      onOpen={() => onViewChange(getOfficeTaskTargetView(task))}
+                    />
+                  ))
+                ) : (
+                  <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-sm font-medium text-slate-500">
+                    No tasks in this section for the current company scope and filters.
+                  </p>
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function OfficeTaskCard({
+  task,
+  companyMap,
+  customers,
+  properties,
+  employees,
+  canEdit,
+  isBusy,
+  onUpdate,
+  onOpen,
+}: {
+  task: OfficeTaskRecord;
+  companyMap: Map<string, CompanyRecord>;
+  customers: CustomerRecord[];
+  properties: PropertyRecord[];
+  employees: EmployeeRecord[];
+  canEdit: boolean;
+  isBusy: boolean;
+  onUpdate: (
+    task: OfficeTaskRecord,
+    update: OfficeTaskUpdate,
+    successMessage: string,
+  ) => Promise<void>;
+  onOpen: () => void;
+}) {
+  const [assignedEmployeeId, setAssignedEmployeeId] = useState(
+    task.assigned_employee_id ?? "",
+  );
+  const [priority, setPriority] = useState<OfficeTaskPriority>(task.priority);
+  const [dueDate, setDueDate] = useState(toPhoenixDateInput(task.due_at));
+  const [notes, setNotes] = useState(task.notes ?? "");
+  const customer = customers.find((item) => item.id === task.customer_id) ?? null;
+  const property = properties.find((item) => item.id === task.property_id) ?? null;
+  const assignee = employees.find((employee) => employee.id === task.assigned_employee_id);
+  const isCompleted = task.status === "completed";
+  const hasEdits =
+    assignedEmployeeId !== (task.assigned_employee_id ?? "") ||
+    priority !== task.priority ||
+    dueDate !== toPhoenixDateInput(task.due_at) ||
+    notes !== (task.notes ?? "");
+
+  useEffect(() => {
+    setAssignedEmployeeId(task.assigned_employee_id ?? "");
+    setPriority(task.priority);
+    setDueDate(toPhoenixDateInput(task.due_at));
+    setNotes(task.notes ?? "");
+  }, [task]);
+
+  const handleSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    await onUpdate(
+      task,
+      {
+        assigned_employee_id: assignedEmployeeId || null,
+        priority,
+        due_at: `${dueDate}T09:00:00-07:00`,
+        notes: notes.trim() || null,
+      },
+      "Office task updated.",
+    );
+  };
+
+  return (
+    <article
+      className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+      data-testid="office-task-card"
+      data-task-id={task.id}
+      data-company-id={task.company_id}
+      data-status={task.status}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-slate-950">{task.title}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">
+            {customer?.display_name ?? "No customer linked"} · {property?.address ?? customer?.property_address ?? "No property linked"}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge label={companyMap.get(task.company_id)?.name ?? "Company"} tone="blue" />
+          <Badge label={officeTaskStatusLabels[task.status]} tone={isCompleted ? "green" : "amber"} />
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs font-medium text-slate-500">
+        Due {formatOfficeTaskDate(task.status === "snoozed" && task.snoozed_until ? task.snoozed_until : task.due_at)}
+        {task.status === "snoozed" ? " · Snoozed" : ""}
+        {assignee ? ` · ${assignee.full_name}` : " · Unassigned"}
+      </p>
+
+      <form onSubmit={handleSave} className="mt-3 grid gap-2">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Priority
+            <select
+              value={priority}
+              disabled={!canEdit || isBusy}
+              onChange={(event) => setPriority(event.target.value as OfficeTaskPriority)}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-950 disabled:bg-slate-100"
+              aria-label={`Priority for ${task.title}`}
+            >
+              {Object.entries(officeTaskPriorityLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Due date
+            <input
+              type="date"
+              required
+              value={dueDate}
+              disabled={!canEdit || isBusy}
+              onChange={(event) => setDueDate(event.target.value)}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-950 disabled:bg-slate-100"
+              aria-label={`Due date for ${task.title}`}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            Assigned employee
+            <select
+              value={assignedEmployeeId}
+              disabled={!canEdit || isBusy}
+              onChange={(event) => setAssignedEmployeeId(event.target.value)}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-950 disabled:bg-slate-100"
+              aria-label={`Assigned employee for ${task.title}`}
+            >
+              <option value="">Unassigned</option>
+              {employees.map((employee) => (
+                <option key={employee.id} value={employee.id}>{employee.full_name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+          Notes
+          <textarea
+            rows={2}
+            value={notes}
+            disabled={!canEdit || isBusy}
+            onChange={(event) => setNotes(event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-950 disabled:bg-slate-100"
+            aria-label={`Notes for ${task.title}`}
+          />
+        </label>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+          >
+            Open source record
+          </button>
+          <button
+            type="submit"
+            disabled={!canEdit || isBusy || !hasEdits}
+            className="rounded-md bg-slate-950 px-2.5 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            data-testid="office-task-save"
+          >
+            Save changes
+          </button>
+          {isCompleted ? (
+            <button
+              type="button"
+              disabled={!canEdit || isBusy}
+              onClick={() => void onUpdate(task, buildOfficeTaskActionUpdate("reopen"), "Office task reopened.")}
+              className="rounded-md border border-sky-300 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-800 disabled:opacity-50"
+              data-testid="office-task-reopen"
+            >
+              Reopen
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={!canEdit || isBusy}
+                onClick={() => void onUpdate(task, buildOfficeTaskActionUpdate("complete"), "Office task completed.")}
+                className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-800 disabled:opacity-50"
+                data-testid="office-task-complete"
+              >
+                Complete
+              </button>
+              <button
+                type="button"
+                disabled={!canEdit || isBusy}
+                onClick={() => void onUpdate(task, buildOfficeTaskActionUpdate("snooze", { snoozeDays: 1 }), "Office task snoozed for one day.")}
+                className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-800 disabled:opacity-50"
+                data-testid="office-task-snooze"
+              >
+                Snooze 1 day
+              </button>
+            </>
+          )}
+        </div>
+        {!canEdit ? (
+          <p className="text-xs font-semibold text-slate-500">
+            Read-only: task updates require office, sales, production, admin, or owner access for this company.
+          </p>
+        ) : null}
+      </form>
+    </article>
+  );
+}
+
+function getOfficeTaskTargetView(task: OfficeTaskRecord): WorkspaceView {
+  if (task.lead_id) {
+    return "leads";
+  }
+
+  if (task.inspection_id) {
+    return "inspections";
+  }
+
+  if (task.estimate_id) {
+    return "estimates";
+  }
+
+  return "jobs";
+}
+
+function toPhoenixDateInput(value: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Phoenix",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatOfficeTaskDate(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Phoenix",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
 }
 
 function OfficeOperationsSectionView({
