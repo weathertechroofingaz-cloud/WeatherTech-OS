@@ -6169,6 +6169,7 @@ function CrmWorkspace({
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onReload}
+              onBackgroundReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
             />
@@ -41633,6 +41634,7 @@ type IntegrationsViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
+  onBackgroundReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
@@ -42888,6 +42890,7 @@ function IntegrationsView({
   snapshot,
   companyMap,
   onReload,
+  onBackgroundReload,
   onNotice,
   onError,
 }: IntegrationsViewProps) {
@@ -43354,14 +43357,14 @@ function IntegrationsView({
 
       if (!response.ok || !result.ok) {
         onError(result.message ?? "Google Calendar discovery is not available yet.");
-      } else {
-        onNotice(
-          `Google Calendar discovery completed: ${result.calendars?.length ?? 0} calendars available.`,
-        );
+        return;
       }
 
-      await onReload();
-      await handleCheckGoogleWorkspaceReadiness();
+      setGoogleWorkspaceReadinessResult(null);
+      await onBackgroundReload();
+      onNotice(
+        `Google Calendar discovery completed: ${result.calendars?.length ?? 0} calendars available.`,
+      );
     } catch (error) {
       onError(
         error instanceof Error

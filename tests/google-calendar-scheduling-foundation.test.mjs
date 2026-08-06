@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -134,6 +134,64 @@ try {
   );
   const integrations = await import(pathToFileURL(join(outDir, "crm", "integrations.js")));
   const originalEnv = { ...process.env };
+
+  const crmAppSource = readFileSync(join(cwd, "components", "CrmApp.tsx"), "utf8");
+  const discoveryRouteSource = readFileSync(
+    join(
+      cwd,
+      "app",
+      "api",
+      "integrations",
+      "google-workspace",
+      "calendar",
+      "discover",
+      "route.ts",
+    ),
+    "utf8",
+  );
+  const discoveryHandlerStart = crmAppSource.indexOf(
+    "const handleDiscoverGoogleCalendars = async () => {",
+  );
+  const discoveryHandlerEnd = crmAppSource.indexOf(
+    "const handleSyncGoogleCalendarEvent = async",
+    discoveryHandlerStart,
+  );
+  const discoveryHandlerSource = crmAppSource.slice(
+    discoveryHandlerStart,
+    discoveryHandlerEnd,
+  );
+  assert(
+    discoveryHandlerStart >= 0 && discoveryHandlerEnd > discoveryHandlerStart,
+    "Calendar discovery handler is available for reload regression coverage",
+  );
+  assert(
+    discoveryHandlerSource.includes("await onBackgroundReload()") &&
+      !discoveryHandlerSource.includes("await onReload()"),
+    "Calendar discovery refreshes CRM data without rebooting the workspace",
+  );
+  assert(
+    discoveryHandlerSource.includes(
+      'onError(result.message ?? "Google Calendar discovery is not available yet.");\n        return;',
+    ),
+    "Failed Calendar discovery preserves the current workspace instead of reloading it",
+  );
+  const discoveryRequestStart = discoveryRouteSource.indexOf(
+    "const discovery = await discoverGoogleCalendars({",
+  );
+  const discoveryRequestEnd = discoveryRouteSource.indexOf(
+    "});",
+    discoveryRequestStart,
+  );
+  const discoveryRequestSource = discoveryRouteSource.slice(
+    discoveryRequestStart,
+    discoveryRequestEnd,
+  );
+  assert(
+    discoveryRequestStart >= 0 &&
+      discoveryRequestEnd > discoveryRequestStart &&
+      !discoveryRequestSource.includes("syncToken"),
+    "Repeated manual Calendar discovery performs a complete list request",
+  );
 
   restoreEnv({});
   const missingConfig = calendar.getGoogleCalendarConfigCheckResult();

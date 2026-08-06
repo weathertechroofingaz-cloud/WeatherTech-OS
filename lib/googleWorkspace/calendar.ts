@@ -384,13 +384,11 @@ export async function discoverGoogleCalendars({
   accessToken,
   companyId,
   integrationConnectionId,
-  syncToken,
   fetchImpl = fetch,
 }: {
   accessToken: string | null;
   companyId: string;
   integrationConnectionId: string;
-  syncToken?: string | null;
   fetchImpl?: FetchLike;
 }): Promise<GoogleCalendarDiscoveryResult> {
   if (!accessToken) {
@@ -416,8 +414,6 @@ export async function discoverGoogleCalendars({
 
     if (pageToken) {
       params.set("pageToken", pageToken);
-    } else if (syncToken) {
-      params.set("syncToken", syncToken);
     }
 
     const response = await fetchImpl(

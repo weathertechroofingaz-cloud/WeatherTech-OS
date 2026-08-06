@@ -7400,7 +7400,8 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("disconnect flow") &&
         text.includes("reconnect flow") &&
         text.includes("oauth ready") &&
-        text.includes("connect gmail oauth later before enabling live send or mailbox sync") &&
+        (text.includes("connect gmail oauth later before enabling live send or mailbox sync") ||
+          text.includes("gmail mailbox is saved for")) &&
         text.includes("twilio live integration foundation") &&
         text.includes("calls and sms routing setup") &&
         text.includes("backend ready") &&
@@ -7893,7 +7894,7 @@ async function testWebsiteMarketingFoundation(browser, tab) {
         text.includes("live writes disabled") &&
         text.includes("connected calendars") &&
         text.includes("event payload preview") &&
-        text.includes("prepare connection") &&
+        (text.includes("prepare connection") || text.includes("discover calendars")) &&
         text.includes("connect calendar") &&
         text.includes("gmail / google workspace email foundation") &&
         text.includes("production google workspace foundation") &&

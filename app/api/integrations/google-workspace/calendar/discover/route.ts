@@ -136,7 +136,6 @@ export async function POST(request: NextRequest) {
     accessToken: refresh.accessToken,
     companyId: connection.company_id,
     integrationConnectionId: connection.id,
-    syncToken: connection.sync_token,
   });
   const now = new Date().toISOString();
 
