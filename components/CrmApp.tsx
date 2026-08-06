@@ -94,6 +94,7 @@ import {
   fetchCrmSnapshot,
   updateIntegrationConnection,
   updateIntegrationSyncLog,
+  updateCalendarEventSync,
   updateInspection,
   updateChangeOrder,
   updateInvoice,
@@ -42901,11 +42902,18 @@ function IntegrationsView({
     (connection) => connection.provider === "google_calendar",
   );
   const primaryConnection = googleConnections[0];
+  const googleCompanyEvents = primaryConnection
+    ? snapshot.scheduleEvents.filter(
+        (event) => event.company_id === primaryConnection.company_id,
+      )
+    : [];
   const googleSyncs = snapshot.calendarEventSyncs.filter(
-    (sync) => sync.provider === "google_calendar",
+    (sync) =>
+      sync.provider === "google_calendar" &&
+      (!primaryConnection || sync.company_id === primaryConnection.company_id),
   );
-  const googleSummary = getCalendarSyncSummary(snapshot.scheduleEvents, googleSyncs);
-  const previewEvent = snapshot.scheduleEvents.find(
+  const googleSummary = getCalendarSyncSummary(googleCompanyEvents, googleSyncs);
+  const previewEvent = googleCompanyEvents.find(
     (event) => event.status === "scheduled",
   );
   const previewPayload = previewEvent
@@ -42987,6 +42995,10 @@ function IntegrationsView({
   const [syncingCalendarEventId, setSyncingCalendarEventId] = useState<string | null>(
     null,
   );
+  const [pendingCalendarApproval, setPendingCalendarApproval] = useState<{
+    eventId: string;
+    operation: "sync" | "cancel";
+  } | null>(null);
   const [isSyncingGmail, setIsSyncingGmail] = useState(false);
   const [sendingGmailMessageId, setSendingGmailMessageId] = useState<string | null>(
     null,
@@ -43376,7 +43388,10 @@ function IntegrationsView({
     }
   };
 
-  const handleSyncGoogleCalendarEvent = async (event: ScheduleEventRecord) => {
+  const handleSyncGoogleCalendarEvent = async (
+    event: ScheduleEventRecord,
+    operation: "sync" | "cancel",
+  ) => {
     if (!primaryConnection) {
       onError("Prepare or connect Google Calendar before syncing events.");
       return;
@@ -43394,19 +43409,27 @@ function IntegrationsView({
         body: JSON.stringify({
           integrationConnectionId: primaryConnection.id,
           scheduleEventId: event.id,
+          operation,
+          approvalAction:
+            operation === "cancel"
+              ? "owner_approved_calendar_cancel"
+              : "owner_approved_calendar_write",
         }),
       });
       const result = (await response.json()) as {
         ok: boolean;
         synced?: boolean;
+        canceled?: boolean;
         writeDisabled?: boolean;
         message?: string;
       };
 
       if (!response.ok || !result.ok) {
         onError(result.message ?? "Google Calendar sync did not run.");
+      } else if (result.synced && result.canceled) {
+        onNotice("Google Calendar confirmed the event was cancelled.");
       } else if (result.synced) {
-        onNotice("Google Calendar confirmed the event was synchronized.");
+        onNotice("Google Calendar confirmed the approved event change.");
       } else {
         onNotice(
           result.message ??
@@ -43414,8 +43437,8 @@ function IntegrationsView({
         );
       }
 
-      await onReload();
-      await handleCheckGoogleWorkspaceReadiness();
+      setGoogleWorkspaceReadinessResult(null);
+      await onBackgroundReload();
     } catch (error) {
       onError(
         error instanceof Error
@@ -43424,6 +43447,7 @@ function IntegrationsView({
       );
     } finally {
       setSyncingCalendarEventId(null);
+      setPendingCalendarApproval(null);
     }
   };
 
@@ -43981,27 +44005,59 @@ function IntegrationsView({
       return;
     }
 
+    if (event.company_id !== primaryConnection.company_id) {
+      onError("Switch to the event company before queueing a Calendar write.");
+      return;
+    }
+
+    if (event.status !== "scheduled") {
+      onError("Only scheduled events can be submitted for a Google Calendar write.");
+      return;
+    }
+
     const payload = buildGoogleCalendarEventPayload(
       event,
       getScheduleTargetName(snapshot, event),
     );
     const sync = getCalendarSyncRecord(event, primaryConnection, googleSyncs);
+    const submittedAt = new Date().toISOString();
+    const pendingPayloadHash = createPayloadFingerprint(payload);
 
     try {
-      await upsertCalendarEventSync(client, {
-        company_id: event.company_id,
-        schedule_event_id: event.id,
-        integration_connection_id: primaryConnection.id,
-        provider: "google_calendar",
-        google_calendar_id: primaryConnection.default_calendar_id ?? "primary",
-        google_event_id: sync?.google_event_id ?? null,
-        sync_status: sync?.google_event_id ? "needs_update" : "queued",
-        sync_direction: primaryConnection.sync_direction,
-        last_payload_hash: createPayloadFingerprint(payload),
-        last_error: null,
-      });
-      onNotice(`${event.title} queued for Google Calendar sync.`);
-      await onReload();
+      if (sync) {
+        await updateCalendarEventSync(client, sync.id, {
+          sync_status: sync.google_event_id ? "needs_update" : "queued",
+          last_error: null,
+          metadata: {
+            ...(sync.metadata ?? {}),
+            approvalState: "pending_owner_approval",
+            submittedForApprovalAt: submittedAt,
+            requiresOwnerApproval: true,
+            pendingPayloadHash,
+          },
+        });
+      } else {
+        await upsertCalendarEventSync(client, {
+          company_id: event.company_id,
+          schedule_event_id: event.id,
+          integration_connection_id: primaryConnection.id,
+          provider: "google_calendar",
+          google_calendar_id: primaryConnection.default_calendar_id ?? "primary",
+          google_event_id: null,
+          sync_status: "queued",
+          sync_direction: primaryConnection.sync_direction,
+          last_payload_hash: null,
+          last_error: null,
+          metadata: {
+            approvalState: "pending_owner_approval",
+            submittedForApprovalAt: submittedAt,
+            requiresOwnerApproval: true,
+            pendingPayloadHash,
+          },
+        });
+      }
+      onNotice(`${event.title} submitted for owner approval. Nothing was written yet.`);
+      await onBackgroundReload();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not queue event.");
     }
@@ -44203,6 +44259,18 @@ function IntegrationsView({
             />
           </div>
 
+          <div
+            className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+            data-testid="google-calendar-owner-approval-policy"
+          >
+            <p className="font-bold">Owner approval required for every live change</p>
+            <p className="mt-1">
+              Queue creates and updates for review, then confirm the owner approval
+              prompt. Calendar cancellations require the WeatherTech OS schedule event
+              to be cancelled first and a separate owner confirmation.
+            </p>
+          </div>
+
           <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
               <p className="text-sm font-bold text-slate-950">
@@ -44210,12 +44278,29 @@ function IntegrationsView({
               </p>
             </div>
             <div className="divide-y divide-slate-200">
-              {snapshot.scheduleEvents.map((event) => {
+              {googleCompanyEvents.map((event) => {
                 const sync = getCalendarSyncRecord(
                   event,
                   primaryConnection,
                   googleSyncs,
                 );
+                const canApproveSync =
+                  event.status === "scheduled" &&
+                  Boolean(
+                    sync &&
+                      (sync.sync_status === "queued" ||
+                        sync.sync_status === "needs_update"),
+                  );
+                const canApproveCancellation = Boolean(
+                  event.status === "canceled" &&
+                    sync?.google_event_id &&
+                    sync.google_event_status !== "cancelled" &&
+                    !sync.deleted_at,
+                );
+                const pendingOperation =
+                  pendingCalendarApproval?.eventId === event.id
+                    ? pendingCalendarApproval.operation
+                    : null;
 
                 return (
                   <article
@@ -44239,6 +44324,9 @@ function IntegrationsView({
                         ) : (
                           <Badge label="Not queued" tone="amber" />
                         )}
+                        {sync?.google_event_status === "cancelled" ? (
+                          <Badge label="Cancelled in Google" tone="amber" />
+                        ) : null}
                       </div>
                       <p className="mt-1 text-sm text-slate-500">
                         {formatDateTime(event.start_at)} -{" "}
@@ -44255,34 +44343,112 @@ function IntegrationsView({
                       ) : null}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                      <button
-                        type="button"
-                        onClick={() => void queueCalendarEvent(event)}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <RefreshCcw className="h-4 w-4" />
-                        {sync ? "Queue update" : "Queue sync"}
-                      </button>
-                      {sync ? (
+                      {event.status === "scheduled" &&
+                      sync?.google_event_status !== "cancelled" ? (
                         <button
                           type="button"
-                          onClick={() => void handleSyncGoogleCalendarEvent(event)}
+                          onClick={() => void queueCalendarEvent(event)}
+                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          <RefreshCcw className="h-4 w-4" />
+                          {sync?.sync_status === "error"
+                            ? "Queue retry"
+                            : sync
+                              ? "Queue update"
+                              : "Queue create"}
+                        </button>
+                      ) : null}
+                      {canApproveSync ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPendingCalendarApproval({
+                              eventId: event.id,
+                              operation: "sync",
+                            })
+                          }
                           disabled={syncingCalendarEventId === event.id}
                           className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <RefreshCcw className="h-4 w-4" />
+                          <ShieldCheck className="h-4 w-4" />
                           {syncingCalendarEventId === event.id
-                            ? "Checking"
-                            : googleCalendarWriteEnabled
-                              ? "Sync now"
-                              : "Validate sync"}
+                            ? "Applying"
+                            : sync?.google_event_id
+                              ? "Review & approve update"
+                              : "Review & approve create"}
+                        </button>
+                      ) : null}
+                      {canApproveCancellation ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPendingCalendarApproval({
+                              eventId: event.id,
+                              operation: "cancel",
+                            })
+                          }
+                          disabled={syncingCalendarEventId === event.id}
+                          className="inline-flex items-center gap-2 rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Review cancellation
                         </button>
                       ) : null}
                     </div>
+                    {pendingOperation ? (
+                      <div
+                        role="alertdialog"
+                        aria-label={
+                          pendingOperation === "cancel"
+                            ? "Approve Google Calendar cancellation"
+                            : "Approve Google Calendar write"
+                        }
+                        className="rounded-lg border border-amber-200 bg-amber-50 p-4 lg:col-span-2"
+                        data-testid="google-calendar-owner-approval-dialog"
+                      >
+                        <p className="font-bold text-amber-950">
+                          {pendingOperation === "cancel"
+                            ? "Approve this Google Calendar cancellation?"
+                            : sync?.google_event_id
+                              ? "Approve this Google Calendar update?"
+                              : "Approve this Google Calendar event creation?"}
+                        </p>
+                        <p className="mt-1 text-sm text-amber-900">
+                          This is the owner approval gate. The provider change begins only
+                          after confirmation and applies only to this company-scoped event.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPendingCalendarApproval(null)}
+                            className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900"
+                          >
+                            Keep pending
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleSyncGoogleCalendarEvent(event, pendingOperation)
+                            }
+                            disabled={syncingCalendarEventId === event.id}
+                            className="rounded-md bg-amber-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                            data-testid="google-calendar-confirm-owner-write"
+                          >
+                            {syncingCalendarEventId === event.id
+                              ? "Applying"
+                              : pendingOperation === "cancel"
+                                ? "Confirm owner approval & cancel"
+                                : sync?.google_event_id
+                                  ? "Confirm owner approval & update"
+                                  : "Confirm owner approval & create"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </article>
                 );
               })}
-              {!snapshot.scheduleEvents.length ? (
+              {!googleCompanyEvents.length ? (
                 <div className="p-4">
                   <EmptyState label="No schedule events are ready for Calendar sync." />
                 </div>

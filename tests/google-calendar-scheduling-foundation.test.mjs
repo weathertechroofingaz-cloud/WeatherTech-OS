@@ -97,6 +97,37 @@ function createConnection(overrides = {}) {
   };
 }
 
+function createSyncRecord(overrides = {}) {
+  return {
+    id: "sync-1",
+    company_id: "company-weathertech",
+    schedule_event_id: "schedule-event-1",
+    integration_connection_id: "connection-1",
+    provider: "google_calendar",
+    google_calendar_id: "calendar-weathertech",
+    google_event_id: "existing-google-event",
+    google_recurring_event_id: null,
+    google_event_etag: "etag-existing",
+    google_event_status: "confirmed",
+    sync_status: "needs_update",
+    sync_direction: "two_way",
+    last_synced_at: null,
+    external_updated_at: null,
+    provider_updated_at: null,
+    deleted_at: null,
+    conflict_status: "none",
+    conflict_reason: null,
+    sync_attempt_count: 0,
+    last_synced_direction: null,
+    last_error: null,
+    last_payload_hash: "old-hash",
+    metadata: {},
+    created_at: "2026-08-01T12:00:00.000Z",
+    updated_at: "2026-08-01T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
 try {
   const compile = spawnSync(
     tsc,
@@ -149,6 +180,19 @@ try {
     ),
     "utf8",
   );
+  const syncRouteSource = readFileSync(
+    join(
+      cwd,
+      "app",
+      "api",
+      "integrations",
+      "google-workspace",
+      "calendar",
+      "sync",
+      "route.ts",
+    ),
+    "utf8",
+  );
   const discoveryHandlerStart = crmAppSource.indexOf(
     "const handleDiscoverGoogleCalendars = async () => {",
   );
@@ -191,6 +235,48 @@ try {
       discoveryRequestEnd > discoveryRequestStart &&
       !discoveryRequestSource.includes("syncToken"),
     "Repeated manual Calendar discovery performs a complete list request",
+  );
+  assert(
+    syncRouteSource.includes('.eq("role", "owner")') &&
+      syncRouteSource.includes("approvalAction") &&
+      syncRouteSource.includes("validateGoogleCalendarOwnerApproval"),
+    "Calendar writes require explicit company-owner approval",
+  );
+  assert(
+    syncRouteSource.includes('.select("user_id, company_id, role")') &&
+      !syncRouteSource.includes('.select("id, role")'),
+    "Calendar owner lookup uses the composite membership key instead of a nonexistent id column",
+  );
+  assert(
+    syncRouteSource.includes('.eq("primary_calendar", true)') &&
+      syncRouteSource.includes('calendar.sync_mode !== "read_write"') &&
+      syncRouteSource.includes("!calendar.selected_for_sync"),
+    "Calendar writes resolve the discovered company primary mapping and require write access",
+  );
+  assert(
+    syncRouteSource.includes("pendingPayloadHash !== plan.payloadHash"),
+    "Calendar approval rejects schedule payloads that changed after submission",
+  );
+  assert(
+    syncRouteSource.includes('result.status === "skipped"\n            ? plan.syncStatus') &&
+      syncRouteSource.includes('result.synced || result.status === "skipped" ? null : resultError'),
+    "Idempotent Calendar approvals return the local sync mapping to a clean state",
+  );
+  const jobTargetIndex = syncRouteSource.indexOf("if (event.job_id)");
+  const customerTargetIndex = syncRouteSource.indexOf("if (event.customer_id)");
+  const leadTargetIndex = syncRouteSource.indexOf("if (event.lead_id)");
+  assert(
+    jobTargetIndex >= 0 &&
+      customerTargetIndex > jobTargetIndex &&
+      leadTargetIndex > customerTargetIndex &&
+      syncRouteSource.includes('return "Unassigned";'),
+    "Server approval fingerprints use the same job, customer, lead, and unassigned target order as the UI",
+  );
+  assert(
+    crmAppSource.includes('data-testid="google-calendar-owner-approval-dialog"') &&
+      crmAppSource.includes('"owner_approved_calendar_write"') &&
+      crmAppSource.includes('"owner_approved_calendar_cancel"'),
+    "Calendar UI has separate explicit owner confirmations for writes and cancellations",
   );
 
   restoreEnv({});
@@ -322,6 +408,63 @@ try {
     "Google event id is deterministic and Calendar-safe",
   );
 
+  const missingOwnerApproval = calendar.validateGoogleCalendarOwnerApproval({
+    event,
+    sync: createSyncRecord(),
+    operation: "sync",
+    isOwner: false,
+    approvalAction: "owner_approved_calendar_write",
+  });
+  assertEqual(missingOwnerApproval.status, "owner_required", "Non-owners cannot approve Calendar writes");
+
+  const missingExplicitApproval = calendar.validateGoogleCalendarOwnerApproval({
+    event,
+    sync: createSyncRecord(),
+    operation: "sync",
+    isOwner: true,
+    approvalAction: null,
+  });
+  assertEqual(
+    missingExplicitApproval.status,
+    "explicit_approval_required",
+    "Calendar write rejects a missing explicit approval action",
+  );
+
+  const unqueuedApproval = calendar.validateGoogleCalendarOwnerApproval({
+    event,
+    sync: createSyncRecord({ sync_status: "synced" }),
+    operation: "sync",
+    isOwner: true,
+    approvalAction: "owner_approved_calendar_write",
+  });
+  assertEqual(
+    unqueuedApproval.status,
+    "approval_submission_required",
+    "Already-synced Calendar mappings cannot be written without a new queue submission",
+  );
+
+  const approvedWrite = calendar.validateGoogleCalendarOwnerApproval({
+    event,
+    sync: createSyncRecord(),
+    operation: "sync",
+    isOwner: true,
+    approvalAction: "owner_approved_calendar_write",
+  });
+  assertEqual(approvedWrite.ok, true, "Queued Calendar update accepts exact owner approval");
+
+  const uncancelledSource = calendar.validateGoogleCalendarOwnerApproval({
+    event,
+    sync: createSyncRecord(),
+    operation: "cancel",
+    isOwner: true,
+    approvalAction: "owner_approved_calendar_cancel",
+  });
+  assertEqual(
+    uncancelledSource.status,
+    "source_cancellation_required",
+    "Google cancellation requires the WeatherTech OS schedule event to be cancelled first",
+  );
+
   let writeFetchCalled = false;
   const disabledSync = await calendar.syncGoogleCalendarEvent({
     event,
@@ -361,6 +504,103 @@ try {
   });
   assertEqual(createSync.synced, true, "Enabled Calendar sync can create mocked event");
   assertEqual(createBody.id, plan.deterministicEventId, "Calendar create body uses deterministic event id");
+  assertEqual(
+    createBody.start.timeZone,
+    "America/Phoenix",
+    "Calendar create preserves the company calendar timezone",
+  );
+
+  let retryAttempts = 0;
+  const retrySync = await calendar.syncGoogleCalendarEvent({
+    event,
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: null,
+    accessToken: "calendar-access-token",
+    retryDelayMs: 0,
+    sleepImpl: async () => {},
+    fetchImpl: async () => {
+      retryAttempts += 1;
+      if (retryAttempts < 3) {
+        return Response.json({ error: { message: "Provider temporarily unavailable" } }, { status: 503 });
+      }
+      return Response.json({
+        id: plan.deterministicEventId,
+        etag: "etag-retry",
+        updated: "2026-08-02T16:06:00.000Z",
+      });
+    },
+  });
+  assertEqual(retrySync.synced, true, "Transient Google API failures are retried successfully");
+  assertEqual(retrySync.attemptCount, 3, "Successful retry reports exact provider attempt count");
+
+  let exhaustedAttempts = 0;
+  const exhaustedSync = await calendar.syncGoogleCalendarEvent({
+    event,
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: null,
+    accessToken: "calendar-access-token",
+    retryDelayMs: 0,
+    sleepImpl: async () => {},
+    fetchImpl: async () => {
+      exhaustedAttempts += 1;
+      return Response.json({ error: { message: "Provider still unavailable" } }, { status: 503 });
+    },
+  });
+  assertEqual(exhaustedSync.status, "failed", "Exhausted Google API retries fail safely");
+  assertEqual(exhaustedAttempts, 3, "Failed Google API writes stop after the bounded retry count");
+
+  let duplicateCalls = 0;
+  const duplicateRecovery = await calendar.syncGoogleCalendarEvent({
+    event,
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: null,
+    accessToken: "calendar-access-token",
+    fetchImpl: async (_url, options = {}) => {
+      duplicateCalls += 1;
+      if (options.method === "POST") {
+        return Response.json({ error: { message: "The requested identifier already exists." } }, { status: 409 });
+      }
+      return Response.json({
+        id: plan.deterministicEventId,
+        etag: "etag-recovered",
+        status: "confirmed",
+        updated: "2026-08-02T16:07:00.000Z",
+        extendedProperties: {
+          private: {
+            weathertechCompanyId: event.company_id,
+            weathertechScheduleEventId: event.id,
+          },
+        },
+      });
+    },
+  });
+  assertEqual(duplicateRecovery.synced, true, "Ambiguous create recovers the deterministic Google event");
+  assertEqual(duplicateRecovery.duplicatePrevented, true, "Recovered create records duplicate prevention");
+  assertEqual(duplicateCalls, 2, "Duplicate recovery performs one create and one exact-id lookup");
+
+  const collisionFailure = await calendar.syncGoogleCalendarEvent({
+    event,
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: null,
+    accessToken: "calendar-access-token",
+    fetchImpl: async (_url, options = {}) =>
+      options.method === "POST"
+        ? Response.json({ error: { message: "Conflict" } }, { status: 409 })
+        : Response.json({
+            id: plan.deterministicEventId,
+            status: "confirmed",
+            extendedProperties: { private: { weathertechCompanyId: "another-company" } },
+          }),
+  });
+  assertEqual(collisionFailure.status, "failed", "Mismatched deterministic-id collisions fail closed");
 
   let updateEndpoint = "";
   const updateSync = await calendar.syncGoogleCalendarEvent({
@@ -368,23 +608,7 @@ try {
     targetName: "Jane Homeowner",
     connection,
     calendar: normalizedCalendar,
-    sync: {
-      id: "sync-1",
-      company_id: "company-weathertech",
-      schedule_event_id: event.id,
-      integration_connection_id: connection.id,
-      provider: "google_calendar",
-      google_calendar_id: "calendar-weathertech",
-      google_event_id: "existing-google-event",
-      sync_status: "needs_update",
-      sync_direction: "two_way",
-      last_synced_at: null,
-      external_updated_at: null,
-      last_error: null,
-      last_payload_hash: "old-hash",
-      created_at: "2026-08-01T12:00:00.000Z",
-      updated_at: "2026-08-01T12:00:00.000Z",
-    },
+    sync: createSyncRecord(),
     accessToken: "calendar-access-token",
     fetchImpl: async (url, options) => {
       updateEndpoint = String(url);
@@ -401,6 +625,52 @@ try {
     updateEndpoint.includes("/events/existing-google-event?sendUpdates=none"),
     "Calendar update targets existing Google event id",
   );
+
+  let cancelBodyPresent = false;
+  const cancelSync = await calendar.syncGoogleCalendarEvent({
+    event: createScheduleEvent({ status: "canceled" }),
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: createSyncRecord(),
+    operation: "cancel",
+    accessToken: "calendar-access-token",
+    fetchImpl: async (url, options) => {
+      assertEqual(options.method, "DELETE", "Approved Calendar cancellation uses DELETE");
+      assert(
+        String(url).includes("/events/existing-google-event?sendUpdates=none"),
+        "Calendar cancellation targets the mapped event without guest updates",
+      );
+      cancelBodyPresent = Object.hasOwn(options, "body");
+      return new Response(null, { status: 204 });
+    },
+  });
+  assertEqual(cancelSync.synced, true, "Approved Calendar cancellation succeeds");
+  assertEqual(cancelSync.canceled, true, "Calendar cancellation is recorded explicitly");
+  assertEqual(cancelBodyPresent, false, "Calendar DELETE sends no request body");
+
+  const alreadyAbsentCancel = await calendar.syncGoogleCalendarEvent({
+    event: createScheduleEvent({ status: "canceled" }),
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: createSyncRecord(),
+    operation: "cancel",
+    accessToken: "calendar-access-token",
+    fetchImpl: async () => Response.json({ error: { message: "Gone" } }, { status: 410 }),
+  });
+  assertEqual(alreadyAbsentCancel.synced, true, "Already-deleted Google event cancellation is idempotent");
+  assertEqual(alreadyAbsentCancel.canceled, true, "Idempotent cancellation records cancelled state");
+
+  const currentPlan = calendar.buildGoogleCalendarEventSyncPlan({
+    event,
+    targetName: "Jane Homeowner",
+    connection,
+    calendar: normalizedCalendar,
+    sync: createSyncRecord({ last_payload_hash: plan.payloadHash, sync_status: "synced" }),
+    writeEnabled: true,
+  });
+  assertEqual(currentPlan.action, "skip", "Unchanged mapped event never creates a duplicate provider event");
 
   const inbound = await calendar.listGoogleCalendarEvents({
     accessToken: "calendar-access-token",

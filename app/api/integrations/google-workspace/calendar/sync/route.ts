@@ -7,10 +7,14 @@ import {
   refreshGoogleAccessToken,
 } from "../../../../../../lib/googleWorkspace/serverClient";
 import {
+  GOOGLE_CALENDAR_CANCEL_EVENT_TYPE,
   GOOGLE_CALENDAR_SYNC_EVENT_TYPE,
   buildGoogleCalendarEventSyncPlan,
   detectGoogleCalendarSchedulingConflicts,
+  hasRequiredGoogleCalendarScopes,
   syncGoogleCalendarEvent,
+  validateGoogleCalendarOwnerApproval,
+  type GoogleCalendarSyncOperation,
 } from "../../../../../../lib/googleWorkspace/calendar";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +23,8 @@ export const runtime = "nodejs";
 type CalendarSyncBody = {
   integrationConnectionId?: unknown;
   scheduleEventId?: unknown;
+  operation?: unknown;
+  approvalAction?: unknown;
 };
 
 async function getJsonBody(request: NextRequest): Promise<CalendarSyncBody> {
@@ -46,18 +52,6 @@ async function resolveTargetName({
     job_id: string | null;
   };
 }) {
-  if (event.customer_id) {
-    const { data: customer } = await serviceClient
-      .from("customers")
-      .select("display_name,contact_name")
-      .eq("id", event.customer_id)
-      .maybeSingle();
-
-    if (customer?.contact_name || customer?.display_name) {
-      return customer.contact_name ?? customer.display_name;
-    }
-  }
-
   if (event.job_id) {
     const { data: job } = await serviceClient
       .from("jobs")
@@ -67,6 +61,18 @@ async function resolveTargetName({
 
     if (job?.title) {
       return job.title;
+    }
+  }
+
+  if (event.customer_id) {
+    const { data: customer } = await serviceClient
+      .from("customers")
+      .select("display_name,contact_name")
+      .eq("id", event.customer_id)
+      .maybeSingle();
+
+    if (customer?.contact_name || customer?.display_name) {
+      return customer.contact_name ?? customer.display_name;
     }
   }
 
@@ -82,7 +88,7 @@ async function resolveTargetName({
     }
   }
 
-  return event.title;
+  return "Unassigned";
 }
 
 export async function POST(request: NextRequest) {
@@ -108,6 +114,8 @@ export async function POST(request: NextRequest) {
   const body = await getJsonBody(request);
   const integrationConnectionId = getRequestString(body.integrationConnectionId);
   const scheduleEventId = getRequestString(body.scheduleEventId);
+  const requestedOperation = getRequestString(body.operation) ?? "sync";
+  const approvalAction = getRequestString(body.approvalAction);
 
   if (!integrationConnectionId || !scheduleEventId) {
     return NextResponse.json(
@@ -120,6 +128,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (requestedOperation !== "sync" && requestedOperation !== "cancel") {
+    return NextResponse.json(
+      { ok: false, synced: false, message: "Select a supported Calendar operation." },
+      { status: 400 },
+    );
+  }
+
+  const operation = requestedOperation as GoogleCalendarSyncOperation;
+
   const { data: connection } = await client
     .from("integration_connections")
     .select("*")
@@ -131,6 +148,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { ok: false, synced: false, message: "Google Calendar connection was not found." },
       { status: 404 },
+    );
+  }
+
+  if (connection.status !== "connected") {
+    return NextResponse.json(
+      {
+        ok: false,
+        synced: false,
+        message: "Resume or reconnect this Google Calendar connection before live writes.",
+      },
+      { status: 409 },
+    );
+  }
+
+  if (!hasRequiredGoogleCalendarScopes(connection.scopes)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        synced: false,
+        message:
+          "The connected Google account does not include the approved Calendar event scope.",
+      },
+      { status: 409 },
     );
   }
 
@@ -148,25 +188,79 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const [{ data: calendar }, { data: sync }, { data: credential }] = await Promise.all([
-    serviceClient
-      .from("google_calendar_connected_calendars")
-      .select("*")
-      .eq("integration_connection_id", connection.id)
-      .eq("google_calendar_id", connection.default_calendar_id ?? "primary")
-      .maybeSingle(),
+  const defaultCalendarId = connection.default_calendar_id?.trim() || "primary";
+  let calendarQuery = serviceClient
+    .from("google_calendar_connected_calendars")
+    .select("*")
+    .eq("integration_connection_id", connection.id)
+    .eq("company_id", connection.company_id);
+
+  calendarQuery =
+    defaultCalendarId === "primary"
+      ? calendarQuery.eq("primary_calendar", true)
+      : calendarQuery.eq("google_calendar_id", defaultCalendarId);
+
+  const [
+    { data: calendar },
+    { data: sync },
+    { data: credential },
+    { data: ownerMembership },
+  ] = await Promise.all([
+    calendarQuery.maybeSingle(),
     serviceClient
       .from("calendar_event_syncs")
       .select("*")
       .eq("integration_connection_id", connection.id)
+      .eq("company_id", connection.company_id)
       .eq("schedule_event_id", event.id)
       .maybeSingle(),
     serviceClient
       .from("google_calendar_credentials")
       .select("*")
       .eq("integration_connection_id", connection.id)
+      .eq("company_id", connection.company_id)
+      .maybeSingle(),
+    client
+      .from("company_memberships")
+      .select("user_id, company_id, role")
+      .eq("company_id", connection.company_id)
+      .eq("user_id", userResult.user.id)
+      .eq("role", "owner")
       .maybeSingle(),
   ]);
+
+  if (
+    !calendar ||
+    calendar.status !== "active" ||
+    !calendar.selected_for_sync ||
+    calendar.sync_mode !== "read_write"
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        synced: false,
+        message:
+          "Select an active, writable company calendar mapping before approving live writes.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const approval = validateGoogleCalendarOwnerApproval({
+    event,
+    sync,
+    operation,
+    isOwner: Boolean(ownerMembership),
+    approvalAction,
+  });
+
+  if (!approval.ok) {
+    return NextResponse.json(
+      { ok: false, synced: false, approval, message: approval.message },
+      { status: approval.status === "owner_required" ? 403 : 409 },
+    );
+  }
+
   const targetName = await resolveTargetName({ serviceClient, event });
   const plan = buildGoogleCalendarEventSyncPlan({
     event,
@@ -174,7 +268,24 @@ export async function POST(request: NextRequest) {
     connection,
     calendar,
     sync,
+    operation,
   });
+
+  if (
+    operation === "sync" &&
+    typeof sync?.metadata?.pendingPayloadHash === "string" &&
+    sync.metadata.pendingPayloadHash !== plan.payloadHash
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        synced: false,
+        message:
+          "This schedule event changed after it was submitted. Queue the current version for owner approval again.",
+      },
+      { status: 409 },
+    );
+  }
   const [
     { data: companyScheduleEvents },
     { data: companyJobAssignments },
@@ -195,11 +306,14 @@ export async function POST(request: NextRequest) {
       .eq("company_id", event.company_id)
       .eq("provider", "google_calendar"),
   ]);
-  const conflicts = detectGoogleCalendarSchedulingConflicts({
-    scheduleEvents: companyScheduleEvents?.length ? companyScheduleEvents : [event],
-    jobAssignments: companyJobAssignments ?? [],
-    syncs: companyCalendarSyncs ?? (sync ? [sync] : []),
-  }).filter((conflict) => conflict.scheduleEventIds.includes(event.id));
+  const conflicts =
+    operation === "sync"
+      ? detectGoogleCalendarSchedulingConflicts({
+          scheduleEvents: companyScheduleEvents?.length ? companyScheduleEvents : [event],
+          jobAssignments: companyJobAssignments ?? [],
+          syncs: companyCalendarSyncs ?? (sync ? [sync] : []),
+        }).filter((conflict) => conflict.scheduleEventIds.includes(event.id))
+      : [];
   const now = new Date().toISOString();
 
   if (conflicts.length) {
@@ -272,8 +386,23 @@ export async function POST(request: NextRequest) {
     connection,
     calendar,
     sync,
+    operation,
     accessToken,
   });
+  const resultError =
+    !result.synced && result.status === "failed" ? result.error : result.message;
+  const approvedAt = new Date().toISOString();
+  const approvalMetadata = {
+    ...(sync?.metadata ?? {}),
+    approvalState:
+      result.synced || result.status === "skipped" ? "completed" : "owner_approved",
+    approvalAction,
+    approvedBy: userResult.user.id,
+    approvedAt,
+    operation,
+    providerAttemptCount: result.attemptCount,
+    duplicatePrevented: result.synced ? result.duplicatePrevented : false,
+  };
 
   await serviceClient.from("calendar_event_syncs").upsert(
     {
@@ -284,26 +413,40 @@ export async function POST(request: NextRequest) {
       google_calendar_id: result.plan?.calendarId ?? plan.calendarId,
       google_event_id: result.synced ? result.googleEventId : sync?.google_event_id ?? null,
       google_event_etag: result.synced ? result.googleEventEtag : sync?.google_event_etag ?? null,
+      google_event_status:
+        result.synced && result.canceled
+          ? "cancelled"
+          : sync?.google_event_status ?? "confirmed",
       sync_status: result.synced
         ? "synced"
         : result.status === "disabled"
           ? plan.syncStatus
-          : "error",
+          : result.status === "skipped"
+            ? plan.syncStatus
+            : "error",
       sync_direction: connection.sync_direction,
       last_synced_at: result.synced ? now : sync?.last_synced_at ?? null,
       external_updated_at: result.synced
         ? result.providerUpdatedAt
         : sync?.external_updated_at ?? null,
       provider_updated_at: result.synced
-        ? result.providerUpdatedAt
+        ? result.providerUpdatedAt ?? (result.canceled ? now : null)
         : sync?.provider_updated_at ?? null,
+      deleted_at:
+        result.synced && result.canceled ? now : sync?.deleted_at ?? null,
       conflict_status: "none",
       conflict_reason: null,
-      sync_attempt_count: (sync?.sync_attempt_count ?? 0) + (result.attempted ? 1 : 0),
-      last_synced_direction: result.synced ? "weathertech_to_provider" : null,
-      last_error: result.synced ? null : result.message,
-      last_payload_hash: result.plan?.payloadHash ?? plan.payloadHash,
+      sync_attempt_count: (sync?.sync_attempt_count ?? 0) + result.attemptCount,
+      last_synced_direction: result.synced
+        ? "weathertech_to_provider"
+        : sync?.last_synced_direction ?? null,
+      last_error: result.synced || result.status === "skipped" ? null : resultError,
+      last_payload_hash:
+        result.synced && !result.canceled
+          ? result.plan.payloadHash
+          : sync?.last_payload_hash ?? null,
       metadata: {
+        ...approvalMetadata,
         writeEnabled: result.plan?.writeEnabled ?? plan.writeEnabled,
         attemptedProviderWrite: result.attempted,
         resultStatus: result.status,
@@ -317,35 +460,56 @@ export async function POST(request: NextRequest) {
     integration_connection_id: connection.id,
     provider: "google_calendar",
     direction: "weathertech_to_provider",
-    event_type: GOOGLE_CALENDAR_SYNC_EVENT_TYPE,
-    status: result.synced ? "succeeded" : result.status === "disabled" ? "skipped" : "failed",
+    event_type:
+      operation === "cancel"
+        ? GOOGLE_CALENDAR_CANCEL_EVENT_TYPE
+        : GOOGLE_CALENDAR_SYNC_EVENT_TYPE,
+    status:
+      result.synced || result.status === "skipped"
+        ? result.synced
+          ? "succeeded"
+          : "skipped"
+        : result.status === "disabled"
+          ? "skipped"
+          : "failed",
     related_table: "schedule_events",
     related_record_id: event.id,
     external_id: result.synced ? result.googleEventId : sync?.google_event_id ?? null,
+    attempt_count: result.attemptCount,
+    max_attempts: 3,
+    last_attempted_at: result.attempted ? now : null,
     request_fingerprint: result.plan?.payloadHash ?? plan.payloadHash,
     request_summary: {
       scheduleEventId: event.id,
       calendarId: result.plan?.calendarId ?? plan.calendarId,
       action: result.plan?.action ?? plan.action,
       writeEnabled: result.plan?.writeEnabled ?? plan.writeEnabled,
+      ownerApproval: true,
+      operation,
     },
     response_summary: {
       synced: result.synced,
       status: result.status,
       providerUpdatedAt: result.synced ? result.providerUpdatedAt : null,
+      attemptCount: result.attemptCount,
+      duplicatePrevented: result.synced ? result.duplicatePrevented : false,
+      canceled: result.synced ? result.canceled : false,
     },
     error_code: result.synced ? null : result.status,
-    error_message: result.synced ? null : result.message,
+    error_message: result.synced ? null : resultError,
     completed_at: now,
   });
 
-  const safeNoWriteResult = !result.synced && result.status === "disabled";
+  const safeNoWriteResult =
+    !result.synced && (result.status === "disabled" || result.status === "skipped");
 
   return NextResponse.json(
     {
       ok: result.synced || safeNoWriteResult,
       synced: result.synced,
-      writeDisabled: safeNoWriteResult,
+      canceled: result.synced ? result.canceled : false,
+      writeDisabled: !result.synced && result.status === "disabled",
+      skipped: !result.synced && result.status === "skipped",
       result,
       message: result.message,
     },

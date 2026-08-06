@@ -7891,7 +7891,8 @@ async function testWebsiteMarketingFoundation(browser, tab) {
         text.includes("real-world service connections") &&
         text.includes("production scheduling foundation") &&
         text.includes("weathertech os remains") &&
-        text.includes("live writes disabled") &&
+        (text.includes("live writes disabled") || text.includes("live writes enabled")) &&
+        text.includes("owner approval required for every live change") &&
         text.includes("connected calendars") &&
         text.includes("event payload preview") &&
         (text.includes("prepare connection") || text.includes("discover calendars")) &&
@@ -7915,7 +7916,11 @@ async function testWebsiteMarketingFoundation(browser, tab) {
 
     return {
       visible: Boolean(section),
-      statesWriteDisabled: text.includes("live writes disabled"),
+      statesWriteMode: text.includes("live writes disabled") || text.includes("live writes enabled"),
+      requiresOwnerApproval: text.includes("owner approval required for every live change"),
+      hasApprovalPolicy: Boolean(
+        section?.querySelector('[data-testid="google-calendar-owner-approval-policy"]'),
+      ),
       hasFakeSyncedAction: text.includes("mark synced"),
       hasPayloadPreview: text.includes("event payload preview"),
     };
@@ -7925,8 +7930,15 @@ async function testWebsiteMarketingFoundation(browser, tab) {
     throw new Error("Google Calendar scheduling foundation panel is not visible.");
   }
 
-  if (!calendarFoundationState.statesWriteDisabled) {
-    throw new Error("Google Calendar foundation does not state live writes are disabled.");
+  if (!calendarFoundationState.statesWriteMode) {
+    throw new Error("Google Calendar foundation does not state its live-write mode.");
+  }
+
+  if (
+    !calendarFoundationState.requiresOwnerApproval ||
+    !calendarFoundationState.hasApprovalPolicy
+  ) {
+    throw new Error("Google Calendar foundation does not enforce visible owner approval.");
   }
 
   if (calendarFoundationState.hasFakeSyncedAction) {

@@ -32,6 +32,7 @@ const ALL_DAY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export const GOOGLE_CALENDAR_DISCOVERY_EVENT_TYPE = "google_calendar.discovery";
 export const GOOGLE_CALENDAR_SYNC_EVENT_TYPE = "google_calendar.event_sync";
+export const GOOGLE_CALENDAR_CANCEL_EVENT_TYPE = "google_calendar.event_cancel";
 export const GOOGLE_CALENDAR_WEBHOOK_EVENT_TYPE = "google_calendar.webhook";
 
 export const googleCalendarSupportedScopes = [
@@ -80,6 +81,9 @@ export type GoogleCalendarApiEvent = {
   location?: unknown;
   updated?: unknown;
   recurringEventId?: unknown;
+  extendedProperties?: {
+    private?: Record<string, unknown>;
+  };
   start?: {
     date?: unknown;
     dateTime?: unknown;
@@ -107,7 +111,7 @@ export type GoogleCalendarDiscoveryResult =
     };
 
 export type GoogleCalendarEventSyncPlan = {
-  action: "create" | "update" | "skip";
+  action: "create" | "update" | "cancel" | "skip";
   reason: string | null;
   calendarId: string;
   deterministicEventId: string;
@@ -124,11 +128,13 @@ export type GoogleCalendarEventSyncResult =
       status:
         | "configuration_missing"
         | "disabled"
+        | "skipped"
         | "missing_token"
         | "missing_event"
         | "missing_calendar";
       message: string;
       plan: GoogleCalendarEventSyncPlan | null;
+      attemptCount: 0;
     }
   | {
       attempted: true;
@@ -139,6 +145,9 @@ export type GoogleCalendarEventSyncResult =
       googleEventEtag: string | null;
       providerUpdatedAt: string | null;
       plan: GoogleCalendarEventSyncPlan;
+      attemptCount: number;
+      duplicatePrevented: boolean;
+      canceled: boolean;
     }
   | {
       attempted: true;
@@ -147,7 +156,25 @@ export type GoogleCalendarEventSyncResult =
       message: string;
       error: string;
       plan: GoogleCalendarEventSyncPlan;
+      attemptCount: number;
     };
+
+export type GoogleCalendarSyncOperation = "sync" | "cancel";
+
+export type GoogleCalendarOwnerApprovalCheck = {
+  ok: boolean;
+  status:
+    | "approved"
+    | "owner_required"
+    | "explicit_approval_required"
+    | "approval_submission_required"
+    | "conflict_resolution_required"
+    | "scheduled_event_required"
+    | "source_cancellation_required"
+    | "synced_event_required"
+    | "already_cancelled";
+  message: string;
+};
 
 export type GoogleCalendarInboundSyncResult =
   | {
@@ -476,6 +503,7 @@ export function buildGoogleCalendarEventSyncPlan({
   connection,
   calendar,
   sync,
+  operation = "sync",
   timeZone = DEFAULT_TIME_ZONE,
   writeEnabled = getGoogleCalendarConfigCheckResult().writeEnabled,
 }: {
@@ -487,6 +515,7 @@ export function buildGoogleCalendarEventSyncPlan({
     "google_calendar_id" | "time_zone" | "sync_mode"
   > | null;
   sync?: CalendarEventSyncRecord | null;
+  operation?: GoogleCalendarSyncOperation;
   timeZone?: string;
   writeEnabled?: boolean;
 }): GoogleCalendarEventSyncPlan {
@@ -517,6 +546,59 @@ export function buildGoogleCalendarEventSyncPlan({
     };
   }
 
+  if (operation === "cancel") {
+    if (!sync?.google_event_id) {
+      return {
+        action: "skip",
+        reason: "No synchronized Google Calendar event exists to cancel.",
+        calendarId,
+        deterministicEventId,
+        payload,
+        payloadHash,
+        writeEnabled,
+        syncStatus: "synced",
+      };
+    }
+
+    if (sync.google_event_status === "cancelled" || sync.deleted_at) {
+      return {
+        action: "skip",
+        reason: "The Google Calendar event is already cancelled.",
+        calendarId,
+        deterministicEventId,
+        payload,
+        payloadHash,
+        writeEnabled,
+        syncStatus: "synced",
+      };
+    }
+
+    return {
+      action: "cancel",
+      reason: null,
+      calendarId,
+      deterministicEventId,
+      payload,
+      payloadHash,
+      writeEnabled,
+      syncStatus: "synced",
+    };
+  }
+
+  if (sync?.google_event_status === "cancelled" || sync?.deleted_at) {
+    return {
+      action: "skip",
+      reason:
+        "Cancelled Google Calendar events cannot be recreated from the same schedule event.",
+      calendarId,
+      deterministicEventId,
+      payload,
+      payloadHash,
+      writeEnabled,
+      syncStatus: "synced",
+    };
+  }
+
   if (sync?.google_event_id && sync.last_payload_hash === payloadHash) {
     return {
       action: "skip",
@@ -542,22 +624,185 @@ export function buildGoogleCalendarEventSyncPlan({
   };
 }
 
+export function validateGoogleCalendarOwnerApproval({
+  event,
+  sync,
+  operation,
+  isOwner,
+  approvalAction,
+}: {
+  event: ScheduleEventRecord;
+  sync: CalendarEventSyncRecord | null;
+  operation: GoogleCalendarSyncOperation;
+  isOwner: boolean;
+  approvalAction: string | null;
+}): GoogleCalendarOwnerApprovalCheck {
+  if (!sync) {
+    return {
+      ok: false,
+      status: "approval_submission_required",
+      message: "Queue this schedule event for owner approval before writing to Google Calendar.",
+    };
+  }
+
+  if (!isOwner) {
+    return {
+      ok: false,
+      status: "owner_required",
+      message: "A company owner must approve every live Google Calendar change.",
+    };
+  }
+
+  const expectedApprovalAction =
+    operation === "cancel"
+      ? "owner_approved_calendar_cancel"
+      : "owner_approved_calendar_write";
+
+  if (approvalAction !== expectedApprovalAction) {
+    return {
+      ok: false,
+      status: "explicit_approval_required",
+      message:
+        operation === "cancel"
+          ? "Explicit owner approval is required before cancelling a Google Calendar event."
+          : "Explicit owner approval is required before creating or updating a Google Calendar event.",
+    };
+  }
+
+  if (operation === "cancel") {
+    if (event.status !== "canceled") {
+      return {
+        ok: false,
+        status: "source_cancellation_required",
+        message:
+          "Cancel the schedule event in WeatherTech OS before cancelling it in Google Calendar.",
+      };
+    }
+
+    if (!sync.google_event_id) {
+      return {
+        ok: false,
+        status: "synced_event_required",
+        message: "No synchronized Google Calendar event exists to cancel.",
+      };
+    }
+
+    if (sync.google_event_status === "cancelled" || sync.deleted_at) {
+      return {
+        ok: false,
+        status: "already_cancelled",
+        message: "This Google Calendar event is already cancelled.",
+      };
+    }
+
+    return { ok: true, status: "approved", message: "Owner cancellation approved." };
+  }
+
+  if (event.status !== "scheduled") {
+    return {
+      ok: false,
+      status: "scheduled_event_required",
+      message: "Only scheduled WeatherTech OS events can be created or updated in Google Calendar.",
+    };
+  }
+
+  if (sync.sync_status === "conflict") {
+    return {
+      ok: false,
+      status: "conflict_resolution_required",
+      message: "Resolve the scheduling conflict before approving a Google Calendar write.",
+    };
+  }
+
+  if (sync.sync_status !== "queued" && sync.sync_status !== "needs_update") {
+    return {
+      ok: false,
+      status: "approval_submission_required",
+      message: "Queue this schedule event for owner approval before writing to Google Calendar.",
+    };
+  }
+
+  return { ok: true, status: "approved", message: "Owner Calendar write approved." };
+}
+
+type GoogleCalendarSleep = (delayMs: number) => Promise<void>;
+
+async function defaultGoogleCalendarSleep(delayMs: number) {
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function readGoogleCalendarApiPayload(response: Response) {
+  const text = await response.text();
+
+  if (!text) {
+    return {} as GoogleCalendarApiEvent & {
+      error?: { message?: unknown };
+    };
+  }
+
+  try {
+    return JSON.parse(text) as GoogleCalendarApiEvent & {
+      error?: { message?: unknown };
+    };
+  } catch {
+    return {} as GoogleCalendarApiEvent & {
+      error?: { message?: unknown };
+    };
+  }
+}
+
+function getGoogleCalendarApiError(
+  payload: GoogleCalendarApiEvent & { error?: { message?: unknown } },
+) {
+  return typeof payload.error?.message === "string"
+    ? payload.error.message
+    : "Google Calendar API returned an error.";
+}
+
+function isRetryableGoogleCalendarWriteStatus(status: number) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isMatchingWeatherTechGoogleEvent({
+  providerEvent,
+  event,
+}: {
+  providerEvent: GoogleCalendarApiEvent;
+  event: ScheduleEventRecord;
+}) {
+  const privateProperties = providerEvent.extendedProperties?.private;
+
+  return (
+    getString(privateProperties?.weathertechCompanyId) === event.company_id &&
+    getString(privateProperties?.weathertechScheduleEventId) === event.id &&
+    getString(providerEvent.status) !== "cancelled"
+  );
+}
+
 export async function syncGoogleCalendarEvent({
   event,
   targetName,
   connection,
   calendar,
   sync,
+  operation = "sync",
   accessToken,
   fetchImpl = fetch,
+  maxAttempts = 3,
+  retryDelayMs = 250,
+  sleepImpl = defaultGoogleCalendarSleep,
 }: {
   event: ScheduleEventRecord | null;
   targetName: string;
   connection: IntegrationConnectionRecord | null;
   calendar?: GoogleCalendarConnectedCalendarRecord | null;
   sync?: CalendarEventSyncRecord | null;
+  operation?: GoogleCalendarSyncOperation;
   accessToken: string | null;
   fetchImpl?: FetchLike;
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  sleepImpl?: GoogleCalendarSleep;
 }): Promise<GoogleCalendarEventSyncResult> {
   if (!getGoogleCalendarConfigCheckResult().ok) {
     return {
@@ -566,6 +811,7 @@ export async function syncGoogleCalendarEvent({
       status: "configuration_missing",
       message: "Google Workspace configuration is incomplete. No calendar event was synced.",
       plan: null,
+      attemptCount: 0,
     };
   }
 
@@ -576,6 +822,7 @@ export async function syncGoogleCalendarEvent({
       status: "missing_event",
       message: "No WeatherTech OS schedule event was provided.",
       plan: null,
+      attemptCount: 0,
     };
   }
 
@@ -586,6 +833,7 @@ export async function syncGoogleCalendarEvent({
       status: "missing_calendar",
       message: "Select a Google Calendar connection before syncing.",
       plan: null,
+      attemptCount: 0,
     };
   }
 
@@ -595,6 +843,7 @@ export async function syncGoogleCalendarEvent({
     connection,
     calendar,
     sync,
+    operation,
   });
 
   if (!plan.writeEnabled) {
@@ -605,6 +854,7 @@ export async function syncGoogleCalendarEvent({
       message:
         "No Google Calendar event was created or changed. GOOGLE_CALENDAR_WRITE_ENABLED must be explicitly enabled for controlled live writes.",
       plan,
+      attemptCount: 0,
     };
   }
 
@@ -615,6 +865,7 @@ export async function syncGoogleCalendarEvent({
       status: "missing_token",
       message: "No authorized Google Calendar token is available. No event was synced.",
       plan,
+      attemptCount: 0,
     };
   }
 
@@ -622,80 +873,164 @@ export async function syncGoogleCalendarEvent({
     return {
       attempted: false,
       synced: false,
-      status: "disabled",
+      status: "skipped",
       message: plan.reason ?? "Google Calendar sync was skipped.",
       plan,
+      attemptCount: 0,
     };
   }
 
   const eventId = sync?.google_event_id ?? plan.deterministicEventId;
+  const eventEndpoint = `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(
+    plan.calendarId,
+  )}/events/${encodeURIComponent(eventId)}`;
   const endpoint =
-    plan.action === "update"
+    plan.action === "create"
       ? `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(
           plan.calendarId,
-        )}/events/${encodeURIComponent(eventId)}?sendUpdates=none`
-      : `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(
-          plan.calendarId,
-        )}/events?sendUpdates=none`;
-  const method = plan.action === "update" ? "PATCH" : "POST";
+        )}/events?sendUpdates=none`
+      : `${eventEndpoint}?sendUpdates=none`;
+  const method =
+    plan.action === "create" ? "POST" : plan.action === "update" ? "PATCH" : "DELETE";
   const body =
-    plan.action === "update"
-      ? plan.payload
-      : {
-          id: eventId,
-          ...plan.payload,
+    plan.action === "create"
+      ? { id: eventId, ...plan.payload }
+      : plan.action === "update"
+        ? plan.payload
+        : null;
+  const boundedMaxAttempts = Math.max(1, Math.min(Math.trunc(maxAttempts), 5));
+  let lastError = "Google Calendar API returned an error.";
+
+  for (let attemptCount = 1; attemptCount <= boundedMaxAttempts; attemptCount += 1) {
+    try {
+      const response = await fetchImpl(endpoint, {
+        method,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const payload = await readGoogleCalendarApiPayload(response);
+
+      if (response.ok) {
+        return {
+          attempted: true,
+          synced: true,
+          status: "synced",
+          message:
+            plan.action === "cancel"
+              ? "Google Calendar event cancelled."
+              : "Google Calendar event synchronized.",
+          googleEventId: getString(payload.id) ?? eventId,
+          googleEventEtag: getString(payload.etag) ?? sync?.google_event_etag ?? null,
+          providerUpdatedAt: getString(payload.updated),
+          plan,
+          attemptCount,
+          duplicatePrevented: false,
+          canceled: plan.action === "cancel",
         };
+      }
 
-  try {
-    const response = await fetchImpl(endpoint, {
-      method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const payload = (await response.json()) as GoogleCalendarApiEvent & {
-      error?: {
-        message?: unknown;
-      };
-    };
+      if (plan.action === "cancel" && (response.status === 404 || response.status === 410)) {
+        return {
+          attempted: true,
+          synced: true,
+          status: "synced",
+          message: "Google Calendar event was already absent and is now recorded as cancelled.",
+          googleEventId: eventId,
+          googleEventEtag: sync?.google_event_etag ?? null,
+          providerUpdatedAt: null,
+          plan,
+          attemptCount,
+          duplicatePrevented: false,
+          canceled: true,
+        };
+      }
 
-    if (!response.ok) {
+      if (plan.action === "create" && response.status === 409) {
+        const existingResponse = await fetchImpl(eventEndpoint, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        });
+        const existingPayload = await readGoogleCalendarApiPayload(existingResponse);
+
+        if (
+          existingResponse.ok &&
+          isMatchingWeatherTechGoogleEvent({ providerEvent: existingPayload, event })
+        ) {
+          return {
+            attempted: true,
+            synced: true,
+            status: "synced",
+            message:
+              "The existing deterministic Google Calendar event was recovered without creating a duplicate.",
+            googleEventId: getString(existingPayload.id) ?? eventId,
+            googleEventEtag: getString(existingPayload.etag),
+            providerUpdatedAt: getString(existingPayload.updated),
+            plan,
+            attemptCount,
+            duplicatePrevented: true,
+            canceled: false,
+          };
+        }
+
+        lastError =
+          "Google Calendar reported an event ID collision that did not match this WeatherTech OS schedule event.";
+      } else {
+        lastError = getGoogleCalendarApiError(payload);
+      }
+
+      if (
+        attemptCount < boundedMaxAttempts &&
+        isRetryableGoogleCalendarWriteStatus(response.status)
+      ) {
+        await sleepImpl(Math.max(0, retryDelayMs) * 2 ** (attemptCount - 1));
+        continue;
+      }
+
       return {
         attempted: true,
         synced: false,
         status: "failed",
         message: "Google Calendar event sync failed.",
-        error:
-          typeof payload.error?.message === "string"
-            ? payload.error.message
-            : "Google Calendar API returned an error.",
+        error: lastError,
         plan,
+        attemptCount,
+      };
+    } catch (error) {
+      lastError =
+        error instanceof Error ? error.message : "Google Calendar API returned an error.";
+
+      if (attemptCount < boundedMaxAttempts) {
+        await sleepImpl(Math.max(0, retryDelayMs) * 2 ** (attemptCount - 1));
+        continue;
+      }
+
+      return {
+        attempted: true,
+        synced: false,
+        status: "failed",
+        message: "Google Calendar event sync failed.",
+        error: lastError,
+        plan,
+        attemptCount,
       };
     }
-
-    return {
-      attempted: true,
-      synced: true,
-      status: "synced",
-      message: "Google Calendar event synchronized.",
-      googleEventId: getString(payload.id) ?? eventId,
-      googleEventEtag: getString(payload.etag),
-      providerUpdatedAt: getString(payload.updated),
-      plan,
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      synced: false,
-      status: "failed",
-      message: "Google Calendar event sync failed.",
-      error:
-        error instanceof Error ? error.message : "Google Calendar API returned an error.",
-      plan,
-    };
   }
+
+  return {
+    attempted: true,
+    synced: false,
+    status: "failed",
+    message: "Google Calendar event sync failed.",
+    error: lastError,
+    plan,
+    attemptCount: boundedMaxAttempts,
+  };
 }
 
 export async function listGoogleCalendarEvents({

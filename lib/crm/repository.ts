@@ -2958,6 +2958,25 @@ export async function upsertCalendarEventSync(
   return data;
 }
 
+export async function updateCalendarEventSync(
+  client: CrmClient,
+  id: string,
+  input: Partial<CalendarEventSyncInput>,
+) {
+  const { data, error } = await client
+    .from("calendar_event_syncs")
+    .update(input)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
 export async function createEmailMessage(client: CrmClient, input: EmailMessageInput) {
 
 
