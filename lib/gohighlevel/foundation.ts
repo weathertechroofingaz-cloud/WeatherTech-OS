@@ -4,6 +4,36 @@ export const goHighLevelReadinessEndpoint =
 export const goHighLevelSyncFoundationMigration =
   "0022_gohighlevel_sync_foundation.sql";
 
+export const goHighLevelOAuthBridgeMigration =
+  "0036_gohighlevel_oauth_communications_bridge.sql";
+
+export const goHighLevelOAuthEndpoints = {
+  start: "/api/integrations/gohighlevel/oauth/start",
+  callback: "/api/oauth/marketplace/callback",
+  sync: "/api/integrations/gohighlevel/sync",
+  webhook: "/api/integrations/gohighlevel/webhook",
+} as const;
+
+export const goHighLevelOAuthScopes = [
+  "locations.readonly",
+  "contacts.readonly",
+  "conversations.readonly",
+  "conversations/message.readonly",
+  "calendars.readonly",
+  "calendars/events.readonly",
+  "opportunities.readonly",
+  // HighLevel exposes its documented Reviews read endpoints under Products.
+  "products.readonly",
+] as const;
+
+export const goHighLevelOAuthRequiredEnvVars = [
+  "GHL_CLIENT_ID",
+  "GHL_CLIENT_SECRET",
+  "GHL_REDIRECT_URI",
+  "GHL_MARKETPLACE_INSTALL_URL",
+  "GHL_TOKEN_ENCRYPTION_KEY",
+] as const;
+
 export type GoHighLevelLiveSyncStatus =
   | "not_connected"
   | "credentials_required"
@@ -124,4 +154,12 @@ export const goHighLevelPhaseOneGuardrails = [
   "Sync mappings store external IDs and conflict state instead of overwriting records.",
   "Credentials stay server-side and are never stored in browser state.",
   "Sync logs store safe metadata and fingerprints, not raw secrets or full contact payloads.",
+];
+
+export const goHighLevelOAuthGuardrails = [
+  "Marketplace OAuth tokens are encrypted and available only to server-side service operations.",
+  "The approved scope set is read-only; WeatherTech OS cannot send messages or modify HighLevel pipelines.",
+  "Every connected HighLevel location is mapped to exactly one WeatherTech OS company.",
+  "Webhook signatures are verified before payload parsing or persistence.",
+  "Provider IDs make sync and webhook retries idempotent without creating duplicate CRM records.",
 ];

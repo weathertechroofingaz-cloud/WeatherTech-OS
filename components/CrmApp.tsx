@@ -236,6 +236,9 @@ import {
 } from "../lib/crm/productionReadiness";
 import {
   goHighLevelLiveSyncStatusLabels,
+  goHighLevelOAuthBridgeMigration,
+  goHighLevelOAuthEndpoints,
+  goHighLevelOAuthScopes,
   goHighLevelPhaseOneGuardrails,
   goHighLevelReadinessEndpoint,
   goHighLevelSyncFoundationMigration,
@@ -42176,36 +42179,6 @@ function getIntegrationStatusTone(status: IntegrationConnectionStatus) {
   return status === "connected" ? "green" : status === "paused" ? "amber" : "amber";
 }
 
-type GoHighLevelConnectionTestResult = {
-  ok: boolean;
-  dryRun: boolean;
-  communicationsSent: boolean;
-  status:
-    | "ready"
-    | "missing_location"
-    | "missing_token"
-    | "auth_failed"
-    | "read_check_unavailable";
-  message: string;
-  tokenConfigured: boolean;
-  requiredEnvVars: string[];
-  configuredLocationIds: string[];
-  locations: Array<{
-    key: "weathertech" | "ihc";
-    label: string;
-    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
-    locationId: string | null;
-    configured: boolean;
-    readCheck: "skipped" | "ok" | "unsupported" | "unauthorized" | "error";
-    statusCode: number | null;
-    message: string;
-    locationName: string | null;
-  }>;
-  apiBaseUrl: string;
-  checkedAt: string;
-  nextStep: string;
-};
-
 type GoHighLevelReadinessResult = {
   ok: boolean;
   dryRun: boolean;
@@ -42221,14 +42194,26 @@ type GoHighLevelReadinessResult = {
   apiBaseUrl: string;
   checkedAt: string;
   accountMetadata: {
-    authMethod: "private_integration_token";
-    oauthSupported: false;
-    locationEndpoint: string;
-    pipelineEndpoint: string;
-    opportunitySearchEndpoint: string;
-    contactsEndpoint: string;
+    authMethod: "private_integration_token" | "marketplace_oauth";
+    oauthSupported: boolean;
+    accessMode?: "read_only";
+    webhookVerification?: string;
+    locationEndpoint?: string;
+    pipelineEndpoint?: string;
+    opportunitySearchEndpoint?: string;
+    contactsEndpoint?: string;
   };
-  locations: GoHighLevelConnectionTestResult["locations"];
+  locations: Array<{
+    key: string;
+    label: string;
+    envVar: string;
+    locationId: string | null;
+    configured: boolean;
+    readCheck: "skipped" | "ok" | "unsupported" | "unauthorized" | "error";
+    statusCode: number | null;
+    message: string;
+    locationName: string | null;
+  }>;
   pipelines: Array<{
     key: "weathertech" | "ihc";
     label: string;
@@ -42261,6 +42246,18 @@ type GoHighLevelReadinessResult = {
     message: string;
   };
   syncResourceCount: number;
+  oauth?: {
+    configured: boolean;
+    missing: string[];
+    malformed: string[];
+    syncEnabled: boolean;
+    scopes: string[];
+    endpoints: typeof goHighLevelOAuthEndpoints;
+    authenticatedLocationCount: number;
+    connectedLocationCount: number;
+    encryptedCredentialCount: number;
+    allScopesValid: boolean;
+  };
   nextStep: string;
 };
 
@@ -42516,50 +42513,6 @@ function formatOptionalDateTime(value: string | null | undefined) {
   }
 
   return formatDateTime(value);
-}
-
-function getStringSetting(
-  settings: Record<string, unknown> | undefined,
-  key: string,
-) {
-  const value = settings?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function getStringListSetting(
-  settings: Record<string, unknown> | undefined,
-  key: string,
-) {
-  const value = settings?.[key];
-
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
-  }
-
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-}
-
-function getGoHighLevelLocationIds(
-  connection: IntegrationConnectionRecord | undefined,
-  testResult: GoHighLevelConnectionTestResult | null,
-) {
-  const settings = connection?.settings;
-  const connectionLocationIds = [
-    getStringSetting(settings, "locationId"),
-    ...getStringListSetting(settings, "locationIds"),
-  ].filter((locationId): locationId is string => Boolean(locationId));
-  const locationIds = connectionLocationIds.length
-    ? connectionLocationIds
-    : testResult?.configuredLocationIds ?? [];
-
-  return Array.from(new Set(locationIds));
 }
 
 function getIntegrationSyncLogStatusTone(
@@ -43430,6 +43383,9 @@ function IntegrationsView({
   const [gmailCompanyId, setGmailCompanyId] = useState(
     snapshot.companies[0]?.id ?? "",
   );
+  const [goHighLevelCompanyId, setGoHighLevelCompanyId] = useState(
+    snapshot.companies[0]?.id ?? "",
+  );
   const googleConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "google_calendar",
   );
@@ -43482,7 +43438,10 @@ function IntegrationsView({
   const goHighLevelConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "gohighlevel",
   );
-  const primaryGoHighLevelConnection = goHighLevelConnections[0];
+  const primaryGoHighLevelConnection =
+    goHighLevelConnections.find(
+      (connection) => connection.company_id === goHighLevelCompanyId,
+    ) ?? goHighLevelConnections[0];
   const goHighLevelSyncLogs = snapshot.integrationSyncLogs.filter(
     (log) => log.provider === "gohighlevel",
   );
@@ -43500,13 +43459,13 @@ function IntegrationsView({
   const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
     ? getIntegrationSyncLogTimestamp(latestGoHighLevelSyncLog)
     : null;
-  const [goHighLevelTestResult, setGoHighLevelTestResult] =
-    useState<GoHighLevelConnectionTestResult | null>(null);
-  const [isTestingGoHighLevel, setIsTestingGoHighLevel] = useState(false);
   const [goHighLevelReadinessResult, setGoHighLevelReadinessResult] =
     useState<GoHighLevelReadinessResult | null>(null);
   const [isCheckingGoHighLevelReadiness, setIsCheckingGoHighLevelReadiness] =
     useState(false);
+  const [isStartingGoHighLevelOAuth, setIsStartingGoHighLevelOAuth] =
+    useState(false);
+  const [isSyncingGoHighLevel, setIsSyncingGoHighLevel] = useState(false);
   const [goHighLevelLeadDryRunResult, setGoHighLevelLeadDryRunResult] =
     useState<GoHighLevelLeadDryRunResult | null>(null);
   const [isRunningGoHighLevelLeadDryRun, setIsRunningGoHighLevelLeadDryRun] =
@@ -43541,10 +43500,6 @@ function IntegrationsView({
     snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
     snapshot.leads[0] ??
     null;
-  const goHighLevelLocationIds = getGoHighLevelLocationIds(
-    primaryGoHighLevelConnection,
-    goHighLevelTestResult,
-  );
   const goHighLevelReadinessStatus =
     goHighLevelReadinessResult?.status ??
     (primaryGoHighLevelConnection
@@ -43581,16 +43536,11 @@ function IntegrationsView({
       : "blue";
   const goHighLevelStatusLabel = primaryGoHighLevelConnection
     ? integrationStatusLabel(primaryGoHighLevelConnection.status)
-    : goHighLevelTestResult?.ok
-      ? "Server ready"
-      : goHighLevelSyncSummary.total
-        ? "Logs active"
-      : goHighLevelTestResult
-        ? "Needs config"
-        : "Not saved";
+    : goHighLevelSyncSummary.total
+      ? "Logs active"
+      : "Not connected";
   const goHighLevelStatusTone =
     primaryGoHighLevelConnection?.status === "connected" ||
-    goHighLevelTestResult?.ok ||
     (goHighLevelSyncSummary.total > 0 && goHighLevelSyncSummary.failed === 0)
       ? "green"
       : "amber";
@@ -43600,10 +43550,6 @@ function IntegrationsView({
       ? formatDateTime(primaryGoHighLevelConnection.last_sync_at)
       : latestGoHighLevelLogAt
         ? formatDateTime(latestGoHighLevelLogAt)
-      : goHighLevelTestResult
-        ? goHighLevelTestResult.ok
-          ? "Server config ready"
-          : "Configuration incomplete"
         : "Not synced yet";
   const twilioStatus = twilioTestResult?.status ?? "not_checked";
   const twilioFromNumberMissing =
@@ -44028,36 +43974,6 @@ function IntegrationsView({
     }
   };
 
-  const handleTestGoHighLevelConnection = async () => {
-    setIsTestingGoHighLevel(true);
-    setGoHighLevelTestResult(null);
-
-    try {
-      const response = await fetch(`${goHighLevelEnvVars.testEndpoint}?probe=1`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      });
-      const result = (await response.json()) as GoHighLevelConnectionTestResult;
-      setGoHighLevelTestResult(result);
-
-      if (response.ok && result.ok) {
-        onNotice("GoHighLevel server configuration test passed. No messages were sent.");
-      } else {
-        onError(result.message);
-      }
-    } catch (error) {
-      onError(
-        error instanceof Error
-          ? error.message
-          : "Could not test GoHighLevel configuration.",
-      );
-    } finally {
-      setIsTestingGoHighLevel(false);
-    }
-  };
-
   const handleCheckGoHighLevelReadiness = async () => {
     setIsCheckingGoHighLevelReadiness(true);
     setGoHighLevelReadinessResult(null);
@@ -44073,7 +43989,7 @@ function IntegrationsView({
       setGoHighLevelReadinessResult(result);
 
       if (result.ok) {
-        onNotice("GoHighLevel readiness checked. No live sync ran.");
+        onNotice("GoHighLevel Marketplace OAuth readiness checked. No sync ran.");
       } else {
         onError(result.message);
       }
@@ -44085,6 +44001,85 @@ function IntegrationsView({
       );
     } finally {
       setIsCheckingGoHighLevelReadiness(false);
+    }
+  };
+
+  const handleStartGoHighLevelOAuth = async () => {
+    if (!goHighLevelCompanyId) {
+      onError("Select a company before connecting HighLevel.");
+      return;
+    }
+
+    setIsStartingGoHighLevelOAuth(true);
+    try {
+      const response = await fetch(goHighLevelOAuthEndpoints.start, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyId: goHighLevelCompanyId,
+          redirectPath: "/?view=integrations",
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        authorizationUrl: string | null;
+        message: string;
+      };
+      if (!response.ok || !result.ok || !result.authorizationUrl) {
+        throw new Error(result.message || "HighLevel authorization could not start.");
+      }
+      window.location.assign(result.authorizationUrl);
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "HighLevel authorization could not start.",
+      );
+      setIsStartingGoHighLevelOAuth(false);
+    }
+  };
+
+  const handleSyncGoHighLevel = async () => {
+    if (!primaryGoHighLevelConnection) {
+      onError("Connect a HighLevel location for the selected company first.");
+      return;
+    }
+
+    setIsSyncingGoHighLevel(true);
+    try {
+      const response = await fetch(goHighLevelOAuthEndpoints.sync, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          integrationConnectionId: primaryGoHighLevelConnection.id,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        message: string;
+        totalFetched?: number;
+        totalSaved?: number;
+      };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "HighLevel synchronization failed.");
+      }
+      onNotice(
+        `HighLevel inbound sync completed: ${result.totalFetched ?? 0} read, ${result.totalSaved ?? 0} stored.`,
+      );
+      await onReload();
+      await handleCheckGoHighLevelReadiness();
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : "HighLevel synchronization failed.",
+      );
+    } finally {
+      setIsSyncingGoHighLevel(false);
     }
   };
 
@@ -46055,12 +46050,12 @@ function IntegrationsView({
                 Settings / Integrations / GoHighLevel
               </p>
               <h3 className="mt-1 text-xl font-bold text-slate-950">
-                Automation bridge readiness
+                Marketplace OAuth communications bridge
               </h3>
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
-                GoHighLevel can receive lead and lifecycle events from WeatherTech OS
-                after the server-side client, sync logs, retry handling, and webhook
-                receiver are approved and wired.
+                Connect each company to its HighLevel location, then run owner-approved
+                read-only synchronization for contacts, communications, calendars,
+                opportunities, and reviews.
               </p>
             </div>
             <Badge label={goHighLevelStatusLabel} tone={goHighLevelStatusTone} />
@@ -46069,8 +46064,12 @@ function IntegrationsView({
           <div className="mt-5 grid gap-3 md:grid-cols-4">
             <ProfileStat label="Connection" value={goHighLevelStatusLabel} />
             <ProfileStat
-              label="Location IDs"
-              value={goHighLevelLocationIds.length || "None"}
+              label="Company mapping"
+              value={
+                primaryGoHighLevelConnection?.company_id === goHighLevelCompanyId
+                  ? primaryGoHighLevelConnection.display_name
+                  : "Not connected"
+              }
             />
             <ProfileStat label="Last sync" value={goHighLevelLastSyncLabel} />
             <ProfileStat
@@ -46087,18 +46086,29 @@ function IntegrationsView({
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-sm font-bold text-slate-950">
-                    GoHighLevel live synchronization foundation
+                    GoHighLevel OAuth and inbound synchronization
                   </p>
                   <Badge
                     label={goHighLevelReadinessStatusLabel}
                     tone={getGoHighLevelReadinessStatusTone(goHighLevelReadinessStatus)}
                   />
-                  <Badge label="No live sync" tone="blue" />
+                  <Badge
+                    label={
+                      goHighLevelReadinessResult?.oauth?.syncEnabled
+                        ? "Read-only sync enabled"
+                        : "Inbound sync disabled"
+                    }
+                    tone={
+                      goHighLevelReadinessResult?.oauth?.syncEnabled
+                        ? "green"
+                        : "blue"
+                    }
+                  />
                 </div>
                 <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                  Phase 1 validates credentials, location routing, pipeline discovery,
-                  external IDs, duplicate protection, conflict detection, sync
-                  timestamps, and retry readiness without creating provider records.
+                  Marketplace OAuth uses the exact approved read-only scopes. Tokens
+                  stay encrypted server-side, webhook signatures are verified before
+                  parsing, and provider IDs make retries safe.
                 </p>
               </div>
               <button
@@ -46112,6 +46122,95 @@ function IntegrationsView({
                   ? "Checking readiness"
                   : "Check sync readiness"}
               </button>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-indigo-200 bg-white p-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)] lg:items-end">
+                <label className="text-sm font-semibold text-slate-700">
+                  Company mapping
+                  <select
+                    value={goHighLevelCompanyId}
+                    onChange={(event) => setGoHighLevelCompanyId(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {snapshot.companies.map((company) => (
+                      <option key={company.id} value={company.id}>
+                        {company.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleStartGoHighLevelOAuth()}
+                    disabled={isStartingGoHighLevelOAuth || !goHighLevelCompanyId}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <PlugZap className="h-4 w-4" />
+                    {isStartingGoHighLevelOAuth
+                      ? "Opening HighLevel"
+                      : primaryGoHighLevelConnection?.company_id === goHighLevelCompanyId
+                        ? "Reconnect HighLevel"
+                        : "Connect HighLevel"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSyncGoHighLevel()}
+                    disabled={
+                      isSyncingGoHighLevel ||
+                      primaryGoHighLevelConnection?.company_id !== goHighLevelCompanyId ||
+                      !goHighLevelReadinessResult?.oauth?.syncEnabled
+                    }
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-indigo-300 bg-white px-4 py-2 text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <RefreshCcw className="h-4 w-4" />
+                    {isSyncingGoHighLevel ? "Syncing" : "Sync inbound data"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                <ProfileStat
+                  label="OAuth configuration"
+                  value={
+                    goHighLevelReadinessResult?.oauth
+                      ? goHighLevelReadinessResult.oauth.configured
+                        ? "Configured"
+                        : "Incomplete"
+                      : "Not checked"
+                  }
+                />
+                <ProfileStat
+                  label="Authenticated locations"
+                  value={
+                    goHighLevelReadinessResult?.oauth?.authenticatedLocationCount ?? 0
+                  }
+                />
+                <ProfileStat
+                  label="Approved scopes"
+                  value={goHighLevelOAuthScopes.length}
+                />
+                <ProfileStat
+                  label="Token storage"
+                  value={
+                    goHighLevelReadinessResult?.oauth?.encryptedCredentialCount
+                      ? "Encrypted"
+                      : "No token stored"
+                  }
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {goHighLevelOAuthScopes.map((scope) => (
+                  <span
+                    key={scope}
+                    className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-xs text-slate-700"
+                  >
+                    {scope}
+                  </span>
+                ))}
+              </div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -46130,7 +46229,7 @@ function IntegrationsView({
                     ? goHighLevelReadinessResult.migration.applied
                       ? "Applied"
                       : "Required"
-                    : goHighLevelSyncFoundationMigration
+                    : goHighLevelOAuthBridgeMigration
                 }
               />
               <ProfileStat
@@ -46294,85 +46393,6 @@ function IntegrationsView({
                       </div>
                     ))}
                   </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-sm font-bold text-slate-950">
-                  Configured location IDs
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  These IDs are safe to display. Access tokens stay on the server.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleTestGoHighLevelConnection()}
-                disabled={isTestingGoHighLevel}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <RefreshCcw className="h-4 w-4" />
-                {isTestingGoHighLevel ? "Testing" : "Test server config"}
-              </button>
-            </div>
-            {goHighLevelLocationIds.length ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {goHighLevelLocationIds.map((locationId) => (
-                  <span
-                    key={locationId}
-                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
-                  >
-                    {locationId}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4">
-                <EmptyState label="No GoHighLevel location IDs configured yet." />
-              </div>
-            )}
-            {goHighLevelTestResult ? (
-              <div className="mt-4 rounded-md border border-slate-200 bg-white p-3 text-sm">
-                <p className="font-semibold text-slate-950">
-                  {goHighLevelTestResult.message}
-                </p>
-                <p className="mt-1 text-slate-500">
-                  Dry run: {goHighLevelTestResult.dryRun ? "yes" : "no"} ·
-                  Communications sent:{" "}
-                  {goHighLevelTestResult.communicationsSent ? "yes" : "no"} ·
-                  Checked {formatDateTime(goHighLevelTestResult.checkedAt)}
-                </p>
-                <div className="mt-3 grid gap-2">
-                  {goHighLevelTestResult.locations.map((location) => (
-                    <div
-                      key={location.key}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-2"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-semibold text-slate-950">
-                          {location.label}
-                        </p>
-                        <Badge
-                          label={location.readCheck.replace("_", " ")}
-                          tone={
-                            location.readCheck === "ok"
-                              ? "green"
-                              : location.readCheck === "skipped"
-                                ? "blue"
-                                : "amber"
-                          }
-                        />
-                      </div>
-                      <p className="mt-1 text-slate-500">
-                        {location.locationName ?? location.locationId ?? location.envVar} ·{" "}
-                        {location.message}
-                      </p>
-                    </div>
-                  ))}
                 </div>
               </div>
             ) : null}
@@ -46716,31 +46736,32 @@ function IntegrationsView({
             <div className="mt-4 grid gap-3 text-sm">
               {[
                 {
-                  label: "Token",
-                  value: goHighLevelEnvVars.privateIntegrationToken,
+                  label: "OAuth client",
+                  value: "GHL_CLIENT_ID",
                 },
                 {
-                  label: "WeatherTech",
-                  value: goHighLevelEnvVars.weatherTechLocationId,
+                  label: "OAuth secret",
+                  value: "GHL_CLIENT_SECRET",
                 },
                 {
-                  label: "IHC",
-                  value: goHighLevelEnvVars.ihcLocationId,
-                },
-                { label: "API base", value: goHighLevelEnvVars.apiBaseUrl },
-                { label: "Test route", value: goHighLevelEnvVars.testEndpoint },
-                {
-                  label: "Readiness route",
-                  value: goHighLevelEnvVars.readinessEndpoint,
+                  label: "Redirect URI",
+                  value: "GHL_REDIRECT_URI",
                 },
                 {
-                  label: "Lead dry run",
-                  value: goHighLevelEnvVars.leadDryRunEndpoint,
+                  label: "Marketplace install URL",
+                  value: "GHL_MARKETPLACE_INSTALL_URL",
                 },
                 {
-                  label: "Sync migration",
-                  value: goHighLevelSyncFoundationMigration,
+                  label: "Token encryption",
+                  value: "GHL_TOKEN_ENCRYPTION_KEY",
                 },
+                {
+                  label: "Inbound sync gate",
+                  value: "GHL_SYNC_ENABLED",
+                },
+                { label: "OAuth start", value: goHighLevelOAuthEndpoints.start },
+                { label: "Webhook", value: goHighLevelOAuthEndpoints.webhook },
+                { label: "Migration", value: goHighLevelOAuthBridgeMigration },
               ].map((item) => (
                 <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase text-slate-500">
@@ -46759,7 +46780,7 @@ function IntegrationsView({
             <div className="mt-4 grid gap-3 text-sm text-slate-600">
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
-                <p>GoHighLevel tokens are read only in the server route.</p>
+                <p>OAuth tokens are encrypted and never returned to the browser.</p>
               </div>
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
@@ -46767,11 +46788,11 @@ function IntegrationsView({
               </div>
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
-                <p>The test endpoint is a dry run and does not send SMS, email, or customer messages.</p>
+                <p>The approved scopes cannot send SMS or modify contacts, calendars, or pipelines.</p>
               </div>
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
-                <p>Lead sync dry runs prepare payloads and sync logs without triggering workflows or campaigns.</p>
+                <p>Current and legacy webhook signatures are verified against the exact raw request body.</p>
               </div>
             </div>
           </section>

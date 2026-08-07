@@ -128,6 +128,10 @@ const expectedMigrations = [
     "0035_office_task_source_delete_cascade.sql",
     "768bb6177263ee5a217a1c732e66a77f85a5e7c6330013c91e28d0af970ce277",
   ],
+  [
+    "0036_gohighlevel_oauth_communications_bridge.sql",
+    "8fbbc0cc1df6f2d02af5989d6e62d9b91a40e1f4db17aa9f9ad5ed9ca11a6f38",
+  ],
 ];
 
 const files = fs
@@ -180,7 +184,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0035 with expected names.");
+  failures.push("Migration files must be sequential from 0001 through 0036 with expected names.");
 }
 
 for (let index = 0; index < expectedFiles.length; index += 1) {
@@ -207,6 +211,7 @@ const proposalBuilderIndex = files.indexOf("0032_estimate_proposal_builder_v2.sq
 const aiToolsIndex = files.indexOf("0033_ai_tools_operating_brain.sql");
 const officeTasksIndex = files.indexOf("0034_office_operations_daily_task_queue.sql");
 const officeTaskCascadeIndex = files.indexOf("0035_office_task_source_delete_cascade.sql");
+const goHighLevelOAuthIndex = files.indexOf("0036_gohighlevel_oauth_communications_bridge.sql");
 
 if (
   integrationSyncIndex === -1 ||
@@ -297,10 +302,15 @@ if (
   aiToolsIndex === -1 ||
   officeTasksIndex === -1 ||
   officeTaskCascadeIndex === -1 ||
-  !(aiToolsIndex < officeTasksIndex && officeTasksIndex < officeTaskCascadeIndex) ||
-  officeTaskCascadeIndex !== files.length - 1
+  goHighLevelOAuthIndex === -1 ||
+  !(
+    aiToolsIndex < officeTasksIndex &&
+    officeTasksIndex < officeTaskCascadeIndex &&
+    officeTaskCascadeIndex < goHighLevelOAuthIndex
+  ) ||
+  goHighLevelOAuthIndex !== files.length - 1
 ) {
-  failures.push("Office Operations migrations must order after AI Tools 2.0 and remain last.");
+  failures.push("GoHighLevel OAuth must order after the Office Operations migrations and remain last.");
 }
 
 for (const file of files) {
@@ -1156,7 +1166,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0035.",
+  "Verified raw filename order matches numeric order from 0001 through 0036.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -1193,6 +1203,9 @@ console.log(
 );
 console.log(
   "Verified 0034_office_operations_daily_task_queue.sql precedes 0035_office_task_source_delete_cascade.sql.",
+);
+console.log(
+  "Verified 0035_office_task_source_delete_cascade.sql precedes 0036_gohighlevel_oauth_communications_bridge.sql.",
 );
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(

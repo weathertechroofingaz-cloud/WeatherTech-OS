@@ -7839,7 +7839,7 @@ async function testProductionReadinessCenter(browser, tab, baseUrl) {
         text.includes("google calendar") &&
         text.includes("gmail / google workspace email foundation") &&
         text.includes("twilio") &&
-        text.includes("gohighlevel live synchronization foundation")
+        text.includes("marketplace oauth communications bridge")
       );
     },
     "production readiness routes to integration center",

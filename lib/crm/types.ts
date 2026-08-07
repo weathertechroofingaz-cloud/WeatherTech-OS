@@ -514,7 +514,7 @@ export type SmsDeliveryStatus =
   | "undelivered"
   | "failed"
   | "received";
-export type BusinessPhoneProvider = "twilio" | "twilio_sms";
+export type BusinessPhoneProvider = "twilio" | "twilio_sms" | "gohighlevel";
 export type BusinessPhoneCommunicationChannel = "sms" | "voice" | "sms_voice";
 export type BusinessPhoneRoutingStatus =
   | "active"
@@ -1502,6 +1502,94 @@ export type GoHighLevelDiscoverySnapshotRecord = {
   updated_at: string;
 };
 
+export type GoHighLevelOauthStateRecord = {
+  id: string;
+  company_id: string;
+  initiated_by: string | null;
+  state_hash: string;
+  redirect_path: string;
+  requested_scopes: string[];
+  expires_at: string;
+  consumed_at: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelOauthCredentialRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  external_location_id: string;
+  external_company_id: string | null;
+  external_user_id: string | null;
+  encrypted_access_token: string;
+  encrypted_refresh_token: string;
+  bridge_version: string;
+  token_type: string;
+  scopes: string[];
+  user_type: "Location" | "Company";
+  token_expires_at: string;
+  last_refreshed_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelResourceType =
+  | "contact"
+  | "conversation"
+  | "message"
+  | "call"
+  | "calendar"
+  | "calendar_event"
+  | "pipeline"
+  | "opportunity"
+  | "review";
+
+export type GoHighLevelResourceSnapshotRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  resource_type: GoHighLevelResourceType;
+  external_id: string;
+  external_parent_id: string | null;
+  external_contact_id: string | null;
+  customer_id: string | null;
+  lead_id: string | null;
+  direction: ProviderEventDirection | null;
+  status: string | null;
+  body_preview: string | null;
+  occurred_at: string | null;
+  provider_updated_at: string | null;
+  payload_summary: Record<string, unknown>;
+  last_synced_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelWebhookEventRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  webhook_id: string;
+  event_type: string;
+  external_location_id: string;
+  external_contact_id: string | null;
+  external_conversation_id: string | null;
+  external_message_id: string | null;
+  signature_version: "ed25519" | "rsa_legacy";
+  processing_status: "received" | "processed" | "ignored" | "failed";
+  attempt_count: number;
+  payload_summary: Record<string, unknown>;
+  error_message: string | null;
+  occurred_at: string | null;
+  processed_at: string | null;
+  received_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LeadSourceMappingRecord = {
   id: string;
   provider: LeadSourceMappingProvider;
@@ -1937,7 +2025,7 @@ export type CallRecord = {
   customer_id: string | null;
   lead_id: string | null;
   job_id: string | null;
-  provider: Extract<BusinessPhoneProvider, "twilio">;
+  provider: Extract<BusinessPhoneProvider, "twilio" | "gohighlevel">;
   provider_account_sid: string | null;
   provider_call_sid: string | null;
   provider_parent_call_sid: string | null;
@@ -2818,6 +2906,49 @@ export type GoHighLevelDiscoverySnapshotInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type GoHighLevelOauthStateInsert = Omit<
+  GoHighLevelOauthStateRecord,
+  "id" | "created_at" | "updated_at" | "consumed_at" | "failure_reason"
+> &
+  Partial<
+    Pick<GoHighLevelOauthStateRecord, "id" | "consumed_at" | "failure_reason">
+  >;
+
+export type GoHighLevelOauthCredentialInsert = Omit<
+  GoHighLevelOauthCredentialRecord,
+  | "id"
+  | "created_at"
+  | "updated_at"
+  | "bridge_version"
+  | "last_refreshed_at"
+  | "revoked_at"
+> &
+  Partial<
+    Pick<
+      GoHighLevelOauthCredentialRecord,
+      "id" | "bridge_version" | "last_refreshed_at" | "revoked_at"
+    >
+  >;
+
+export type GoHighLevelResourceSnapshotInsert = Omit<
+  GoHighLevelResourceSnapshotRecord,
+  "id" | "created_at" | "updated_at" | "last_synced_at"
+> &
+  Partial<
+    Pick<GoHighLevelResourceSnapshotRecord, "id" | "last_synced_at">
+  >;
+
+export type GoHighLevelWebhookEventInsert = Omit<
+  GoHighLevelWebhookEventRecord,
+  "id" | "created_at" | "updated_at" | "received_at" | "attempt_count"
+> &
+  Partial<
+    Pick<
+      GoHighLevelWebhookEventRecord,
+      "id" | "received_at" | "attempt_count"
+    >
+  >;
+
 export type LeadSourceMappingInput = {
   provider: LeadSourceMappingProvider;
   external_source_id?: string | null;
@@ -3094,7 +3225,7 @@ export type CallRecordInput = {
   customer_id?: string | null;
   lead_id?: string | null;
   job_id?: string | null;
-  provider?: Extract<BusinessPhoneProvider, "twilio">;
+  provider?: Extract<BusinessPhoneProvider, "twilio" | "gohighlevel">;
   provider_account_sid?: string | null;
   provider_call_sid?: string | null;
   provider_parent_call_sid?: string | null;
@@ -3950,6 +4081,30 @@ export type Database = {
         Update: Partial<
           Database["public"]["Tables"]["gohighlevel_discovery_snapshots"]["Insert"]
         >;
+        Relationships: [];
+      };
+      gohighlevel_oauth_states: {
+        Row: GoHighLevelOauthStateRecord;
+        Insert: GoHighLevelOauthStateInsert;
+        Update: Partial<GoHighLevelOauthStateInsert>;
+        Relationships: [];
+      };
+      gohighlevel_oauth_credentials: {
+        Row: GoHighLevelOauthCredentialRecord;
+        Insert: GoHighLevelOauthCredentialInsert;
+        Update: Partial<GoHighLevelOauthCredentialInsert>;
+        Relationships: [];
+      };
+      gohighlevel_resource_snapshots: {
+        Row: GoHighLevelResourceSnapshotRecord;
+        Insert: GoHighLevelResourceSnapshotInsert;
+        Update: Partial<GoHighLevelResourceSnapshotInsert>;
+        Relationships: [];
+      };
+      gohighlevel_webhook_events: {
+        Row: GoHighLevelWebhookEventRecord;
+        Insert: GoHighLevelWebhookEventInsert;
+        Update: Partial<GoHighLevelWebhookEventInsert>;
         Relationships: [];
       };
       lead_source_mappings: {
