@@ -371,7 +371,7 @@ export async function exchangeGoHighLevelOAuthCode({
       client_secret: config.clientSecret,
       grant_type: "authorization_code",
       code,
-      user_type: "Location",
+      user_type: "Company",
       redirect_uri: config.redirectUri,
     },
   });
@@ -509,27 +509,35 @@ export async function resolveGoHighLevelCompanyLocation({
   accessToken,
   companyId,
   approvedLocationIds,
+  excludedLocationIds = [],
   fetchImpl = fetch,
 }: {
   accessToken: string;
   companyId: string;
   approvedLocationIds: string[];
+  excludedLocationIds?: string[];
   fetchImpl?: FetchLike;
 }): Promise<HighLevelCompanyLocationResolutionResult> {
   const uniqueApprovedLocationIds = [...new Set(approvedLocationIds)];
-  if (uniqueApprovedLocationIds.length === 1) {
+  const excludedLocations = new Set(excludedLocationIds);
+  const availableApprovedLocationIds = uniqueApprovedLocationIds.filter(
+    (locationId) => !excludedLocations.has(locationId),
+  );
+  if (uniqueApprovedLocationIds.length && availableApprovedLocationIds.length === 1) {
     return {
       ok: true,
-      locationId: uniqueApprovedLocationIds[0],
+      locationId: availableApprovedLocationIds[0],
       source: "approved_locations",
     };
   }
-  if (uniqueApprovedLocationIds.length > 1) {
+  if (uniqueApprovedLocationIds.length) {
     return {
       ok: false,
       reason: "location_count_invalid",
       error:
-        "HighLevel returned multiple approved sub-accounts for one company mapping.",
+        availableApprovedLocationIds.length === 0
+          ? "Every HighLevel-approved sub-account is already mapped to another WeatherTech OS company."
+          : "HighLevel returned multiple unmapped approved sub-accounts for one company mapping.",
     };
   }
 
@@ -545,20 +553,23 @@ export async function resolveGoHighLevelCompanyLocation({
       error: installedLocations.error,
     };
   }
-  if (installedLocations.locations.length !== 1) {
+  const availableInstalledLocations = installedLocations.locations.filter(
+    (location) => !excludedLocations.has(location.id),
+  );
+  if (availableInstalledLocations.length !== 1) {
     return {
       ok: false,
       reason: "location_count_invalid",
       error:
-        installedLocations.locations.length === 0
-          ? "HighLevel installed-location discovery returned no installed sub-accounts."
-          : "HighLevel installed-location discovery returned multiple installed sub-accounts for one company mapping.",
+        availableInstalledLocations.length === 0
+          ? "HighLevel installed-location discovery returned no unmapped sub-accounts."
+          : "HighLevel installed-location discovery returned multiple unmapped sub-accounts for one company mapping.",
     };
   }
 
   return {
     ok: true,
-    locationId: installedLocations.locations[0].id,
+    locationId: availableInstalledLocations[0].id,
     source: "installed_locations",
   };
 }

@@ -206,10 +206,32 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    const { data: existingCompanyMappings, error: mappingLookupError } =
+      await serviceClient
+        .from("gohighlevel_oauth_credentials")
+        .select("external_location_id")
+        .neq("company_id", stateRecord.company_id);
+    if (mappingLookupError) {
+      await recordFailure({
+        serviceClient,
+        stateId: stateRecord.id,
+        companyId: stateRecord.company_id,
+        stateHash,
+        message: "Existing HighLevel company mappings could not be verified.",
+      });
+      return redirectAndClearState(request, redirectPath, {
+        gohighlevel: "error",
+        reason: "oauth_location_mapping_lookup_failed",
+      });
+    }
+
     const locationResolution = await resolveGoHighLevelCompanyLocation({
       accessToken: tokenPayload.accessToken,
       companyId: tokenPayload.companyId,
       approvedLocationIds: tokenPayload.approvedLocations,
+      excludedLocationIds: (existingCompanyMappings ?? []).map(
+        (mapping) => mapping.external_location_id,
+      ),
     });
     if (!locationResolution.ok) {
       await recordFailure({

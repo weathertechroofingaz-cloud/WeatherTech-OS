@@ -168,7 +168,11 @@ try {
     "authorization_code",
     "Authorization exchange uses official snake_case fields",
   );
-  assertEqual(exchangeBody.get("user_type"), "Location", "OAuth token is location scoped");
+  assertEqual(
+    exchangeBody.get("user_type"),
+    "Company",
+    "Agency-only installation requests the provider-documented company token",
+  );
   assertEqual(exchangeBody.get("clientId"), null, "Camel-case token fields are not sent");
 
   const companyExchange = await oauth.exchangeGoHighLevelOAuthCode({
@@ -299,6 +303,45 @@ try {
     ambiguousCompanyResolution.ok,
     false,
     "Bulk company resolution rejects multiple installed sub-accounts",
+  );
+
+  const isolatedSecondCompanyResolution =
+    await oauth.resolveGoHighLevelCompanyLocation({
+      accessToken: "agency-access-token",
+      companyId: "agency-1",
+      approvedLocationIds: [],
+      excludedLocationIds: ["location-weathertech"],
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          items: [
+            { _id: "location-weathertech", isInstalled: true },
+            { _id: "location-ihc", isInstalled: true },
+          ],
+        }),
+    });
+  assertEqual(
+    isolatedSecondCompanyResolution.ok,
+    true,
+    "A second company resolves only the remaining unmapped installed sub-account",
+  );
+  assertEqual(
+    isolatedSecondCompanyResolution.locationId,
+    "location-ihc",
+    "Existing company mappings cannot be reassigned during location resolution",
+  );
+
+  const excludedApprovedLocation =
+    await oauth.resolveGoHighLevelCompanyLocation({
+      accessToken: "agency-access-token",
+      companyId: "agency-1",
+      approvedLocationIds: ["location-weathertech"],
+      excludedLocationIds: ["location-weathertech"],
+      fetchImpl: async () => jsonResponse(200, { items: [] }),
+    });
+  assertEqual(
+    excludedApprovedLocation.ok,
+    false,
+    "An approved location already owned by another company remains rejected",
   );
 
   const missingCompanyResolution = await oauth.resolveGoHighLevelCompanyLocation({
@@ -614,6 +657,8 @@ try {
     callbackRoute.includes("validateGoHighLevelGrantedScopes") &&
       callbackRoute.includes("exchangeGoHighLevelLocationToken") &&
       callbackRoute.includes("resolveGoHighLevelCompanyLocation") &&
+      callbackRoute.includes('.neq("company_id", stateRecord.company_id)') &&
+      callbackRoute.includes("excludedLocationIds") &&
       callbackRoute.includes("locationResolutionSource") &&
       callbackRoute.includes("encryptGoHighLevelToken") &&
       callbackRoute.includes("location_company_conflict") &&
