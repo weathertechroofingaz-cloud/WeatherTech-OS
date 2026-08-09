@@ -42,6 +42,7 @@ export type IntegrationProviderId =
   | "website_forms"
   | "gohighlevel"
   | "quickbooks_online"
+  | "stripe"
   | "docusign"
   | "dropbox_sign"
   | "future_provider";
@@ -970,6 +971,111 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       "Configure Intuit OAuth and company realmIds later. Live QuickBooks sync, accounting writes, and payment processing are disabled.",
   },
   {
+    id: "stripe",
+    label: "Stripe",
+    shortLabel: "Stripe",
+    family: "financial",
+    description:
+      "Owner-approved invoice and deposit payments for WeatherTech Roofing LLC with company isolation, idempotency, refunds, and signed webhook handling.",
+    connectionProviders: ["stripe"],
+    capabilities: ["payments", "webhooks", "crm_sync"],
+    iconKey: "accounting",
+    requiresCredentials: true,
+    supportsOAuth: false,
+    supportsWebhooks: true,
+    configurationFields: [
+      {
+        id: "secret_key",
+        label: "Server API key",
+        description:
+          "Live Stripe secret key stored only in the server environment for the verified WeatherTech Roofing account.",
+        required: true,
+        sensitive: true,
+        kind: "secret",
+      },
+      {
+        id: "weathertech_account",
+        label: "WeatherTech Stripe account",
+        description:
+          "Maps one verified live Stripe account exclusively to WeatherTech Roofing LLC. IHC remains disabled.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
+        id: "webhook_secret",
+        label: "Webhook signing secret",
+        description:
+          "Verifies the raw Stripe webhook payload before any provider event is trusted.",
+        required: true,
+        sensitive: true,
+        kind: "webhook",
+      },
+      {
+        id: "write_gates",
+        label: "Owner write gates",
+        description:
+          "Payment, refund, and webhook processing flags default to disabled and require explicit activation.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+    ],
+    credentialValidationChecks: [
+      {
+        id: "account_identity",
+        label: "Account identity check",
+        description:
+          "Read the authenticated Stripe account and require the configured account ID and WeatherTech Roofing business name to match.",
+      },
+      {
+        id: "company_isolation",
+        label: "Company isolation check",
+        description:
+          "Require every connection, payment object, refund, and webhook event to resolve to the WeatherTech Roofing company mapping.",
+      },
+      {
+        id: "idempotency",
+        label: "Duplicate prevention check",
+        description:
+          "Use a deterministic operation key in Stripe and a unique local mapping before retrying provider writes.",
+      },
+      {
+        id: "webhook",
+        label: "Webhook signature check",
+        description:
+          "Verify Stripe signatures against the unmodified raw request body and deduplicate provider event IDs.",
+      },
+      {
+        id: "owner_approval",
+        label: "Owner approval check",
+        description:
+          "Reject every payment or refund write unless a signed-in company owner explicitly submits approval.",
+      },
+    ],
+    oauthReadiness: {
+      enabled: false,
+      label: "Server credential flow",
+      callbackPath: null,
+      scopes: [],
+      summary:
+        "The verified direct Stripe account uses server-only API credentials rather than OAuth in this architecture.",
+    },
+    connectionSteps: [
+      "Apply the prepared company-isolation migration after owner review.",
+      "Store the verified WeatherTech Stripe account ID and server-only secrets outside source control.",
+      "Create the signed webhook endpoint and keep all write gates disabled.",
+      "Run one separately approved non-customer test payment and refund with idempotent retries.",
+      "Enable WeatherTech Roofing payments only after the controlled validation passes; keep IHC disabled.",
+    ],
+    disconnectSummary:
+      "Disconnecting pauses Stripe writes and webhook processing without deleting WeatherTech OS payment history.",
+    reconnectSummary:
+      "Reconnecting revalidates account identity, company mapping, signatures, idempotency, and owner-controlled write gates.",
+    summaryWhenDisconnected:
+      "Stripe remains disabled until the WeatherTech-only migration, server credentials, account mapping, webhook, and controlled test are approved.",
+  },
+  {
     id: "docusign",
     label: "DocuSign",
     shortLabel: "DocuSign",
@@ -1316,6 +1422,10 @@ function getRelatedActivityCount(snapshot: CrmSnapshot, metadata: IntegrationPro
     return snapshot.integrationSyncLogs.filter((log) => log.provider === "quickbooks_online").length;
   }
 
+  if (metadata.id === "stripe") {
+    return snapshot.integrationSyncLogs.filter((log) => log.provider === "stripe").length;
+  }
+
   if (metadata.id === "docusign" || metadata.id === "dropbox_sign") {
     return snapshot.integrationSyncLogs.filter((log) =>
       metadata.connectionProviders.includes(log.provider),
@@ -1363,6 +1473,14 @@ function getRelatedActivityLatestAt(snapshot: CrmSnapshot, metadata: Integration
     return getLatestTimestamp(
       snapshot.integrationSyncLogs
         .filter((log) => log.provider === "quickbooks_online")
+        .map((log) => log.completed_at ?? log.last_attempted_at ?? log.updated_at),
+    );
+  }
+
+  if (metadata.id === "stripe") {
+    return getLatestTimestamp(
+      snapshot.integrationSyncLogs
+        .filter((log) => log.provider === "stripe")
         .map((log) => log.completed_at ?? log.last_attempted_at ?? log.updated_at),
     );
   }

@@ -326,6 +326,7 @@ export type IntegrationProvider =
   | "gmail"
   | "google_maps"
   | "quickbooks_online"
+  | "stripe"
   | "twilio"
   | "twilio_sms"
   | "gohighlevel"
@@ -1206,6 +1207,104 @@ export type PaymentRecord = {
   notes: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type StripeCompanyAccountRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  stripe_account_id: string;
+  account_display_name: string;
+  country: string;
+  default_currency: string;
+  livemode: boolean;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  card_payments_status: "active" | "inactive" | "pending" | "restricted";
+  ach_payments_status: "active" | "inactive" | "pending" | "restricted";
+  payment_writes_enabled: boolean;
+  refund_writes_enabled: boolean;
+  webhook_processing_enabled: boolean;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StripeCompanyAccountInsert = Omit<
+  StripeCompanyAccountRecord,
+  "id" | "created_at" | "updated_at"
+> & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type StripeObjectMappingRecord = {
+  id: string;
+  company_id: string;
+  stripe_company_account_id: string;
+  integration_connection_id: string;
+  customer_id: string | null;
+  invoice_id: string | null;
+  payment_id: string | null;
+  local_object_type: "customer" | "invoice" | "deposit" | "payment" | "refund";
+  stripe_object_type:
+    | "customer"
+    | "invoice"
+    | "payment_intent"
+    | "charge"
+    | "checkout_session"
+    | "refund";
+  stripe_object_id: string;
+  operation_key: string;
+  status: string;
+  amount_cents: number | null;
+  currency: string | null;
+  livemode: boolean;
+  metadata_summary: Record<string, unknown>;
+  last_provider_request_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StripeObjectMappingInsert = Omit<
+  StripeObjectMappingRecord,
+  "id" | "created_at" | "updated_at"
+> & {
+  id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type StripeWebhookEventRecord = {
+  id: string;
+  company_id: string;
+  stripe_company_account_id: string;
+  integration_connection_id: string;
+  stripe_event_id: string;
+  stripe_account_id: string;
+  event_type: string;
+  api_version: string | null;
+  livemode: boolean;
+  processing_status: "received" | "processed" | "ignored" | "failed";
+  attempt_count: number;
+  payload_summary: Record<string, unknown>;
+  error_message: string | null;
+  provider_created_at: string | null;
+  processed_at: string | null;
+  received_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StripeWebhookEventInsert = Omit<
+  StripeWebhookEventRecord,
+  "id" | "received_at" | "created_at" | "updated_at"
+> & {
+  id?: string;
+  received_at?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type ProposalTemplateRecord = {
@@ -3933,6 +4032,24 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["payments"]["Insert"]>;
         Relationships: [];
       };
+      stripe_company_accounts: {
+        Row: StripeCompanyAccountRecord;
+        Insert: StripeCompanyAccountInsert;
+        Update: Partial<StripeCompanyAccountInsert>;
+        Relationships: [];
+      };
+      stripe_object_mappings: {
+        Row: StripeObjectMappingRecord;
+        Insert: StripeObjectMappingInsert;
+        Update: Partial<StripeObjectMappingInsert>;
+        Relationships: [];
+      };
+      stripe_webhook_events: {
+        Row: StripeWebhookEventRecord;
+        Insert: StripeWebhookEventInsert;
+        Update: Partial<StripeWebhookEventInsert>;
+        Relationships: [];
+      };
       proposal_templates: {
         Row: ProposalTemplateRecord;
         Insert: ProposalTemplateInsert;
@@ -4237,7 +4354,15 @@ export type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      wtos_record_stripe_payment: {
+        Args: {
+          target_mapping_id: string;
+          provider_paid_at: string;
+        };
+        Returns: string;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

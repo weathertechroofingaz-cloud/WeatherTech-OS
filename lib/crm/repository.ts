@@ -2731,23 +2731,61 @@ export async function getDocumentFileSignedUrl(
 export async function createPayment(client: CrmClient, input: PaymentInput) {
   let invoice: InvoiceRecord | null = null;
 
-  if (input.invoice_id && (input.status ?? "posted") === "posted") {
+  if (input.invoice_id) {
     const { data, error: invoiceError } = await client
       .from("invoices")
       .select("*")
       .eq("id", input.invoice_id)
+      .eq("company_id", input.company_id)
       .single();
 
     if (invoiceError) {
-      throw invoiceError;
+      throw new Error("The payment invoice does not belong to the selected company.");
     }
 
     invoice = data;
 
-    if (input.amount > invoice.balance_due) {
+    if (
+      input.customer_id &&
+      invoice.customer_id &&
+      input.customer_id !== invoice.customer_id
+    ) {
+      throw new Error("The payment customer does not match the selected invoice.");
+    }
+
+    if (
+      (input.status ?? "posted") === "posted" &&
+      input.amount > invoice.balance_due
+    ) {
       throw new Error(
         `Payment exceeds remaining invoice balance of ${invoice.balance_due.toFixed(2)}.`,
       );
+    }
+  }
+
+  if (input.customer_id) {
+    const { data: customer, error: customerError } = await client
+      .from("customers")
+      .select("id")
+      .eq("id", input.customer_id)
+      .eq("company_id", input.company_id)
+      .single();
+
+    if (customerError || !customer) {
+      throw new Error("The payment customer does not belong to the selected company.");
+    }
+  }
+
+  if (input.property_id) {
+    const { data: property, error: propertyError } = await client
+      .from("properties")
+      .select("id")
+      .eq("id", input.property_id)
+      .eq("company_id", input.company_id)
+      .single();
+
+    if (propertyError || !property) {
+      throw new Error("The payment property does not belong to the selected company.");
     }
   }
 
@@ -2784,7 +2822,8 @@ export async function createPayment(client: CrmClient, input: PaymentInput) {
         balance_due: balanceDue,
         status: balanceDue === 0 ? "paid" : invoice.status,
       })
-      .eq("id", input.invoice_id);
+      .eq("id", input.invoice_id)
+      .eq("company_id", input.company_id);
 
     if (updateError) {
       throw updateError;

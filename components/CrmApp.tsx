@@ -37376,9 +37376,15 @@ function CustomerPortalView({
             className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
             data-testid="customer-portal-payment-disconnected"
           >
-            <p className="font-black">Payment integration not connected</p>
+            <p className="font-black">
+              {company?.name === "IHC Painting"
+                ? "Stripe payments disabled for IHC Painting"
+                : "Payment integration not connected"}
+            </p>
             <p className="mt-1">
-              Online payments are not enabled yet. The office can share current payment instructions.
+              {company?.name === "IHC Painting"
+                ? "IHC requires its own separately authorized Stripe account before online payments can be enabled."
+                : "Online payments remain approval-gated until the WeatherTech Stripe migration, server configuration, and controlled validation are complete."}
             </p>
           </div>
           {latestProposalModel ? (
@@ -42150,8 +42156,9 @@ const integrationCards = [
   },
   {
     name: "Stripe",
-    status: "Portal ready",
-    detail: "Customer portal payments can be routed through Stripe Checkout or Payment Links.",
+    status: "Activation gated",
+    detail:
+      "WeatherTech-only company mapping, owner approval, idempotency, refunds, and signed webhooks are prepared. IHC payments remain disabled.",
   },
   {
     name: "CompanyCam / Native photos",

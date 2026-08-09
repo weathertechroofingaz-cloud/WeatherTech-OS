@@ -132,6 +132,10 @@ const expectedMigrations = [
     "0036_gohighlevel_oauth_communications_bridge.sql",
     "8fbbc0cc1df6f2d02af5989d6e62d9b91a40e1f4db17aa9f9ad5ed9ca11a6f38",
   ],
+  [
+    "20260808222141_stripe_company_isolation.sql",
+    "83f9309b9409e5f5b268a587790846cb563dce645962562a1e833d2ef1d77d67",
+  ],
 ];
 
 const files = fs
@@ -184,10 +188,12 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 }
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
-  failures.push("Migration files must be sequential from 0001 through 0036 with expected names.");
+  failures.push(
+    "Migration files must be sequential from 0001 through 0036 followed by the registered Stripe migration.",
+  );
 }
 
-for (let index = 0; index < expectedFiles.length; index += 1) {
+for (let index = 0; index < 36; index += 1) {
   const expectedVersion = String(index + 1).padStart(4, "0");
   const version = migrationPattern.exec(expectedFiles[index])?.[1];
 
@@ -212,6 +218,9 @@ const aiToolsIndex = files.indexOf("0033_ai_tools_operating_brain.sql");
 const officeTasksIndex = files.indexOf("0034_office_operations_daily_task_queue.sql");
 const officeTaskCascadeIndex = files.indexOf("0035_office_task_source_delete_cascade.sql");
 const goHighLevelOAuthIndex = files.indexOf("0036_gohighlevel_oauth_communications_bridge.sql");
+const stripeCompanyIsolationIndex = files.indexOf(
+  "20260808222141_stripe_company_isolation.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -303,14 +312,18 @@ if (
   officeTasksIndex === -1 ||
   officeTaskCascadeIndex === -1 ||
   goHighLevelOAuthIndex === -1 ||
+  stripeCompanyIsolationIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
-    officeTaskCascadeIndex < goHighLevelOAuthIndex
+    officeTaskCascadeIndex < goHighLevelOAuthIndex &&
+    goHighLevelOAuthIndex < stripeCompanyIsolationIndex
   ) ||
-  goHighLevelOAuthIndex !== files.length - 1
+  stripeCompanyIsolationIndex !== files.length - 1
 ) {
-  failures.push("GoHighLevel OAuth must order after the Office Operations migrations and remain last.");
+  failures.push(
+    "Stripe company isolation must order after GoHighLevel OAuth and remain last.",
+  );
 }
 
 for (const file of files) {
@@ -1166,7 +1179,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0036.",
+  "Verified raw filename order matches numeric order from 0001 through 0036 followed by the registered Stripe migration.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -1206,6 +1219,9 @@ console.log(
 );
 console.log(
   "Verified 0035_office_task_source_delete_cascade.sql precedes 0036_gohighlevel_oauth_communications_bridge.sql.",
+);
+console.log(
+  "Verified 0036_gohighlevel_oauth_communications_bridge.sql precedes 20260808222141_stripe_company_isolation.sql.",
 );
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
