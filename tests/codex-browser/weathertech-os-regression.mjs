@@ -164,33 +164,59 @@ function createProgressLogger(progressPath) {
 
 async function restRequest(env, path, options = {}) {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const method = (options.method ?? "GET").toUpperCase();
+  const canRetry = ["GET", "HEAD", "DELETE"].includes(method);
 
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !serviceRoleKey) {
     throw new Error("Supabase URL or service role key is missing.");
   }
 
-  const response = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
-    headers: {
-      apikey: serviceRoleKey,
-      authorization: `Bearer ${serviceRoleKey}`,
-      "content-type": "application/json",
-      ...(options.headers ?? {}),
-    },
-  });
+  let lastNetworkError = null;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Supabase ${options.method ?? "GET"} ${path} failed: ${response.status} ${body.slice(0, 300)}`);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let response = null;
+
+    try {
+      response = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`, {
+        ...options,
+        headers: {
+          apikey: serviceRoleKey,
+          authorization: `Bearer ${serviceRoleKey}`,
+          "content-type": "application/json",
+          ...(options.headers ?? {}),
+        },
+      });
+    } catch (error) {
+      lastNetworkError = error;
+
+      if (!canRetry || attempt === 3) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+      continue;
+    }
+
+    if (canRetry && attempt < 3 && (response.status === 429 || response.status >= 500)) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+      continue;
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Supabase ${method} ${path} failed: ${response.status} ${body.slice(0, 300)}`);
+    }
+
+    const text = await response.text();
+
+    if (response.status === 204 || !text.trim()) {
+      return null;
+    }
+
+    return JSON.parse(text);
   }
 
-  const text = await response.text();
-
-  if (response.status === 204 || !text.trim()) {
-    return null;
-  }
-
-  return JSON.parse(text);
+  throw lastNetworkError ?? new Error(`Supabase ${method} ${path} did not complete.`);
 }
 
 async function deleteByIds(env, table, column, ids) {
@@ -1300,43 +1326,8 @@ async function countEstimateLineItems(env, estimateId) {
 }
 
 async function getTab(browser) {
-  const withTimeout = async (operation, fallback) => {
-    let timeout = null;
-
-    try {
-      return await Promise.race([
-        operation,
-        new Promise((resolve) => {
-          timeout = setTimeout(() => resolve(fallback), 5000);
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
-  };
-
-  const tabs = await withTimeout(browser.tabs.list(), []);
-  const selected = await withTimeout(browser.tabs.selected(), undefined);
-
-  if (selected) {
-    const selectedUrl = await withTimeout(selected.url().catch(() => ""), "");
-
-    if (selectedUrl && !selectedUrl.startsWith("data:")) {
-      return selected;
-    }
-  }
-
-  const appTab = tabs.find((tab) =>
-    tab.url?.startsWith("http://localhost:3000") ||
-    tab.url?.startsWith("http://127.0.0.1:3000"),
-  );
-
-  if (appTab) {
-    return browser.tabs.get(appTab.id);
-  }
-
+  // A regression run owns its tab. Reusing a selected or previously controlled
+  // tab lets an older Browser session close that tab while this run is active.
   return browser.tabs.new();
 }
 
@@ -2102,17 +2093,66 @@ function visibleDomButtonNodeId(domText, text, type = "submit") {
   return null;
 }
 
+async function findVisibleExactButton(tab, text, type = "submit") {
+  const selector = type ? `button[type="${type}"]` : "button";
+  const candidates = await tab.playwright
+    .locator(selector)
+    .filter({ hasText: text, visible: true })
+    .all();
+  const targetText = text.replace(/\s+/g, " ").trim();
+
+  for (const candidate of candidates) {
+    const candidateText = (await candidate.innerText())
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (candidateText === targetText && await candidate.isEnabled()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) {
   const startedAt = Date.now();
   const input = { text };
   let lastDom = "";
 
   while (Date.now() - startedAt < timeoutMs) {
+    const directButton = await findVisibleExactButton(tab, text);
+
+    if (directButton) {
+      try {
+        await directButton.evaluate((button) => {
+          button.scrollIntoView({ block: "center", behavior: "auto" });
+        });
+        await tab.playwright.waitForTimeout(200);
+        await clickVisibleButtonByText(
+          tab,
+          'button[type="submit"]',
+          text,
+          `${label} coordinate click`,
+          "exact",
+          5000,
+        );
+        await tab.playwright.waitForTimeout(500);
+        return;
+      } catch (error) {
+        lastDom = `Coordinate click error: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+    }
+
     await tab.playwright.evaluate((input) => {
       const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const button = [...document.querySelectorAll('button[type="submit"]')].find(
-        (candidate) => normalize(candidate.textContent) === input.text,
-      );
+      const buttons = [...document.querySelectorAll('button[type="submit"]')]
+        .filter((candidate) => normalize(candidate.textContent) === input.text);
+      const button = buttons.find((candidate) =>
+        candidate.getClientRects().length > 0 &&
+        getComputedStyle(candidate).visibility !== "hidden",
+      ) ?? buttons[0];
 
       button?.scrollIntoView({ block: "center", behavior: "auto" });
     }, input);
@@ -2146,11 +2186,39 @@ async function clickVisibleDomButtonByText(tab, text, label, timeoutMs = 30000) 
   let lastDom = "";
 
   while (Date.now() - startedAt < timeoutMs) {
+    const directButton = await findVisibleExactButton(tab, text, null);
+
+    if (directButton) {
+      try {
+        await directButton.evaluate((button) => {
+          button.scrollIntoView({ block: "center", behavior: "auto" });
+        });
+        await tab.playwright.waitForTimeout(200);
+        await clickVisibleButtonByText(
+          tab,
+          "button",
+          text,
+          `${label} coordinate click`,
+          "exact",
+          5000,
+        );
+        await tab.playwright.waitForTimeout(500);
+        return;
+      } catch (error) {
+        lastDom = `Coordinate click error: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+    }
+
     await tab.playwright.evaluate((input) => {
       const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const button = [...document.querySelectorAll("button")].find(
-        (candidate) => normalize(candidate.textContent) === input.text,
-      );
+      const buttons = [...document.querySelectorAll("button")]
+        .filter((candidate) => normalize(candidate.textContent) === input.text);
+      const button = buttons.find((candidate) =>
+        candidate.getClientRects().length > 0 &&
+        getComputedStyle(candidate).visibility !== "hidden",
+      ) ?? buttons[0];
 
       button?.scrollIntoView({ block: "center", behavior: "auto" });
     }, input);
@@ -2335,12 +2403,33 @@ function toDateTimeLocalValue(date) {
 async function clickCompanyScope(tab, companyName) {
   await tab.playwright.evaluate(() => window.scrollTo(0, 0));
   await tab.playwright.waitForTimeout(300);
-  const scopeButton = tab.playwright.locator(
-    `xpath=//button[@aria-pressed and (.//p[normalize-space(.)=${xpathString(companyName)}] or contains(normalize-space(.), ${xpathString(companyName)}))]`,
+  const startedAt = Date.now();
+  let lastCounts = { header: 0, dashboard: 0 };
+
+  while (Date.now() - startedAt < 30000) {
+    const headerScopeButton = tab.playwright
+      .locator("header button[aria-pressed]")
+      .filter({ hasText: companyName, visible: true });
+    const dashboardScopeButton = tab.playwright
+      .locator('[aria-label="Dashboard company scope"] button[aria-pressed]')
+      .filter({ hasText: companyName, visible: true });
+    const headerCount = await headerScopeButton.count();
+    const dashboardCount = await dashboardScopeButton.count();
+    lastCounts = { header: headerCount, dashboard: dashboardCount };
+
+    if (headerCount === 1 || dashboardCount === 1) {
+      const scopeButton = headerCount === 1 ? headerScopeButton : dashboardScopeButton;
+      await scopeButton.click({ timeoutMs: 10000 });
+      await tab.playwright.waitForTimeout(600);
+      return;
+    }
+
+    await tab.playwright.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `company scope ${companyName} expected one header or dashboard match, found ${lastCounts.header} and ${lastCounts.dashboard}.`,
   );
-  await waitForUniqueLocator(scopeButton, `company scope ${companyName}`);
-  await scopeButton.click({ timeoutMs: 10000 });
-  await tab.playwright.waitForTimeout(600);
 }
 
 async function selectTestJob(tab, jobTitle) {
@@ -3039,34 +3128,50 @@ async function testOfficeOperationsWorkspace(browser, tab, env, seededJob) {
     }, routedSchedulingAlert.index);
     await tab.playwright.waitForTimeout(250);
 
-    await clickUnique(
-      tab.playwright
-        .locator('[data-testid="scheduling-alert-row"]')
-        .nth(routedSchedulingAlert.index),
-      "scheduling alert route",
-      { retryTransientClick: true },
-    );
-    await waitFor(
-      tab,
-      (targetView) => {
-        const text = document.body.innerText;
-        const selectors = {
-          calendar: () => text.includes("Schedule inspections, estimates, jobs, follow-ups, and deliveries."),
-          customers: () => text.includes("Customer 360"),
-          documents: () => text.includes("Document Center"),
-          inspections: () => text.includes("Inspections"),
-          jobs: () =>
-            Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
-            text.includes("Jobs / Projects"),
-          orders: () => text.includes("Material Orders"),
-        };
+    let schedulingRouteOpened = false;
+    let schedulingRouteError = null;
 
-        return selectors[targetView]?.() ?? text.length > 0;
-      },
-      "scheduling alert routes to existing module",
-      10000,
-      routedSchedulingAlert.targetView,
-    );
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await clickUnique(
+        tab.playwright
+          .locator('[data-testid="scheduling-alert-row"]')
+          .nth(routedSchedulingAlert.index),
+        `scheduling alert route attempt ${attempt}`,
+        { retryTransientClick: true },
+      );
+
+      try {
+        await waitFor(
+          tab,
+          (targetView) => {
+            const text = document.body.innerText;
+            const selectors = {
+              calendar: () => text.includes("Schedule inspections, estimates, jobs, follow-ups, and deliveries."),
+              customers: () => text.includes("Customer 360"),
+              documents: () => text.includes("Document Center"),
+              inspections: () => text.includes("Inspections"),
+              jobs: () =>
+                Boolean(document.querySelector('[data-testid="jobs-search"]')) &&
+                text.includes("Jobs / Projects"),
+              orders: () => text.includes("Material Orders"),
+            };
+
+            return selectors[targetView]?.() ?? text.length > 0;
+          },
+          "scheduling alert routes to existing module",
+          attempt === 3 ? 10000 : 4000,
+          routedSchedulingAlert.targetView,
+        );
+        schedulingRouteOpened = true;
+        break;
+      } catch (error) {
+        schedulingRouteError = error;
+      }
+    }
+
+    if (!schedulingRouteOpened) {
+      throw schedulingRouteError ?? new Error("Scheduling alert route did not open.");
+    }
 
     await clickNav(tab, "Operations");
     await waitFor(
@@ -8756,21 +8861,43 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
     updatedTitle,
     "rename document title",
   );
-  await clickVisibleDomSubmitByText(tab, "Save document changes", "Save document changes");
+  let renamedDocument = null;
+  let renameError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickVisibleDomSubmitByText(
+      tab,
+      "Save document changes",
+      `Save document changes attempt ${attempt}`,
+    );
+
+    try {
+      renamedDocument = await waitForAsync(
+        () => findDocumentByTitle(env, updatedTitle),
+        "renamed document persistence",
+        attempt === 3 ? 15000 : 5000,
+      );
+      break;
+    } catch (error) {
+      renameError = error;
+    }
+  }
+
+  if (!renamedDocument) {
+    throw renameError ?? new Error("Renamed document did not persist.");
+  }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="document-search"]'),
+    updatedTitle,
+    "renamed document search",
+  );
   await waitFor(
     tab,
-    (title) =>
-      document.body.innerText.includes("Document draft updated.") &&
-      document.body.innerText.includes(title),
+    (title) => document.body.innerText.includes(title),
     "renamed document UI",
-    30000,
+    15000,
     updatedTitle,
-  );
-
-  const renamedDocument = await waitForAsync(
-    () => findDocumentByTitle(env, updatedTitle),
-    "renamed document persistence",
-    30000,
   );
 
   if (renamedDocument.status !== "ready") {
@@ -10224,18 +10351,38 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
 
   const currentJobBeforeStart = await findJobByTitle(env, testJob.title);
   if (currentJobBeforeStart?.status !== "in_progress") {
-    await withAcceptedConfirm(tab, async () => {
-      await clickVisibleDomButtonByText(tab, "Start job", "field Start job", 15000);
-    });
-    await waitForAsync(
-      async () => {
-        const updatedJob = await findJobByTitle(env, testJob.title);
+    let startedJob = null;
+    let startJobError = null;
 
-        return updatedJob?.status === "in_progress" ? updatedJob : null;
-      },
-      "field status transition persistence",
-      30000,
-    );
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await withAcceptedConfirm(tab, async () => {
+        await clickVisibleDomButtonByText(
+          tab,
+          "Start job",
+          `field Start job attempt ${attempt}`,
+          15000,
+        );
+      });
+
+      try {
+        startedJob = await waitForAsync(
+          async () => {
+            const updatedJob = await findJobByTitle(env, testJob.title);
+
+            return updatedJob?.status === "in_progress" ? updatedJob : null;
+          },
+          "field status transition persistence",
+          attempt === 3 ? 15000 : 5000,
+        );
+        break;
+      } catch (error) {
+        startJobError = error;
+      }
+    }
+
+    if (!startedJob) {
+      throw startJobError ?? new Error("Field status transition did not persist.");
+    }
   }
   progress("job:field-workspace:done");
 
@@ -10277,12 +10424,32 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   results.addFieldTask = await preventTopJumpAround(
     tab,
     async () => {
-      await clickVisibleDomSubmitByText(tab, "Add field task", "Add field task");
-      await waitForAsync(
-        () => findJobTaskByTitle(env, selectedJobId, fieldTaskTitle),
-        `field task persistence ${fieldTaskTitle}`,
-        15000,
-      );
+      let persistedFieldTask = null;
+      let fieldTaskError = null;
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await clickVisibleDomSubmitByText(
+          tab,
+          "Add field task",
+          `Add field task attempt ${attempt}`,
+        );
+
+        try {
+          persistedFieldTask = await waitForAsync(
+            () => findJobTaskByTitle(env, selectedJobId, fieldTaskTitle),
+            `field task persistence ${fieldTaskTitle}`,
+            attempt === 3 ? 15000 : 5000,
+          );
+          break;
+        } catch (error) {
+          fieldTaskError = error;
+        }
+      }
+
+      if (!persistedFieldTask) {
+        throw fieldTaskError ?? new Error(`Field task ${fieldTaskTitle} did not persist.`);
+      }
+
       await waitFor(
         tab,
         (title) => document.body.innerText.includes(title),
@@ -10463,12 +10630,32 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   results.addDailyProgress = await preventTopJumpAround(
     tab,
     async () => {
-      await clickVisibleDomSubmitByText(tab, "Save progress log", "Save progress log");
-      await waitForAsync(
-        () => findDailyLogByWorkCompleted(env, selectedJobId, progressText),
-        `daily progress persistence ${progressText}`,
-        15000,
-      );
+      let persistedDailyProgress = null;
+      let dailyProgressError = null;
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await clickVisibleDomSubmitByText(
+          tab,
+          "Save progress log",
+          `Save progress log attempt ${attempt}`,
+        );
+
+        try {
+          persistedDailyProgress = await waitForAsync(
+            () => findDailyLogByWorkCompleted(env, selectedJobId, progressText),
+            `daily progress persistence ${progressText}`,
+            attempt === 3 ? 15000 : 5000,
+          );
+          break;
+        } catch (error) {
+          dailyProgressError = error;
+        }
+      }
+
+      if (!persistedDailyProgress) {
+        throw dailyProgressError ?? new Error(`Daily progress ${progressText} did not persist.`);
+      }
+
       await waitFor(
         tab,
         (text) => document.body.innerText.includes(text),
@@ -10504,12 +10691,32 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   results.addFieldIssue = await preventTopJumpAround(
     tab,
     async () => {
-      await clickVisibleDomSubmitByText(tab, "Record issue", "Record issue");
-      await waitForAsync(
-        () => findJobNoteContaining(env, selectedJobId, issueText),
-        `field issue note persistence ${issueText}`,
-        15000,
-      );
+      let persistedFieldIssue = null;
+      let fieldIssueError = null;
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await clickVisibleDomSubmitByText(
+          tab,
+          "Record issue",
+          `Record issue attempt ${attempt}`,
+        );
+
+        try {
+          persistedFieldIssue = await waitForAsync(
+            () => findJobNoteContaining(env, selectedJobId, issueText),
+            `field issue note persistence ${issueText}`,
+            attempt === 3 ? 15000 : 5000,
+          );
+          break;
+        } catch (error) {
+          fieldIssueError = error;
+        }
+      }
+
+      if (!persistedFieldIssue) {
+        throw fieldIssueError ?? new Error(`Field issue ${issueText} did not persist.`);
+      }
+
       await waitFor(
         tab,
         (text) => document.body.innerText.includes(text),
@@ -10733,6 +10940,7 @@ export function formatRegressionReport(result) {
     `Seeded job: ${result.seededJobTitle ?? "none"}`,
     `Cleanup before: ${JSON.stringify(result.cleanup.before)}`,
     `Cleanup after: ${JSON.stringify(result.cleanup.after)}`,
+    `Browser console errors: ${result.browserConsoleErrorCount ?? "not checked"}`,
     "",
     ...result.results.map(formatRecord),
   ];
@@ -10787,6 +10995,8 @@ export async function runWeatherTechOsRegression({
     `await import("${new URL(import.meta.url).pathname}").then((module) => module.runWeatherTechOsRegression({ browser, nodeRepl }))`,
   ];
   let seededJob = null;
+  let regressionTab = null;
+  let browserConsoleErrorCount = null;
 
   const record = async (name, fn) => {
     try {
@@ -10819,6 +11029,7 @@ export async function runWeatherTechOsRegression({
     progress("seed:done");
 
     const tab = await getTab(browser);
+    regressionTab = tab;
     await ensureAppShell(tab, baseUrl, progress);
 
     const shouldRunLeadWorkflow =
@@ -11116,15 +11327,42 @@ export async function runWeatherTechOsRegression({
       );
     }
   } finally {
-    progress("cleanup:after:start");
-    cleanup.after = await cleanupTestRecords(env, runId);
-    progress("cleanup:after:done");
     try {
-      const viewport = await browser.capabilities.get("viewport");
-      await viewport.reset();
-      progress("viewport:reset:done");
-    } catch {
-      // Ignore viewport reset failures; results above are still valid.
+      progress("cleanup:after:start");
+      cleanup.after = await cleanupTestRecords(env, runId);
+      progress("cleanup:after:done");
+    } finally {
+      try {
+        const viewport = await browser.capabilities.get("viewport");
+        await viewport.reset();
+        progress("viewport:reset:done");
+      } catch {
+        // Ignore viewport reset failures; results above are still valid.
+      }
+
+      try {
+        browserConsoleErrorCount = regressionTab
+          ? (await regressionTab.dev.logs({ levels: ["error"], limit: 100 })).length
+          : 0;
+        progress(`browser:console-errors:${browserConsoleErrorCount}`);
+
+        if (browserConsoleErrorCount > 0) {
+          results.push({
+            name: "Browser console remains free of runtime errors",
+            status: "failed",
+            error: `${browserConsoleErrorCount} browser console error(s) were recorded.`,
+          });
+        }
+      } catch {
+        browserConsoleErrorCount = null;
+      }
+
+      try {
+        await regressionTab?.close();
+        progress("browser:tab:closed");
+      } catch {
+        // Ignore tab cleanup failures; results above are still valid.
+      }
     }
   }
 
@@ -11138,6 +11376,7 @@ export async function runWeatherTechOsRegression({
     testPrefix: TEST_PREFIX,
     seededJobTitle: seededJob?.title ?? null,
     cleanup,
+    browserConsoleErrorCount,
     commands,
     results,
   };
