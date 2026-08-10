@@ -10,15 +10,28 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const refundEventTypes = new Set([
+  "refund.created",
+  "refund.updated",
+  "refund.failed",
+]);
+
 const supportedEventTypes = new Set([
   "payment_intent.succeeded",
   "payment_intent.payment_failed",
   "payment_intent.canceled",
   "charge.refunded",
-  "refund.created",
-  "refund.updated",
-  "refund.failed",
+  ...refundEventTypes,
 ]);
+
+function metadataValue(
+  metadata: Stripe.Metadata | null | undefined,
+  key: string,
+  pattern: RegExp,
+) {
+  const value = metadata?.[key];
+  return typeof value === "string" && pattern.test(value) ? value : null;
+}
 
 function objectSummary(object: Stripe.Event.Data.Object) {
   const candidate = object as Stripe.Event.Data.Object & {
@@ -30,6 +43,7 @@ function objectSummary(object: Stripe.Event.Data.Object) {
     amount_refunded?: number;
     currency?: string;
     payment_intent?: string | Stripe.PaymentIntent | null;
+    metadata?: Stripe.Metadata | null;
   };
 
   return {
@@ -46,6 +60,30 @@ function objectSummary(object: Stripe.Event.Data.Object) {
       typeof candidate.payment_intent === "string"
         ? candidate.payment_intent
         : candidate.payment_intent?.id ?? null,
+    wtosCompanyId: metadataValue(
+      candidate.metadata,
+      "wtos_company_id",
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+    wtosInvoiceId: metadataValue(
+      candidate.metadata,
+      "wtos_invoice_id",
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+    wtosPaymentId: metadataValue(
+      candidate.metadata,
+      "wtos_payment_id",
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+    wtosOperationKey: metadataValue(
+      candidate.metadata,
+      "wtos_operation_key",
+      /^wtos_[a-f0-9]{64}$/,
+    ),
+    wtosSourceOfTruth:
+      candidate.metadata?.wtos_source_of_truth === "supabase"
+        ? "supabase"
+        : null,
   };
 }
 
@@ -136,7 +174,7 @@ export async function POST(request: NextRequest) {
 
   const { data: existingEvent } = await serviceClient
     .from("stripe_webhook_events")
-    .select("id, processing_status")
+    .select("id, processing_status, attempt_count")
     .eq("stripe_event_id", event.id)
     .maybeSingle();
 
@@ -159,7 +197,7 @@ export async function POST(request: NextRequest) {
         api_version: event.api_version ?? null,
         livemode: event.livemode,
         processing_status: "received",
-        attempt_count: (existingEvent ? 1 : 0) + 1,
+        attempt_count: (existingEvent?.attempt_count ?? 0) + 1,
         payload_summary: summary,
         error_message: null,
         provider_created_at: new Date(event.created * 1000).toISOString(),
@@ -192,24 +230,47 @@ export async function POST(request: NextRequest) {
   try {
     const lookup = mappingLookup(summary);
     if (!lookup) {
-      throw new Error("Stripe webhook did not include a supported mapped object.");
+      await serviceClient
+        .from("stripe_webhook_events")
+        .update({
+          processing_status: "ignored",
+          processed_at: new Date().toISOString(),
+        })
+        .eq("id", storedEvent.id)
+        .eq("company_id", account.company_id);
+      return NextResponse.json({ ok: true, ignored: true });
     }
 
     const { data: mapping } = await serviceClient
       .from("stripe_object_mappings")
       .select("*")
       .eq("company_id", account.company_id)
+      .eq("stripe_company_account_id", account.id)
       .eq("integration_connection_id", account.integration_connection_id)
       .eq("stripe_object_type", lookup.stripeObjectType)
       .eq("stripe_object_id", lookup.objectId)
       .maybeSingle();
 
     if (!mapping) {
+      const isWeatherTechRefundMappingRace =
+        refundEventTypes.has(event.type) &&
+        summary.objectType === "refund" &&
+        summary.wtosCompanyId === account.company_id &&
+        summary.wtosInvoiceId !== null &&
+        summary.wtosPaymentId !== null &&
+        summary.wtosOperationKey !== null &&
+        summary.wtosSourceOfTruth === "supabase";
+
+      if (isWeatherTechRefundMappingRace) {
+        throw new Error(
+          "No company-scoped Stripe refund mapping exists yet; Stripe should retry this webhook.",
+        );
+      }
+
       await serviceClient
         .from("stripe_webhook_events")
         .update({
           processing_status: "ignored",
-          error_message: "No company-scoped Stripe object mapping exists.",
           processed_at: new Date().toISOString(),
         })
         .eq("id", storedEvent.id)
@@ -228,6 +289,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (refundEventTypes.has(event.type)) {
+      if (
+        mapping.stripe_object_type !== "refund" ||
+        summary.objectType !== "refund" ||
+        summary.amount !== mapping.amount_cents ||
+        summary.currency !== mapping.currency ||
+        mapping.livemode !== event.livemode
+      ) {
+        throw new Error(
+          "Stripe refund amount, currency, live mode, or object type does not match its approved mapping.",
+        );
+      }
+
+      const { error: refundError } = await serviceClient.rpc(
+        "wtos_reconcile_stripe_refund",
+        {
+          target_refund_mapping_id: mapping.id,
+          target_webhook_event_id: storedEvent.id,
+        },
+      );
+
+      if (refundError) {
+        throw new Error("Stripe refund could not be reconciled atomically.");
+      }
+
+      return NextResponse.json({ ok: true, duplicatePrevented: false });
+    }
+
+    if (event.type === "charge.refunded") {
+      // Refund-object events own the atomic accounting transition. Stripe also
+      // emits charge.refunded for partial refunds, so this aggregate event is
+      // intentionally observational and cannot mark a full payment refunded.
+      await serviceClient
+        .from("stripe_webhook_events")
+        .update({
+          processing_status: "processed",
+          processed_at: new Date().toISOString(),
+          error_message: null,
+        })
+        .eq("id", storedEvent.id)
+        .eq("company_id", account.company_id);
+      return NextResponse.json({ ok: true, duplicatePrevented: false });
+    }
+
     const mappingStatus =
       event.type === "payment_intent.succeeded"
         ? "succeeded"
@@ -235,9 +340,7 @@ export async function POST(request: NextRequest) {
           ? "failed"
           : event.type === "payment_intent.canceled"
             ? "canceled"
-            : event.type === "charge.refunded"
-              ? "refunded"
-              : summary.status ?? event.type;
+            : summary.status ?? event.type;
     const { error: mappingUpdateError } = await serviceClient
       .from("stripe_object_mappings")
       .update({ status: mappingStatus })

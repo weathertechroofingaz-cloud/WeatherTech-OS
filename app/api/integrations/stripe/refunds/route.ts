@@ -109,6 +109,7 @@ export async function POST(request: NextRequest) {
   if (
     !config.livePaymentsEnabled ||
     !config.refundsEnabled ||
+    !config.webhookProcessingEnabled ||
     !stripe ||
     !config.weatherTechAccountId
   ) {
@@ -124,6 +125,7 @@ export async function POST(request: NextRequest) {
     if (
       !context.account.payment_writes_enabled ||
       !context.account.refund_writes_enabled ||
+      !context.account.webhook_processing_enabled ||
       context.account.stripe_account_id !== config.weatherTechAccountId
     ) {
       return NextResponse.json(
@@ -154,24 +156,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (amountCents > Math.round(Number(payment.amount) * 100)) {
+    const paymentAmountCents = Math.round(Number(payment.amount) * 100);
+    if (
+      payment.method !== "stripe" ||
+      paymentAmountCents <= 0
+    ) {
       return NextResponse.json(
-        { ok: false, message: "Refund amount exceeds the recorded payment." },
+        { ok: false, message: "Only a posted Stripe payment can be refunded." },
         { status: 409 },
       );
     }
 
-    const { data: paymentMapping } = await serviceClient
-      .from("stripe_object_mappings")
-      .select("*")
-      .eq("company_id", companyId)
-      .eq("payment_id", payment.id)
-      .eq("stripe_object_type", "payment_intent")
-      .maybeSingle();
-
-    if (!paymentMapping) {
+    if (amountCents !== paymentAmountCents) {
       return NextResponse.json(
-        { ok: false, message: "The payment has no company-scoped Stripe PaymentIntent mapping." },
+        {
+          ok: false,
+          message:
+            "WeatherTech OS supports only a full refund of the recorded Stripe payment.",
+        },
         { status: 409 },
       );
     }
@@ -191,12 +193,114 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (existingRefund) {
+      const existingRefundMatches =
+        existingRefund.company_id === companyId &&
+        existingRefund.stripe_company_account_id === context.account.id &&
+        existingRefund.integration_connection_id === context.connection.id &&
+        existingRefund.customer_id === payment.customer_id &&
+        existingRefund.invoice_id === payment.invoice_id &&
+        existingRefund.payment_id === payment.id &&
+        existingRefund.local_object_type === "refund" &&
+        existingRefund.stripe_object_type === "refund" &&
+        Number(existingRefund.amount_cents) === amountCents &&
+        existingRefund.currency === context.account.default_currency &&
+        existingRefund.livemode === context.account.livemode;
+
+      if (!existingRefundMatches) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "The existing Stripe refund did not pass its company-isolation check.",
+          },
+          { status: 409 },
+        );
+      }
+
       return NextResponse.json({
         ok: true,
         duplicatePrevented: true,
         refundId: existingRefund.stripe_object_id,
         status: existingRefund.status,
       });
+    }
+
+    const { data: refundMappings, error: refundMappingsError } =
+      await serviceClient
+        .from("stripe_object_mappings")
+        .select("*")
+        .eq("company_id", companyId)
+        .eq("payment_id", payment.id)
+        .eq("local_object_type", "refund")
+        .eq("stripe_object_type", "refund");
+
+    if (refundMappingsError) {
+      throw new Error("Existing Stripe refund mappings could not be checked safely.");
+    }
+
+    const activeRefund = refundMappings?.find(
+      (mapping) => !["failed", "canceled"].includes(mapping.status),
+    );
+    if (activeRefund) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "This Stripe payment already has an active or reconciled refund.",
+        },
+        { status: 409 },
+      );
+    }
+
+    if (payment.status !== "posted") {
+      return NextResponse.json(
+        { ok: false, message: "Only a posted Stripe payment can be refunded." },
+        { status: 409 },
+      );
+    }
+
+    const { data: paymentMapping } = await serviceClient
+      .from("stripe_object_mappings")
+      .select("*")
+      .eq("company_id", companyId)
+      .eq("stripe_company_account_id", context.account.id)
+      .eq("integration_connection_id", context.connection.id)
+      .eq("payment_id", payment.id)
+      .eq("stripe_object_type", "payment_intent")
+      .maybeSingle();
+
+    if (!paymentMapping) {
+      return NextResponse.json(
+        { ok: false, message: "The payment has no company-scoped Stripe PaymentIntent mapping." },
+        { status: 409 },
+      );
+    }
+
+    const paymentMappingMatches =
+      paymentMapping.company_id === companyId &&
+      paymentMapping.stripe_company_account_id === context.account.id &&
+      paymentMapping.integration_connection_id === context.connection.id &&
+      paymentMapping.customer_id === payment.customer_id &&
+      paymentMapping.invoice_id === payment.invoice_id &&
+      paymentMapping.payment_id === payment.id &&
+      (paymentMapping.local_object_type === "invoice" ||
+        paymentMapping.local_object_type === "deposit") &&
+      paymentMapping.stripe_object_type === "payment_intent" &&
+      paymentMapping.stripe_object_id === payment.reference &&
+      paymentMapping.status === "succeeded" &&
+      Number(paymentMapping.amount_cents) === amountCents &&
+      paymentMapping.currency === context.account.default_currency &&
+      paymentMapping.livemode === context.account.livemode;
+
+    if (!paymentMappingMatches) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "The Stripe PaymentIntent mapping did not pass its company and accounting checks.",
+        },
+        { status: 409 },
+      );
     }
 
     const refund = await stripe.refunds.create(

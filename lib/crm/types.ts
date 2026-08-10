@@ -4362,6 +4362,13 @@ export type Database = {
         };
         Returns: string;
       };
+      wtos_reconcile_stripe_refund: {
+        Args: {
+          target_refund_mapping_id: string;
+          target_webhook_event_id: string;
+        };
+        Returns: string;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
