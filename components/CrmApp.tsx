@@ -2,6 +2,7 @@
 
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Image from "next/image";
+import StripeInvoicePayment from "./StripeInvoicePayment";
 import {
   Activity,
   AlertTriangle,
@@ -6076,8 +6077,10 @@ function CrmWorkspace({
           {view === "invoices" ? (
             <InvoicesView
               client={client}
+              isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              userId={user?.id ?? null}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -32864,8 +32867,10 @@ function PhotosView({
 
 type InvoicesViewProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  userId: string | null;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -32873,8 +32878,10 @@ type InvoicesViewProps = {
 
 function InvoicesView({
   client,
+  isDemoMode,
   snapshot,
   companyMap,
+  userId,
   onReload,
   onNotice,
   onError,
@@ -33158,6 +33165,10 @@ function InvoicesView({
           invoice={selectedInvoice}
           summary={selectedSummary}
           snapshot={snapshot}
+          isDemoMode={isDemoMode}
+          userId={userId}
+          onReload={onReload}
+          onNotice={onNotice}
           onRecordPayment={handleRecordPayment}
         />
         <InvoicePreview
@@ -33716,11 +33727,19 @@ function InvoicePaymentsPanel({
   invoice,
   summary,
   snapshot,
+  isDemoMode,
+  userId,
+  onReload,
+  onNotice,
   onRecordPayment,
 }: {
   invoice: InvoiceRecord | null;
   summary: FinancialOperationsSummary["invoiceSummaries"][number] | null;
   snapshot: CrmSnapshot;
+  isDemoMode: boolean;
+  userId: string | null;
+  onReload: () => Promise<void>;
+  onNotice: (message: string) => void;
   onRecordPayment: (input: PaymentInput) => Promise<void>;
 }) {
   const [isSaving, setIsSaving] = useState(false);
@@ -33738,6 +33757,17 @@ function InvoicePaymentsPanel({
   const customer = invoice.customer_id
     ? snapshot.customers.find((item) => item.id === invoice.customer_id) ?? null
     : null;
+  const company =
+    snapshot.companies.find((item) => item.id === invoice.company_id) ?? null;
+  const isCompanyOwner = Boolean(
+    userId &&
+      snapshot.companyMemberships.some(
+        (membership) =>
+          membership.user_id === userId &&
+          membership.company_id === invoice.company_id &&
+          membership.role === "owner",
+      ),
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -33814,74 +33844,90 @@ function InvoicePaymentsPanel({
         ) : null}
       </div>
       {invoice.balance_due > 0 ? (
-        <form
-          onSubmit={handleSubmit}
-          className="mt-4 grid gap-3 rounded-lg border border-slate-200 p-3"
-          data-testid="financial-payment-form"
-        >
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Amount
-              <input
-                required
-                name="amount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                defaultValue={invoice.balance_due}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
-              />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Method
-              <select
-                name="method"
-                defaultValue="Check"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
-              >
-                <option>Cash</option>
-                <option>Check</option>
-                <option>Credit card</option>
-                <option>ACH</option>
-                <option>Financing</option>
-                <option>Other</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Payment date
-              <input
-                name="paid_at"
-                type="date"
-                defaultValue={todayIsoDate()}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
-              />
-            </label>
-          </div>
-          <input
-            name="reference"
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder="Reference number"
-          />
-          <textarea
-            name="notes"
-            className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder={`Office note for ${customer?.display_name ?? "this customer"}`}
-          />
-          {formError ? (
-            <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-              {formError}
-            </p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={isSaving}
-            data-testid="financial-record-payment"
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+        <>
+          <form
+            onSubmit={handleSubmit}
+            className="mt-4 grid gap-3 rounded-lg border border-slate-200 p-3"
+            data-testid="financial-payment-form"
           >
-            <DollarSign className="h-4 w-4" />
-            {isSaving ? "Recording" : "Record payment"}
-          </button>
-        </form>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Record an offline payment
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Amount
+                <input
+                  required
+                  name="amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  defaultValue={invoice.balance_due}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Method
+                <select
+                  name="method"
+                  defaultValue="Check"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+                >
+                  <option>Cash</option>
+                  <option>Check</option>
+                  <option>Credit card</option>
+                  <option>ACH</option>
+                  <option>Financing</option>
+                  <option>Other</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Payment date
+                <input
+                  name="paid_at"
+                  type="date"
+                  defaultValue={todayIsoDate()}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-950"
+                />
+              </label>
+            </div>
+            <input
+              name="reference"
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="Reference number"
+            />
+            <textarea
+              name="notes"
+              className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder={`Office note for ${customer?.display_name ?? "this customer"}`}
+            />
+            {formError ? (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                {formError}
+              </p>
+            ) : null}
+            <button
+              type="submit"
+              disabled={isSaving}
+              data-testid="financial-record-payment"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+            >
+              <DollarSign className="h-4 w-4" />
+              {isSaving ? "Recording" : "Record payment"}
+            </button>
+          </form>
+          <StripeInvoicePayment
+            key={`${invoice.id}:${invoice.balance_due}`}
+            company={company}
+            invoiceId={invoice.id}
+            invoiceNumber={invoice.invoice_number}
+            balanceDue={invoice.balance_due}
+            isCompanyOwner={isCompanyOwner}
+            isDemoMode={isDemoMode}
+            onReload={onReload}
+            onNotice={onNotice}
+          />
+        </>
       ) : (
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
           This invoice is paid in full.

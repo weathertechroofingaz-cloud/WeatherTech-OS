@@ -7,6 +7,7 @@ export const STRIPE_COMPANY_ISOLATION_MIGRATION =
   "20260808222141_stripe_company_isolation.sql";
 
 export const stripeEnvVars = {
+  publishableKey: "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
   secretKey: "STRIPE_SECRET_KEY",
   webhookSecret: "STRIPE_WEBHOOK_SECRET",
   weatherTechAccountId: "STRIPE_WEATHERTECH_ACCOUNT_ID",
@@ -53,6 +54,8 @@ export type StripeConfigCheckResult = {
   missing: string[];
   malformed: string[];
   credentials: {
+    publishableKeyDetected: boolean;
+    publishableKeyMode: "live" | "test" | "unknown" | "missing";
     secretKeyDetected: boolean;
     secretKeyMode: "live" | "test" | "unknown" | "missing";
     webhookSecretDetected: boolean;
@@ -108,6 +111,22 @@ function secretKeyMode(value: string | null) {
   return "unknown" as const;
 }
 
+function publishableKeyMode(value: string | null) {
+  if (!value) {
+    return "missing" as const;
+  }
+
+  if (value.startsWith("pk_live_")) {
+    return "live" as const;
+  }
+
+  if (value.startsWith("pk_test_")) {
+    return "test" as const;
+  }
+
+  return "unknown" as const;
+}
+
 export function getStripeCompanyEligibility(
   company: StripeCompanyDescriptor,
 ): StripeCompanyEligibility {
@@ -136,6 +155,7 @@ export function getStripeConfigCheckResult(
   env: Record<string, string | undefined> = process.env,
   now = new Date(),
 ): StripeConfigCheckResult {
+  const publishableKey = trimmedEnvValue(env, stripeEnvVars.publishableKey);
   const secretKey = trimmedEnvValue(env, stripeEnvVars.secretKey);
   const webhookSecret = trimmedEnvValue(env, stripeEnvVars.webhookSecret);
   const accountId = trimmedEnvValue(env, stripeEnvVars.weatherTechAccountId);
@@ -143,10 +163,17 @@ export function getStripeConfigCheckResult(
   const missing: string[] = [];
   const malformed: string[] = [];
 
+  if (!publishableKey) missing.push(stripeEnvVars.publishableKey);
   if (!secretKey) missing.push(stripeEnvVars.secretKey);
   if (!webhookSecret) missing.push(stripeEnvVars.webhookSecret);
   if (!accountId) missing.push(stripeEnvVars.weatherTechAccountId);
   if (!publicBaseUrl) missing.push(stripeEnvVars.publicBaseUrl);
+  if (
+    publishableKey &&
+    !/^pk_(live|test)_[A-Za-z0-9]+$/.test(publishableKey)
+  ) {
+    malformed.push(stripeEnvVars.publishableKey);
+  }
   if (secretKey && !/^sk_(live|test)_[A-Za-z0-9]+$/.test(secretKey)) {
     malformed.push(stripeEnvVars.secretKey);
   }
@@ -158,6 +185,17 @@ export function getStripeConfigCheckResult(
   }
   if (publicBaseUrl && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(publicBaseUrl)) {
     malformed.push(stripeEnvVars.publicBaseUrl);
+  }
+  const browserKeyMode = publishableKeyMode(publishableKey);
+  const serverKeyMode = secretKeyMode(secretKey);
+  if (
+    browserKeyMode !== "missing" &&
+    browserKeyMode !== "unknown" &&
+    serverKeyMode !== "missing" &&
+    serverKeyMode !== "unknown" &&
+    browserKeyMode !== serverKeyMode
+  ) {
+    malformed.push(stripeEnvVars.publishableKey);
   }
 
   return {
@@ -171,8 +209,10 @@ export function getStripeConfigCheckResult(
     missing,
     malformed,
     credentials: {
+      publishableKeyDetected: Boolean(publishableKey),
+      publishableKeyMode: browserKeyMode,
       secretKeyDetected: Boolean(secretKey),
-      secretKeyMode: secretKeyMode(secretKey),
+      secretKeyMode: serverKeyMode,
       webhookSecretDetected: Boolean(webhookSecret),
       weatherTechAccountIdDetected: Boolean(accountId),
       publicBaseUrlDetected: Boolean(publicBaseUrl),

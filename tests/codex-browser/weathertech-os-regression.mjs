@@ -3693,6 +3693,16 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
   progress("financial:seed:start");
   const seeded = await seedFinancialOperationsRecords(env, company, runId);
   const expectedInvoiceTitle = `Invoice for ${seeded.estimate.title}`;
+  const [stripeMappingsBefore, stripeWebhookEventsBefore] = await Promise.all([
+    restRequest(
+      env,
+      `stripe_object_mappings?select=id&company_id=eq.${encodeURIComponent(company.id)}`,
+    ),
+    restRequest(
+      env,
+      `stripe_webhook_events?select=id&company_id=eq.${encodeURIComponent(company.id)}`,
+    ),
+  ]);
   progress("financial:seed:done");
 
   await tab.reload();
@@ -3795,6 +3805,43 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
 
   if (!createdInvoice || createdInvoice.estimate_id !== seeded.estimate.id) {
     throw new Error("Financial estimate invoice did not persist with the expected estimate link.");
+  }
+
+  await waitFor(
+    tab,
+    () => {
+      const surface = document.querySelector('[data-testid="stripe-invoice-payment"]');
+      const prepareButton = document.querySelector('[data-testid="stripe-prepare-payment"]');
+
+      return (
+        Boolean(surface) &&
+        Boolean(document.querySelector('[data-testid="stripe-payment-disabled"]')) &&
+        Boolean(document.querySelector('[data-testid="stripe-owner-approval"]')) &&
+        prepareButton?.disabled === true &&
+        !surface?.querySelector("iframe")
+      );
+    },
+    "Stripe Payment Element remains gated off during browser regression",
+    15000,
+  );
+
+  const [stripeMappingsAfter, stripeWebhookEventsAfter] = await Promise.all([
+    restRequest(
+      env,
+      `stripe_object_mappings?select=id&company_id=eq.${encodeURIComponent(company.id)}`,
+    ),
+    restRequest(
+      env,
+      `stripe_webhook_events?select=id&company_id=eq.${encodeURIComponent(company.id)}`,
+    ),
+  ]);
+  if (
+    stripeMappingsAfter.length !== stripeMappingsBefore.length ||
+    stripeWebhookEventsAfter.length !== stripeWebhookEventsBefore.length
+  ) {
+    throw new Error(
+      "Rendering the disabled Stripe payment surface created a Stripe mapping or webhook record.",
+    );
   }
 
   await fillUnique(

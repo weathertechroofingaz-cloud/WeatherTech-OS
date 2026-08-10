@@ -985,6 +985,15 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     supportsWebhooks: true,
     configurationFields: [
       {
+        id: "publishable_key",
+        label: "Browser publishable key",
+        description:
+          "Public Stripe.js key used only to initialize Stripe's secure browser-hosted Payment Element.",
+        required: true,
+        sensitive: false,
+        kind: "text",
+      },
+      {
         id: "secret_key",
         label: "Server API key",
         description:

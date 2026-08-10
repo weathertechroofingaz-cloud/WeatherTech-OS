@@ -11,6 +11,8 @@
     "test:browser:codex": "node tests/codex-browser/weathertech-os-regression.mjs"
   },
   "dependencies": {
+    "@stripe/react-stripe-js": "^6.8.0",
+    "@stripe/stripe-js": "^9.13.0",
     "@supabase/ssr": "0.12.0",
     "@supabase/supabase-js": "^2.108.2",
     "lucide-react": "^1.21.0",

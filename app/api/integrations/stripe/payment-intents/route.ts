@@ -196,12 +196,60 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (existingMapping) {
-      return NextResponse.json({
-        ok: true,
-        duplicatePrevented: true,
-        paymentIntentId: existingMapping.stripe_object_id,
-        status: existingMapping.status,
-      });
+      const existingIntent = await stripe.paymentIntents.retrieve(
+        existingMapping.stripe_object_id,
+      );
+      const mappingMatchesRequest =
+        existingMapping.company_id === companyId &&
+        existingMapping.integration_connection_id === context.connection.id &&
+        existingMapping.stripe_company_account_id === context.account.id &&
+        existingMapping.invoice_id === invoice.id &&
+        Number(existingMapping.amount_cents) === amountCents &&
+        existingMapping.currency === context.account.default_currency &&
+        existingIntent.id === existingMapping.stripe_object_id &&
+        existingIntent.amount === amountCents &&
+        existingIntent.currency === context.account.default_currency &&
+        existingIntent.livemode === existingMapping.livemode &&
+        existingIntent.metadata.wtos_company_id === companyId &&
+        existingIntent.metadata.wtos_invoice_id === invoice.id &&
+        existingIntent.metadata.wtos_operation_key === operationKey;
+
+      if (!mappingMatchesRequest) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "The existing Stripe payment request did not pass its company-isolation check.",
+          },
+          { status: 409 },
+        );
+      }
+
+      if (
+        !existingIntent.client_secret &&
+        existingIntent.status !== "succeeded" &&
+        existingIntent.status !== "processing"
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "The existing Stripe payment request cannot be confirmed and must be reviewed.",
+          },
+          { status: 409 },
+        );
+      }
+
+      return NextResponse.json(
+        {
+          ok: true,
+          duplicatePrevented: true,
+          paymentIntentId: existingIntent.id,
+          clientSecret: existingIntent.client_secret,
+          status: existingIntent.status,
+        },
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
     }
 
     const metadata = buildStripeObjectMetadata({
@@ -266,13 +314,16 @@ export async function POST(request: NextRequest) {
       last_attempted_at: new Date().toISOString(),
     });
 
-    return NextResponse.json({
-      ok: true,
-      duplicatePrevented: false,
-      paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
-      status: paymentIntent.status,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        duplicatePrevented: false,
+        paymentIntentId: paymentIntent.id,
+        clientSecret: paymentIntent.client_secret,
+        status: paymentIntent.status,
+      },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (error) {
     return NextResponse.json(
       { ok: false, message: sanitizeStripeErrorMessage(error) },

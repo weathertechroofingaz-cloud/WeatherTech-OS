@@ -26,11 +26,26 @@ function assertEqual(actual, expected, message) {
   }
 }
 
+async function assertRejects(promise, expectedMessage, message) {
+  try {
+    await promise;
+  } catch (error) {
+    assert(
+      error instanceof Error && error.message.includes(expectedMessage),
+      `${message}. Received ${error instanceof Error ? error.message : String(error)}.`,
+    );
+    return;
+  }
+
+  throw new Error(`${message}. Expected the promise to reject.`);
+}
+
 try {
   const compile = spawnSync(
     tsc,
     [
       "lib/stripe/foundation.ts",
+      "lib/stripe/clientPayment.ts",
       "lib/stripe/serverClient.ts",
       "lib/crm/integrationCenter.ts",
       "--target",
@@ -54,6 +69,9 @@ try {
   }
 
   const stripe = await import(pathToFileURL(join(outDir, "stripe", "foundation.js")));
+  const stripeClient = await import(
+    pathToFileURL(join(outDir, "stripe", "clientPayment.js"))
+  );
   const stripeServer = await import(
     pathToFileURL(join(outDir, "stripe", "serverClient.js"))
   );
@@ -113,6 +131,7 @@ try {
   );
 
   const readyButDisabled = stripe.getStripeConfigCheckResult({
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_live_example123",
     STRIPE_SECRET_KEY: "sk_live_example123",
     STRIPE_WEBHOOK_SECRET: "whsec_example123",
     STRIPE_WEATHERTECH_ACCOUNT_ID: "acct_example123",
@@ -123,9 +142,157 @@ try {
   });
   assertEqual(readyButDisabled.ok, true, "Configuration contract can be complete while writes stay off");
   assertEqual(
+    readyButDisabled.credentials.publishableKeyDetected,
+    true,
+    "Stripe.js publishable-key configuration is detected",
+  );
+  assertEqual(
     readyButDisabled.credentials.livePaymentsEnabled,
     false,
     "Exact false keeps payment writes off",
+  );
+  assert(
+    stripe.getStripeConfigCheckResult({
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_example123",
+      STRIPE_SECRET_KEY: "sk_live_example123",
+      STRIPE_WEBHOOK_SECRET: "whsec_example123",
+      STRIPE_WEATHERTECH_ACCOUNT_ID: "acct_example123",
+      STRIPE_PUBLIC_BASE_URL: "https://example.test",
+    }).malformed.includes("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"),
+    "Live and test browser/server key modes cannot be mixed",
+  );
+
+  assertEqual(
+    stripeClient.parseStripePaymentAmount("0.50", 100).amountCents,
+    50,
+    "Minimum Stripe payment parses into exact integer cents",
+  );
+  assertEqual(
+    stripeClient.parseStripePaymentAmount("10", 100).amountCents,
+    1000,
+    "Whole-dollar Stripe payment parses into exact integer cents",
+  );
+  for (const [amount, balance] of [
+    ["0.49", 100],
+    ["101.00", 100],
+    ["-1.00", 100],
+    ["not-money", 100],
+    ["1.001", 100],
+  ]) {
+    assertEqual(
+      stripeClient.parseStripePaymentAmount(amount, balance).ok,
+      false,
+      `Unsafe payment amount ${amount} is rejected`,
+    );
+  }
+  assertEqual(
+    stripeClient.isStripeClientCompanyEligible({
+      id: "weathertech",
+      name: "WeatherTech Roofing LLC",
+      trade: "roofing",
+    }),
+    true,
+    "Browser payment eligibility permits exact WeatherTech roofing identity",
+  );
+  assertEqual(
+    stripeClient.isStripeClientCompanyEligible({
+      id: "ihc",
+      name: "IHC Painting",
+      trade: "painting",
+    }),
+    false,
+    "Browser payment eligibility denies IHC",
+  );
+  assertEqual(
+    stripeClient.isStripeClientCompanyEligible({
+      id: "lookalike",
+      name: "WeatherTech Roofing LLC",
+      trade: "painting",
+    }),
+    false,
+    "Browser payment eligibility denies a company-name lookalike",
+  );
+
+  const browserRequest = stripeClient.buildStripePaymentIntentRequest({
+    companyId: "weathertech",
+    invoiceId: "invoice-1",
+    amountCents: 50,
+    attemptKey: "stable-browser-attempt",
+  });
+  assertEqual(
+    Object.keys(browserRequest).sort().join(","),
+    [
+      "amountCents",
+      "attemptKey",
+      "companyId",
+      "invoiceId",
+      "kind",
+      "ownerApproval",
+    ].sort().join(","),
+    "Browser request contains only the approved non-PII fields",
+  );
+  assertEqual(browserRequest.ownerApproval, true, "Browser request records explicit owner approval");
+  assert(
+    !JSON.stringify(browserRequest).match(/email|phone|customer|secret|key_live/i),
+    "Browser payment request contains no customer PII or credentials",
+  );
+
+  let capturedRequest = null;
+  const recoveredIntent = await stripeClient.requestStripePaymentIntent(
+    browserRequest,
+    async (url, init) => {
+      capturedRequest = { url, init };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          duplicatePrevented: true,
+          paymentIntentId: "pi_existing",
+          clientSecret: "pi_existing_secret_recoverable",
+          status: "requires_payment_method",
+        }),
+      };
+    },
+  );
+  assertEqual(
+    capturedRequest.url,
+    "/api/integrations/stripe/payment-intents",
+    "Browser caller uses the existing PaymentIntent route",
+  );
+  assertEqual(capturedRequest.init.method, "POST", "Browser caller uses POST");
+  assertEqual(
+    capturedRequest.init.credentials,
+    "same-origin",
+    "Browser caller preserves signed-in same-origin authentication",
+  );
+  assertEqual(capturedRequest.init.cache, "no-store", "Browser caller disables response caching");
+  assertEqual(
+    recoveredIntent.clientSecret,
+    "pi_existing_secret_recoverable",
+    "Idempotent browser retry recovers the existing client secret",
+  );
+  await assertRejects(
+    stripeClient.requestStripePaymentIntent(browserRequest, async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        paymentIntentId: "pi_missing_secret",
+        status: "requires_payment_method",
+      }),
+    })),
+    "secure confirmation token",
+    "A non-terminal response without a client secret is rejected",
+  );
+  await assertRejects(
+    stripeClient.requestStripePaymentIntent(browserRequest, async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ ok: false, message: "Live Stripe payment writes remain disabled." }),
+    })),
+    "remain disabled",
+    "Provider and safety-gate failures surface as sanitized errors",
   );
 
   const operation = {
@@ -282,6 +449,61 @@ try {
     paymentIntentRoute.includes("body.ownerApproval !== true") &&
       paymentIntentRoute.includes("config.livePaymentsEnabled"),
     "PaymentIntent route requires owner approval and the live-write gate",
+  );
+  assert(
+    paymentIntentRoute.includes("stripe.paymentIntents.retrieve") &&
+      paymentIntentRoute.includes("clientSecret: existingIntent.client_secret") &&
+      paymentIntentRoute.includes('"Cache-Control": "private, no-store"'),
+    "Idempotent PaymentIntent retries securely recover a non-cacheable client secret",
+  );
+  assert(
+    paymentIntentRoute.indexOf("body.ownerApproval !== true") <
+      paymentIntentRoute.indexOf("stripe.paymentIntents.retrieve") &&
+      paymentIntentRoute.indexOf("config.livePaymentsEnabled") <
+        paymentIntentRoute.indexOf("stripe.paymentIntents.retrieve") &&
+      paymentIntentRoute.indexOf("Payment amount exceeds the invoice balance") <
+        paymentIntentRoute.indexOf("stripe.paymentIntents.retrieve"),
+    "Existing PaymentIntent retrieval happens only after approval, gate, and invoice checks",
+  );
+
+  const paymentElementComponent = fs.readFileSync(
+    path.join(cwd, "components/StripeInvoicePayment.tsx"),
+    "utf8",
+  );
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(cwd, "package.json"), "utf8"),
+  );
+  assert(
+    packageJson.dependencies["@stripe/react-stripe-js"] &&
+      packageJson.dependencies["@stripe/stripe-js"],
+    "Stripe.js and React Stripe.js are production dependencies",
+  );
+  for (const requiredClientPrimitive of [
+    "loadStripe",
+    "Elements",
+    "PaymentElement",
+    "useStripe",
+    "useElements",
+    "stripe.confirmPayment",
+    'redirect: "if_required"',
+  ]) {
+    assert(
+      paymentElementComponent.includes(requiredClientPrimitive),
+      `Payment Element uses ${requiredClientPrimitive}`,
+    );
+  }
+  assert(
+    !paymentElementComponent.includes("STRIPE_SECRET_KEY") &&
+      !paymentElementComponent.includes("STRIPE_WEBHOOK_SECRET") &&
+      !paymentElementComponent.includes("console.") &&
+      !paymentElementComponent.includes("localStorage") &&
+      !paymentElementComponent.includes("sessionStorage"),
+    "Payment Element never references server secrets or persists/logs browser payment state",
+  );
+  assert(
+    paymentElementComponent.includes('"stripe-payment-ihc-disabled"') &&
+      paymentElementComponent.includes('data-testid="stripe-payment-owner-required"'),
+    "Payment Element renders explicit IHC and non-owner denial states",
   );
   assert(
     refundRoute.includes("body.ownerApproval !== true") &&
