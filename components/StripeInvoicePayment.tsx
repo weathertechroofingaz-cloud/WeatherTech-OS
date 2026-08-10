@@ -13,8 +13,10 @@ import {
   buildStripePaymentIntentRequest,
   isStripeClientCompanyEligible,
   parseStripePaymentAmount,
+  parseStripeReadinessDiagnostic,
   requestStripePaymentIntent,
   sanitizeStripeClientMessage,
+  type StripeClientReadinessDiagnostic,
   type StripeClientCompany,
 } from "../lib/stripe/clientPayment";
 
@@ -39,7 +41,11 @@ type StripeInvoicePaymentProps = {
 
 type StripeReadinessState =
   | { status: "checking"; message: string }
-  | { status: "disabled"; message: string }
+  | {
+      status: "disabled";
+      message: string;
+      diagnostic: StripeClientReadinessDiagnostic | null;
+    }
   | { status: "ready"; message: string };
 
 function StripeConfirmationForm({
@@ -165,6 +171,7 @@ export default function StripeInvoicePayment({
       setReadiness({
         status: "disabled",
         message: "Stripe browser configuration is not available in this deployment.",
+        diagnostic: null,
       });
       return;
     }
@@ -180,6 +187,7 @@ export default function StripeInvoicePayment({
     })
       .then(async (response) => {
         const payload = (await response.json()) as {
+          config?: unknown;
           livePaymentsEnabled?: unknown;
           message?: unknown;
         };
@@ -188,10 +196,11 @@ export default function StripeInvoicePayment({
         }
 
         const message = sanitizeStripeClientMessage(payload.message);
+        const diagnostic = parseStripeReadinessDiagnostic(payload.config);
         setReadiness(
           response.ok && payload.livePaymentsEnabled === true
             ? { status: "ready", message }
-            : { status: "disabled", message },
+            : { status: "disabled", message, diagnostic },
         );
       })
       .catch(() => {
@@ -199,6 +208,7 @@ export default function StripeInvoicePayment({
           setReadiness({
             status: "disabled",
             message: "WeatherTech OS could not verify Stripe readiness.",
+            diagnostic: null,
           });
         }
       });
@@ -285,12 +295,41 @@ export default function StripeInvoicePayment({
       </div>
 
       {readiness.status !== "ready" ? (
-        <p
+        <div
           className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
           data-testid="stripe-payment-disabled"
         >
-          {readiness.message}
-        </p>
+          <p>{readiness.message}</p>
+          {readiness.status === "disabled" && readiness.diagnostic ? (
+            <dl
+              className="mt-2 grid gap-1 text-xs"
+              data-testid="stripe-readiness-config-diagnostic"
+            >
+              <div>
+                <dt className="inline font-semibold">Configuration status: </dt>
+                <dd className="inline" data-testid="stripe-readiness-config-status">
+                  {readiness.diagnostic.status}
+                </dd>
+              </div>
+              {readiness.diagnostic.missing.length ? (
+                <div>
+                  <dt className="inline font-semibold">Missing environment variables: </dt>
+                  <dd className="inline" data-testid="stripe-readiness-config-missing">
+                    {readiness.diagnostic.missing.join(", ")}
+                  </dd>
+                </div>
+              ) : null}
+              {readiness.diagnostic.malformed.length ? (
+                <div>
+                  <dt className="inline font-semibold">Malformed environment variables: </dt>
+                  <dd className="inline" data-testid="stripe-readiness-config-malformed">
+                    {readiness.diagnostic.malformed.join(", ")}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          ) : null}
+        </div>
       ) : null}
 
       {!clientSecret ? (

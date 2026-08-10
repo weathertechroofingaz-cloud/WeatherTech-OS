@@ -213,6 +213,47 @@ try {
     "Browser payment eligibility denies a company-name lookalike",
   );
 
+  const readinessDiagnostic = stripeClient.parseStripeReadinessDiagnostic({
+    status: "malformed_config",
+    missing: [
+      "STRIPE_WEBHOOK_SECRET",
+      "UNRECOGNIZED_ENV",
+      "STRIPE_SECRET_KEY=sk_live_syntheticneverrender",
+      "whsec_syntheticneverrender",
+    ],
+    malformed: [
+      "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+      "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_syntheticneverrender",
+    ],
+    credentials: { secretKey: "sk_live_syntheticneverrender" },
+  });
+  assertEqual(
+    readinessDiagnostic.status,
+    "malformed_config",
+    "Browser diagnostic exposes the readiness configuration status",
+  );
+  assertEqual(
+    readinessDiagnostic.missing.join(","),
+    "STRIPE_WEBHOOK_SECRET",
+    "Browser diagnostic allows only known missing environment-variable names",
+  );
+  assertEqual(
+    readinessDiagnostic.malformed.join(","),
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+    "Browser diagnostic allows only known malformed environment-variable names",
+  );
+  assert(
+    !/sk_live_|whsec_|pk_live_|syntheticneverrender/.test(
+      JSON.stringify(readinessDiagnostic),
+    ),
+    "Browser diagnostic discards values, prefixes, arbitrary fields, and unrecognized strings",
+  );
+  assertEqual(
+    stripeClient.parseStripeReadinessDiagnostic({ status: "unexpected" }),
+    null,
+    "Browser diagnostic rejects an unrecognized configuration status",
+  );
+
   const browserRequest = stripeClient.buildStripePaymentIntentRequest({
     companyId: "weathertech",
     invoiceId: "invoice-1",
@@ -504,6 +545,14 @@ try {
     paymentElementComponent.includes('"stripe-payment-ihc-disabled"') &&
       paymentElementComponent.includes('data-testid="stripe-payment-owner-required"'),
     "Payment Element renders explicit IHC and non-owner denial states",
+  );
+  assert(
+    paymentElementComponent.includes("parseStripeReadinessDiagnostic") &&
+      paymentElementComponent.includes('data-testid="stripe-readiness-config-status"') &&
+      paymentElementComponent.includes('data-testid="stripe-readiness-config-missing"') &&
+      paymentElementComponent.includes('data-testid="stripe-readiness-config-malformed"') &&
+      !paymentElementComponent.includes("config.credentials"),
+    "Payment diagnostics render only sanitized status and environment-variable names",
   );
   assert(
     refundRoute.includes("body.ownerApproval !== true") &&

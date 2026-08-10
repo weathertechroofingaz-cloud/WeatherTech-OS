@@ -27,6 +27,20 @@ export type StripePaymentIntentResult = {
   duplicatePrevented: boolean;
 };
 
+const stripeClientReadinessEnvironmentVariableNames = new Set([
+  "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET",
+  "STRIPE_WEATHERTECH_ACCOUNT_ID",
+  "STRIPE_PUBLIC_BASE_URL",
+]);
+
+export type StripeClientReadinessDiagnostic = {
+  status: "ready" | "missing_config" | "malformed_config";
+  missing: string[];
+  malformed: string[];
+};
+
 type FetchLike = (
   input: string,
   init?: RequestInit,
@@ -102,6 +116,42 @@ export function sanitizeStripeClientMessage(value: unknown) {
     .replace(/pi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+/g, "[redacted]")
     .replace(/(bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
     .slice(0, 240);
+}
+
+export function parseStripeReadinessDiagnostic(
+  value: unknown,
+): StripeClientReadinessDiagnostic | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const config = value as Record<string, unknown>;
+  if (
+    config.status !== "ready" &&
+    config.status !== "missing_config" &&
+    config.status !== "malformed_config"
+  ) {
+    return null;
+  }
+
+  const readNames = (candidate: unknown) =>
+    Array.isArray(candidate)
+      ? Array.from(
+          new Set(
+            candidate.filter(
+              (name): name is string =>
+                typeof name === "string" &&
+                stripeClientReadinessEnvironmentVariableNames.has(name),
+            ),
+          ),
+        )
+      : [];
+
+  return {
+    status: config.status,
+    missing: readNames(config.missing),
+    malformed: readNames(config.malformed),
+  };
 }
 
 export async function requestStripePaymentIntent(
