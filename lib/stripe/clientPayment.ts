@@ -1,5 +1,7 @@
 export const STRIPE_PAYMENT_INTENT_PATH =
   "/api/integrations/stripe/payment-intents" as const;
+export const STRIPE_REFUND_PATH =
+  "/api/integrations/stripe/refunds" as const;
 export const STRIPE_READINESS_PATH =
   "/api/integrations/stripe/readiness" as const;
 export const STRIPE_CLIENT_ALLOWED_COMPANY_NAME =
@@ -23,6 +25,21 @@ export type StripePaymentIntentRequest = {
 export type StripePaymentIntentResult = {
   paymentIntentId: string;
   clientSecret: string | null;
+  status: string;
+  duplicatePrevented: boolean;
+};
+
+export type StripeRefundRequest = {
+  companyId: string;
+  paymentId: string;
+  amountCents: number;
+  attemptKey: string;
+  reason: "requested_by_customer";
+  ownerApproval: true;
+};
+
+export type StripeRefundResult = {
+  refundId: string;
   status: string;
   duplicatePrevented: boolean;
 };
@@ -54,6 +71,83 @@ export function isStripeClientCompanyEligible(
       company.name === STRIPE_CLIENT_ALLOWED_COMPANY_NAME &&
       company.trade === "roofing",
   );
+}
+
+export function isStripeClientRefundEligible(input: {
+  company: StripeClientCompany | null | undefined;
+  paymentCompanyId: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  isCompanyOwner: boolean;
+  isDemoMode: boolean;
+}) {
+  return Boolean(
+    isStripeClientCompanyEligible(input.company) &&
+      input.company?.id === input.paymentCompanyId &&
+      input.paymentMethod === "stripe" &&
+      input.paymentStatus === "posted" &&
+      input.isCompanyOwner &&
+      !input.isDemoMode,
+  );
+}
+
+export function isStripeRefundSubmissionAllowed(input: {
+  readinessStatus: "checking" | "disabled" | "ready";
+  ownerApproved: boolean;
+  isSubmitting: boolean;
+  submitted: boolean;
+}) {
+  return Boolean(
+    input.readinessStatus === "ready" &&
+      input.ownerApproved &&
+      !input.isSubmitting &&
+      !input.submitted,
+  );
+}
+
+export function isStripeRefundReadinessEnabled(input: {
+  responseOk: boolean;
+  ok: unknown;
+  livePaymentsEnabled: unknown;
+  refundsEnabled: unknown;
+  webhookProcessingEnabled: unknown;
+}) {
+  return Boolean(
+    input.responseOk &&
+      input.ok === true &&
+      input.livePaymentsEnabled === true &&
+      input.refundsEnabled === true &&
+      input.webhookProcessingEnabled === true,
+  );
+}
+
+export function isStripePaymentReadinessEnabled(input: {
+  responseOk: boolean;
+  ok: unknown;
+  livePaymentsEnabled: unknown;
+}) {
+  return Boolean(
+    input.responseOk &&
+      input.ok === true &&
+      input.livePaymentsEnabled === true,
+  );
+}
+
+export function getStripeRefundAmountCents(amount: number) {
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+
+  const amountCents = Math.round(amount * 100);
+  if (
+    !Number.isSafeInteger(amountCents) ||
+    amountCents < 50 ||
+    Math.abs(amount - amountCents / 100) > Number.EPSILON * 100
+  ) {
+    return null;
+  }
+
+  return amountCents;
 }
 
 export function parseStripePaymentAmount(
@@ -104,8 +198,26 @@ export function buildStripePaymentIntentRequest(input: {
   };
 }
 
-export function sanitizeStripeClientMessage(value: unknown) {
-  const fallback = "WeatherTech OS could not prepare the secure Stripe payment.";
+export function buildStripeRefundRequest(input: {
+  companyId: string;
+  paymentId: string;
+  amountCents: number;
+  attemptKey: string;
+}): StripeRefundRequest {
+  return {
+    companyId: input.companyId,
+    paymentId: input.paymentId,
+    amountCents: input.amountCents,
+    attemptKey: input.attemptKey,
+    reason: "requested_by_customer",
+    ownerApproval: true,
+  };
+}
+
+export function sanitizeStripeClientMessage(
+  value: unknown,
+  fallback = "WeatherTech OS could not prepare the secure Stripe payment.",
+) {
   if (typeof value !== "string" || !value.trim()) {
     return fallback;
   }
@@ -198,6 +310,52 @@ export async function requestStripePaymentIntent(
   return {
     paymentIntentId,
     clientSecret,
+    status,
+    duplicatePrevented: payload.duplicatePrevented === true,
+  };
+}
+
+export async function requestStripeRefund(
+  input: StripeRefundRequest,
+  fetcher: FetchLike = fetch,
+): Promise<StripeRefundResult> {
+  const response = await fetcher(STRIPE_REFUND_PATH, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  let payload: Record<string, unknown> = {};
+
+  try {
+    payload = (await response.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error("WeatherTech OS received an invalid Stripe refund response.");
+  }
+
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(
+      sanitizeStripeClientMessage(
+        payload.message,
+        "WeatherTech OS could not issue the approved Stripe refund.",
+      ),
+    );
+  }
+
+  const refundId =
+    typeof payload.refundId === "string" && payload.refundId
+      ? payload.refundId
+      : null;
+  const status =
+    typeof payload.status === "string" && payload.status ? payload.status : null;
+
+  if (!refundId || !status) {
+    throw new Error("Stripe did not return a valid refund result.");
+  }
+
+  return {
+    refundId,
     status,
     duplicatePrevented: payload.duplicatePrevented === true,
   };

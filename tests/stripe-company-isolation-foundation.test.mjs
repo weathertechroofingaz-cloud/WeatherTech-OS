@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import path, { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const cwd = process.cwd();
 const outDir = mkdtempSync(join(cwd, ".tmp-weathertech-stripe-foundation-"));
@@ -48,12 +50,15 @@ try {
       "lib/stripe/clientPayment.ts",
       "lib/stripe/serverClient.ts",
       "lib/crm/integrationCenter.ts",
+      "components/StripeInvoiceRefund.tsx",
       "--target",
       "ES2022",
       "--module",
       "commonjs",
       "--moduleResolution",
       "node",
+      "--jsx",
+      "react-jsx",
       "--skipLibCheck",
       "--esModuleInterop",
       "--outDir",
@@ -68,16 +73,21 @@ try {
     );
   }
 
-  const stripe = await import(pathToFileURL(join(outDir, "stripe", "foundation.js")));
+  const stripe = await import(pathToFileURL(join(outDir, "lib", "stripe", "foundation.js")));
   const stripeClient = await import(
-    pathToFileURL(join(outDir, "stripe", "clientPayment.js"))
+    pathToFileURL(join(outDir, "lib", "stripe", "clientPayment.js"))
   );
   const stripeServer = await import(
-    pathToFileURL(join(outDir, "stripe", "serverClient.js"))
+    pathToFileURL(join(outDir, "lib", "stripe", "serverClient.js"))
   );
   const integrationCenter = await import(
-    pathToFileURL(join(outDir, "crm", "integrationCenter.js"))
+    pathToFileURL(join(outDir, "lib", "crm", "integrationCenter.js"))
   );
+  const stripeRefundComponentModule = await import(
+    pathToFileURL(join(outDir, "components", "StripeInvoiceRefund.js"))
+  );
+  const StripeInvoiceRefund = stripeRefundComponentModule.default.default ??
+    stripeRefundComponentModule.default;
 
   assertEqual(
     stripe.STRIPE_ALLOWED_COMPANY_NAME,
@@ -336,6 +346,339 @@ try {
     "Provider and safety-gate failures surface as sanitized errors",
   );
 
+  assertEqual(
+    stripeClient.getStripeRefundAmountCents(0.5),
+    50,
+    "The controlled minimum full refund converts to exact integer cents",
+  );
+  for (const unsafeRefundAmount of [0.49, -1, Number.NaN, 1.001]) {
+    assertEqual(
+      stripeClient.getStripeRefundAmountCents(unsafeRefundAmount),
+      null,
+      `Unsafe refund amount ${String(unsafeRefundAmount)} is rejected`,
+    );
+  }
+  const refundablePayment = {
+    company: {
+      id: "weathertech",
+      name: "WeatherTech Roofing LLC",
+      trade: "roofing",
+    },
+    paymentCompanyId: "weathertech",
+    paymentMethod: "stripe",
+    paymentStatus: "posted",
+    isCompanyOwner: true,
+    isDemoMode: false,
+  };
+  assertEqual(
+    stripeClient.isStripeClientRefundEligible(refundablePayment),
+    true,
+    "A posted WeatherTech Stripe payment is owner-refundable",
+  );
+  for (const ineligibleRefund of [
+    {
+      ...refundablePayment,
+      company: { id: "ihc", name: "IHC Painting", trade: "painting" },
+      paymentCompanyId: "ihc",
+    },
+    {
+      ...refundablePayment,
+      company: {
+        id: "lookalike",
+        name: "WeatherTech Roofing LLC",
+        trade: "painting",
+      },
+      paymentCompanyId: "lookalike",
+    },
+    { ...refundablePayment, paymentCompanyId: "another-company" },
+    { ...refundablePayment, paymentMethod: "Check" },
+    { ...refundablePayment, paymentStatus: "pending" },
+    { ...refundablePayment, paymentStatus: "refunded" },
+    { ...refundablePayment, isCompanyOwner: false },
+    { ...refundablePayment, isDemoMode: true },
+  ]) {
+    assertEqual(
+      stripeClient.isStripeClientRefundEligible(ineligibleRefund),
+      false,
+      "Refund eligibility rejects non-WeatherTech, cross-company, offline, non-posted, non-owner, and demo inputs",
+    );
+  }
+  assertEqual(
+    stripeClient.isStripeRefundSubmissionAllowed({
+      readinessStatus: "ready",
+      ownerApproved: true,
+      isSubmitting: false,
+      submitted: false,
+    }),
+    true,
+    "Refund submission unlocks only after readiness and explicit owner approval",
+  );
+  for (const lockedRefundSubmission of [
+    {
+      readinessStatus: "checking",
+      ownerApproved: true,
+      isSubmitting: false,
+      submitted: false,
+    },
+    {
+      readinessStatus: "disabled",
+      ownerApproved: true,
+      isSubmitting: false,
+      submitted: false,
+    },
+    {
+      readinessStatus: "ready",
+      ownerApproved: false,
+      isSubmitting: false,
+      submitted: false,
+    },
+    {
+      readinessStatus: "ready",
+      ownerApproved: true,
+      isSubmitting: true,
+      submitted: false,
+    },
+    {
+      readinessStatus: "ready",
+      ownerApproved: true,
+      isSubmitting: false,
+      submitted: true,
+    },
+  ]) {
+    assertEqual(
+      stripeClient.isStripeRefundSubmissionAllowed(lockedRefundSubmission),
+      false,
+      "Refund submission stays locked while readiness, approval, or idempotency safeguards are incomplete",
+    );
+  }
+  assertEqual(
+    stripeClient.isStripeRefundReadinessEnabled({
+      responseOk: true,
+      ok: true,
+      livePaymentsEnabled: true,
+      refundsEnabled: true,
+      webhookProcessingEnabled: true,
+    }),
+    true,
+    "Refund readiness requires the healthy response and all three live gates",
+  );
+  assertEqual(
+    stripeClient.isStripeRefundReadinessEnabled({
+      responseOk: true,
+      ok: false,
+      livePaymentsEnabled: true,
+      refundsEnabled: true,
+      webhookProcessingEnabled: true,
+    }),
+    false,
+    "A failed overall readiness result keeps refunds locked even if all gate booleans are true",
+  );
+  assertEqual(
+    stripeClient.isStripePaymentReadinessEnabled({
+      responseOk: true,
+      ok: true,
+      livePaymentsEnabled: true,
+    }),
+    true,
+    "Payment readiness requires a healthy response and the live-payment gate",
+  );
+  assertEqual(
+    stripeClient.isStripePaymentReadinessEnabled({
+      responseOk: true,
+      ok: false,
+      livePaymentsEnabled: true,
+    }),
+    false,
+    "A failed overall readiness result keeps payments locked even when the live-payment gate is true",
+  );
+
+  const refundRenderBase = {
+    company: refundablePayment.company,
+    paymentId: "payment-1",
+    paymentCompanyId: "weathertech",
+    paymentAmount: 0.5,
+    paymentMethod: "stripe",
+    paymentStatus: "posted",
+    isCompanyOwner: true,
+    isDemoMode: false,
+    onReload: async () => {},
+    onNotice: () => {},
+  };
+  const eligibleRefundMarkup = renderToStaticMarkup(
+    React.createElement(StripeInvoiceRefund, refundRenderBase),
+  );
+  assert(
+    eligibleRefundMarkup.includes('data-testid="stripe-refund-action"') &&
+      eligibleRefundMarkup.includes('data-testid="stripe-refund-submit"') &&
+      eligibleRefundMarkup.includes("disabled"),
+    "An eligible WeatherTech refund renders but starts locked pending readiness and approval",
+  );
+  const ihcRefundMarkup = renderToStaticMarkup(
+    React.createElement(StripeInvoiceRefund, {
+      ...refundRenderBase,
+      company: { id: "ihc", name: "IHC Painting", trade: "painting" },
+      paymentCompanyId: "ihc",
+    }),
+  );
+  assert(
+    ihcRefundMarkup.includes('data-testid="stripe-refund-ihc-disabled"') &&
+      !ihcRefundMarkup.includes('data-testid="stripe-refund-submit"'),
+    "IHC receives only the disabled isolation state",
+  );
+  const nonOwnerRefundMarkup = renderToStaticMarkup(
+    React.createElement(StripeInvoiceRefund, {
+      ...refundRenderBase,
+      isCompanyOwner: false,
+    }),
+  );
+  assert(
+    nonOwnerRefundMarkup.includes('data-testid="stripe-refund-owner-required"') &&
+      !nonOwnerRefundMarkup.includes('data-testid="stripe-refund-submit"'),
+    "A non-owner receives no active refund control",
+  );
+  const offlineRefundMarkup = renderToStaticMarkup(
+    React.createElement(StripeInvoiceRefund, {
+      ...refundRenderBase,
+      paymentMethod: "Check",
+    }),
+  );
+  assertEqual(offlineRefundMarkup, "", "Offline payments render no Stripe refund UI");
+  const refundedPaymentMarkup = renderToStaticMarkup(
+    React.createElement(StripeInvoiceRefund, {
+      ...refundRenderBase,
+      paymentStatus: "refunded",
+    }),
+  );
+  assert(
+    refundedPaymentMarkup.includes('data-testid="stripe-refund-completed"') &&
+      !refundedPaymentMarkup.includes('data-testid="stripe-refund-submit"'),
+    "A reconciled refund renders only its completed state",
+  );
+
+  const refundRequest = stripeClient.buildStripeRefundRequest({
+    companyId: "weathertech",
+    paymentId: "payment-1",
+    amountCents: 50,
+    attemptKey: "stable-refund-attempt",
+  });
+  assertEqual(
+    Object.keys(refundRequest).sort().join(","),
+    [
+      "amountCents",
+      "attemptKey",
+      "companyId",
+      "ownerApproval",
+      "paymentId",
+      "reason",
+    ].sort().join(","),
+    "Refund request contains only the approved non-PII fields",
+  );
+  assertEqual(refundRequest.ownerApproval, true, "Refund request records explicit owner approval");
+  assertEqual(
+    refundRequest.reason,
+    "requested_by_customer",
+    "Refund caller uses the approved fixed Stripe reason",
+  );
+  assert(
+    !JSON.stringify(refundRequest).match(/email|phone|customerId|invoiceId|secret|key_live/i),
+    "Refund request contains no customer PII, invoice data, or credentials",
+  );
+
+  let capturedRefundRequest = null;
+  const recoveredRefund = await stripeClient.requestStripeRefund(
+    refundRequest,
+    async (url, init) => {
+      capturedRefundRequest = { url, init };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          duplicatePrevented: true,
+          refundId: "re_existing",
+          status: "succeeded",
+        }),
+      };
+    },
+  );
+  assertEqual(
+    capturedRefundRequest.url,
+    "/api/integrations/stripe/refunds",
+    "Refund caller uses the existing protected route",
+  );
+  assertEqual(capturedRefundRequest.init.method, "POST", "Refund caller uses POST");
+  assertEqual(
+    capturedRefundRequest.init.headers["Content-Type"],
+    "application/json",
+    "Refund caller sends only JSON",
+  );
+  assertEqual(
+    capturedRefundRequest.init.credentials,
+    "same-origin",
+    "Refund caller preserves the signed-in owner session",
+  );
+  assertEqual(
+    capturedRefundRequest.init.cache,
+    "no-store",
+    "Refund caller disables response caching",
+  );
+  assertEqual(
+    JSON.parse(capturedRefundRequest.init.body).attemptKey,
+    "stable-refund-attempt",
+    "Refund caller preserves the stable idempotency attempt key",
+  );
+  assertEqual(
+    capturedRefundRequest.init.body,
+    JSON.stringify(refundRequest),
+    "Refund caller sends exactly the approved request body",
+  );
+  assertEqual(
+    recoveredRefund.duplicatePrevented,
+    true,
+    "An idempotent refund retry recovers the existing provider result",
+  );
+  await assertRejects(
+    stripeClient.requestStripeRefund(refundRequest, async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("invalid json");
+      },
+    })),
+    "invalid Stripe refund response",
+    "An invalid JSON refund response is rejected without provider data",
+  );
+  await assertRejects(
+    stripeClient.requestStripeRefund(refundRequest, async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, status: "succeeded" }),
+    })),
+    "valid refund result",
+    "A malformed successful refund response is rejected",
+  );
+  await assertRejects(
+    stripeClient.requestStripeRefund(refundRequest, async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        message: "Live Stripe refunds remain disabled. sk_live_syntheticneverrender",
+      }),
+    })),
+    "[redacted]",
+    "Refund safety-gate and provider failures surface only after sanitization",
+  );
+  await assertRejects(
+    stripeClient.requestStripeRefund(refundRequest, async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({ ok: false }),
+    })),
+    "could not issue the approved Stripe refund",
+    "A missing provider message uses the refund-specific sanitized fallback",
+  );
+
   const operation = {
     operation: "deposit",
     companyId: "weathertech",
@@ -548,11 +891,64 @@ try {
   );
   assert(
     paymentElementComponent.includes("parseStripeReadinessDiagnostic") &&
+      paymentElementComponent.includes("isStripePaymentReadinessEnabled") &&
+      paymentElementComponent.includes("ok: payload.ok") &&
       paymentElementComponent.includes('data-testid="stripe-readiness-config-status"') &&
       paymentElementComponent.includes('data-testid="stripe-readiness-config-missing"') &&
       paymentElementComponent.includes('data-testid="stripe-readiness-config-malformed"') &&
       !paymentElementComponent.includes("config.credentials"),
     "Payment diagnostics render only sanitized status and environment-variable names",
+  );
+  const refundComponent = fs.readFileSync(
+    path.join(cwd, "components/StripeInvoiceRefund.tsx"),
+    "utf8",
+  );
+  const crmApp = fs.readFileSync(
+    path.join(cwd, "components/CrmApp.tsx"),
+    "utf8",
+  );
+  for (const requiredRefundControl of [
+    "isStripeClientRefundEligible",
+    "isStripeRefundReadinessEnabled",
+    "isStripeRefundSubmissionAllowed",
+    "getStripeRefundAmountCents",
+    "buildStripeRefundRequest",
+    "requestStripeRefund",
+    "livePaymentsEnabled: payload.livePaymentsEnabled",
+    "refundsEnabled: payload.refundsEnabled",
+    "webhookProcessingEnabled: payload.webhookProcessingEnabled",
+    "window.crypto.randomUUID()",
+    'data-testid="stripe-refund-owner-approval"',
+    'data-testid="stripe-refund-submit"',
+    "I approve one full",
+    "original Stripe payment method",
+    "await onReload()",
+  ]) {
+    assert(
+      refundComponent.includes(requiredRefundControl),
+      `Refund control includes ${requiredRefundControl}`,
+    );
+  }
+  assert(
+    refundComponent.includes('data-testid="stripe-refund-ihc-disabled"') &&
+      refundComponent.includes('data-testid="stripe-refund-owner-required"') &&
+      refundComponent.includes('paymentStatus === "refunded"'),
+    "Refund control renders explicit IHC, non-owner, and completed-refund safety states",
+  );
+  assert(
+    !refundComponent.includes("STRIPE_SECRET_KEY") &&
+      !refundComponent.includes("STRIPE_WEBHOOK_SECRET") &&
+      !refundComponent.includes("console.") &&
+      !refundComponent.includes("localStorage") &&
+      !refundComponent.includes("sessionStorage"),
+    "Refund control never references server secrets or persists/logs refund state",
+  );
+  assert(
+    crmApp.includes('payment.method === "stripe"') &&
+      crmApp.includes("<StripeInvoiceRefund") &&
+      crmApp.indexOf("<StripeInvoiceRefund") <
+        crmApp.indexOf("{invoice.balance_due > 0 ? ("),
+    "Refund control mounts only for Stripe payment rows and remains outside the invoice-balance branch",
   );
   assert(
     refundRoute.includes("body.ownerApproval !== true") &&

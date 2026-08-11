@@ -3873,6 +3873,15 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
     throw new Error(`Financial payment totals were not updated correctly: ${JSON.stringify(paidInvoice)}`);
   }
 
+  const refundControlsAfterOfflinePayment = await tab.playwright.evaluate(
+    () => document.querySelectorAll('[data-testid="stripe-refund-action"]').length,
+  );
+  if (refundControlsAfterOfflinePayment !== 0) {
+    throw new Error(
+      "An offline payment incorrectly exposed the live Stripe refund control.",
+    );
+  }
+
   await fillUnique(
     tab.playwright.locator('[data-testid="financial-payment-form"] input[name="amount"]'),
     "99999",

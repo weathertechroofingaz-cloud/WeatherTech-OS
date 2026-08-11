@@ -12,6 +12,7 @@ import {
   STRIPE_READINESS_PATH,
   buildStripePaymentIntentRequest,
   isStripeClientCompanyEligible,
+  isStripePaymentReadinessEnabled,
   parseStripePaymentAmount,
   parseStripeReadinessDiagnostic,
   requestStripePaymentIntent,
@@ -187,6 +188,7 @@ export default function StripeInvoicePayment({
     })
       .then(async (response) => {
         const payload = (await response.json()) as {
+          ok?: unknown;
           config?: unknown;
           livePaymentsEnabled?: unknown;
           message?: unknown;
@@ -198,7 +200,11 @@ export default function StripeInvoicePayment({
         const message = sanitizeStripeClientMessage(payload.message);
         const diagnostic = parseStripeReadinessDiagnostic(payload.config);
         setReadiness(
-          response.ok && payload.livePaymentsEnabled === true
+          isStripePaymentReadinessEnabled({
+            responseOk: response.ok,
+            ok: payload.ok,
+            livePaymentsEnabled: payload.livePaymentsEnabled,
+          })
             ? { status: "ready", message }
             : { status: "disabled", message, diagnostic },
         );

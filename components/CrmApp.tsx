@@ -3,6 +3,7 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Image from "next/image";
 import StripeInvoicePayment from "./StripeInvoicePayment";
+import StripeInvoiceRefund from "./StripeInvoiceRefund";
 import {
   Activity,
   AlertTriangle,
@@ -33837,6 +33838,20 @@ function InvoicePaymentsPanel({
               {formatDate(payment.paid_at ?? payment.created_at)} · {payment.method}
               {payment.reference ? ` · ${payment.reference}` : ""}
             </p>
+            {payment.method === "stripe" ? (
+              <StripeInvoiceRefund
+                company={company}
+                paymentId={payment.id}
+                paymentCompanyId={payment.company_id}
+                paymentAmount={payment.amount}
+                paymentMethod={payment.method}
+                paymentStatus={payment.status}
+                isCompanyOwner={isCompanyOwner}
+                isDemoMode={isDemoMode}
+                onReload={onReload}
+                onNotice={onNotice}
+              />
+            ) : null}
           </div>
         ))}
         {!summary.payments.length ? (
