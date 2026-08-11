@@ -1082,6 +1082,35 @@ async function seedFinancialOperationsRecords(env, company, runId) {
     }),
   });
 
+  await restRequest(env, "invoices", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify(
+      Array.from({ length: 8 }, (_, index) => {
+        const total = 100 + index;
+        return {
+          company_id: company.id,
+          customer_id: customer.id,
+          job_id: null,
+          estimate_id: null,
+          invoice_number: `INV-TEST-${runId}-PAGE-${index + 1}`,
+          title: `${TEST_PREFIX} ${runId} FINANCIAL PAGINATION ${index + 1}`,
+          status: "draft",
+          issue_date: new Date().toISOString().slice(0, 10),
+          due_date: null,
+          subtotal: total,
+          tax_rate: 0,
+          tax_total: 0,
+          discount_total: 0,
+          total,
+          amount_paid: 0,
+          balance_due: total,
+          notes: `${TEST_PREFIX} ${runId} pagination safety fixture`,
+        };
+      }),
+    ),
+  });
+
   return { customer, estimate, job, changeOrder, invoice };
 }
 
@@ -1724,6 +1753,12 @@ async function clickVisibleButtonByText(
 async function fillUnique(locator, value, label) {
   await waitForUniqueLocator(locator, label);
   await locator.fill(value, { timeoutMs: 8000 });
+}
+
+async function clearUnique(locator, label) {
+  await waitForUniqueLocator(locator, label);
+  await locator.press("Meta+A", { timeoutMs: 8000 });
+  await locator.press("Backspace", { timeoutMs: 8000 });
 }
 
 async function fillDateUnique(locator, value, label) {
@@ -3689,7 +3724,15 @@ async function testAiToolsOperatingBrain(browser, tab) {
   return { desktopLayout, mobileLayout };
 }
 
-async function testFinancialOperationsWorkspace(browser, tab, env, company, runId, progress) {
+async function testFinancialOperationsWorkspace(
+  browser,
+  tab,
+  env,
+  company,
+  otherCompany,
+  runId,
+  progress,
+) {
   progress("financial:seed:start");
   const seeded = await seedFinancialOperationsRecords(env, company, runId);
   const expectedInvoiceTitle = `Invoice for ${seeded.estimate.title}`;
@@ -3732,6 +3775,15 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
     15000,
   );
 
+  await waitFor(
+    tab,
+    () =>
+      !document.querySelector('[data-testid="stripe-invoice-payment"]') &&
+      !document.querySelector('[data-testid="stripe-refund-action"]'),
+    "Invoices require an explicit invoice selection before exposing Stripe actions",
+    10000,
+  );
+
   await selectUnique(
     tab.playwright.locator('[data-testid="financial-company-filter"]'),
     company.id,
@@ -3760,9 +3812,8 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
     "financial sent invoice row",
     10000,
   );
-  await fillUnique(
+  await clearUnique(
     tab.playwright.locator('[data-testid="financial-search"]'),
-    "",
     "clear financial search",
   );
   await selectUnique(
@@ -3807,23 +3858,204 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
     throw new Error("Financial estimate invoice did not persist with the expected estimate link.");
   }
 
+  const persistedInvoiceRow = () =>
+    tab.playwright
+      .locator('[data-testid="financial-invoice-row"]')
+      .filter({ hasText: createdInvoice.invoice_number })
+      .filter({ hasText: createdInvoice.title });
+  const waitForHiddenStripeActions = (label) =>
+    waitFor(
+      tab,
+      () =>
+        !document.querySelector('[data-testid="stripe-invoice-payment"]') &&
+        !document.querySelector('[data-testid="stripe-refund-action"]'),
+      label,
+      10000,
+    );
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    createdInvoice.invoice_number,
+    "financial persisted invoice search",
+  );
+  await clickUnique(
+    persistedInvoiceRow(),
+    "financial explicitly selected persisted invoice",
+  );
+
   await waitFor(
     tab,
     () => {
       const surface = document.querySelector('[data-testid="stripe-invoice-payment"]');
-      const prepareButton = document.querySelector('[data-testid="stripe-prepare-payment"]');
-
       return (
         Boolean(surface) &&
-        Boolean(document.querySelector('[data-testid="stripe-payment-disabled"]')) &&
+        Boolean(document.querySelector('[data-testid="stripe-payment-target"]')) &&
+        Boolean(document.querySelector('[data-testid="stripe-payment-amount"]')) &&
         Boolean(document.querySelector('[data-testid="stripe-owner-approval"]')) &&
-        prepareButton?.disabled === true &&
-        !surface?.querySelector("iframe")
+        Boolean(document.querySelector('[data-testid="stripe-prepare-payment"]'))
       );
     },
-    "Stripe Payment Element remains gated off during browser regression",
+    "Stripe Payment Element safety controls render for the explicitly selected invoice",
     15000,
   );
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    `${TEST_PREFIX} ${runId} HIDDEN INVOICE`,
+    "financial hidden-selection search",
+  );
+  await waitForHiddenStripeActions("Search filtering clears hidden Stripe actions");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    createdInvoice.invoice_number,
+    "restore financial persisted invoice search",
+  );
+  await waitFor(
+    tab,
+    () =>
+      document.querySelectorAll('[data-testid="financial-invoice-row"]').length === 1 &&
+      !document.querySelector('[data-testid="stripe-invoice-payment"]'),
+    "Search restoration does not restore a hidden invoice selection",
+    10000,
+  );
+  await clickUnique(persistedInvoiceRow(), "financial reselect after search filter");
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-workflow-filter"]'),
+    "overdue",
+    "financial hidden-selection workflow filter",
+  );
+  await waitForHiddenStripeActions("Workflow filtering clears hidden Stripe actions");
+  await selectUnique(
+    tab.playwright.locator('[data-testid="financial-workflow-filter"]'),
+    "all",
+    "restore financial workflow filter",
+  );
+  await waitFor(
+    tab,
+    () =>
+      document.querySelectorAll('[data-testid="financial-invoice-row"]').length === 1 &&
+      !document.querySelector('[data-testid="stripe-invoice-payment"]'),
+    "Workflow restoration does not restore a hidden invoice selection",
+    10000,
+  );
+  await clickUnique(persistedInvoiceRow(), "financial reselect after workflow filter");
+
+  const otherCompanyOptionAvailable = await tab.playwright.evaluate(
+    (otherCompanyId) =>
+      Array.from(
+        document.querySelector('[data-testid="financial-company-filter"]')?.options ?? [],
+      ).some((option) => option.value === otherCompanyId),
+    otherCompany.id,
+  );
+  if (otherCompanyOptionAvailable) {
+    await selectUnique(
+      tab.playwright.locator('[data-testid="financial-company-filter"]'),
+      otherCompany.id,
+      "financial hidden-selection company filter",
+    );
+    await waitForHiddenStripeActions("Company switching clears hidden Stripe actions");
+    await selectUnique(
+      tab.playwright.locator('[data-testid="financial-company-filter"]'),
+      company.id,
+      "restore financial company filter",
+    );
+    await waitFor(
+      tab,
+      () =>
+        document.querySelectorAll('[data-testid="financial-invoice-row"]').length === 1 &&
+        !document.querySelector('[data-testid="stripe-invoice-payment"]'),
+      "Company restoration does not restore a hidden invoice selection",
+      10000,
+    );
+    await clickUnique(persistedInvoiceRow(), "financial reselect after company filter");
+  }
+
+  await clearUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    "clear financial search for pagination guard",
+  );
+  try {
+    await waitFor(
+      tab,
+      () => {
+        const searchInput = document.querySelector('[data-testid="financial-search"]');
+        return (
+          searchInput?.value === "" &&
+          Boolean(document.querySelector('button[aria-label="Go to page 2"]'))
+        );
+      },
+      "financial pagination fixtures visible after clearing search",
+      10000,
+    );
+  } catch (error) {
+    const paginationState = await tab.playwright.evaluate(() => ({
+      search: document.querySelector('[data-testid="financial-search"]')?.value ?? null,
+      rowCount: document.querySelectorAll('[data-testid="financial-invoice-row"]').length,
+      paginationText:
+        document.querySelector('nav[aria-label="Pagination"]')?.textContent ?? null,
+    }));
+    throw new Error(`${error instanceof Error ? error.message : String(error)}: ${JSON.stringify(paginationState)}`);
+  }
+  await clickUnique(
+    persistedInvoiceRow(),
+    "financial select persisted invoice before pagination",
+  );
+  await clickUnique(
+    tab.playwright.locator('button[aria-label="Go to page 2"]'),
+    "financial next invoice page",
+  );
+  await waitForHiddenStripeActions("Invoice pagination clears hidden Stripe actions");
+  await clickUnique(
+    tab.playwright.locator('button[aria-label="Go to page 1"]'),
+    "financial previous invoice page",
+  );
+  await waitForHiddenStripeActions(
+    "Returning to the invoice page does not restore a hidden selection",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    createdInvoice.invoice_number,
+    "restore financial persisted invoice search after pagination",
+  );
+  await clickUnique(persistedInvoiceRow(), "financial reselect after pagination");
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="stripe-invoice-payment"]')),
+    "Stripe actions return only after the invoice is explicitly reselected",
+    10000,
+  );
+
+  const stripePaymentSafetyState = await tab.playwright.evaluate(() => {
+    const surface = document.querySelector('[data-testid="stripe-invoice-payment"]');
+    const amountInput = document.querySelector('[data-testid="stripe-payment-amount"]');
+    const approval = document.querySelector('[data-testid="stripe-owner-approval"]');
+    const prepareButton = document.querySelector('[data-testid="stripe-prepare-payment"]');
+
+    return {
+      disabledMessageVisible: Boolean(
+        document.querySelector('[data-testid="stripe-payment-disabled"]'),
+      ),
+      amount: amountInput?.value ?? null,
+      approvalDisabled: approval?.disabled ?? null,
+      approvalChecked: approval?.checked ?? null,
+      prepareDisabled: prepareButton?.disabled ?? null,
+      iframeCount: surface?.querySelectorAll("iframe").length ?? null,
+    };
+  });
+
+  if (
+    !stripePaymentSafetyState.disabledMessageVisible ||
+    stripePaymentSafetyState.amount !== "" ||
+    stripePaymentSafetyState.approvalDisabled !== true ||
+    stripePaymentSafetyState.approvalChecked !== false ||
+    stripePaymentSafetyState.prepareDisabled !== true ||
+    stripePaymentSafetyState.iframeCount !== 0
+  ) {
+    throw new Error(
+      `Stripe Payment Element safety state is incorrect: ${JSON.stringify(stripePaymentSafetyState)}`,
+    );
+  }
 
   const [stripeMappingsAfter, stripeWebhookEventsAfter] = await Promise.all([
     restRequest(
@@ -3872,6 +4104,19 @@ async function testFinancialOperationsWorkspace(browser, tab, env, company, runI
   if (!paidInvoice || Number(paidInvoice.amount_paid) !== 250 || Number(paidInvoice.balance_due) !== 4750) {
     throw new Error(`Financial payment totals were not updated correctly: ${JSON.stringify(paidInvoice)}`);
   }
+
+  await fillUnique(
+    tab.playwright.locator('[data-testid="financial-search"]'),
+    paidInvoice.invoice_number,
+    "financial partially paid invoice search",
+  );
+  await clickUnique(
+    tab.playwright
+      .locator('[data-testid="financial-invoice-row"]')
+      .filter({ hasText: paidInvoice.invoice_number })
+      .filter({ hasText: paidInvoice.title }),
+    "financial explicitly reselected partially paid invoice",
+  );
 
   const refundControlsAfterOfflinePayment = await tab.playwright.evaluate(
     () => document.querySelectorAll('[data-testid="stripe-refund-action"]').length,
@@ -11079,7 +11324,7 @@ export async function runWeatherTechOsRegression({
     cleanup.before = await cleanupTestRecords(env, "", leadNameColumn);
     progress("cleanup:before:done");
     const companies = await findCompanies(env);
-    const { weatherTech } = companies;
+    const { weatherTech, ihc } = companies;
     progress("seed:start");
     seededJob = await seedTestJob(env, weatherTech.id, runId);
     progress("seed:done");
@@ -11179,7 +11424,7 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("financial")) {
       await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
-        testFinancialOperationsWorkspace(browser, tab, env, weatherTech, runId, progress),
+        testFinancialOperationsWorkspace(browser, tab, env, weatherTech, ihc, runId, progress),
       );
     }
 

@@ -195,6 +195,60 @@ try {
     50,
     "Minimum Stripe payment parses into exact integer cents",
   );
+  assertEqual(
+    stripeClient.isStripePaymentConfirmationAllowed({
+      stripeReady: true,
+      elementsReady: true,
+      ownerConfirmedExactCharge: true,
+      isConfirming: false,
+      submitted: false,
+    }),
+    true,
+    "Exact-charge owner approval enables a ready Stripe confirmation",
+  );
+  for (const blockedConfirmation of [
+    {
+      stripeReady: false,
+      elementsReady: true,
+      ownerConfirmedExactCharge: true,
+      isConfirming: false,
+      submitted: false,
+    },
+    {
+      stripeReady: true,
+      elementsReady: false,
+      ownerConfirmedExactCharge: true,
+      isConfirming: false,
+      submitted: false,
+    },
+    {
+      stripeReady: true,
+      elementsReady: true,
+      ownerConfirmedExactCharge: false,
+      isConfirming: false,
+      submitted: false,
+    },
+    {
+      stripeReady: true,
+      elementsReady: true,
+      ownerConfirmedExactCharge: true,
+      isConfirming: true,
+      submitted: false,
+    },
+    {
+      stripeReady: true,
+      elementsReady: true,
+      ownerConfirmedExactCharge: true,
+      isConfirming: false,
+      submitted: true,
+    },
+  ]) {
+    assertEqual(
+      stripeClient.isStripePaymentConfirmationAllowed(blockedConfirmation),
+      false,
+      "Stripe confirmation stays blocked unless every final approval condition passes",
+    );
+  }
 
   const recoveryMapping = {
     id: "mapping-1",
@@ -490,6 +544,32 @@ try {
   assert(
     !JSON.stringify(browserRequest).match(/email|phone|customer|secret|key_live/i),
     "Browser payment request contains no customer PII or credentials",
+  );
+
+  const revalidationRequest = stripeClient.buildStripePaymentIntentRequest({
+    companyId: "weathertech",
+    invoiceId: "invoice-1",
+    amountCents: 50,
+    attemptKey: "stable-browser-attempt",
+    expectedPaymentIntentId: "pi_existing",
+  });
+  assertEqual(
+    revalidationRequest.expectedPaymentIntentId,
+    "pi_existing",
+    "Final confirmation revalidates only the exact prepared PaymentIntent",
+  );
+  assertEqual(
+    Object.keys(revalidationRequest).sort().join(","),
+    [
+      "amountCents",
+      "attemptKey",
+      "companyId",
+      "expectedPaymentIntentId",
+      "invoiceId",
+      "kind",
+      "ownerApproval",
+    ].sort().join(","),
+    "Revalidation adds only the expected PaymentIntent identifier",
   );
 
   let capturedRequest = null;
@@ -1099,6 +1179,21 @@ try {
     "Concurrent browser amounts use one authoritative invoice-generation Stripe key and recover the winning mapping",
   );
   assert(
+    paymentIntentRoute.includes("expectedPaymentIntentId?: unknown") &&
+      paymentIntentRoute.includes("expectsExistingPaymentIntent") &&
+      paymentIntentRoute.includes("recoverableMapping.stripe_object_id !== expectedPaymentIntentId") &&
+      paymentIntentRoute.includes("if (expectedPaymentIntentId)") &&
+      paymentIntentRoute.includes('recoverableIntent.status !== "requires_payment_method"') &&
+      paymentIntentRoute.includes('recoverableIntent.status !== "requires_confirmation"') &&
+      paymentIntentRoute.includes('recoverableIntent.confirmation_method !== "automatic"') &&
+      paymentIntentRoute.includes('recoverableIntent.capture_method !== "automatic"') &&
+      paymentIntentRoute.includes('recoverableIntent.capture_method !== "automatic_async"') &&
+      paymentIntentRoute.includes("recoverableIntent.amount_received !== 0") &&
+      paymentIntentRoute.includes("!recoverableIntent.client_secret") &&
+      paymentIntentRoute.indexOf("if (expectedPaymentIntentId)") < providerCreateIndex,
+    "Final confirmation revalidation fails closed before provider creation when the prepared PaymentIntent is absent or mismatched",
+  );
+  assert(
     paymentIntentRoute.indexOf("recoveryCandidates.length > 1") <
       providerCreateIndex &&
       paymentIntentRoute.indexOf("return existingPaymentIntentResponse(recoverableIntent)") <
@@ -1178,6 +1273,31 @@ try {
       !paymentElementComponent.includes("config.credentials"),
     "Payment diagnostics render only sanitized status and environment-variable names",
   );
+  assert(
+    paymentElementComponent.includes('const [amount, setAmount] = useState("")') &&
+      paymentElementComponent.includes('setAmount("")') &&
+      !paymentElementComponent.includes("balanceDue.toFixed(2)") &&
+      paymentElementComponent.includes("setOwnerApproved(false)") &&
+      paymentElementComponent.includes('data-testid="stripe-payment-target"'),
+    "Payment preparation starts blank, invalidates stale approval, and identifies the exact invoice target",
+  );
+  assert(
+      paymentElementComponent.includes('data-testid="stripe-confirmation-summary"') &&
+      paymentElementComponent.includes('data-testid="stripe-final-owner-approval"') &&
+      paymentElementComponent.includes("isStripePaymentConfirmationAllowed") &&
+      paymentElementComponent.includes("!confirmationAllowed") &&
+      paymentElementComponent.includes("Final charge: {formattedAmount} USD") &&
+      paymentElementComponent.includes("invoiceTitle={invoiceTitle}") &&
+      paymentElementComponent.includes("preparedAmountCents") &&
+      paymentElementComponent.includes('key={`${invoiceId}:${paymentIntentId}`}') &&
+      paymentElementComponent.includes("onRevalidate") &&
+      paymentElementComponent.includes("expectedPaymentIntentId: paymentIntentId") &&
+      paymentElementComponent.includes("revalidated.paymentIntentId !== paymentIntentId") &&
+      paymentElementComponent.includes("revalidated.clientSecret !== clientSecret") &&
+      paymentElementComponent.includes("confirmInFlight.current") &&
+      paymentElementComponent.includes("setSubmitted(true)"),
+    "Payment confirmation repeats the immutable invoice and amount and requires a second explicit owner approval",
+  );
   const refundComponent = fs.readFileSync(
     path.join(cwd, "components/StripeInvoiceRefund.tsx"),
     "utf8",
@@ -1185,6 +1305,15 @@ try {
   const crmApp = fs.readFileSync(
     path.join(cwd, "components/CrmApp.tsx"),
     "utf8",
+  );
+  assert(
+    crmApp.includes('const [selectedInvoiceId, setSelectedInvoiceId] = useState("new")') &&
+      crmApp.includes("const selectedInvoiceIsVisible =") &&
+      crmApp.includes("pagedInvoices.some") &&
+      crmApp.includes("const selectedInvoice = selectedInvoiceIsVisible") &&
+      crmApp.includes('selectedInvoiceId !== "new"') &&
+      crmApp.includes('setSelectedInvoiceId("new")'),
+    "Invoices require explicit visible selection and clear hidden Stripe actions after filtering",
   );
   for (const requiredRefundControl of [
     "isStripeClientRefundEligible",

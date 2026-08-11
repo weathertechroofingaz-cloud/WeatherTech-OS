@@ -12,6 +12,7 @@ import {
   STRIPE_READINESS_PATH,
   buildStripePaymentIntentRequest,
   isStripeClientCompanyEligible,
+  isStripePaymentConfirmationAllowed,
   isStripePaymentReadinessEnabled,
   parseStripePaymentAmount,
   parseStripeReadinessDiagnostic,
@@ -33,6 +34,7 @@ type StripeInvoicePaymentProps = {
   company: StripeClientCompany | null;
   invoiceId: string;
   invoiceNumber: string;
+  invoiceTitle: string;
   balanceDue: number;
   isCompanyOwner: boolean;
   isDemoMode: boolean;
@@ -51,31 +53,59 @@ type StripeReadinessState =
 
 function StripeConfirmationForm({
   invoiceNumber,
+  invoiceTitle,
+  amountCents,
+  onRevalidate,
   onConfirmed,
 }: {
   invoiceNumber: string;
+  invoiceTitle: string;
+  amountCents: number;
+  onRevalidate: () => Promise<void>;
   onConfirmed: () => Promise<void>;
 }) {
   const stripe = useStripe();
   const elements = useElements();
+  const confirmInFlight = useRef(false);
+  const [ownerConfirmedExactCharge, setOwnerConfirmedExactCharge] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const formattedAmount = (amountCents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+  });
+  const confirmationAllowed = isStripePaymentConfirmationAllowed({
+    stripeReady: Boolean(stripe),
+    elementsReady: Boolean(elements),
+    ownerConfirmedExactCharge,
+    isConfirming,
+    submitted,
+  });
+
+  useEffect(() => {
+    setOwnerConfirmedExactCharge(false);
+  }, [amountCents, invoiceNumber, invoiceTitle]);
 
   const handleConfirm = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!stripe || !elements || isConfirming) {
+    if (!stripe || !elements || !confirmationAllowed || confirmInFlight.current) {
       return;
     }
 
+    confirmInFlight.current = true;
     setIsConfirming(true);
     setErrorMessage(null);
 
     try {
       const submission = await elements.submit();
       if (submission.error) {
+        setOwnerConfirmedExactCharge(false);
         setErrorMessage(sanitizeStripeClientMessage(submission.error.message));
         return;
       }
+
+      await onRevalidate();
 
       const returnUrl = new URL("/", window.location.origin);
       returnUrl.searchParams.set("view", "invoices");
@@ -87,20 +117,31 @@ function StripeConfirmationForm({
       });
 
       if (result.error) {
+        setOwnerConfirmedExactCharge(false);
         setErrorMessage(sanitizeStripeClientMessage(result.error.message));
         return;
       }
 
+      setSubmitted(true);
       await onConfirmed();
     } catch (error) {
+      setOwnerConfirmedExactCharge(false);
       setErrorMessage(sanitizeStripeClientMessage(error));
     } finally {
+      confirmInFlight.current = false;
       setIsConfirming(false);
     }
   };
 
   return (
     <form onSubmit={handleConfirm} className="grid gap-4" data-testid="stripe-confirmation-form">
+      <div
+        className="rounded-md border-2 border-amber-400 bg-amber-50 px-3 py-3 text-sm text-amber-950"
+        data-testid="stripe-confirmation-summary"
+      >
+        <p className="font-black">Final charge: {formattedAmount} USD</p>
+        <p className="mt-1 font-semibold">Invoice {invoiceNumber}: {invoiceTitle}</p>
+      </div>
       <PaymentElement
         options={{
           layout: "tabs",
@@ -112,13 +153,28 @@ function StripeConfirmationForm({
           {errorMessage}
         </p>
       ) : null}
+      <label className="flex items-start gap-2 rounded-md border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-800">
+        <input
+          type="checkbox"
+          checked={ownerConfirmedExactCharge}
+          onChange={(event) => setOwnerConfirmedExactCharge(event.target.checked)}
+          disabled={isConfirming || submitted}
+          data-testid="stripe-final-owner-approval"
+          className="mt-0.5"
+        />
+        I confirm the exact {formattedAmount} charge for invoice {invoiceNumber}.
+      </label>
       <button
         type="submit"
-        disabled={!stripe || !elements || isConfirming}
+        disabled={!confirmationAllowed}
         data-testid="stripe-confirm-payment"
         className="inline-flex items-center justify-center rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
-        {isConfirming ? "Confirming secure payment" : `Confirm payment for ${invoiceNumber}`}
+        {submitted
+          ? `${formattedAmount} payment submitted`
+          : isConfirming
+          ? `Confirming ${formattedAmount} payment`
+          : `Confirm ${formattedAmount} payment for ${invoiceNumber}`}
       </button>
       <p className="text-xs text-slate-500">
         Card details are entered in Stripe&apos;s secure Payment Element and are not stored by WeatherTech OS.
@@ -131,16 +187,20 @@ export default function StripeInvoicePayment({
   company,
   invoiceId,
   invoiceNumber,
+  invoiceTitle,
   balanceDue,
   isCompanyOwner,
   isDemoMode,
   onReload,
   onNotice,
 }: StripeInvoicePaymentProps) {
-  const [amount, setAmount] = useState(balanceDue.toFixed(2));
+  const [amount, setAmount] = useState("");
   const [ownerApproved, setOwnerApproved] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [preparedAttemptKey, setPreparedAttemptKey] = useState<string | null>(null);
+  const [preparedAmountCents, setPreparedAmountCents] = useState<number | null>(null);
   const [paymentIntentStatus, setPaymentIntentStatus] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<StripeReadinessState>({
@@ -155,9 +215,12 @@ export default function StripeInvoicePayment({
   );
 
   useEffect(() => {
-    setAmount(balanceDue.toFixed(2));
+    setAmount("");
     setOwnerApproved(false);
     setClientSecret(null);
+    setPaymentIntentId(null);
+    setPreparedAttemptKey(null);
+    setPreparedAmountCents(null);
     setPaymentIntentStatus(null);
     setErrorMessage(null);
     attemptKey.current = null;
@@ -267,6 +330,9 @@ export default function StripeInvoicePayment({
         }),
       );
       setPaymentIntentStatus(result.status);
+      setPaymentIntentId(result.paymentIntentId);
+      setPreparedAttemptKey(stableAttemptKey);
+      setPreparedAmountCents(amountResult.amountCents);
       setClientSecret(result.clientSecret);
 
       if (!result.clientSecret) {
@@ -283,6 +349,9 @@ export default function StripeInvoicePayment({
   const resetAttempt = () => {
     attemptKey.current = null;
     setClientSecret(null);
+    setPaymentIntentId(null);
+    setPreparedAttemptKey(null);
+    setPreparedAmountCents(null);
     setPaymentIntentStatus(null);
     setOwnerApproved(false);
     setErrorMessage(null);
@@ -340,11 +409,23 @@ export default function StripeInvoicePayment({
 
       {!clientSecret ? (
         <>
+          <div
+            className="rounded-md border border-sky-300 bg-white px-3 py-2 text-sm text-slate-800"
+            data-testid="stripe-payment-target"
+          >
+            <p className="font-bold">Invoice {invoiceNumber}: {invoiceTitle}</p>
+            <p className="mt-1 text-xs text-slate-600">
+              Balance due: {balanceDue.toLocaleString("en-US", { style: "currency", currency: "USD" })}. Enter the intended charge amount manually.
+            </p>
+          </div>
           <label className="grid gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
             Amount
             <input
               value={amount}
-              onChange={(event) => setAmount(event.target.value)}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setOwnerApproved(false);
+              }}
               type="text"
               inputMode="decimal"
               autoComplete="off"
@@ -360,10 +441,18 @@ export default function StripeInvoicePayment({
               type="checkbox"
               checked={ownerApproved}
               onChange={(event) => setOwnerApproved(event.target.checked)}
+              disabled={!amountResult.ok || readiness.status !== "ready"}
               data-testid="stripe-owner-approval"
               className="mt-0.5"
             />
-            I approve creating one Stripe PaymentIntent for this invoice and amount.
+            {amountResult.ok
+              ? `I approve creating one ${(
+                  amountResult.amountCents / 100
+                ).toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                })} Stripe PaymentIntent for invoice ${invoiceNumber}.`
+              : `Enter and review the exact charge amount for invoice ${invoiceNumber} before approval.`}
           </label>
           <button
             type="button"
@@ -377,12 +466,25 @@ export default function StripeInvoicePayment({
             data-testid="stripe-prepare-payment"
             className="inline-flex items-center justify-center rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {isPreparing ? "Preparing secure payment" : "Prepare secure payment"}
+            {isPreparing
+              ? "Preparing secure payment"
+              : amountResult.ok
+                ? `Prepare ${(
+                    amountResult.amountCents / 100
+                  ).toLocaleString("en-US", {
+                    style: "currency",
+                    currency: "USD",
+                  })} for ${invoiceNumber}`
+                : `Prepare payment for ${invoiceNumber}`}
           </button>
         </>
-      ) : stripePromise ? (
+      ) : stripePromise &&
+        paymentIntentId &&
+        preparedAttemptKey &&
+        preparedAmountCents !== null ? (
         <>
           <Elements
+            key={`${invoiceId}:${paymentIntentId}`}
             stripe={stripePromise}
             options={{
               clientSecret,
@@ -392,6 +494,29 @@ export default function StripeInvoicePayment({
           >
             <StripeConfirmationForm
               invoiceNumber={invoiceNumber}
+              invoiceTitle={invoiceTitle}
+              amountCents={preparedAmountCents}
+              onRevalidate={async () => {
+                const revalidated = await requestStripePaymentIntent(
+                  buildStripePaymentIntentRequest({
+                    companyId: company.id,
+                    invoiceId,
+                    amountCents: preparedAmountCents,
+                    attemptKey: preparedAttemptKey,
+                    expectedPaymentIntentId: paymentIntentId,
+                  }),
+                );
+
+                if (
+                  !revalidated.duplicatePrevented ||
+                  revalidated.paymentIntentId !== paymentIntentId ||
+                  revalidated.clientSecret !== clientSecret
+                ) {
+                  throw new Error(
+                    "The prepared Stripe payment no longer matches the current authorized invoice state.",
+                  );
+                }
+              }}
               onConfirmed={async () => {
                 setPaymentIntentStatus("submitted");
                 onNotice("Stripe accepted the payment confirmation. Waiting for the signed webhook to record it.");

@@ -19,6 +19,7 @@ export type StripePaymentIntentRequest = {
   amountCents: number;
   kind: "payment_intent";
   attemptKey: string;
+  expectedPaymentIntentId?: string;
   ownerApproval: true;
 };
 
@@ -133,6 +134,22 @@ export function isStripePaymentReadinessEnabled(input: {
   );
 }
 
+export function isStripePaymentConfirmationAllowed(input: {
+  stripeReady: boolean;
+  elementsReady: boolean;
+  ownerConfirmedExactCharge: boolean;
+  isConfirming: boolean;
+  submitted: boolean;
+}) {
+  return Boolean(
+    input.stripeReady &&
+      input.elementsReady &&
+      input.ownerConfirmedExactCharge &&
+      !input.isConfirming &&
+      !input.submitted,
+  );
+}
+
 export function getStripeRefundAmountCents(amount: number) {
   if (!Number.isFinite(amount)) {
     return null;
@@ -187,6 +204,7 @@ export function buildStripePaymentIntentRequest(input: {
   invoiceId: string;
   amountCents: number;
   attemptKey: string;
+  expectedPaymentIntentId?: string;
 }): StripePaymentIntentRequest {
   return {
     companyId: input.companyId,
@@ -194,6 +212,9 @@ export function buildStripePaymentIntentRequest(input: {
     amountCents: input.amountCents,
     kind: "payment_intent",
     attemptKey: input.attemptKey,
+    ...(input.expectedPaymentIntentId
+      ? { expectedPaymentIntentId: input.expectedPaymentIntentId }
+      : {}),
     ownerApproval: true,
   };
 }

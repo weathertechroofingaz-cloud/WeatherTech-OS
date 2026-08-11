@@ -32887,9 +32887,7 @@ function InvoicesView({
   onNotice,
   onError,
 }: InvoicesViewProps) {
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState(
-    snapshot.invoices[0]?.id ?? "new",
-  );
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState("new");
   const [companyFilter, setCompanyFilter] = useState<CompanyScopeId>("all");
   const [statusFilter, setStatusFilter] = useState<
     FinancialInvoiceWorkflowStatus | "all"
@@ -32908,15 +32906,8 @@ function InvoicesView({
       }),
     [companyFilter, snapshot],
   );
-  const selectedInvoice =
+  const selectedInvoiceRecord =
     snapshot.invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null;
-  const selectedSummary =
-    financialSummary.invoiceSummaries.find(
-      (summary) => summary.invoice.id === selectedInvoiceId,
-    ) ?? null;
-  const selectedLineItems =
-    selectedSummary?.lineItems ??
-    (selectedInvoice ? getInvoiceLineItems(snapshot, selectedInvoice.id) : []);
   const filteredInvoices = financialSummary.invoiceSummaries.filter((summary) => {
     const { invoice } = summary;
     const query = search.toLowerCase();
@@ -32936,7 +32927,25 @@ function InvoicesView({
     setPage: setInvoicePage,
     pagedItems: pagedInvoices,
   } = usePagination(filteredInvoices);
+  const selectedInvoiceIsVisible =
+    selectedInvoiceRecord !== null &&
+    pagedInvoices.some((summary) => summary.invoice.id === selectedInvoiceRecord.id);
+  const selectedInvoice = selectedInvoiceIsVisible ? selectedInvoiceRecord : null;
+  const selectedSummary = selectedInvoice
+    ? financialSummary.invoiceSummaries.find(
+        (summary) => summary.invoice.id === selectedInvoice.id,
+      ) ?? null
+    : null;
+  const selectedLineItems =
+    selectedSummary?.lineItems ??
+    (selectedInvoice ? getInvoiceLineItems(snapshot, selectedInvoice.id) : []);
 
+  useEffect(() => {
+    if (selectedInvoiceId !== "new" && !selectedInvoiceIsVisible) {
+      setSelectedInvoiceId("new");
+      setDraftPreset(null);
+    }
+  }, [selectedInvoiceId, selectedInvoiceIsVisible]);
   const handleSaveInvoice = async (
     input: InvoiceInput,
     lineItems: InvoiceLineItemInput[],
@@ -33936,6 +33945,7 @@ function InvoicePaymentsPanel({
             company={company}
             invoiceId={invoice.id}
             invoiceNumber={invoice.invoice_number}
+            invoiceTitle={invoice.title}
             balanceDue={invoice.balance_due}
             isCompanyOwner={isCompanyOwner}
             isDemoMode={isDemoMode}

@@ -28,6 +28,7 @@ type PaymentIntentRequest = {
   amountCents?: unknown;
   kind?: unknown;
   attemptKey?: unknown;
+  expectedPaymentIntentId?: unknown;
   ownerApproval?: unknown;
 };
 
@@ -101,6 +102,8 @@ export async function POST(request: NextRequest) {
   const companyId = requestString(body.companyId);
   const invoiceId = requestString(body.invoiceId);
   const attemptKey = requestString(body.attemptKey);
+  const expectsExistingPaymentIntent = body.expectedPaymentIntentId !== undefined;
+  const expectedPaymentIntentId = requestString(body.expectedPaymentIntentId);
   const kind = body.kind === "deposit" ? "deposit" : "payment_intent";
   const amountCents =
     typeof body.amountCents === "number" && Number.isSafeInteger(body.amountCents)
@@ -112,7 +115,9 @@ export async function POST(request: NextRequest) {
     !invoiceId ||
     !attemptKey ||
     amountCents === null ||
-    amountCents < 50
+    amountCents < 50 ||
+    (expectsExistingPaymentIntent &&
+      (!expectedPaymentIntentId || !/^pi_[A-Za-z0-9]+$/.test(expectedPaymentIntentId)))
   ) {
     return NextResponse.json(
       { ok: false, message: "Company, invoice, amount, and attempt key are required." },
@@ -279,6 +284,20 @@ export async function POST(request: NextRequest) {
 
     const [recoverableMapping] = recoveryCandidates;
     if (recoverableMapping) {
+      if (
+        expectedPaymentIntentId &&
+        recoverableMapping.stripe_object_id !== expectedPaymentIntentId
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "The prepared Stripe payment request no longer matches this invoice.",
+          },
+          { status: 409 },
+        );
+      }
+
       const recoverableIntent = await stripe.paymentIntents.retrieve(
         recoverableMapping.stripe_object_id,
       );
@@ -298,7 +317,15 @@ export async function POST(request: NextRequest) {
 
       if (
         !recoveryMatchesRequest ||
-        !isRecoverablePaymentIntentProviderStatus(recoverableIntent.status)
+        !isRecoverablePaymentIntentProviderStatus(recoverableIntent.status) ||
+        (expectedPaymentIntentId &&
+          (recoverableIntent.status !== "requires_payment_method" &&
+            recoverableIntent.status !== "requires_confirmation" ||
+            recoverableIntent.confirmation_method !== "automatic" ||
+            (recoverableIntent.capture_method !== "automatic" &&
+              recoverableIntent.capture_method !== "automatic_async") ||
+            recoverableIntent.amount_received !== 0 ||
+            !recoverableIntent.client_secret))
       ) {
         return NextResponse.json(
           {
@@ -311,6 +338,17 @@ export async function POST(request: NextRequest) {
       }
 
       return existingPaymentIntentResponse(recoverableIntent);
+    }
+
+    if (expectedPaymentIntentId) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "The prepared Stripe payment request is no longer active and cannot be confirmed.",
+        },
+        { status: 409 },
+      );
     }
 
     const paymentIntentGenerationKey = createStripePaymentIntentGenerationKey({
