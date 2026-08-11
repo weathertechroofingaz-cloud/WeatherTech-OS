@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type Stripe from "stripe";
 import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
   buildStripeObjectMetadata,
@@ -12,6 +13,11 @@ import {
   getStripeServerConfig,
   probeStripeAccount,
 } from "../../../../../lib/stripe/serverClient";
+import {
+  createStripePaymentIntentGenerationKey,
+  isRecoverablePaymentIntentProviderStatus,
+  paymentIntentMatchesMapping,
+} from "../../../../../lib/stripe/paymentIntentRecovery";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +33,38 @@ type PaymentIntentRequest = {
 
 function requestString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function existingPaymentIntentResponse(intent: Stripe.PaymentIntent) {
+  const confirmationComplete =
+    intent.status === "succeeded" || intent.status === "processing";
+  const clientSecret = confirmationComplete ? null : intent.client_secret;
+
+  if (
+    !clientSecret &&
+    intent.status !== "succeeded" &&
+    intent.status !== "processing"
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "The existing Stripe payment request cannot be confirmed and must be reviewed.",
+      },
+      { status: 409 },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      ok: true,
+      duplicatePrevented: true,
+      paymentIntentId: intent.id,
+      clientSecret,
+      status: intent.status,
+    },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -181,76 +219,112 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const operationKey = createStripeOperationKey({
-      operation: kind,
-      companyId,
-      invoiceId,
-      amountCents,
-      attemptKey,
-    });
-    const { data: existingMapping } = await serviceClient
-      .from("stripe_object_mappings")
-      .select("*")
-      .eq("company_id", companyId)
-      .eq("operation_key", operationKey)
-      .maybeSingle();
+    const localObjectType = kind === "deposit" ? "deposit" : "invoice";
+    const { data: latestPriorMapping, error: latestPriorMappingError } =
+      await serviceClient
+        .from("stripe_object_mappings")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("integration_connection_id", context.connection.id)
+        .eq("stripe_company_account_id", context.account.id)
+        .eq("invoice_id", invoice.id)
+        .eq("local_object_type", localObjectType)
+        .eq("stripe_object_type", "payment_intent")
+        .eq("currency", context.account.default_currency)
+        .eq("livemode", context.account.livemode)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (existingMapping) {
-      const existingIntent = await stripe.paymentIntents.retrieve(
-        existingMapping.stripe_object_id,
+    if (latestPriorMappingError) {
+      throw new Error(
+        "WeatherTech OS could not establish the invoice payment generation.",
       );
-      const mappingMatchesRequest =
-        existingMapping.company_id === companyId &&
-        existingMapping.integration_connection_id === context.connection.id &&
-        existingMapping.stripe_company_account_id === context.account.id &&
-        existingMapping.invoice_id === invoice.id &&
-        Number(existingMapping.amount_cents) === amountCents &&
-        existingMapping.currency === context.account.default_currency &&
-        existingIntent.id === existingMapping.stripe_object_id &&
-        existingIntent.amount === amountCents &&
-        existingIntent.currency === context.account.default_currency &&
-        existingIntent.livemode === existingMapping.livemode &&
-        existingIntent.metadata.wtos_company_id === companyId &&
-        existingIntent.metadata.wtos_invoice_id === invoice.id &&
-        existingIntent.metadata.wtos_operation_key === operationKey;
+    }
 
-      if (!mappingMatchesRequest) {
-        return NextResponse.json(
-          {
-            ok: false,
-            message:
-              "The existing Stripe payment request did not pass its company-isolation check.",
-          },
-          { status: 409 },
-        );
-      }
+    const { data: recoverableMappings, error: recoverableMappingsError } =
+      await serviceClient
+        .from("stripe_object_mappings")
+        .select("*")
+        .eq("company_id", companyId)
+        .eq("integration_connection_id", context.connection.id)
+        .eq("stripe_company_account_id", context.account.id)
+        .eq("invoice_id", invoice.id)
+        .eq("local_object_type", localObjectType)
+        .eq("stripe_object_type", "payment_intent")
+        .eq("currency", context.account.default_currency)
+        .eq("livemode", context.account.livemode)
+        .is("payment_id", null)
+        .order("created_at", { ascending: false })
+        .limit(2);
+
+    if (recoverableMappingsError) {
+      throw new Error(
+        "WeatherTech OS could not verify whether this invoice already has an active Stripe payment request.",
+      );
+    }
+
+    const recoveryCandidates = recoverableMappings ?? [];
+
+    if (recoveryCandidates.length > 1) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "This invoice has multiple active Stripe payment requests and must be reviewed before another payment can be prepared.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const [recoverableMapping] = recoveryCandidates;
+    if (recoverableMapping) {
+      const recoverableIntent = await stripe.paymentIntents.retrieve(
+        recoverableMapping.stripe_object_id,
+      );
+      const recoveryMatchesRequest = paymentIntentMatchesMapping({
+        mapping: recoverableMapping,
+        intent: recoverableIntent,
+        companyId,
+        connectionId: context.connection.id,
+        accountMappingId: context.account.id,
+        invoiceId: invoice.id,
+        customerId: invoice.customer_id,
+        localObjectType,
+        amountCents,
+        currency: context.account.default_currency,
+        livemode: context.account.livemode,
+      });
 
       if (
-        !existingIntent.client_secret &&
-        existingIntent.status !== "succeeded" &&
-        existingIntent.status !== "processing"
+        !recoveryMatchesRequest ||
+        !isRecoverablePaymentIntentProviderStatus(recoverableIntent.status)
       ) {
         return NextResponse.json(
           {
             ok: false,
             message:
-              "The existing Stripe payment request cannot be confirmed and must be reviewed.",
+              "The active Stripe payment request did not pass its recovery safety check.",
           },
           { status: 409 },
         );
       }
 
-      return NextResponse.json(
-        {
-          ok: true,
-          duplicatePrevented: true,
-          paymentIntentId: existingIntent.id,
-          clientSecret: existingIntent.client_secret,
-          status: existingIntent.status,
-        },
-        { headers: { "Cache-Control": "private, no-store" } },
-      );
+      return existingPaymentIntentResponse(recoverableIntent);
     }
+
+    const paymentIntentGenerationKey = createStripePaymentIntentGenerationKey({
+      priorPaymentIntentMappingId: latestPriorMapping?.id ?? null,
+    });
+    const operationKey = createStripeOperationKey({
+      operation: kind,
+      companyId,
+      invoiceId,
+      // Provider creation is invoice-generation scoped. The actual approved
+      // amount remains in the PaymentIntent request and saved mapping.
+      amountCents: 0,
+      attemptKey: paymentIntentGenerationKey,
+    });
 
     const metadata = buildStripeObjectMetadata({
       companyId,
@@ -278,7 +352,7 @@ export async function POST(request: NextRequest) {
         customer_id: invoice.customer_id,
         invoice_id: invoice.id,
         payment_id: null,
-        local_object_type: kind === "deposit" ? "deposit" : "invoice",
+        local_object_type: localObjectType,
         stripe_object_type: "payment_intent",
         stripe_object_id: paymentIntent.id,
         operation_key: operationKey,
@@ -291,6 +365,39 @@ export async function POST(request: NextRequest) {
       });
 
     if (mappingError) {
+      const { data: racedMapping, error: racedMappingError } = await serviceClient
+        .from("stripe_object_mappings")
+        .select("*")
+        .eq("company_id", companyId)
+        .eq("operation_key", operationKey)
+        .maybeSingle();
+
+      if (!racedMappingError && racedMapping) {
+        const racedIntent = await stripe.paymentIntents.retrieve(
+          racedMapping.stripe_object_id,
+        );
+        const raceMatchesRequest = paymentIntentMatchesMapping({
+          mapping: racedMapping,
+          intent: racedIntent,
+          companyId,
+          connectionId: context.connection.id,
+          accountMappingId: context.account.id,
+          invoiceId: invoice.id,
+          customerId: invoice.customer_id,
+          localObjectType,
+          amountCents,
+          currency: context.account.default_currency,
+          livemode: context.account.livemode,
+        });
+
+        if (
+          raceMatchesRequest &&
+          isRecoverablePaymentIntentProviderStatus(racedIntent.status)
+        ) {
+          return existingPaymentIntentResponse(racedIntent);
+        }
+      }
+
       throw new Error(
         "Stripe created the idempotent PaymentIntent, but WeatherTech OS could not save its mapping.",
       );

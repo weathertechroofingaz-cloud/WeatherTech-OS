@@ -28,6 +28,20 @@ function assertEqual(actual, expected, message) {
   }
 }
 
+function assertThrows(callback, expectedMessage, message) {
+  try {
+    callback();
+  } catch (error) {
+    assert(
+      error instanceof Error && error.message.includes(expectedMessage),
+      `${message}. Received ${error instanceof Error ? error.message : String(error)}.`,
+    );
+    return;
+  }
+
+  throw new Error(`${message}. Expected the callback to throw.`);
+}
+
 async function assertRejects(promise, expectedMessage, message) {
   try {
     await promise;
@@ -48,6 +62,7 @@ try {
     [
       "lib/stripe/foundation.ts",
       "lib/stripe/clientPayment.ts",
+      "lib/stripe/paymentIntentRecovery.ts",
       "lib/stripe/serverClient.ts",
       "lib/crm/integrationCenter.ts",
       "components/StripeInvoiceRefund.tsx",
@@ -79,6 +94,9 @@ try {
   );
   const stripeServer = await import(
     pathToFileURL(join(outDir, "lib", "stripe", "serverClient.js"))
+  );
+  const paymentIntentRecovery = await import(
+    pathToFileURL(join(outDir, "lib", "stripe", "paymentIntentRecovery.js"))
   );
   const integrationCenter = await import(
     pathToFileURL(join(outDir, "lib", "crm", "integrationCenter.js"))
@@ -177,6 +195,192 @@ try {
     50,
     "Minimum Stripe payment parses into exact integer cents",
   );
+
+  const recoveryMapping = {
+    id: "mapping-1",
+    company_id: "weathertech",
+    stripe_company_account_id: "account-mapping-1",
+    integration_connection_id: "connection-1",
+    customer_id: null,
+    invoice_id: "invoice-1",
+    payment_id: null,
+    local_object_type: "invoice",
+    stripe_object_type: "payment_intent",
+    stripe_object_id: "pi_existing",
+    operation_key: "wtos_existing_operation",
+    status: "requires_payment_method",
+    amount_cents: 50,
+    currency: "usd",
+    livemode: true,
+    metadata_summary: {
+      wtos_company_id: "weathertech",
+      wtos_customer_id: "none",
+      wtos_invoice_id: "invoice-1",
+      wtos_operation_key: "wtos_existing_operation",
+      wtos_source_of_truth: "supabase",
+    },
+    last_provider_request_id: null,
+    created_at: new Date(0).toISOString(),
+    updated_at: new Date(0).toISOString(),
+  };
+  const recoveryIntent = {
+    id: "pi_existing",
+    amount: 50,
+    currency: "usd",
+    livemode: true,
+    status: "requires_payment_method",
+    client_secret: "pi_existing_secret_recoverable",
+    metadata: {
+      wtos_company_id: "weathertech",
+      wtos_customer_id: "none",
+      wtos_invoice_id: "invoice-1",
+      wtos_operation_key: "wtos_existing_operation",
+      wtos_source_of_truth: "supabase",
+    },
+  };
+  const recoveryContext = {
+    companyId: "weathertech",
+    connectionId: "connection-1",
+    accountMappingId: "account-mapping-1",
+    invoiceId: "invoice-1",
+    customerId: null,
+    localObjectType: "invoice",
+    amountCents: 50,
+    currency: "usd",
+    livemode: true,
+  };
+  const stableGenerationKey =
+    paymentIntentRecovery.createStripePaymentIntentGenerationKey({
+      priorPaymentIntentMappingId: null,
+    });
+  assertEqual(
+    stableGenerationKey,
+    paymentIntentRecovery.createStripePaymentIntentGenerationKey({
+      priorPaymentIntentMappingId: null,
+    }),
+    "The authoritative invoice state produces one stable cross-session idempotency generation",
+  );
+  assert(
+    stableGenerationKey !==
+      paymentIntentRecovery.createStripePaymentIntentGenerationKey({
+        priorPaymentIntentMappingId: "7084f25f-b0f6-4f8e-90c5-1dfbe0f1d8de",
+      }),
+    "A completed mapped payment creates a new generation even after a full refund restores the invoice totals",
+  );
+  assertThrows(
+    () =>
+      paymentIntentRecovery.createStripePaymentIntentGenerationKey({
+        priorPaymentIntentMappingId: "not-a-database-mapping-id",
+      }),
+    "cannot safely identify",
+    "A malformed prior mapping identity fails closed before a provider write",
+  );
+  assertEqual(
+    paymentIntentRecovery.paymentIntentMatchesMapping({
+      ...recoveryContext,
+      mapping: recoveryMapping,
+      intent: recoveryIntent,
+    }),
+    true,
+    "An active PaymentIntent can be recovered only when every saved and provider identity matches",
+  );
+  const recoveryMismatches = [
+    { mapping: { ...recoveryMapping, company_id: "ihc" }, intent: recoveryIntent },
+    {
+      mapping: { ...recoveryMapping, integration_connection_id: "other-connection" },
+      intent: recoveryIntent,
+    },
+    {
+      mapping: { ...recoveryMapping, stripe_company_account_id: "other-account" },
+      intent: recoveryIntent,
+    },
+    { mapping: { ...recoveryMapping, invoice_id: "other-invoice" }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, customer_id: "other-customer" }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, local_object_type: "deposit" }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, stripe_object_type: "charge" }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, amount_cents: 51 }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, currency: "cad" }, intent: recoveryIntent },
+    { mapping: { ...recoveryMapping, livemode: false }, intent: recoveryIntent },
+    {
+      mapping: {
+        ...recoveryMapping,
+        metadata_summary: {
+          ...recoveryMapping.metadata_summary,
+          wtos_source_of_truth: "provider",
+        },
+      },
+      intent: recoveryIntent,
+    },
+    { mapping: recoveryMapping, intent: { ...recoveryIntent, id: "pi_other" } },
+    { mapping: recoveryMapping, intent: { ...recoveryIntent, amount: 51 } },
+    { mapping: recoveryMapping, intent: { ...recoveryIntent, currency: "cad" } },
+    { mapping: recoveryMapping, intent: { ...recoveryIntent, livemode: false } },
+    {
+      mapping: recoveryMapping,
+      intent: {
+        ...recoveryIntent,
+        metadata: { ...recoveryIntent.metadata, wtos_company_id: "ihc" },
+      },
+    },
+    {
+      mapping: recoveryMapping,
+      intent: {
+        ...recoveryIntent,
+        metadata: { ...recoveryIntent.metadata, wtos_customer_id: "other-customer" },
+      },
+    },
+    {
+      mapping: recoveryMapping,
+      intent: {
+        ...recoveryIntent,
+        metadata: { ...recoveryIntent.metadata, wtos_invoice_id: "other-invoice" },
+      },
+    },
+    {
+      mapping: recoveryMapping,
+      intent: {
+        ...recoveryIntent,
+        metadata: { ...recoveryIntent.metadata, wtos_operation_key: "wtos_other" },
+      },
+    },
+    {
+      mapping: recoveryMapping,
+      intent: {
+        ...recoveryIntent,
+        metadata: { ...recoveryIntent.metadata, wtos_source_of_truth: "provider" },
+      },
+    },
+  ];
+  for (const mismatch of recoveryMismatches) {
+    assertEqual(
+      paymentIntentRecovery.paymentIntentMatchesMapping({
+        ...recoveryContext,
+        ...mismatch,
+      }),
+      false,
+      "PaymentIntent recovery fails closed on every company, account, invoice, amount, mode, and metadata mismatch",
+    );
+  }
+  for (const recoverableStatus of [
+    "requires_payment_method",
+    "requires_confirmation",
+    "requires_action",
+    "processing",
+    "succeeded",
+  ]) {
+    assertEqual(
+      paymentIntentRecovery.isRecoverablePaymentIntentProviderStatus(recoverableStatus),
+      true,
+      `Provider status ${recoverableStatus} prevents creation of a second PaymentIntent`,
+    );
+  }
+  for (const unsafeRecoveryStatus of ["canceled", "requires_capture"]) {
+    assertEqual(
+      paymentIntentRecovery.isRecoverablePaymentIntentProviderStatus(unsafeRecoveryStatus),
+      false,
+      `Provider status ${unsafeRecoveryStatus} requires review instead of another write`,
+    );
+  }
   assertEqual(
     stripeClient.parseStripePaymentAmount("10", 100).amountCents,
     1000,
@@ -821,6 +1025,10 @@ try {
     path.join(cwd, "app/api/integrations/stripe/payment-intents/route.ts"),
     "utf8",
   );
+  const paymentIntentRecoverySource = fs.readFileSync(
+    path.join(cwd, "lib/stripe/paymentIntentRecovery.ts"),
+    "utf8",
+  );
   const refundRoute = fs.readFileSync(
     path.join(cwd, "app/api/integrations/stripe/refunds/route.ts"),
     "utf8",
@@ -836,7 +1044,8 @@ try {
   );
   assert(
     paymentIntentRoute.includes("stripe.paymentIntents.retrieve") &&
-      paymentIntentRoute.includes("clientSecret: existingIntent.client_secret") &&
+      paymentIntentRoute.includes("const clientSecret = confirmationComplete ? null") &&
+      paymentIntentRoute.includes("clientSecret,") &&
       paymentIntentRoute.includes('"Cache-Control": "private, no-store"'),
     "Idempotent PaymentIntent retries securely recover a non-cacheable client secret",
   );
@@ -849,6 +1058,76 @@ try {
         paymentIntentRoute.indexOf("stripe.paymentIntents.retrieve"),
     "Existing PaymentIntent retrieval happens only after approval, gate, and invoice checks",
   );
+  const activeRecoveryIndex = paymentIntentRoute.indexOf(
+    "data: recoverableMappings",
+  );
+  const latestPriorMappingIndex = paymentIntentRoute.indexOf(
+    "data: latestPriorMapping",
+  );
+  const providerCreateIndex = paymentIntentRoute.indexOf(
+    "stripe.paymentIntents.create",
+  );
+  assert(
+    latestPriorMappingIndex >
+      paymentIntentRoute.indexOf("Payment amount exceeds the invoice balance") &&
+      latestPriorMappingIndex < activeRecoveryIndex &&
+      activeRecoveryIndex >
+      paymentIntentRoute.indexOf("Payment amount exceeds the invoice balance") &&
+      activeRecoveryIndex < providerCreateIndex,
+    "The stable prior generation is captured before unresolved recovery, after every invoice check, and before any provider write",
+  );
+  assert(
+    paymentIntentRoute.includes("recoverableMappingsError") &&
+      paymentIntentRoute.includes("latestPriorMappingError") &&
+      paymentIntentRoute.includes('.is("payment_id", null)') &&
+      !paymentIntentRoute.includes('.eq("amount_cents"') &&
+      !paymentIntentRoute.includes('.in("status"') &&
+      paymentIntentRoute.includes('.limit(2)') &&
+      paymentIntentRoute.includes("recoveryCandidates.length > 1") &&
+      paymentIntentRoute.includes("isRecoverablePaymentIntentProviderStatus") &&
+      paymentIntentRoute.includes("paymentIntentMatchesMapping") &&
+      paymentIntentRoute.includes("return existingPaymentIntentResponse(recoverableIntent)"),
+    "PaymentIntent recovery fails closed on lookup errors, multiple active candidates, identity mismatches, and unsafe provider states",
+  );
+  assert(
+    paymentIntentRoute.includes("createStripePaymentIntentGenerationKey") &&
+      paymentIntentRoute.includes("amountCents: 0") &&
+      paymentIntentRoute.includes("attemptKey: paymentIntentGenerationKey") &&
+      paymentIntentRoute.includes("priorPaymentIntentMappingId:") &&
+      paymentIntentRoute.includes("racedMapping") &&
+      paymentIntentRoute.includes("raceMatchesRequest"),
+    "Concurrent browser amounts use one authoritative invoice-generation Stripe key and recover the winning mapping",
+  );
+  assert(
+    paymentIntentRoute.indexOf("recoveryCandidates.length > 1") <
+      providerCreateIndex &&
+      paymentIntentRoute.indexOf("return existingPaymentIntentResponse(recoverableIntent)") <
+        providerCreateIndex &&
+      paymentIntentRoute.includes("duplicatePrevented: true") &&
+      paymentIntentRoute.includes('"Cache-Control": "private, no-store"') &&
+      paymentIntentRoute.includes("const clientSecret = confirmationComplete ? null") &&
+      paymentIntentRoute.includes('intent.status === "succeeded"') &&
+      paymentIntentRoute.includes('intent.status === "processing"'),
+    "A recovered PaymentIntent returns the original private confirmation response and never creates a second object",
+  );
+  for (const requiredRecoveryIdentity of [
+    "mapping.company_id === input.companyId",
+    "mapping.integration_connection_id === input.connectionId",
+    "mapping.stripe_company_account_id === input.accountMappingId",
+    "mapping.customer_id === input.customerId",
+    "mapping.invoice_id === input.invoiceId",
+    "Number(mapping.amount_cents) === input.amountCents",
+    "mapping.currency === input.currency",
+    "mapping.livemode === input.livemode",
+    "mappingMetadata.wtos_operation_key === mapping.operation_key",
+    "intent.metadata.wtos_operation_key === mapping.operation_key",
+    'intent.metadata.wtos_source_of_truth === "supabase"',
+  ]) {
+    assert(
+      paymentIntentRecoverySource.includes(requiredRecoveryIdentity),
+      `PaymentIntent recovery validates ${requiredRecoveryIdentity}`,
+    );
+  }
 
   const paymentElementComponent = fs.readFileSync(
     path.join(cwd, "components/StripeInvoicePayment.tsx"),
