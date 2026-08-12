@@ -70,6 +70,7 @@ export const twilioEnvVars = {
   messagingServiceSid: "TWILIO_MESSAGING_SERVICE_SID",
   fromNumber: "TWILIO_FROM_NUMBER",
   publicBaseUrl: "TWILIO_PUBLIC_BASE_URL",
+  inboundSmsEnabled: "TWILIO_INBOUND_SMS_ENABLED",
   outboundSmsEnabled: "TWILIO_OUTBOUND_SMS_ENABLED",
   weatherTechPhoenixNumber: "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   weatherTechTucsonNumber: "TWILIO_WEATHERTECH_TUCSON_NUMBER",

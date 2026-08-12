@@ -4,17 +4,17 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Completed.
+Approved.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
 ## Sprint Name
 
-Non-Production Regression Environment & CI Test-Data Lifecycle
+Production Connections Phase 1: Twilio/SMS
 
 ## Objective
 
-Give WeatherTech OS a positively identified, isolated non-production Supabase environment where the complete write-capable browser regression suite can create synthetic fixtures, validate application behavior, clean up only the current run's records, and prove zero residue. Production must be technically rejected as an ordinary regression target, and the same fail-closed identity and lifecycle contract must govern local and CI execution.
+Connect and validate the production Twilio inbound-SMS workflow for WeatherTech Roofing LLC and, only when an independently verified company-controlled number exists, IHC Painting. Signed inbound messages must be routed by an exact account-and-number mapping, persisted once in the existing communications model, matched to CRM context without ambiguity, visible in the Unified Inbox, and auditable. General outbound customer SMS remains disabled.
 
 ## Owner
 
@@ -22,19 +22,21 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-11.
+2026-08-12.
 
 ## Verified Starting State
 
 - Repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`.
 - Branch: `main`.
-- Starting local `HEAD` and `origin/main`: `d62ae07aedc22313d74cfd9d34d14f3d516dc369`.
+- Starting local `HEAD`, `origin/main`, and live GitHub `main`: `cb4b45473b25b5a0927e1b7c3b5350a9b092669f`.
 - Canonical production URL: `https://weathertech-os.vercel.app`.
 - Production Supabase reference: `gahfcgyjtfwwmsterhzu`.
-- Production `/api/health`: HTTP 200 and healthy at starting commit.
-- Production `/api/readiness`: HTTP 503 because provider writes remain enabled while broad production-provider approval remains false; this is the expected truthful safety state and is not a runtime-health failure.
-- Production clean baseline: Customers 0, Employees 0, Leads 10, Properties 8, Jobs 6, Invoices 0, Invoice line items 0, Outstanding `$0`, Overdue 0, and only two preserved refunded Stripe payment audit rows.
+- Isolated regression Supabase reference: `hygtnhmmaoboduqghhwg`.
+- Production `/api/health`: HTTP 200 and healthy at the starting commit.
+- Production `/api/readiness`: HTTP 503 because Gmail send and Google Calendar write are enabled while broad production-provider approval remains false; this is the expected truthful safety state and must not be weakened.
+- Production clean baseline: Customers 0, Employees 0, Leads 10, Properties 8, Jobs 6, Invoices 0, Invoice line items 0, Outstanding `$0`, Overdue 0, only two preserved refunded Stripe audit payments, and zero proven regression residue.
 - Stripe payment, refund, and webhook-processing gates are false. IHC Stripe connections, accounts, mappings, events, and payments are zero.
+- The existing Twilio schema/routes/tests are present, but production has zero Twilio connections, business-number mappings, SMS messages, provider events, call records, or Twilio sync logs at sprint start.
 
 ## Explicitly Preserved Working-Tree Changes
 
@@ -49,77 +51,82 @@ They must remain byte-for-byte unchanged, unstaged, and uncommitted throughout t
 
 ## Owner-Approved Scope
 
-- Audit the actual repository, production deployment, Supabase capabilities, test harness, target guards, seed/cleanup lifecycle, CI configuration, environment assumptions, and fixture ownership before implementation.
-- Select the safest maintainable isolated Supabase architecture actually available to this repository and account; provision/configure it when no paid-plan decision or owner-only credential action is required.
-- Build the WeatherTech OS schema reproducibly in the isolated target without copying production business data or unnecessary production secrets.
-- Keep all provider integrations and external side effects disabled or safely mocked, including Stripe, Gmail, Google Calendar, Twilio, QuickBooks, Yelp, AI providers, and webhooks.
-- Strengthen fail-closed identity verification so write-capable regression proves the database is not production, belongs to the explicitly approved test environment, and matches the browser-observed, server, and service-role targets before any seed, read, write, cleanup, or delete.
-- Require a unique current-run marker, collision refusal, explicit captured fixture IDs, bounded cleanup on success and ordinary failure, Stripe-linked cleanup refusal, diagnostics for residue, and a final exact zero-residue proof.
-- Run every existing browser group against the verified non-production target without reducing coverage to obtain a green result; fix only sprint-related environment, lifecycle, or regression problems and add regression coverage where practical.
-- Integrate the safe test-target and lifecycle contract into repository CI using protected secret storage, visible failures, non-zero exit status, and no silent skipping of critical browser groups.
-- Document the approved target type, variable names, local and CI workflows, identity checks, synthetic seed/cleanup ownership, residue expectations, troubleshooting, and the prohibition against live financial/provider effects.
-- After implementation, run all applicable repository, migration-integrity, security, company-isolation, target-guard, cleanup/residue, type-check, lint, build, dependency/security, full browser, console, and production read-only smoke checks.
-- Commit, push, verify the exact production deployment, and close the sprint only after the approved implementation and validation are complete.
+- Audit the existing Twilio foundation, production configuration, Unified Inbox, role/company authorization, provider readiness, webhook security, persistence, retry behavior, and isolated-test architecture before implementation.
+- Reuse the existing Twilio and communications architecture; implement only the smallest robust inbound-SMS completion required for production.
+- Authenticate Twilio requests with the supported signature model and server-only credentials; reject unsigned, invalid, malformed, unsupported, or wrong-account requests without exposing secrets.
+- Route an inbound message only through an exact active company-controlled Twilio account-and-number mapping. Never infer company from message content and never map IHC unless its own number is verified.
+- Normalize sender/recipient numbers; match an exact unambiguous customer or lead within the routed company; preserve unknown or ambiguous senders as unmatched communications without silently creating duplicate CRM records.
+- Make inbound message persistence exactly-once, provider-event accounting retry-convergent, duplicate handling durable, and every write company scoped; reject conflicting reuse of a provider identifier.
+- Keep the existing Unified Inbox/communications model authoritative instead of creating a parallel inbox.
+- Keep every outbound SMS path disabled or explicitly approval-gated. Do not send any outbound SMS during ordinary tests or this inbound validation.
+- Use only the isolated non-production Supabase target for write-capable automated/browser regression and leave all provider side effects disabled there.
+- Configure production secrets/mapping/webhook through authorized connected tooling when possible. If an owner-only Twilio login, number selection/purchase, billing acceptance, credential entry, or manual inbound send is unavoidable, complete all other work first and request one exact owner action.
+- After deployment and configuration, perform one narrowly controlled real inbound SMS validation, verify exact-once persistence/UI/company/contact behavior, prove duplicate replay idempotency without sending a second SMS when safely possible, and confirm no outbound or unrelated data mutation.
+- Update minimum necessary setup, security, troubleshooting, readiness, module, and sprint-governance documentation based only on verified state.
+- Run the complete repository, Twilio, communications, company-isolation, security, migration, type, lint, build, dependency, isolated browser, console, and production read-only verification gates before closeout.
+- Commit, push, verify the exact production deployment, and close the sprint only after the approved implementation and live validation are complete.
 
 ## Explicit Exclusions
 
-- Do not run write-capable browser regression against production, reseed production, or use the production project as the normal test target.
-- Do not weaken or remove the permanent production-project rejection, browser/server target agreement, credential identity check, unique-marker collision check, captured-ID cleanup, Stripe-linked cleanup refusal, or zero-residue verification.
-- Do not copy production business data into the non-production environment.
-- Do not trigger Stripe live payments, refunds, customers, webhooks, or any financial object.
-- Do not send real email, SMS, calendar events, customer messages, QuickBooks writes, Yelp/provider calls, AI-provider writes, or other external side effects.
-- Do not alter the provider-write approval model, turn the expected readiness HTTP 503 into a false green result, enable live Stripe gates, activate providers, or activate IHC Stripe.
-- Do not rebuild AI Command Center 3.0, begin Yelp/Mighty Apes or CompanyCam work, activate Twilio or QuickBooks, or perform a broad UI redesign.
-- Do not delete the deliberately preserved mixed-provenance IHC lead/property graph.
-- Do not make destructive production changes, weaken RLS, expose secrets, commit credentials, modify `.env.local`, or touch the two preserved Property Intelligence files.
+- Do not enable general outbound SMS, marketing, bulk messages, auto-replies, reminders, or campaigns.
+- Do not send any real outbound SMS or use production as the routine browser-regression target.
+- Do not infer company from message text, silently choose among ambiguous CRM matches, or create customers/leads merely because an SMS arrived unless an existing explicitly supported path is proven safe and retained by design.
+- Do not configure IHC with a WeatherTech number/account or guess any company mapping.
+- Do not weaken Twilio signature verification, RLS, company isolation, regression target guards, `/api/readiness`, or broader provider-approval controls.
+- Do not alter Stripe gates, activate IHC Stripe, start Yelp/Mighty Apes, CompanyCam, QuickBooks, OpenAI/Anthropic, or perform broad UI redesign.
+- Do not pollute production with synthetic browser fixtures or modify the deliberately preserved mixed-provenance IHC graph.
+- Do not expose or commit Twilio credentials, phone numbers when they are not intended public configuration, service-role keys, or other secrets.
+- Do not modify `.env.local` or touch the two preserved Property Intelligence files.
 - Do not select, approve, promote, or begin another sprint.
 
 ## Mandatory Stop Conditions
 
 Stop only when:
 
-- an external login or authentication action must be completed by the owner;
-- a paid resource, plan change, or billing decision is required;
-- credentials cannot safely be provisioned with existing authorized tooling;
-- a destructive or irreversible production operation would be required;
-- a target cannot be positively identified as isolated non-production before mutation; or
-- a genuine business or security decision cannot be resolved from the repository and verified architecture.
+- the owner must complete Twilio login/authentication, accept terms or billing, purchase/select a number, or enter a credential unavailable through authorized tooling;
+- a real charge or destructive/irreversible production action requires separate owner action;
+- the production Twilio account/number cannot be positively identified before mapping or validation;
+- a controlled live action could send or route anything beyond the single approved inbound validation;
+- required credentials cannot be securely provisioned through existing authorized tooling; or
+- a genuine unresolved business/security decision cannot be determined from the repository and verified architecture.
 
-Routine non-production resource configuration, CI changes, test fixes, schema reproduction in the isolated test target, commits, pushes, and deployment verification are approved and are not stop conditions.
+Routine implementation, isolated testing, safe migrations, CI changes, commits, pushes, deployments, configuration updates through authorized tooling, and read-only verification are approved and are not stop conditions.
 
 ## Completion Criteria
 
-- A real isolated non-production Supabase target exists, contains reproducible WeatherTech OS schema, contains no copied production business data, and is explicitly documented as the sole hosted regression target.
-- Every write-capable run proves target identity and browser/server/service-role agreement before any database operation; production, missing, malformed, unknown, or mismatched targets fail closed before access.
-- Each run owns a unique marker and exact fixture IDs, refuses collisions, cleans only its own records, refuses Stripe-linked records, cleans on success and ordinary failure where safe, and proves zero current-run residue.
-- The complete intended browser suite passes against non-production with all expected groups and assertions reported; browser warnings/errors are zero or explicitly explained.
-- Production remains unchanged by regression execution and retains the clean starting baseline; the mixed-provenance IHC graph remains untouched.
-- CI obtains credentials only from protected secret storage, rejects production by default, exposes test results, returns non-zero on unsafe setup or test failure, executes cleanup/residue verification reliably, and cannot silently skip critical browser groups while reporting success.
-- Documentation accurately explains local/CI setup, variable names only, target verification, schema provisioning, seed/cleanup lifecycle, residue handling, troubleshooting, and the prohibition against live provider side effects.
-- Every applicable `tests/*.test.mjs` test, migration-integrity/security/company-isolation/target/lifecycle test, type-check, lint, production build, `git diff --check`, credential scan, and available dependency/security audit passes.
-- Final production read-only smoke confirms the canonical deployment, `/api/health`, truthful `/api/readiness`, application shell and major workspaces, console state, clean baseline, disabled Stripe gates, and IHC isolation.
-- `.env.local` and both protected Property Intelligence files retain their starting content and hashes and remain unstaged/uncommitted.
-- The focused implementation and any required documentation-only closeout are committed and pushed; local `HEAD`, `origin/main`, live GitHub main, and the intended Vercel deployment are verified to match.
+- Production has an exact, verified Twilio account-and-number-to-company mapping for each company actually connected; unconfigured companies remain explicitly unconfigured.
+- The inbound SMS endpoint is HTTPS, authenticates the exact Twilio request, validates content/account/payload, and fails closed before persistence on invalid input.
+- One signed inbound MessageSid creates exactly one company-scoped `sms_messages` record and converges to one auditable provider event; duplicates are no-ops and conflicting identifiers fail closed.
+- Exact, unambiguous company-scoped CRM phone matches are linked; unknown/ambiguous senders remain safely visible without guessed association or duplicate record creation.
+- The communication appears in the correct Unified Inbox/company context with no cross-company exposure.
+- General outbound SMS remains false/disabled in production and tests, and no outbound SMS is sent during validation.
+- The complete isolated browser suite and all applicable repository/security/company-isolation/Twilio tests pass with zero unexplained browser console errors or warnings and zero regression residue.
+- One controlled real inbound SMS is received, signature-verified, persisted once, visible in the correct UI, and duplicate replay is proven idempotent without an additional SMS when possible.
+- Production baseline remains clean except the single deliberate inbound audit record and any exact contact/context association it legitimately uses; no unrelated CRM or provider data changes.
+- Documentation and readiness accurately distinguish configured, authenticated, mapped, reachable, inbound validated, and outbound disabled states.
+- `.env.local` and both protected Property Intelligence files retain their starting hashes and remain unstaged/uncommitted.
+- A focused implementation commit and, when required, one documentation-only closeout commit are pushed; local `HEAD`, `origin/main`, live GitHub main, and Vercel production are verified.
 
 ## Validation Plan
 
-- Verify branch, local/remote/live commit identity, deployment, Git state, protected hashes, `.env.local`, Supabase organization/project identity, project capabilities, migration ledger, and CI/harness architecture.
-- Exercise target guards for production, missing, malformed, unknown, browser/server mismatch, credential mismatch, allowed explicit non-production, marker collision, unrelated-record preservation, Stripe-linked refusal, bounded cleanup, ordinary-failure cleanup, and residue detection.
-- Apply committed schema/migrations only to the verified isolated test target and verify migration order, RLS/security behavior, required Data API access, provider-disabled state, and synthetic-only seed prerequisites.
-- Run every `tests/*.test.mjs` file plus type-check, lint, build, `git diff --check`, credential/secret scan, and available dependency/security checks.
-- Run the complete browser regression against non-production; capture exact groups/assertions, console output, cleanup result, and zero-residue evidence.
-- Perform read-only production smoke and baseline verification only; never seed or run write-capable regression against production.
-- Recheck `.env.local` and protected-file hashes before staging, after commit, and at final completion.
+- Verify Git/deployment identity, production and regression Supabase identity/ledger/schema/RLS, baseline counts, current Twilio config, env-name inventory, and all preserved hashes before mutation.
+- Exercise unit/route/database cases for valid, missing, invalid, tampered, malformed, wrong-account, wrong-number, disabled/missing mapping, known customer, known lead, unknown, ambiguous, duplicate, conflicting duplicate, retry, and cross-company requests.
+- Apply any additive migration first to the isolated regression project, verify schema/function/ACL/RLS, run transaction rollback tests, then apply only the exact validated migration to production when authorized by this sprint and safe.
+- Run every `tests/*.test.mjs` file, type-check, lint, production build, `git diff --check`, credential/secret scan, and dependency/security audit.
+- Run the full 24-group isolated browser regression plus targeted communications/Twilio validation, and prove cleanup/residue zero.
+- Commit/push/deploy exact scope, verify production SHA/health/truthful readiness, then configure only inbound Twilio secrets/mapping/webhook with outbound false.
+- Perform one controlled signed inbound validation and exact duplicate replay; verify provider delivery, database ledger, Unified Inbox, company isolation, no outbound request, and non-target production fingerprints.
+- Recheck production baseline, Stripe gates, IHC isolation, `.env.local`, protected hashes, staging scope, and final Git/deployment identity before closeout.
 
 ## Planned Commit Messages
 
-- Implementation: `test: add isolated regression environment lifecycle`
-- Documentation-only closeout, if required: `docs: close non-production regression sprint`
+- Implementation: `feat: validate production Twilio inbound SMS`
+- Documentation-only closeout, if required: `docs: close Twilio inbound sprint`
 
 ## Final Status
 
-Completed. The focused implementation shipped in `6354429976fb7a549bbc738fc0b76b3c5ea2022b`. WeatherTech OS now uses the dedicated isolated Supabase regression project `hygtnhmmaoboduqghhwg`; the complete browser suite passed all 24 groups and 28 assertions with zero console errors, zero console warnings, successful bounded cleanup, and zero run residue. Repository validation passed all 25 top-level tests, type-check, lint, production build, dependency audit, patch checks, workflow checks, and credential scanning. Production remained read-only and unchanged.
+Approved and in progress.
 
 ## Notes
 
-The owner chooses the next sprint. Completion of this sprint does not authorize another provider, product, or activation sprint.
+The owner chooses the next sprint. Completion of this sprint does not authorize outbound SMS or another provider/product sprint.

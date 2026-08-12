@@ -1883,7 +1883,10 @@ export function buildUnifiedInboxItems(
       attachments: [],
       createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
       updatedAt: message.updated_at,
-      status: smsMessageStatusLabel(message.status),
+      status:
+        direction === "inbound" && message.delivery_status === "received"
+          ? "Received"
+          : smsMessageStatusLabel(message.status),
       priority: message.status === "failed" || message.delivery_status === "undelivered" ? "high" : direction === "inbound" ? "medium" : "low",
       responseStatus:
         message.status === "failed" || message.delivery_status === "undelivered"

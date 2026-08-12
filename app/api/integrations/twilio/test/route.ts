@@ -1,144 +1,93 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getSupabaseServerClient } from "../../../../../lib/supabase/server";
 import {
   getTwilioConfigCheckResult,
-  normalizeTwilioTestRecipient,
-  sendTwilioTestSms,
   type TwilioTestSmsResult,
 } from "../../../../../lib/twilio/serverClient";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type TwilioTestRequestBody = {
-  safeTestMode?: unknown;
-  testRecipient?: unknown;
-  message?: unknown;
-};
-
 type TwilioTestResponse = ReturnType<typeof getTwilioConfigCheckResult> & {
-  communicationsSent: boolean;
+  communicationsSent: false;
   testSms: TwilioTestSmsResult;
 };
 
-function getOptionalMessage(value: unknown) {
-  if (typeof value !== "string") {
-    return undefined;
+async function requireOwner() {
+  const sessionClient = await getSupabaseServerClient();
+
+  if (!sessionClient) {
+    return NextResponse.json(
+      { ok: false, message: "Server-side Supabase access is required." },
+      { status: 503 },
+    );
   }
 
-  const message = value.trim();
+  const { data: userResult } = await sessionClient.auth.getUser();
 
-  if (!message) {
-    return undefined;
+  if (!userResult.user) {
+    return NextResponse.json(
+      { ok: false, message: "Sign in before checking Twilio configuration." },
+      { status: 401 },
+    );
   }
 
-  return message.slice(0, 320);
-}
+  const { data: ownerMemberships } = await sessionClient
+    .from("company_memberships")
+    .select("company_id")
+    .eq("user_id", userResult.user.id)
+    .eq("role", "owner")
+    .limit(1);
 
-async function getJsonBody(request: NextRequest): Promise<TwilioTestRequestBody> {
-  try {
-    const body: unknown = await request.json();
-
-    if (body && typeof body === "object") {
-      return body as TwilioTestRequestBody;
-    }
-  } catch {
-    return {};
+  if (!ownerMemberships?.length) {
+    return NextResponse.json(
+      { ok: false, message: "A company owner must check Twilio configuration." },
+      { status: 403 },
+    );
   }
 
-  return {};
+  return null;
 }
 
-function createResponse(
-  testSms: TwilioTestSmsResult,
-  status: number,
-  communicationsSent = false,
-) {
-  const config = getTwilioConfigCheckResult();
-  const responseBody: TwilioTestResponse = {
-    ...config,
-    communicationsSent,
-    testSms,
-  };
-
-  return NextResponse.json(responseBody, { status });
-}
-
-export async function GET() {
+function createNoSendResponse(status = 200) {
   const config = getTwilioConfigCheckResult();
 
   return NextResponse.json(
     {
       ...config,
+      credentials: {
+        ...config.credentials,
+        fromNumber: null,
+      },
+      businessNumbers: [],
       communicationsSent: false,
       testSms: {
         attempted: false,
         sent: false,
         message:
-          "No SMS was sent. To explicitly request a safe test SMS, set safeTestMode to true and include testRecipient in E.164 format.",
+          "Twilio outbound SMS is unavailable in the inbound-only production phase. No provider request was made.",
       },
     } satisfies TwilioTestResponse,
-    { status: config.ok ? 200 : 503 },
+    { status },
   );
 }
 
-export async function POST(request: NextRequest) {
-  const config = getTwilioConfigCheckResult();
-  const body = await getJsonBody(request);
-  const safeTestMode = body.safeTestMode === true;
-  const recipient = normalizeTwilioTestRecipient(body.testRecipient);
+export async function GET() {
+  const authorizationFailure = await requireOwner();
 
-  if (safeTestMode && !recipient) {
-    return createResponse(
-      {
-        attempted: false,
-        sent: false,
-        message:
-          "No SMS was sent. safeTestMode requires testRecipient in E.164 format, such as +14805550123.",
-      },
-      400,
-    );
+  if (authorizationFailure) {
+    return authorizationFailure;
   }
 
-  if (!safeTestMode) {
-    return createResponse(
-      {
-        attempted: false,
-        sent: false,
-        message:
-          "No SMS was sent. Set safeTestMode to true and provide testRecipient to explicitly request a safe test SMS.",
-      },
-      config.ok ? 200 : 503,
-    );
+  return createNoSendResponse();
+}
+
+export async function POST() {
+  const authorizationFailure = await requireOwner();
+
+  if (authorizationFailure) {
+    return authorizationFailure;
   }
 
-  if (!config.ok) {
-    return createResponse(
-      {
-        attempted: false,
-        sent: false,
-        message:
-          "No SMS was sent because Twilio server configuration is incomplete.",
-      },
-      503,
-    );
-  }
-
-  if (!config.outboundReady) {
-    return createResponse(
-      {
-        attempted: false,
-        sent: false,
-        message:
-          "No SMS was sent because TWILIO_FROM_NUMBER is blank. Add or port a sender number before outbound testing.",
-      },
-      200,
-    );
-  }
-
-  const testSms = await sendTwilioTestSms({
-    recipient: recipient ?? "",
-    body: getOptionalMessage(body.message),
-  });
-
-  return createResponse(testSms, testSms.sent ? 200 : 502, testSms.sent);
+  return createNoSendResponse(405);
 }

@@ -238,9 +238,6 @@ const providerGuideEnv = {
     twilioEnvVars.authToken,
     twilioEnvVars.messagingServiceSid,
     twilioEnvVars.publicBaseUrl,
-    twilioEnvVars.weatherTechPhoenixNumber,
-    twilioEnvVars.weatherTechTucsonNumber,
-    twilioEnvVars.ihcNumber,
   ],
   googleWorkspace: [
     googleWorkspaceEnvVars.clientId,
@@ -601,17 +598,17 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
     label: "Twilio",
     providers: ["twilio"],
     requiredOwnerActions: [
-      "Confirm WeatherTech Phoenix, WeatherTech Tucson, and IHC business numbers.",
-      "Approve inbound SMS, voice, recording, and status callback URLs.",
-      "Complete controlled live-call and SMS tests before enabling outbound messaging.",
+      "Verify each company-controlled Twilio number before creating its exact active company mapping.",
+      "Configure the signed inbound SMS callback URL for each mapped number.",
+      "Complete one controlled live inbound SMS test before marking inbound messaging validated.",
     ],
     requiredCredentials: providerGuideEnv.twilio,
     oauthSetup: ["OAuth is not used for this Twilio foundation; signed webhooks and server credentials are required."],
     externalApprovals: ["Twilio account ownership, phone-number ownership, messaging compliance, and sender verification."],
-    testingSequence: [
+      testingSequence: [
       "Run the existing Twilio readiness check.",
       "Send signed sandbox webhook payloads.",
-      "Run controlled live inbound SMS and voice tests.",
+      "Run one controlled live inbound SMS test for each company actually mapped.",
       "Enable outbound SMS only in a later owner-approved activation sprint.",
     ],
     rollbackProcedure: [
@@ -1088,13 +1085,19 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       id: "twilio",
       label: "Twilio",
       status: "controlled_testing_required",
-      summary: "Foundation exists for calls and SMS, but credentials, numbers, callbacks, compliance, and outbound gates require owner setup.",
+      summary: "The inbound-SMS backend is hardened; external Twilio account access, one verified company number, its exact mapping and callback, and a controlled live inbound validation remain. Outbound SMS is unavailable.",
       setupDocumentPath: setupDocumentPaths.twilio,
       requiredBeforeActivation: productionActivationGuides[0].requiredOwnerActions,
-      requiredMappings: ["WeatherTech Phoenix number", "WeatherTech Tucson number", "IHC number"],
+      requiredMappings: [
+        "Each connected Twilio number must map to exactly one verified company and active connection",
+        "Unverified or unavailable company numbers remain unconfigured",
+      ],
       controlledTestPlan: productionActivationGuides[0].testingSequence,
       rollbackSummary: productionActivationGuides[0].rollbackProcedure,
-      disabledSafetyFlags: [twilioEnvVars.outboundSmsEnabled ?? "TWILIO_OUTBOUND_SMS_ENABLED"],
+      disabledSafetyFlags: [
+        twilioEnvVars.outboundSmsEnabled ?? "TWILIO_OUTBOUND_SMS_ENABLED",
+        "Voice, recording, and status callbacks are disabled in the inbound-SMS-only phase",
+      ],
       evidenceFields: productionEvidenceFields,
     },
     {
@@ -1461,6 +1464,19 @@ export function buildProductionEnvironmentInventory(
           name,
           classification: "required_before_provider_connection" as const,
         })),
+        {
+          name: twilioEnvVars.inboundSmsEnabled,
+          classification: "required_before_provider_connection" as const,
+        },
+        {
+          name: twilioEnvVars.weatherTechPhoenixNumber,
+          classification: "optional" as const,
+        },
+        {
+          name: twilioEnvVars.weatherTechTucsonNumber,
+          classification: "optional" as const,
+        },
+        { name: twilioEnvVars.ihcNumber, classification: "optional" as const },
         { name: twilioEnvVars.outboundSmsEnabled, classification: "disabled_safety_flag" },
       ],
       env,

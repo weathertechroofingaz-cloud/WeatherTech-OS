@@ -1,28 +1,16 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
-import {
-  sanitizeIntegrationSyncLogSummary,
-  sanitizeIntegrationSyncLogText,
-} from "../crm/integrations";
-import {
-  normalizeTwilioCallLeadBody,
-  normalizeTwilioSmsLeadBody,
-  processLeadIntake,
-  type TwilioLeadRequestBody,
-} from "../crm/leadIntake";
-import {
-  createIntegrationSyncLog,
-  createSmsMessage,
-} from "../crm/repository";
+import twilio from "twilio";
 import type {
+  BusinessPhoneNumberRecord,
+  CommunicationProviderEventRecord,
+  CustomerRecord,
   Database,
   IntegrationConnectionRecord,
-  CallRecordInsert,
-  CustomerRecord,
   LeadRecord,
-  SmsMessageRecord,
   SmsMessageInsert,
+  SmsMessageRecord,
 } from "../crm/types";
 
 export type TwilioWebhookKind =
@@ -36,43 +24,11 @@ export type TwilioSignatureStatus =
   | "valid"
   | "invalid"
   | "missing_auth_token"
+  | "missing_public_base_url"
   | "missing_signature"
-  | "unsupported_content_type";
-
-type CrmClient = SupabaseClient<Database>;
-
-type BusinessPhoneRouteRow = {
-  id: string;
-  company_id: string;
-  integration_connection_id: string | null;
-  phone_number_e164: string | null;
-  display_name: string;
-  routing_key: string;
-  business_location: string;
-  team_queue: string;
-  lead_source: string;
-  routing_status: string;
-};
-
-type BusinessPhoneRouteResult =
-  | { status: "matched"; row: BusinessPhoneRouteRow }
-  | { status: "needs_review"; row: null }
-  | { status: "migration_required"; row: null };
-
-type TwilioCrmTarget = {
-  customerId: string | null;
-  leadId: string | null;
-  intakeRecordId: string | null;
-  syncLogId: string | null;
-  matchStatus:
-    | "matched_customer"
-    | "matched_lead"
-    | "created_lead"
-    | "accepted_for_review"
-    | "unmatched"
-    | "skipped";
-  warnings: string[];
-};
+  | "unsupported_content_type"
+  | "payload_too_large"
+  | "malformed_request";
 
 export type TwilioWebhookPayload = {
   kind: TwilioWebhookKind;
@@ -82,6 +38,7 @@ export type TwilioWebhookPayload = {
   parentCallSid: string | null;
   recordingSid: string | null;
   messagingServiceSid: string | null;
+  numMedia: number | null;
   from: string | null;
   to: string | null;
   body: string | null;
@@ -98,6 +55,7 @@ export type TwilioWebhookPayload = {
 export type ParsedTwilioWebhookRequest = {
   payload: TwilioWebhookPayload;
   signatureStatus: TwilioSignatureStatus;
+  signatureEvidence: string | null;
 };
 
 export type TwilioStorageResult = {
@@ -111,11 +69,54 @@ export type TwilioStorageResult = {
   skippedReason: string | null;
 };
 
-const SMS_INBOUND_EVENT_TYPE = "sms.inbound";
+type CrmClient = SupabaseClient<Database>;
+
+type VerifiedRoute = {
+  number: BusinessPhoneNumberRecord;
+  connection: IntegrationConnectionRecord;
+};
+
+type ContactMatch = {
+  customerId: string | null;
+  leadId: string | null;
+  status: "matched_customer" | "matched_lead" | "unmatched" | "ambiguous";
+};
+
+type MessageClaim = {
+  duplicate: boolean;
+  message: SmsMessageRecord;
+  contactStatus: ContactMatch["status"];
+};
+
+const MAX_FORM_BYTES = 64 * 1024;
+const MAX_MESSAGE_BODY_LENGTH = 16_000;
+const ACCOUNT_SID_PATTERN = /^AC[0-9a-fA-F]{32}$/;
+const MESSAGE_SID_PATTERN = /^SM[0-9a-fA-F]{32}$/;
+const MESSAGING_SERVICE_SID_PATTERN = /^MG[0-9a-fA-F]{32}$/;
+const CRITICAL_FORM_FIELDS = [
+  "AccountSid",
+  "MessageSid",
+  "SmsSid",
+  "SmsMessageSid",
+  "From",
+  "To",
+  "Body",
+  "MessagingServiceSid",
+  "NumMedia",
+] as const;
+
+function getEnvValue(name: string) {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
+function getBooleanEnvValue(name: string) {
+  return getEnvValue(name)?.toLowerCase() === "true";
+}
 
 function getServiceSupabaseClient(): CrmClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const url = getEnvValue("NEXT_PUBLIC_SUPABASE_URL");
+  const serviceRoleKey = getEnvValue("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!url || !serviceRoleKey) {
     return null;
@@ -123,211 +124,195 @@ function getServiceSupabaseClient(): CrmClient | null {
 
   return createClient<Database>(url, serviceRoleKey, {
     auth: {
+      autoRefreshToken: false,
       persistSession: false,
     },
   });
 }
 
-export function createTwilioTwiMLResponse() {
-  return new Response("<Response></Response>", {
-    status: 200,
-    headers: {
-      "Content-Type": "text/xml; charset=utf-8",
-    },
-  });
-}
-
-function createTwilioWebhookRejectedResponse(
-  signatureStatus: Exclude<TwilioSignatureStatus, "valid">,
-) {
-  const status =
-    signatureStatus === "unsupported_content_type"
-      ? 415
-      : signatureStatus === "missing_auth_token"
-        ? 503
-        : 403;
-
-  return new Response("Twilio webhook rejected.", {
-    status,
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-  });
-}
-
-function getRecordValue(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-
-      if (trimmed) {
-        return trimmed;
-      }
-    }
-  }
-
-  return null;
-}
-
-function getRecordBody(record: Record<string, unknown>) {
-  const value = record.Body ?? record.body;
-
-  return typeof value === "string" ? value : null;
-}
-
-function getRecordInteger(record: Record<string, unknown>, keys: string[]) {
-  const value = getRecordValue(record, keys);
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function getRequestUrlForTwilioSignature(request: NextRequest) {
-  const requestUrl = new URL(request.url);
-  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const forwardedHost =
-    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ??
-    request.headers.get("host")?.split(",")[0]?.trim();
-
-  if (forwardedProto) {
-    requestUrl.protocol = `${forwardedProto}:`;
-  }
-
-  if (forwardedHost) {
-    requestUrl.host = forwardedHost;
-  }
-
-  return requestUrl.toString();
-}
-
-function timingSafeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    crypto.timingSafeEqual(leftBuffer, rightBuffer)
-  );
-}
-
-function validateTwilioSignature(request: NextRequest, params: URLSearchParams) {
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
-  const signature = request.headers.get("x-twilio-signature")?.trim();
-
-  if (!authToken) {
-    return "missing_auth_token" satisfies TwilioSignatureStatus;
-  }
-
-  if (!signature) {
-    return "missing_signature" satisfies TwilioSignatureStatus;
-  }
-
-  const signatureBase = `${getRequestUrlForTwilioSignature(request)}${Array.from(
-    params.entries(),
-  )
-    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-    .map(([key, value]) => `${key}${value}`)
-    .join("")}`;
-  const expectedSignature = crypto
-    .createHmac("sha1", authToken)
-    .update(signatureBase)
-    .digest("base64");
-
-  return timingSafeEqual(signature, expectedSignature)
-    ? ("valid" satisfies TwilioSignatureStatus)
-    : ("invalid" satisfies TwilioSignatureStatus);
-}
-
-function inferWebhookKind(
-  record: Record<string, unknown>,
-  expectedKind: TwilioWebhookKind,
-): TwilioWebhookKind {
-  if (expectedKind === "voice_inbound" && getRecordValue(record, ["CallStatus", "callStatus"])) {
-    return "voice_status";
-  }
-
-  if (expectedKind !== "sms_inbound") {
-    return expectedKind;
-  }
-
-  if (getRecordValue(record, ["MessageStatus", "SmsStatus", "messageStatus"])) {
-    return "sms_status";
-  }
-
-  return expectedKind;
-}
-
-function buildPayloadFromRecord(
-  record: Record<string, unknown>,
-  expectedKind: TwilioWebhookKind,
-): TwilioWebhookPayload {
-  const kind = inferWebhookKind(record, expectedKind);
-
+function emptyPayload(kind: TwilioWebhookKind): TwilioWebhookPayload {
   return {
     kind,
-    accountSid: getRecordValue(record, ["AccountSid", "accountSid"]),
-    messageSid: getRecordValue(record, [
-      "MessageSid",
-      "SmsSid",
-      "SmsMessageSid",
-      "messageSid",
-      "smsSid",
-    ]),
-    callSid: getRecordValue(record, ["CallSid", "callSid"]),
-    parentCallSid: getRecordValue(record, ["ParentCallSid", "parentCallSid"]),
-    recordingSid: getRecordValue(record, ["RecordingSid", "recordingSid"]),
-    messagingServiceSid: getRecordValue(record, [
-      "MessagingServiceSid",
-      "messagingServiceSid",
-    ]),
-    from: getRecordValue(record, ["From", "from"]),
-    to: getRecordValue(record, ["To", "to"]),
-    body: getRecordBody(record),
-    messageStatus: getRecordValue(record, [
-      "MessageStatus",
-      "SmsStatus",
-      "messageStatus",
-    ]),
-    callStatus: getRecordValue(record, ["CallStatus", "callStatus"]),
-    recordingStatus: getRecordValue(record, [
-      "RecordingStatus",
-      "recordingStatus",
-    ]),
-    errorCode: getRecordValue(record, ["ErrorCode", "errorCode"]),
-    errorMessage: getRecordValue(record, ["ErrorMessage", "errorMessage"]),
-    durationSeconds: getRecordInteger(record, ["CallDuration", "Duration"]),
-    recordingDurationSeconds: getRecordInteger(record, ["RecordingDuration"]),
+    accountSid: null,
+    messageSid: null,
+    callSid: null,
+    parentCallSid: null,
+    recordingSid: null,
+    messagingServiceSid: null,
+    numMedia: null,
+    from: null,
+    to: null,
+    body: null,
+    messageStatus: null,
+    callStatus: null,
+    recordingStatus: null,
+    errorCode: null,
+    errorMessage: null,
+    durationSeconds: null,
+    recordingDurationSeconds: null,
     occurredAt: new Date().toISOString(),
   };
+}
+
+function parsedResult(
+  payload: TwilioWebhookPayload,
+  signatureStatus: TwilioSignatureStatus,
+  signatureEvidence: string | null = null,
+): ParsedTwilioWebhookRequest {
+  return { payload, signatureStatus, signatureEvidence };
+}
+
+function getOnlyFormValue(params: URLSearchParams, keys: readonly string[]) {
+  const values = keys
+    .flatMap((key) => params.getAll(key))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const distinctValues = new Set(values);
+  return distinctValues.size === 1 ? values[0] : null;
+}
+
+function hasDuplicateCriticalField(params: URLSearchParams) {
+  return CRITICAL_FORM_FIELDS.some((field) => params.getAll(field).length > 1);
+}
+
+function hasConflictingMessageSidAliases(params: URLSearchParams) {
+  const values = ["MessageSid", "SmsSid", "SmsMessageSid"]
+    .flatMap((field) => params.getAll(field))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return new Set(values).size > 1;
+}
+
+function buildPayload(params: URLSearchParams, kind: TwilioWebhookKind) {
+  const payload = emptyPayload(kind);
+  payload.accountSid = getOnlyFormValue(params, ["AccountSid"]);
+  payload.messageSid = getOnlyFormValue(params, [
+    "MessageSid",
+    "SmsSid",
+    "SmsMessageSid",
+  ]);
+  payload.messagingServiceSid = getOnlyFormValue(params, ["MessagingServiceSid"]);
+  const numMedia = getOnlyFormValue(params, ["NumMedia"]);
+  payload.numMedia = numMedia && /^\d+$/.test(numMedia) ? Number.parseInt(numMedia, 10) : null;
+  payload.from = getOnlyFormValue(params, ["From"]);
+  payload.to = getOnlyFormValue(params, ["To"]);
+  payload.body = params.has("Body") ? params.get("Body") : null;
+  payload.messageStatus = getOnlyFormValue(params, ["MessageStatus", "SmsStatus"]);
+  payload.callSid = getOnlyFormValue(params, ["CallSid"]);
+  payload.parentCallSid = getOnlyFormValue(params, ["ParentCallSid"]);
+  payload.recordingSid = getOnlyFormValue(params, ["RecordingSid"]);
+  payload.callStatus = getOnlyFormValue(params, ["CallStatus"]);
+  payload.recordingStatus = getOnlyFormValue(params, ["RecordingStatus"]);
+  payload.errorCode = getOnlyFormValue(params, ["ErrorCode"]);
+  payload.errorMessage = getOnlyFormValue(params, ["ErrorMessage"]);
+  return payload;
+}
+
+function getCanonicalFormFingerprint(params: URLSearchParams) {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify(
+        Array.from(params.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+          const keyOrder = leftKey.localeCompare(rightKey);
+          return keyOrder || leftValue.localeCompare(rightValue);
+        }),
+      ),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+function getCanonicalWebhookUrl(request: NextRequest) {
+  const configuredBaseUrl = getEnvValue("TWILIO_PUBLIC_BASE_URL");
+
+  if (!configuredBaseUrl) {
+    return null;
+  }
+
+  try {
+    const baseUrl = new URL(configuredBaseUrl);
+
+    if (
+      baseUrl.protocol !== "https:" ||
+      baseUrl.username ||
+      baseUrl.password ||
+      baseUrl.search ||
+      baseUrl.hash
+    ) {
+      return null;
+    }
+
+    return new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, `${baseUrl.origin}/`).toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function parseTwilioWebhookRequest(
   request: NextRequest,
   expectedKind: TwilioWebhookKind,
 ): Promise<ParsedTwilioWebhookRequest> {
-  const contentType = request.headers.get("content-type") ?? "";
+  const empty = emptyPayload(expectedKind);
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
 
-  if (contentType.includes("application/json")) {
-    const body: unknown = await request.json().catch(() => ({}));
-
-    return {
-      payload: buildPayloadFromRecord(
-        body && typeof body === "object" ? (body as Record<string, unknown>) : {},
-        expectedKind,
-      ),
-      signatureStatus: "unsupported_content_type",
-    };
+  if (contentType !== "application/x-www-form-urlencoded") {
+    return parsedResult(empty, "unsupported_content_type");
   }
 
-  const rawBody = await request.text();
-  const params = new URLSearchParams(rawBody);
+  const declaredLength = Number.parseInt(request.headers.get("content-length") ?? "0", 10);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_FORM_BYTES) {
+    return parsedResult(empty, "payload_too_large");
+  }
 
-  return {
-    payload: buildPayloadFromRecord(Object.fromEntries(params.entries()), expectedKind),
-    signatureStatus: validateTwilioSignature(request, params),
-  };
+  let rawBody: string;
+  try {
+    rawBody = await request.text();
+  } catch {
+    return parsedResult(empty, "malformed_request");
+  }
+
+  if (Buffer.byteLength(rawBody, "utf8") > MAX_FORM_BYTES) {
+    return parsedResult(empty, "payload_too_large");
+  }
+
+  const params = new URLSearchParams(rawBody);
+  const payload = buildPayload(params, expectedKind);
+
+  if (hasDuplicateCriticalField(params) || hasConflictingMessageSidAliases(params)) {
+    return parsedResult(payload, "malformed_request");
+  }
+
+  const authToken = getEnvValue("TWILIO_AUTH_TOKEN");
+  if (!authToken) {
+    return parsedResult(payload, "missing_auth_token");
+  }
+
+  const canonicalUrl = getCanonicalWebhookUrl(request);
+  if (!canonicalUrl) {
+    return parsedResult(payload, "missing_public_base_url");
+  }
+
+  const signature = request.headers.get("x-twilio-signature")?.trim();
+  if (!signature) {
+    return parsedResult(payload, "missing_signature");
+  }
+
+  const signatureParameters = Object.fromEntries(params.entries());
+  const valid = twilio.validateRequest(authToken, signature, canonicalUrl, signatureParameters);
+  const signatureEvidence = valid
+    ? crypto
+        .createHmac("sha256", authToken)
+        .update(
+          JSON.stringify({
+            canonicalUrl,
+            formFingerprint: getCanonicalFormFingerprint(params),
+          }),
+          "utf8",
+        )
+        .digest("hex")
+    : null;
+  return parsedResult(payload, valid ? "valid" : "invalid", signatureEvidence);
 }
 
 export function normalizeTwilioPhoneNumber(value: string | null) {
@@ -336,1086 +321,571 @@ export function normalizeTwilioPhoneNumber(value: string | null) {
   }
 
   const trimmed = value.trim();
-  const digits = trimmed.replace(/\D/g, "");
-
-  if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) {
-    return `+${digits}`;
+  if (!trimmed || !/^\+?[0-9().\s-]+$/.test(trimmed)) {
+    return null;
   }
 
+  const digits = trimmed.replace(/\D/g, "");
+  if (trimmed.startsWith("+")) {
+    return digits.length >= 8 && digits.length <= 15 && !digits.startsWith("0")
+      ? `+${digits}`
+      : null;
+  }
   if (digits.length === 10) {
     return `+1${digits}`;
   }
-
   if (digits.length === 11 && digits.startsWith("1")) {
     return `+${digits}`;
   }
-
-  return trimmed || null;
-}
-
-function normalizePhoneDigits(value: string | null) {
-  return value?.replace(/\D/g, "") ?? "";
-}
-
-function isSamePhone(left: string | null, right: string | null) {
-  const normalizedLeft = normalizePhoneDigits(left);
-  const normalizedRight = normalizePhoneDigits(right);
-
-  return Boolean(normalizedLeft && normalizedLeft === normalizedRight);
-}
-
-function isSameSid(left: string | null, right: string | null) {
-  return Boolean(left && right && left.trim() === right.trim());
-}
-
-function emptyTwilioCrmTarget(
-  matchStatus: TwilioCrmTarget["matchStatus"] = "unmatched",
-  warnings: string[] = [],
-): TwilioCrmTarget {
-  return {
-    customerId: null,
-    leadId: null,
-    intakeRecordId: null,
-    syncLogId: null,
-    matchStatus,
-    warnings,
-  };
-}
-
-function maskPhone(value: string | null) {
-  const digits = normalizePhoneDigits(value);
-
-  return digits.length > 4 ? `****${digits.slice(-4)}` : "****";
-}
-
-function maskSid(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  return `${value.slice(0, 2)}****`;
-}
-
-function getSettingValue(
-  settings: Record<string, unknown>,
-  keys: string[],
-): string | null {
-  for (const key of keys) {
-    const value = settings[key];
-
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-
   return null;
 }
 
-function matchesInboundNumber(
-  connection: IntegrationConnectionRecord,
-  payload: TwilioWebhookPayload,
-) {
-  const settings = connection.settings ?? {};
-  const configuredNumber = getSettingValue(settings, [
-    "fromNumber",
-    "from_number",
-    "phoneNumber",
-    "phone_number",
-    "senderNumber",
-    "sender_number",
-    "twilioFromNumber",
-    "twilio_from_number",
-  ]);
-
-  return (
-    isSamePhone(configuredNumber, getBusinessPhoneCandidate(payload)) ||
-    isSamePhone(connection.webhook_channel_id, getBusinessPhoneCandidate(payload)) ||
-    isSamePhone(connection.webhook_resource_id, getBusinessPhoneCandidate(payload))
-  );
+function deterministicUuid(namespace: string, ...parts: string[]) {
+  const bytes = crypto
+    .createHash("sha256")
+    .update([namespace, ...parts].join("\u0000"), "utf8")
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function matchesMessagingService(
-  connection: IntegrationConnectionRecord,
-  payload: TwilioWebhookPayload,
-) {
-  const settings = connection.settings ?? {};
-  const configuredMessagingServiceSid = getSettingValue(settings, [
-    "messagingServiceSid",
-    "messaging_service_sid",
-    "twilioMessagingServiceSid",
-    "twilio_messaging_service_sid",
-  ]);
-  const envMessagingServiceSid =
-    process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() || null;
-
-  return (
-    isSameSid(configuredMessagingServiceSid, payload.messagingServiceSid) ||
-    isSameSid(connection.webhook_resource_id, payload.messagingServiceSid) ||
-    isSameSid(configuredMessagingServiceSid, envMessagingServiceSid)
-  );
+export function createTwilioInboundPayloadFingerprint(payload: {
+  accountSid: string;
+  messageSid: string;
+  messagingServiceSid: string;
+  from: string;
+  to: string;
+  body: string;
+  companyId: string;
+}) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload), "utf8")
+    .digest("hex");
 }
 
-function findInboundConnection(
-  connections: IntegrationConnectionRecord[],
-  payload: TwilioWebhookPayload,
-) {
-  const explicitMatch = connections.find(
-    (connection) =>
-      matchesInboundNumber(connection, payload) ||
-      matchesMessagingService(connection, payload),
-  );
+export function createTwilioInboundEvidenceProof(input: {
+  messageId: string;
+  eventId: string;
+  companyId: string;
+  connectionId: string;
+  businessPhoneNumberId: string;
+  customerId: string | null;
+  leadId: string | null;
+  accountSid: string;
+  messagingServiceSid: string;
+  messageSid: string;
+  from: string;
+  to: string;
+  payloadFingerprint: string;
+  signatureEvidence: string;
+}) {
+  const authToken = getEnvValue("TWILIO_AUTH_TOKEN");
 
-  if (explicitMatch) {
-    return explicitMatch;
-  }
-
-  const accountMatches = connections.filter((connection) =>
-    isSameSid(connection.external_account_id, payload.accountSid),
-  );
-
-  if (accountMatches.length === 1) {
-    return accountMatches[0];
-  }
-
-  return connections.length === 1 ? connections[0] : null;
-}
-
-function describeSafeError(error: unknown) {
-  if (error instanceof Error) {
-    return sanitizeIntegrationSyncLogText(error.message) ?? "Request failed.";
-  }
-
-  if (typeof error === "string") {
-    return sanitizeIntegrationSyncLogText(error) ?? "Request failed.";
-  }
-
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-
-    if (typeof message === "string") {
-      return sanitizeIntegrationSyncLogText(message) ?? "Request failed.";
-    }
-  }
-
-  return "Request failed.";
-}
-
-function isMissingRelationError(error: unknown) {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const record = error as { code?: unknown; message?: unknown };
-  const message = typeof record.message === "string" ? record.message : "";
-
-  return record.code === "42P01" || message.includes("does not exist");
-}
-
-function getMissingPayloadFields(payload: TwilioWebhookPayload) {
-  const required = [
-    payload.accountSid ? null : "AccountSid",
-  ];
-
-  if (payload.kind === "sms_inbound") {
-    required.push(payload.from ? null : "From");
-    required.push(payload.to ? null : "To");
-    required.push(payload.body !== null ? null : "Body");
-    required.push(payload.messageSid ? null : "MessageSid");
-  }
-
-  if (payload.kind === "sms_status") {
-    required.push(payload.from ? null : "From");
-    required.push(payload.to ? null : "To");
-    required.push(payload.messageSid ? null : "MessageSid");
-    required.push(payload.messageStatus ? null : "MessageStatus");
-  }
-
-  if (payload.kind === "voice_inbound" || payload.kind === "voice_status") {
-    required.push(payload.from ? null : "From");
-    required.push(payload.to ? null : "To");
-    required.push(payload.callSid ? null : "CallSid");
-  }
-
-  if (payload.kind === "recording_status") {
-    required.push(payload.callSid ? null : "CallSid");
-    required.push(payload.recordingSid ? null : "RecordingSid");
-  }
-
-  return required.filter((value): value is string => Boolean(value));
-}
-
-function getBusinessPhoneCandidate(payload: TwilioWebhookPayload) {
-  if (payload.kind === "sms_status") {
-    return payload.from;
-  }
-
-  return payload.to;
-}
-
-function getCustomerPhoneCandidate(payload: TwilioWebhookPayload) {
-  if (payload.kind === "sms_status") {
-    return payload.to;
-  }
-
-  return payload.from;
-}
-
-function getRouteToken(row: BusinessPhoneRouteRow | null) {
-  return [
-    row?.routing_key,
-    row?.display_name,
-    row?.business_location,
-    row?.team_queue,
-    row?.lead_source,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-function getVerifiedCompanyKeyForRoute(row: BusinessPhoneRouteRow | null) {
-  const token = getRouteToken(row);
-
-  if (token.includes("ihc") || token.includes("paint")) {
-    return "ihc_painting" as const;
-  }
-
-  if (token.includes("weathertech") || token.includes("roof")) {
-    return "weathertech_roofing" as const;
-  }
-
-  return undefined;
-}
-
-function getVerifiedBranchKeyForRoute(row: BusinessPhoneRouteRow | null) {
-  const token = getRouteToken(row);
-
-  if (token.includes("ihc") || token.includes("paint")) {
-    return "ihc" as const;
-  }
-
-  if (token.includes("tucson")) {
-    return "weathertech_tucson" as const;
-  }
-
-  if (token.includes("phoenix") || token.includes("weathertech") || token.includes("roof")) {
-    return "weathertech_phoenix" as const;
-  }
-
-  return undefined;
-}
-
-function getCompanyIdForPayload(
-  route: BusinessPhoneRouteResult,
-  connection: IntegrationConnectionRecord | null,
-) {
-  return route.row?.company_id ?? connection?.company_id ?? null;
-}
-
-function crmPhoneMatches(recordPhone: string | null | undefined, candidatePhone: string | null) {
-  const recordDigits = normalizePhoneDigits(recordPhone ?? null);
-  const candidateDigits = normalizePhoneDigits(candidatePhone);
-
-  if (!recordDigits || !candidateDigits) {
-    return false;
-  }
-
-  if (recordDigits === candidateDigits) {
-    return true;
-  }
-
-  return (
-    recordDigits.length >= 7 &&
-    candidateDigits.length >= 7 &&
-    recordDigits.endsWith(candidateDigits.slice(-7))
-  );
-}
-
-async function findCustomerByPhone(
-  client: CrmClient,
-  companyId: string,
-  phone: string | null,
-) {
-  if (!phone) {
+  if (!authToken) {
     return null;
   }
 
-  const { data, error } = await client
-    .from("customers")
-    .select("id, phone")
-    .eq("company_id", companyId)
-    .limit(500);
-
-  if (error) {
-    throw error;
-  }
-
-  return (
-    ((data ?? []) as Pick<CustomerRecord, "id" | "phone">[]).find((customer) =>
-      crmPhoneMatches(customer.phone, phone),
-    ) ?? null
-  );
+  return crypto
+    .createHmac("sha256", authToken)
+    .update(JSON.stringify({ version: 1, ...input }), "utf8")
+    .digest("hex");
 }
 
-async function findLeadByPhone(
-  client: CrmClient,
-  companyId: string,
-  phone: string | null,
-) {
-  if (!phone) {
-    return null;
-  }
-
-  const { data, error } = await client
-    .from("leads")
-    .select("id, phone")
-    .eq("company_id", companyId)
-    .limit(500);
-
-  if (error) {
-    throw error;
-  }
-
-  return (
-    ((data ?? []) as Pick<LeadRecord, "id" | "phone">[]).find((lead) =>
-      crmPhoneMatches(lead.phone, phone),
-    ) ?? null
-  );
-}
-
-function buildTwilioLeadRequestBody(
-  payload: TwilioWebhookPayload,
-  route: BusinessPhoneRouteResult,
-): TwilioLeadRequestBody {
-  const routeRow = route.row;
-
-  return {
-    accountSid: payload.accountSid,
-    messagingServiceSid: payload.messagingServiceSid,
-    messageSid: payload.messageSid,
-    smsSid: payload.messageSid,
-    callSid: payload.callSid,
-    providerEventSid: getTwilioProviderEventSid(payload),
-    from: normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload)),
-    to: normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload)),
-    body: payload.body,
-    message: payload.body,
-    transcriptSummary:
-      payload.kind === "voice_inbound" || payload.kind === "voice_status"
-        ? `Inbound call ${payload.callStatus ?? "received"}.`
-        : null,
-    source: payload.kind === "sms_inbound" ? "SMS" : "Phone",
-    serviceType: routeRow?.lead_source,
-    business: routeRow?.display_name ?? routeRow?.lead_source,
-    location: routeRow?.business_location,
-    receivingBusinessPhoneNumber: normalizeTwilioPhoneNumber(
-      getBusinessPhoneCandidate(payload),
-    ),
-    verifiedCompanyKey: getVerifiedCompanyKeyForRoute(routeRow),
-    verifiedBranchKey: getVerifiedBranchKeyForRoute(routeRow),
-    forceUnassignedRouting: route.status !== "matched",
-    forceReviewReason:
-      route.status === "matched"
-        ? null
-        : "Twilio business number is not yet mapped to an active WeatherTech OS company route.",
-    verifiedSourceMetadata: {
-      routeStatus: route.status,
-      businessPhoneNumberId: routeRow?.id ?? null,
-      routingKey: routeRow?.routing_key ?? null,
-      businessLocation: routeRow?.business_location ?? null,
-      teamQueue: routeRow?.team_queue ?? null,
+function getConfiguredCompanyNumber(phoneNumber: string) {
+  const candidates = [
+    {
+      companyName: "WeatherTech Roofing LLC",
+      phone: normalizeTwilioPhoneNumber(getEnvValue("TWILIO_WEATHERTECH_PHOENIX_NUMBER")),
     },
-    occurredAt: payload.occurredAt,
-  };
+    {
+      companyName: "WeatherTech Roofing LLC",
+      phone: normalizeTwilioPhoneNumber(getEnvValue("TWILIO_WEATHERTECH_TUCSON_NUMBER")),
+    },
+    {
+      companyName: "IHC Painting",
+      phone: normalizeTwilioPhoneNumber(getEnvValue("TWILIO_IHC_NUMBER")),
+    },
+  ].filter((candidate) => candidate.phone === phoneNumber);
+
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
-async function createLeadForUnmatchedTwilioSender({
-  client,
-  payload,
-  route,
-}: {
-  client: CrmClient;
-  payload: TwilioWebhookPayload;
-  route: BusinessPhoneRouteResult;
-}): Promise<TwilioCrmTarget> {
-  if (
-    payload.kind !== "sms_inbound" &&
-    payload.kind !== "voice_inbound" &&
-    payload.kind !== "voice_status"
-  ) {
-    return emptyTwilioCrmTarget("skipped");
-  }
-
-  const body = buildTwilioLeadRequestBody(payload, route);
-  const normalized =
-    payload.kind === "sms_inbound"
-      ? normalizeTwilioSmsLeadBody(body)
-      : normalizeTwilioCallLeadBody(body);
-
-  if (!normalized.lead) {
-    return emptyTwilioCrmTarget("unmatched", normalized.errors);
-  }
-
-  const result = await processLeadIntake(client, normalized.lead);
-  const leadId = result.leadId ?? result.duplicateOfLeadId ?? null;
-
-  return {
-    customerId: null,
-    leadId,
-    intakeRecordId: result.intakeRecordId ?? null,
-    syncLogId: result.syncLogId ?? null,
-    matchStatus: leadId
-      ? result.status.includes("duplicate")
-        ? "matched_lead"
-        : "created_lead"
-      : result.status === "accepted_for_review"
-        ? "accepted_for_review"
-        : "unmatched",
-    warnings: result.warnings,
-  };
-}
-
-async function resolveTwilioCrmTarget({
-  client,
-  payload,
-  route,
-  connection,
-  shouldCreateLead,
-}: {
-  client: CrmClient;
-  payload: TwilioWebhookPayload;
-  route: BusinessPhoneRouteResult;
-  connection: IntegrationConnectionRecord | null;
-  shouldCreateLead: boolean;
-}): Promise<TwilioCrmTarget> {
-  const companyId = getCompanyIdForPayload(route, connection);
-  const customerPhone = normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload));
-
-  if (!companyId) {
-    return emptyTwilioCrmTarget("unmatched", [
-      "No company route was matched for the receiving Twilio number.",
-    ]);
-  }
-
-  const customer = await findCustomerByPhone(client, companyId, customerPhone);
-
-  if (customer) {
-    return {
-      ...emptyTwilioCrmTarget("matched_customer"),
-      customerId: customer.id,
-    };
-  }
-
-  const lead = await findLeadByPhone(client, companyId, customerPhone);
-
-  if (lead) {
-    return {
-      ...emptyTwilioCrmTarget("matched_lead"),
-      leadId: lead.id,
-    };
-  }
-
-  return shouldCreateLead
-    ? createLeadForUnmatchedTwilioSender({ client, payload, route })
-    : emptyTwilioCrmTarget("unmatched");
-}
-
-async function findBusinessPhoneRoute(
+async function resolveVerifiedRoute(
   client: CrmClient,
-  payload: TwilioWebhookPayload,
-): Promise<BusinessPhoneRouteResult> {
-  const businessPhone = normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload));
-
-  if (!businessPhone) {
-    return { status: "needs_review", row: null };
+  payload: {
+    accountSid: string;
+    messagingServiceSid: string;
+    to: string;
+  },
+): Promise<{ status: "matched"; route: VerifiedRoute } | { status: "forbidden" | "conflict" | "retryable" }> {
+  const configuredNumber = getConfiguredCompanyNumber(payload.to);
+  if (!configuredNumber) {
+    return { status: "forbidden" };
   }
 
-  const { data, error } = await client
+  const { data: numbers, error: numberError } = await client
     .from("business_phone_numbers")
     .select("*")
-    .eq("phone_number_e164", businessPhone)
-    .maybeSingle();
+    .eq("phone_number_e164", payload.to)
+    .eq("provider_account_sid", payload.accountSid)
+    .eq("messaging_service_sid", payload.messagingServiceSid)
+    .eq("routing_status", "active")
+    .in("provider", ["twilio", "twilio_sms"])
+    .in("communication_channel", ["sms", "sms_voice"])
+    .limit(2);
 
-  if (error) {
-    if (isMissingRelationError(error)) {
-      return { status: "migration_required", row: null };
-    }
-
-    throw error;
+  if (numberError) {
+    return { status: "retryable" };
+  }
+  if (!numbers?.length) {
+    return { status: "forbidden" };
+  }
+  if (numbers.length !== 1) {
+    return { status: "conflict" };
   }
 
-  return data
-    ? { status: "matched", row: data as BusinessPhoneRouteRow }
-    : { status: "needs_review", row: null };
+  const number = numbers[0];
+  if (!number.integration_connection_id) {
+    return { status: "forbidden" };
+  }
+
+  const [companyResult, connectionResult] = await Promise.all([
+    client.from("companies").select("id, name").eq("id", number.company_id).limit(2),
+    client
+      .from("integration_connections")
+      .select("*")
+      .eq("id", number.integration_connection_id)
+      .eq("company_id", number.company_id)
+      .eq("provider", "twilio_sms")
+      .limit(2),
+  ]);
+
+  if (companyResult.error || connectionResult.error) {
+    return { status: "retryable" };
+  }
+  if (companyResult.data?.length !== 1 || connectionResult.data?.length !== 1) {
+    return { status: "forbidden" };
+  }
+
+  const company = companyResult.data[0];
+  const connection = connectionResult.data[0];
+  const connectionAccountSid = connection.provider_account_id ?? connection.external_account_id;
+  const routing_status = number.routing_status;
+  const status = connection.status;
+  const routeIsActive = routing_status === "active";
+  const connectionIsConnected = status === "connected";
+
+  if (
+    company.name !== configuredNumber.companyName ||
+    !routeIsActive ||
+    !connectionIsConnected ||
+    connection.disabled_at ||
+    connectionAccountSid !== payload.accountSid ||
+    number.company_id !== connection.company_id
+  ) {
+    return { status: "forbidden" };
+  }
+
+  return { status: "matched", route: { number, connection } };
 }
 
-async function getExistingSmsMessage(
+async function resolveContact(
   client: CrmClient,
-  messageSid: string,
-): Promise<SmsMessageRecord | null> {
-  const { data } = await client
-    .from("sms_messages")
-    .select("*")
-    .eq("twilio_message_sid", messageSid)
-    .maybeSingle();
+  companyId: string,
+  senderPhone: string,
+): Promise<{ status: "ok"; match: ContactMatch } | { status: "retryable" }> {
+  const fetchAllPhoneRows = async (table: "customers" | "leads") => {
+    const rows: Array<{ id: string; company_id: string; phone: string | null }> = [];
+    const pageSize = 500;
 
-  return data;
-}
+    for (let page = 0; page < 200; page += 1) {
+      const start = page * pageSize;
+      const result = await client
+        .from(table)
+        .select("id, company_id, phone")
+        .eq("company_id", companyId)
+        .not("phone", "is", null)
+        .order("id", { ascending: true })
+        .range(start, start + pageSize - 1);
 
-async function getExistingCallRecordId(client: CrmClient, callSid: string | null) {
-  if (!callSid) {
-    return null;
-  }
+      if (result.error) {
+        return { data: null, error: result.error };
+      }
 
-  const { data, error } = await client
-    .from("call_records")
-    .select("id")
-    .eq("provider_call_sid", callSid)
-    .maybeSingle();
-
-  if (error) {
-    if (isMissingRelationError(error)) {
-      return null;
+      const pageRows = result.data ?? [];
+      rows.push(...pageRows);
+      if (pageRows.length < pageSize) {
+        return { data: rows, error: null };
+      }
     }
 
-    throw error;
+    return { data: null, error: new Error("Contact lookup exceeded its safe pagination limit.") };
+  };
+  const [customersResult, leadsResult] = await Promise.all([
+    fetchAllPhoneRows("customers"),
+    fetchAllPhoneRows("leads"),
+  ]);
+
+  if (customersResult.error || leadsResult.error || !customersResult.data || !leadsResult.data) {
+    return { status: "retryable" };
   }
 
-  return data?.id ?? null;
-}
+  const customers = customersResult.data.filter(
+    (record) => normalizeTwilioPhoneNumber(record.phone) === senderPhone,
+  ) as Pick<CustomerRecord, "id" | "company_id" | "phone">[];
+  const leads = leadsResult.data.filter(
+    (record) => normalizeTwilioPhoneNumber(record.phone) === senderPhone,
+  ) as Pick<LeadRecord, "id" | "company_id" | "phone">[];
+  const matchCount = customers.length + leads.length;
 
-async function createInboundSyncLog({
-  client,
-  connection,
-  payload,
-  smsMessageId,
-  status,
-  errorMessage = null,
-}: {
-  client: CrmClient;
-  connection: IntegrationConnectionRecord;
-  payload: TwilioWebhookPayload;
-  smsMessageId: string | null;
-  status: "succeeded" | "failed" | "skipped";
-  errorMessage?: string | null;
-}) {
-  const now = new Date().toISOString();
-
-  return createIntegrationSyncLog(client, {
-    company_id: connection.company_id,
-    integration_connection_id: connection.id,
-    provider: "twilio_sms",
-    direction: "provider_to_weathertech",
-    event_type: SMS_INBOUND_EVENT_TYPE,
-    status,
-    related_table: smsMessageId ? "sms_messages" : null,
-    related_record_id: smsMessageId,
-    external_id: payload.messageSid,
-    attempt_count: 1,
-    max_attempts: 1,
-    last_attempted_at: now,
-    completed_at: now,
-    request_summary: sanitizeIntegrationSyncLogSummary(getSafePayloadSummary(payload)),
-    response_summary: sanitizeIntegrationSyncLogSummary({
-      stored: status === "succeeded",
-      smsMessageId,
-    }),
-    error_code: errorMessage ? "twilio_inbound_storage_failed" : null,
-    error_message: errorMessage,
-  });
-}
-
-export function getTwilioProviderEventSid(payload: TwilioWebhookPayload) {
-  if (payload.kind === "sms_status" && payload.messageSid && payload.messageStatus) {
-    return `${payload.messageSid}:${payload.messageStatus}`;
+  if (matchCount === 0) {
+    return {
+      status: "ok",
+      match: { status: "unmatched", customerId: null, leadId: null },
+    };
   }
-
-  if (payload.kind === "voice_status" && payload.callSid && payload.callStatus) {
-    return `${payload.callSid}:${payload.callStatus}`;
+  if (matchCount !== 1) {
+    return {
+      status: "ok",
+      match: { status: "ambiguous", customerId: null, leadId: null },
+    };
   }
-
-  return payload.recordingSid ?? payload.messageSid ?? payload.callSid;
+  if (customers.length === 1) {
+    return {
+      status: "ok",
+      match: { status: "matched_customer", customerId: customers[0].id, leadId: null },
+    };
+  }
+  return {
+    status: "ok",
+    match: { status: "matched_lead", customerId: null, leadId: leads[0].id },
+  };
 }
 
-function getProviderParentSid(payload: TwilioWebhookPayload) {
-  return payload.recordingSid ? payload.callSid : payload.parentCallSid;
-}
-
-function getProvider(payload: TwilioWebhookPayload) {
-  return payload.kind.startsWith("sms") ? "twilio_sms" : "twilio";
-}
-
-function getChannel(payload: TwilioWebhookPayload) {
-  return payload.kind.startsWith("sms") ? "sms" : "voice";
-}
-
-function getDirection(payload: TwilioWebhookPayload) {
-  return payload.kind === "sms_status" ? "outbound" : "inbound";
-}
-
-function getEventStatus(payload: TwilioWebhookPayload) {
+function messageMatchesClaim(
+  message: SmsMessageRecord,
+  expected: {
+    id: string;
+    companyId: string;
+    connectionId: string;
+    numberId: string;
+    accountSid: string;
+    messagingServiceSid: string;
+    messageSid: string;
+    from: string;
+    to: string;
+    body: string;
+    fingerprint: string;
+  },
+) {
   return (
-    payload.messageStatus ??
-    payload.callStatus ??
-    payload.recordingStatus ??
-    (payload.kind === "sms_inbound" ? "received" : "received")
+    message.id === expected.id &&
+    message.company_id === expected.companyId &&
+    message.integration_connection_id === expected.connectionId &&
+    message.business_phone_number_id === expected.numberId &&
+    message.provider === "twilio_sms" &&
+    message.direction === "inbound" &&
+    message.provider_account_sid === expected.accountSid &&
+    message.provider_messaging_service_sid === expected.messagingServiceSid &&
+    message.twilio_message_sid === expected.messageSid &&
+    message.from_phone === expected.from &&
+    message.to_phone === expected.to &&
+    message.body === expected.body &&
+    createTwilioInboundPayloadFingerprint({
+      accountSid: expected.accountSid,
+      messageSid: expected.messageSid,
+      messagingServiceSid: expected.messagingServiceSid,
+      from: expected.from,
+      to: expected.to,
+      body: message.body,
+      companyId: expected.companyId,
+    }) === expected.fingerprint &&
+    message.provider_payload_fingerprint === expected.fingerprint
   );
 }
 
-function getSafePayloadSummary(payload: TwilioWebhookPayload) {
-  return {
-    accountSid: maskSid(payload.accountSid),
-    messageSid: maskSid(payload.messageSid),
-    callSid: maskSid(payload.callSid),
-    recordingSid: maskSid(payload.recordingSid),
-    messagingServiceSid: maskSid(payload.messagingServiceSid),
-    from: maskPhone(payload.from),
-    to: maskPhone(payload.to),
-    bodyLength: payload.body?.length ?? 0,
-    messageStatus: payload.messageStatus,
-    callStatus: payload.callStatus,
-    recordingStatus: payload.recordingStatus,
-    durationSeconds: payload.durationSeconds,
-    recordingDurationSeconds: payload.recordingDurationSeconds,
-    errorCode: payload.errorCode,
-    errorMessage: sanitizeIntegrationSyncLogText(payload.errorMessage),
-  };
-}
-
-async function storeProviderEvent({
-  client,
-  payload,
-  route,
-  target,
-  smsMessageId,
-  callRecordId,
-}: {
-  client: CrmClient;
-  payload: TwilioWebhookPayload;
-  route: BusinessPhoneRouteResult;
-  target: TwilioCrmTarget;
-  smsMessageId: string | null;
-  callRecordId: string | null;
-}) {
-  if (route.status === "migration_required") {
-    return {
-      providerEventId: null,
-      duplicate: false,
-      migrationRequired: true,
-    };
-  }
-
-  const routeRow = route.row;
-  const { data, error } = await client
-    .from("communication_provider_events")
-    .insert({
-      company_id: routeRow?.company_id ?? null,
-      business_phone_number_id: routeRow?.id ?? null,
-      integration_connection_id: routeRow?.integration_connection_id ?? null,
-      customer_id: target.customerId,
-      lead_id: target.leadId,
-      sms_message_id: smsMessageId,
-      provider: getProvider(payload),
-      provider_account_sid: payload.accountSid,
-      provider_event_sid: getTwilioProviderEventSid(payload),
-      provider_parent_sid: getProviderParentSid(payload),
-      event_type: payload.kind,
-      channel: getChannel(payload),
-      direction: getDirection(payload),
-      status: getEventStatus(payload),
-      from_phone: normalizeTwilioPhoneNumber(payload.from),
-      to_phone: normalizeTwilioPhoneNumber(payload.to),
-      business_phone: normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload)),
-      customer_phone: normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload)),
-      routing_status: route.status === "matched" ? "matched" : "needs_review",
-      payload_summary: sanitizeIntegrationSyncLogSummary(getSafePayloadSummary(payload)),
-      response_summary: sanitizeIntegrationSyncLogSummary({
-        smsMessageId,
-        callRecordId,
-        leadId: target.leadId,
-        customerId: target.customerId,
-        intakeRecordId: target.intakeRecordId,
-        matchStatus: target.matchStatus,
-        routingStatus: route.status,
-      }),
-      error_code: payload.errorCode,
-      error_message: sanitizeIntegrationSyncLogText(payload.errorMessage),
-      occurred_at: payload.occurredAt,
-    })
-    .select("id")
-    .single();
-
-  if (error) {
-    if (isMissingRelationError(error)) {
-      return {
-        providerEventId: null,
-        duplicate: false,
-        migrationRequired: true,
-      };
-    }
-
-    if (error.code === "23505") {
-      return {
-        providerEventId: null,
-        duplicate: true,
-        migrationRequired: false,
-      };
-    }
-
-    throw error;
-  }
-
-  return {
-    providerEventId: data.id,
-    duplicate: false,
-    migrationRequired: false,
-  };
-}
-
-export function normalizeTwilioSmsDeliveryStatus(status: string | null) {
-  const normalized = status?.toLowerCase().replace(/[^a-z]+/g, "_") ?? null;
-
-  if (
-    normalized === "accepted" ||
-    normalized === "queued" ||
-    normalized === "sending" ||
-    normalized === "sent" ||
-    normalized === "delivered" ||
-    normalized === "undelivered" ||
-    normalized === "failed" ||
-    normalized === "received"
-  ) {
-    return normalized;
-  }
-
-  return null;
-}
-
-async function updateSmsStatusFromCallback(client: CrmClient, payload: TwilioWebhookPayload) {
-  if (payload.kind !== "sms_status" || !payload.messageSid) {
-    return null;
-  }
-
-  const deliveryStatus = normalizeTwilioSmsDeliveryStatus(payload.messageStatus);
-  const now = new Date().toISOString();
-  const update: Partial<SmsMessageInsert> = {
-    delivery_status: deliveryStatus,
-    last_error: sanitizeIntegrationSyncLogText(payload.errorMessage),
-    provider_account_sid: payload.accountSid,
-    provider_messaging_service_sid: payload.messagingServiceSid,
-  };
-
-  if (deliveryStatus === "failed" || deliveryStatus === "undelivered") {
-    update.status = "failed";
-    update.failed_at = now;
-  } else if (deliveryStatus === "delivered") {
-    update.status = "sent";
-    update.delivered_at = now;
-  } else if (deliveryStatus === "sent") {
-    update.status = "sent";
-  }
-
-  const { data, error } = await client
-    .from("sms_messages")
-    .update(update)
-    .eq("twilio_message_sid", payload.messageSid)
-    .select("id")
-    .maybeSingle();
-
-  if (error) {
-    if (isMissingRelationError(error) || error.code === "42703") {
-      return null;
-    }
-
-    throw error;
-  }
-
-  return data?.id ?? null;
-}
-
-export function normalizeTwilioCallStatus(status: string | null) {
-  const normalized = status?.toLowerCase().replace(/[^a-z]+/g, "_") ?? null;
-
-  if (normalized === "in_progress") {
-    return "in_progress";
-  }
-
-  if (normalized === "completed") {
-    return "completed";
-  }
-
-  if (normalized === "busy") {
-    return "busy";
-  }
-
-  if (normalized === "failed" || normalized === "canceled") {
-    return "failed";
-  }
-
-  if (normalized === "no_answer") {
-    return "missed";
-  }
-
-  if (normalized === "ringing") {
-    return "ringing";
-  }
-
-  if (normalized === "answered") {
-    return "answered";
-  }
-
-  return "incoming";
-}
-
-function normalizeRecordingStatus(status: string | null) {
-  const normalized = status?.toLowerCase().replace(/[^a-z]+/g, "_") ?? null;
-
-  if (normalized === "completed") {
-    return "completed";
-  }
-
-  if (normalized === "failed") {
-    return "failed";
-  }
-
-  if (normalized === "in_progress") {
-    return "in_progress";
-  }
-
-  return "not_requested";
-}
-
-async function upsertCallRecord({
-  client,
-  payload,
-  route,
-  target,
-}: {
-  client: CrmClient;
-  payload: TwilioWebhookPayload;
-  route: BusinessPhoneRouteResult;
-  target: TwilioCrmTarget;
-}) {
-  if (
-    (payload.kind !== "voice_inbound" &&
-      payload.kind !== "voice_status" &&
-      payload.kind !== "recording_status") ||
-    !payload.callSid ||
-    route.status === "migration_required"
-  ) {
-    return null;
-  }
-
-  const routeRow = route.row;
-  const { data: existing, error: lookupError } = await client
-    .from("call_records")
-    .select("id")
-    .eq("provider_call_sid", payload.callSid)
-    .maybeSingle();
-
-  if (lookupError) {
-    if (isMissingRelationError(lookupError)) {
-      return null;
-    }
-
-    throw lookupError;
-  }
-
-  const recordInput: CallRecordInsert = {
-    company_id: routeRow?.company_id ?? null,
-    business_phone_number_id: routeRow?.id ?? null,
-    integration_connection_id: routeRow?.integration_connection_id ?? null,
-    customer_id: target.customerId,
-    lead_id: target.leadId,
-    provider: "twilio",
-    provider_account_sid: payload.accountSid,
-    provider_call_sid: payload.callSid,
-    provider_parent_call_sid: payload.parentCallSid,
-    direction: "inbound",
-    call_status: normalizeTwilioCallStatus(payload.callStatus),
-    from_phone: normalizeTwilioPhoneNumber(payload.from),
-    to_phone: normalizeTwilioPhoneNumber(payload.to),
-    business_phone: normalizeTwilioPhoneNumber(getBusinessPhoneCandidate(payload)),
-    customer_phone: normalizeTwilioPhoneNumber(getCustomerPhoneCandidate(payload)),
-    routing_status: route.status === "matched" ? "matched" : "needs_review",
-    started_at: payload.occurredAt,
-    ended_at: payload.durationSeconds ? payload.occurredAt : null,
-    duration_seconds: payload.durationSeconds,
-    recording_sid: payload.recordingSid,
-    recording_status:
-      payload.kind === "recording_status"
-        ? normalizeRecordingStatus(payload.recordingStatus)
-        : "not_requested",
-    recording_duration_seconds: payload.recordingDurationSeconds,
-    transcript_status: "not_requested",
-    follow_up_required:
-      normalizeTwilioCallStatus(payload.callStatus) === "missed" ||
-      normalizeTwilioCallStatus(payload.callStatus) === "busy" ||
-      normalizeTwilioCallStatus(payload.callStatus) === "failed",
-    metadata: sanitizeIntegrationSyncLogSummary({
-      ...getSafePayloadSummary(payload),
-      leadId: target.leadId,
-      customerId: target.customerId,
-      intakeRecordId: target.intakeRecordId,
-      matchStatus: target.matchStatus,
-      warnings: target.warnings,
-    }),
-  };
-
-  if (existing?.id) {
-    const { data, error } = await client
-      .from("call_records")
-      .update(recordInput)
-      .eq("id", existing.id)
-      .select("id")
-      .single();
-
-    if (error) {
-      throw error;
-    }
-
-    return data.id;
-  }
-
-  const { data, error } = await client
-    .from("call_records")
-    .insert(recordInput)
-    .select("id")
-    .single();
-
-  if (error) {
-    if (isMissingRelationError(error)) {
-      return null;
-    }
-
-    throw error;
-  }
-
-  return data.id;
-}
-
-async function getTwilioConnections(client: CrmClient) {
-  const { data, error } = await client
-    .from("integration_connections")
-    .select("*")
-    .in("provider", ["twilio", "twilio_sms"])
-    .order("updated_at", { ascending: false });
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []) as IntegrationConnectionRecord[];
-}
-
-async function storeInboundSmsWithExistingModel({
-  client,
-  payload,
-  route,
-  connection,
-  target,
-}: {
-  client: CrmClient;
-  payload: TwilioWebhookPayload;
-  route: BusinessPhoneRouteResult;
-  connection: IntegrationConnectionRecord | null;
-  target: TwilioCrmTarget;
-}) {
-  if (payload.kind !== "sms_inbound") {
-    return {
-      smsMessageId: null,
-      duplicate: false,
-      skippedReason: null,
-    };
-  }
-
-  const routeCompanyId = route.row?.company_id ?? null;
-  const companyId = routeCompanyId ?? connection?.company_id ?? null;
-
-  if (!companyId) {
-    return {
-      smsMessageId: null,
-      duplicate: false,
-      skippedReason:
-        "Inbound SMS was preserved as a provider event but no company route was matched.",
-    };
-  }
-
-  const existingMessage = await getExistingSmsMessage(client, payload.messageSid ?? "");
-
-  if (existingMessage) {
-    if (connection) {
-      await createInboundSyncLog({
-        client,
-        connection,
-        payload,
-        smsMessageId: existingMessage.id,
-        status: "skipped",
-      }).catch(() => null);
-    }
-
-    return {
-      smsMessageId: existingMessage.id,
-      duplicate: true,
-      skippedReason: "Duplicate Twilio MessageSid was already stored.",
-    };
-  }
-
-  const now = new Date().toISOString();
-  const smsMessage = await createSmsMessage(client, {
-    company_id: companyId,
-    customer_id: target.customerId,
-    lead_id: target.leadId,
-    integration_connection_id: route.row?.integration_connection_id ?? connection?.id ?? null,
+async function claimInboundMessage(
+  client: CrmClient,
+  params: {
+    route: VerifiedRoute;
+    contact: ContactMatch;
+    accountSid: string;
+    messagingServiceSid: string;
+    messageSid: string;
+    from: string;
+    to: string;
+    body: string;
+    fingerprint: string;
+  },
+): Promise<{ status: "ok"; claim: MessageClaim } | { status: "conflict" | "retryable" }> {
+  const id = deterministicUuid("wtos:twilio:sms:v1", params.messageSid);
+  const insert: SmsMessageInsert = {
+    id,
+    company_id: params.route.number.company_id,
+    customer_id: params.contact.customerId,
+    lead_id: params.contact.leadId,
+    integration_connection_id: params.route.connection.id,
     provider: "twilio_sms",
     category: "general",
     status: "sent",
-    business_phone_number_id: route.row?.id ?? null,
+    business_phone_number_id: params.route.number.id,
     direction: "inbound",
     delivery_status: "received",
-    provider_account_sid: payload.accountSid,
-    provider_messaging_service_sid: payload.messagingServiceSid,
-    to_phone: normalizeTwilioPhoneNumber(payload.to) ?? payload.to ?? "",
-    from_phone: normalizeTwilioPhoneNumber(payload.from),
-    body: payload.body ?? "",
-    twilio_message_sid: payload.messageSid,
-    sent_at: now,
-    delivered_at: now,
-    correlation_id: payload.messageSid ?? undefined,
-    provider_payload_fingerprint: payload.messageSid ?? undefined,
-    metadata: sanitizeIntegrationSyncLogSummary({
-      leadId: target.leadId,
-      customerId: target.customerId,
-      intakeRecordId: target.intakeRecordId,
-      matchStatus: target.matchStatus,
-      warnings: target.warnings,
-      routingStatus: route.status,
-    }),
-  });
+    provider_account_sid: params.accountSid,
+    provider_messaging_service_sid: params.messagingServiceSid,
+    to_phone: params.to,
+    from_phone: params.from,
+    body: params.body,
+    twilio_message_sid: params.messageSid,
+    sent_at: new Date().toISOString(),
+    delivered_at: new Date().toISOString(),
+    correlation_id: id,
+    provider_payload_fingerprint: params.fingerprint,
+    metadata: {
+      ingestion_status: "claimed",
+      contact_match_status: params.contact.status,
+      source: "authenticated_twilio_webhook",
+    },
+    last_error: null,
+  };
+  const { data, error } = await client.from("sms_messages").insert(insert).select("*").single();
 
-  if (connection) {
-    await createInboundSyncLog({
-      client,
-      connection,
-      payload,
-      smsMessageId: smsMessage.id,
-      status: "succeeded",
-    }).catch(() => null);
+  if (!error && data) {
+    return {
+      status: "ok",
+      claim: { duplicate: false, message: data, contactStatus: params.contact.status },
+    };
+  }
+  if (error?.code !== "23505") {
+    return { status: "retryable" };
   }
 
-  return {
-    smsMessageId: smsMessage.id,
-    duplicate: false,
-    skippedReason: null,
+  const { data: existing, error: existingError } = await client
+    .from("sms_messages")
+    .select("*")
+    .eq("id", id)
+    .limit(2);
+  if (existingError || existing?.length !== 1) {
+    return { status: "retryable" };
+  }
+
+  const expected = {
+    id,
+    companyId: params.route.number.company_id,
+    connectionId: params.route.connection.id,
+    numberId: params.route.number.id,
+    accountSid: params.accountSid,
+    messagingServiceSid: params.messagingServiceSid,
+    messageSid: params.messageSid,
+    from: params.from,
+    to: params.to,
+    body: params.body,
+    fingerprint: params.fingerprint,
   };
+  if (!messageMatchesClaim(existing[0], expected)) {
+    return { status: "conflict" };
+  }
+
+  const storedStatus = existing[0].metadata?.contact_match_status;
+  const contactStatus =
+    storedStatus === "matched_customer" ||
+    storedStatus === "matched_lead" ||
+    storedStatus === "unmatched" ||
+    storedStatus === "ambiguous"
+      ? storedStatus
+      : existing[0].customer_id
+        ? "matched_customer"
+        : existing[0].lead_id
+          ? "matched_lead"
+          : "unmatched";
+  return {
+    status: "ok",
+    claim: { duplicate: true, message: existing[0], contactStatus },
+  };
+}
+
+function eventMatchesMessage(
+  event: CommunicationProviderEventRecord,
+  message: SmsMessageRecord,
+  fingerprint: string,
+  expectedEventId: string,
+) {
+  return (
+    event.id === expectedEventId &&
+    event.company_id === message.company_id &&
+    event.business_phone_number_id === message.business_phone_number_id &&
+    event.integration_connection_id === message.integration_connection_id &&
+    event.customer_id === message.customer_id &&
+    event.lead_id === message.lead_id &&
+    event.sms_message_id === message.id &&
+    event.provider === "twilio" &&
+    event.provider_account_sid === message.provider_account_sid &&
+    event.provider_event_sid === message.twilio_message_sid &&
+    event.event_type === "sms_inbound" &&
+    event.channel === "sms" &&
+    event.direction === "inbound" &&
+    event.status === "received" &&
+    event.from_phone === message.from_phone &&
+    event.to_phone === message.to_phone &&
+    event.business_phone === message.to_phone &&
+    event.customer_phone === message.from_phone &&
+    event.routing_status === "matched" &&
+    event.request_fingerprint === fingerprint
+  );
+}
+
+async function convergeProviderEvent(
+  client: CrmClient,
+  message: SmsMessageRecord,
+  fingerprint: string,
+  contactStatus: ContactMatch["status"],
+  signatureEvidence: string,
+): Promise<{ status: "ok"; event: CommunicationProviderEventRecord } | { status: "conflict" | "retryable" }> {
+  const messageSid = message.twilio_message_sid;
+  if (!messageSid) {
+    return { status: "conflict" };
+  }
+  const eventId = deterministicUuid("wtos:twilio:event:v1", messageSid);
+  const evidenceProof = createTwilioInboundEvidenceProof({
+    messageId: message.id,
+    eventId,
+    companyId: message.company_id,
+    connectionId: message.integration_connection_id ?? "",
+    businessPhoneNumberId: message.business_phone_number_id ?? "",
+    customerId: message.customer_id,
+    leadId: message.lead_id,
+    accountSid: message.provider_account_sid ?? "",
+    messagingServiceSid: message.provider_messaging_service_sid ?? "",
+    messageSid,
+    from: message.from_phone ?? "",
+    to: message.to_phone,
+    payloadFingerprint: fingerprint,
+    signatureEvidence,
+  });
+
+  if (!evidenceProof) {
+    return { status: "retryable" };
+  }
+  const { data, error } = await client
+    .from("communication_provider_events")
+    .insert({
+      id: eventId,
+      company_id: message.company_id,
+      business_phone_number_id: message.business_phone_number_id ?? null,
+      integration_connection_id: message.integration_connection_id,
+      customer_id: message.customer_id,
+      lead_id: message.lead_id,
+      sms_message_id: message.id,
+      provider: "twilio",
+      provider_account_sid: message.provider_account_sid ?? null,
+      provider_event_sid: messageSid,
+      event_type: "sms_inbound",
+      channel: "sms",
+      direction: "inbound",
+      status: "received",
+      from_phone: message.from_phone,
+      to_phone: message.to_phone,
+      business_phone: message.to_phone,
+      customer_phone: message.from_phone,
+      routing_status: "matched",
+      correlation_id: message.correlation_id ?? message.id,
+      request_fingerprint: fingerprint,
+      payload_summary: {
+        body_length: message.body.length,
+        contact_match_status: contactStatus,
+        signature_validated: true,
+        signature_evidence: signatureEvidence,
+      },
+      response_summary: {
+        persisted: true,
+        outbound_sent: false,
+        evidence_proof: evidenceProof,
+      },
+      error_code: null,
+      error_message: null,
+      occurred_at: message.delivered_at ?? message.sent_at ?? new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+
+  let event = data;
+  if (error?.code === "23505") {
+    const existingResult = await client
+      .from("communication_provider_events")
+      .select("*")
+      .eq("provider", "twilio")
+      .eq("event_type", "sms_inbound")
+      .eq("provider_event_sid", messageSid)
+      .limit(2);
+    if (existingResult.error || existingResult.data?.length !== 1) {
+      return { status: "retryable" };
+    }
+    event = existingResult.data[0];
+  } else if (error || !event) {
+    return { status: "retryable" };
+  }
+
+  if (
+    !eventMatchesMessage(event, message, fingerprint, eventId) ||
+    event.response_summary?.evidence_proof !== evidenceProof
+  ) {
+    return { status: "conflict" };
+  }
+
+  const metadata = {
+    ...(message.metadata ?? {}),
+    ingestion_status: "complete",
+    provider_event_id: event.id,
+    evidence_proof: evidenceProof,
+  };
+  const updateResult = await client
+    .from("sms_messages")
+    .update({ metadata, last_error: null })
+    .eq("id", message.id)
+    .eq("provider_payload_fingerprint", fingerprint)
+    .select("id")
+    .single();
+  if (updateResult.error || updateResult.data?.id !== message.id) {
+    return { status: "retryable" };
+  }
+
+  return { status: "ok", event };
+}
+
+export function getTwilioProviderEventSid(payload: TwilioWebhookPayload) {
+  return payload.messageSid ?? payload.callSid ?? payload.recordingSid;
+}
+
+export function normalizeTwilioSmsDeliveryStatus(status: string | null) {
+  const normalized = status?.trim().toLowerCase().replace(/_/g, "-");
+  return ["accepted", "queued", "sending", "sent", "delivered", "undelivered", "failed", "received"].includes(
+    normalized ?? "",
+  )
+    ? normalized
+    : null;
+}
+
+export function normalizeTwilioCallStatus(status: string | null) {
+  const normalized = status?.trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "no-answer" || normalized === "canceled") {
+    return "missed";
+  }
+  const supported = ["incoming", "ringing", "in-progress", "answered", "completed", "missed", "busy", "failed", "voicemail"];
+  if (!supported.includes(normalized ?? "")) {
+    return null;
+  }
+  return normalized === "in-progress" ? "in_progress" : normalized;
 }
 
 export async function storeTwilioWebhookPayload(
   payload: TwilioWebhookPayload,
+  signatureEvidence?: string,
 ): Promise<TwilioStorageResult> {
-  const missingFields = getMissingPayloadFields(payload);
-
-  if (missingFields.length > 0) {
+  if (payload.kind !== "sms_inbound") {
     return {
       stored: false,
       duplicate: false,
@@ -1423,151 +893,214 @@ export async function storeTwilioWebhookPayload(
       providerEventId: null,
       smsMessageId: null,
       callRecordId: null,
-      routingStatus: "needs_review",
-      skippedReason: `Missing Twilio fields: ${missingFields.join(", ")}.`,
+      routingStatus: "unassigned",
+      skippedReason: "unsupported_inbound_only_phase",
     };
+  }
+
+  if (!signatureEvidence || !/^[a-f0-9]{64}$/.test(signatureEvidence)) {
+    throw new TwilioWebhookError("signature_evidence_missing", 503);
+  }
+
+  const accountSid = payload.accountSid;
+  const messageSid = payload.messageSid;
+  const messagingServiceSid = payload.messagingServiceSid;
+  const from = normalizeTwilioPhoneNumber(payload.from);
+  const to = normalizeTwilioPhoneNumber(payload.to);
+  const body = payload.body;
+  const configuredAccountSid = getEnvValue("TWILIO_ACCOUNT_SID");
+  const configuredMessagingServiceSid = getEnvValue("TWILIO_MESSAGING_SERVICE_SID");
+
+  if (
+    !accountSid ||
+    !ACCOUNT_SID_PATTERN.test(accountSid) ||
+    !messageSid ||
+    !MESSAGE_SID_PATTERN.test(messageSid) ||
+    !messagingServiceSid ||
+    !MESSAGING_SERVICE_SID_PATTERN.test(messagingServiceSid) ||
+    !from ||
+    !to ||
+    body === null ||
+    body.length > MAX_MESSAGE_BODY_LENGTH ||
+    payload.numMedia !== 0 ||
+    accountSid !== configuredAccountSid ||
+    messagingServiceSid !== configuredMessagingServiceSid
+  ) {
+    throw new TwilioWebhookError("invalid_payload", 400);
   }
 
   const client = getServiceSupabaseClient();
-
   if (!client) {
-    return {
-      stored: false,
-      duplicate: false,
-      migrationRequired: false,
-      providerEventId: null,
-      smsMessageId: null,
-      callRecordId: null,
-      routingStatus: "needs_review",
-      skippedReason:
-        "SUPABASE_SERVICE_ROLE_KEY is not configured, so Twilio storage was skipped.",
-    };
+    throw new TwilioWebhookError("storage_unavailable", 503);
   }
 
-  try {
-    const route = await findBusinessPhoneRoute(client, payload);
-    const connections = await getTwilioConnections(client);
-    const connection = findInboundConnection(connections, payload);
-    const existingSmsMessage =
-      payload.kind === "sms_inbound" && payload.messageSid
-        ? await getExistingSmsMessage(client, payload.messageSid)
-        : null;
-    const existingCallRecordId =
-      payload.kind === "voice_inbound" ||
-      payload.kind === "voice_status" ||
-      payload.kind === "recording_status"
-        ? await getExistingCallRecordId(client, payload.callSid)
-        : null;
-    const shouldCreateLead =
-      !existingSmsMessage &&
-      !existingCallRecordId &&
-      (payload.kind === "sms_inbound" ||
-        payload.kind === "voice_inbound" ||
-        payload.kind === "voice_status");
-    const target = await resolveTwilioCrmTarget({
-      client,
-      payload,
-      route,
-      connection,
-      shouldCreateLead,
-    });
-    const smsStorage =
-      payload.kind === "sms_inbound"
-        ? await storeInboundSmsWithExistingModel({
-            client,
-            payload,
-            route,
-            connection,
-            target,
-          })
-        : {
-            smsMessageId: await updateSmsStatusFromCallback(client, payload),
-            duplicate: false,
-            skippedReason: null,
-          };
-    const callRecordId = await upsertCallRecord({ client, payload, route, target });
-    const providerEvent = await storeProviderEvent({
-      client,
-      payload,
-      route,
-      target,
-      smsMessageId: smsStorage.smsMessageId,
-      callRecordId,
-    });
-    const migrationRequired = route.status === "migration_required" || providerEvent.migrationRequired;
-
-    return {
-      stored: Boolean(smsStorage.smsMessageId || providerEvent.providerEventId || callRecordId),
-      duplicate: smsStorage.duplicate || providerEvent.duplicate,
-      migrationRequired,
-      providerEventId: providerEvent.providerEventId,
-      smsMessageId: smsStorage.smsMessageId,
-      callRecordId,
-      routingStatus:
-        route.status === "migration_required"
-          ? "migration_required"
-          : route.status === "matched"
-            ? "matched"
-            : "needs_review",
-      skippedReason:
-        smsStorage.skippedReason ??
-        (migrationRequired
-          ? "Twilio live integration migration is required before provider events can be stored."
-          : null),
-    };
-  } catch (error) {
-    return {
-      stored: false,
-      duplicate: false,
-      migrationRequired: false,
-      providerEventId: null,
-      smsMessageId: null,
-      callRecordId: null,
-      routingStatus: "needs_review",
-      skippedReason: describeSafeError(error),
-    };
+  const routeResult = await resolveVerifiedRoute(client, {
+    accountSid,
+    messagingServiceSid,
+    to,
+  });
+  if (routeResult.status !== "matched") {
+    throw new TwilioWebhookError(
+      routeResult.status === "forbidden" ? "route_rejected" : routeResult.status,
+      routeResult.status === "forbidden" ? 403 : routeResult.status === "conflict" ? 409 : 503,
+    );
   }
+
+  const contactResult = await resolveContact(client, routeResult.route.number.company_id, from);
+  if (contactResult.status !== "ok") {
+    throw new TwilioWebhookError("contact_lookup_failed", 503);
+  }
+
+  const fingerprint = createTwilioInboundPayloadFingerprint({
+    accountSid,
+    messageSid,
+    messagingServiceSid,
+    from,
+    to,
+    body,
+    companyId: routeResult.route.number.company_id,
+  });
+  const claimResult = await claimInboundMessage(client, {
+    route: routeResult.route,
+    contact: contactResult.match,
+    accountSid,
+    messagingServiceSid,
+    messageSid,
+    from,
+    to,
+    body,
+    fingerprint,
+  });
+  if (claimResult.status !== "ok") {
+    throw new TwilioWebhookError(
+      claimResult.status === "conflict" ? "message_conflict" : "message_claim_failed",
+      claimResult.status === "conflict" ? 409 : 503,
+    );
+  }
+
+  const eventResult = await convergeProviderEvent(
+    client,
+    claimResult.claim.message,
+    fingerprint,
+    claimResult.claim.contactStatus,
+    signatureEvidence,
+  );
+  if (eventResult.status !== "ok") {
+    throw new TwilioWebhookError(
+      eventResult.status === "conflict" ? "event_conflict" : "event_persistence_failed",
+      eventResult.status === "conflict" ? 409 : 503,
+    );
+  }
+
+  return {
+    stored: !claimResult.claim.duplicate,
+    duplicate: claimResult.claim.duplicate,
+    migrationRequired: false,
+    providerEventId: eventResult.event.id,
+    smsMessageId: claimResult.claim.message.id,
+    callRecordId: null,
+    routingStatus: "matched",
+    skippedReason: null,
+  };
+}
+
+class TwilioWebhookError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(code);
+  }
+}
+
+export function createTwilioTwiMLResponse() {
+  return new Response("<Response></Response>", {
+    status: 200,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/xml; charset=utf-8",
+    },
+  });
+}
+
+function rejectedResponse(signatureStatus: Exclude<TwilioSignatureStatus, "valid">) {
+  const status =
+    signatureStatus === "unsupported_content_type"
+      ? 415
+      : signatureStatus === "payload_too_large"
+        ? 413
+        : signatureStatus === "malformed_request"
+          ? 400
+          : signatureStatus === "missing_auth_token" || signatureStatus === "missing_public_base_url"
+            ? 503
+            : 403;
+  return new Response("Twilio webhook rejected.", {
+    status,
+    headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
 
 export async function handleTwilioWebhook(
   request: NextRequest,
   expectedKind: TwilioWebhookKind,
 ) {
-  try {
-    const { payload, signatureStatus } = await parseTwilioWebhookRequest(
-      request,
-      expectedKind,
-    );
-
-    if (signatureStatus !== "valid") {
-      console.warn("[Twilio] Webhook rejected", {
-        kind: payload.kind,
-        providerEventSid: maskSid(getTwilioProviderEventSid(payload)),
-        accountSid: maskSid(payload.accountSid),
-        signatureStatus,
-      });
-
-      return createTwilioWebhookRejectedResponse(signatureStatus);
-    }
-
-    const storage = await storeTwilioWebhookPayload(payload);
-
-    console.info("[Twilio] Webhook handled", {
-      kind: payload.kind,
-      providerEventSid: maskSid(getTwilioProviderEventSid(payload)),
-      accountSid: maskSid(payload.accountSid),
-      signatureStatus,
-      stored: storage.stored,
-      duplicate: storage.duplicate,
-      migrationRequired: storage.migrationRequired,
-      routingStatus: storage.routingStatus,
-      skippedReason: storage.skippedReason,
-    });
-  } catch (error) {
-    console.error("[Twilio] Webhook failed", {
-      message: describeSafeError(error),
+  if (expectedKind !== "sms_inbound") {
+    return new Response("Twilio callback is disabled in the inbound-SMS-only phase.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
     });
   }
 
-  return createTwilioTwiMLResponse();
+  const parsed = await parseTwilioWebhookRequest(request, expectedKind);
+  if (parsed.signatureStatus !== "valid") {
+    return rejectedResponse(parsed.signatureStatus);
+  }
+  if (!getBooleanEnvValue("TWILIO_INBOUND_SMS_ENABLED")) {
+    return new Response("Twilio inbound SMS processing remains disabled.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+  if (getBooleanEnvValue("TWILIO_OUTBOUND_SMS_ENABLED")) {
+    return new Response("Twilio inbound SMS is unavailable while outbound SMS is enabled.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+  const configuredAccountSid = getEnvValue("TWILIO_ACCOUNT_SID");
+  const configuredMessagingServiceSid = getEnvValue("TWILIO_MESSAGING_SERVICE_SID");
+  if (
+    !configuredAccountSid ||
+    !ACCOUNT_SID_PATTERN.test(configuredAccountSid) ||
+    !configuredMessagingServiceSid ||
+    !MESSAGING_SERVICE_SID_PATTERN.test(configuredMessagingServiceSid)
+  ) {
+    return new Response("Twilio inbound SMS configuration is incomplete.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+  if (parsed.payload.accountSid !== configuredAccountSid) {
+    return new Response("Twilio account rejected.", {
+      status: 403,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  try {
+    if (!parsed.signatureEvidence) {
+      return new Response("Twilio signature evidence is unavailable.", {
+        status: 503,
+        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    await storeTwilioWebhookPayload(parsed.payload, parsed.signatureEvidence);
+    return createTwilioTwiMLResponse();
+  } catch (error) {
+    const status = error instanceof TwilioWebhookError ? error.status : 503;
+    return new Response("Twilio inbound SMS was not accepted.", {
+      status,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
 }

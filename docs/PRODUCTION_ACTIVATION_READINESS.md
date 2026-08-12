@@ -212,7 +212,7 @@ Before production activation, the owner must verify:
 - Required credentials: Twilio account SID, auth token, messaging service or numbers, approved public callback base URL, and company/branch number mapping.
 - OAuth: not used in the current foundation.
 - External approvals: Twilio account ownership, phone-number ownership, messaging compliance, sender verification, webhook URL approval.
-- Testing sequence: run readiness checks, validate signed webhook payloads, test inbound SMS/voice with approved contacts, then request explicit owner approval before outbound messaging.
+- Testing sequence: run readiness checks, validate signed webhook payloads, and test one exact mapped inbound SMS with an approved owner-controlled sender. Voice and outbound messaging remain future, separately approved work.
 - Rollback: remove webhook URLs in Twilio, disable outbound gates, and pause connection records if errors appear.
 
 ### Gmail / Google Workspace

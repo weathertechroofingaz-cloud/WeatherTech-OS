@@ -89,7 +89,6 @@ import {
   createRoutePlan,
   createScheduleEvent,
   createSignature,
-  createSmsMessage,
   createScope,
   createScopeTemplate,
   createTimeEntry,
@@ -114,7 +113,6 @@ import {
   reorderJobTasks,
   updateScheduleEvent,
   updateSignature,
-  updateSmsMessage,
   updateTimeEntry,
   updateDocument,
   uploadDocumentFile,
@@ -284,6 +282,8 @@ import {
 } from "../lib/crm/quickbooksOnlineFoundation";
 import {
   twilioBusinessNumberRouteTemplates,
+  twilioInboundGuardrails,
+  twilioInboundReadinessEndpoint,
   twilioLiveFoundationChecklist,
   twilioLiveReadinessLabels,
   twilioWebhookEndpoints,
@@ -311,11 +311,9 @@ import {
   buildGmailSendPreview,
   buildRouteCandidates,
   buildRoutePreview,
-  buildTwilioSmsPreview,
   buildIntegrationSyncRetryableUpdate,
   calendarSyncStatusLabel,
   canRetryIntegrationSyncLog,
-  countSmsSegments,
   createGmailOutboundPayloadFingerprint,
   createPayloadFingerprint,
   emailCategoryLabel,
@@ -328,7 +326,6 @@ import {
   getFailedIntegrationSyncLogs,
   getIntegrationSyncLogSummary,
   getRetryableIntegrationSyncLogs,
-  getSmsOutboxSummary,
   goHighLevelEnvVars,
   googleMapsEnvVars,
   googleWorkspaceEnvVars,
@@ -482,7 +479,6 @@ import type {
   SignatureRecord,
   SignatureStatus,
   SmsMessageRecord,
-  SmsMessageCategory,
   ScopeCategory,
   ScopeInput,
   ScopeRecord,
@@ -1281,15 +1277,6 @@ const notificationStatuses: { value: NotificationStatus; label: string }[] = [
   { value: "sent", label: "Sent" },
   { value: "read", label: "Read" },
   { value: "dismissed", label: "Dismissed" },
-];
-
-const smsCategories: { value: SmsMessageCategory; label: string }[] = [
-  { value: "appointment_reminder", label: "Appointment reminder" },
-  { value: "estimate_follow_up", label: "Estimate follow-up" },
-  { value: "invoice_reminder", label: "Invoice reminder" },
-  { value: "job_update", label: "Job update" },
-  { value: "weather_delay", label: "Weather delay" },
-  { value: "general", label: "General" },
 ];
 
 const scopeCategories = (Object.keys(scopeCategoryLabels) as ScopeCategory[]).map(
@@ -4951,46 +4938,6 @@ function getSmsTargetName(snapshot: CrmSnapshot, message: SmsMessageRecord) {
       ?.invoice_number ??
     "General SMS"
   );
-}
-
-function buildDefaultSmsBody({
-  category,
-  companyName,
-  targetName,
-  event,
-  invoice,
-  job,
-}: {
-  category: SmsMessageCategory;
-  companyName: string;
-  targetName: string;
-  event?: ScheduleEventRecord;
-  invoice?: InvoiceRecord;
-  job?: JobRecord;
-}) {
-  const optOut = "Reply STOP to opt out.";
-
-  if (category === "appointment_reminder" && event) {
-    return `Hi ${targetName}, this is ${companyName}. Reminder: ${event.title} is scheduled for ${formatDateTime(event.start_at)}${event.location ? ` at ${event.location}` : ""}. ${optOut}`;
-  }
-
-  if (category === "invoice_reminder" && invoice) {
-    return `Hi ${targetName}, ${companyName} invoice ${invoice.invoice_number} has a balance of ${formatMoney(invoice.balance_due)}. Please reply with questions or payment timing. ${optOut}`;
-  }
-
-  if (category === "job_update" && job) {
-    return `Hi ${targetName}, ${companyName} update for ${job.title}: current status is ${jobStatusLabel(job.status)}. We will keep you posted as production moves forward. ${optOut}`;
-  }
-
-  if (category === "weather_delay") {
-    return `Hi ${targetName}, this is ${companyName}. Weather may affect today's schedule. Our team is reviewing conditions and will confirm the next update shortly. ${optOut}`;
-  }
-
-  if (category === "estimate_follow_up") {
-    return `Hi ${targetName}, this is ${companyName}. Following up on your estimate. Reply here with questions or approval and we can help reserve the schedule. ${optOut}`;
-  }
-
-  return `Hi ${targetName}, this is ${companyName}. Reply here if you have any questions or need an update from our team. ${optOut}`;
 }
 
 function getCaughtErrorMessage(currentError: unknown, fallback: string) {
@@ -15836,17 +15783,17 @@ function TwilioCommunicationsSetupNotice() {
   return (
     <div
       className="rounded-lg border border-amber-200 bg-amber-50 p-4"
-      data-testid="twilio-communications-setup-required"
+      data-testid="twilio-communications-inbound-safety"
     >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-sm font-bold text-amber-950">
-            Twilio Live Setup Required
+            Twilio inbound safety
           </p>
           <p className="mt-1 text-sm leading-6 text-amber-900">
-              SMS and call history will appear here after migration 0021, business
-            number routing, credentials, webhook signatures, and live testing are
-            complete. Unknown callers/messages must remain unassigned for review.
+            Only authenticated SMS received through an exact active company-number
+            mapping appears here. Unknown or ambiguous senders remain unassigned for
+            review, and outbound SMS remains unavailable.
           </p>
         </div>
         <ProviderStatusBadge label="No Outbound SMS Or Calls" tone="red" />
@@ -20908,8 +20855,8 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("jobs")}
         />
         <CustomerQuickAction
-          label="Send SMS"
-          detail="Open the SMS workflow for this customer."
+          label="Send SMS (disabled)"
+          detail="Open the read-only SMS conversation history for this customer."
           icon={Phone}
           onClick={() => onViewChange("inbox")}
         />
@@ -42205,8 +42152,8 @@ const integrationCards = [
   },
   {
     name: "Twilio SMS",
-    status: "Outbox active",
-    detail: "Connection records, SMS queueing, status tracking, and Twilio payload previews.",
+    status: "Inbound only",
+    detail: "Signed inbound SMS, exact company-number mapping, deduplication, and inbox auditability; outbound is disabled.",
   },
   {
     name: "GoHighLevel",
@@ -42371,29 +42318,58 @@ type GoHighLevelLeadDryRunResult = {
   syncLogId: string | null;
 };
 
-type TwilioConnectionTestResult = {
+type TwilioInboundReadinessResult = {
   ok: boolean;
-  status: "configured" | "configured_with_warning" | "missing_config";
+  status: TwilioLiveReadinessStatus;
   checkedAt: string | null;
-  outboundReady: boolean;
-  missing: string[];
-  warnings: Array<{
-    code: string;
-    message: string;
-  }>;
-  credentials: {
+  message: string;
+  configuration: {
+    configured: boolean;
+    missing: string[];
     accountSid: string | null;
-    authToken: string | null;
-    messagingServiceSid: string | null;
-    fromNumber: string | null;
+    authTokenConfigured: boolean;
+    publicBaseUrl: string | null;
+    inboundWebhookUrl: string | null;
+    inboundGateEnabled: boolean;
+    outboundSmsEnabled: boolean;
+    outboundSmsDisabled: boolean;
+    outboundLockedInApplication: boolean;
   };
-  messagesEndpoint: string;
+  schema: {
+    applied: boolean;
+    businessPhoneNumbersAvailable: boolean;
+    providerEventsAvailable: boolean;
+    inboundMessagesAvailable: boolean;
+  };
+  mapping: {
+    configuredNumberCount: number;
+    exactMappedNumberCount: number;
+    routes: Array<{
+      key: string;
+      label: string;
+      company: string;
+      configured: boolean;
+      maskedPhoneNumber: string | null;
+      companyResolved: boolean;
+      connectionStored: boolean;
+      connectionStatus: string | null;
+      routeStored: boolean;
+      routingStatus: string | null;
+      accountMatches: boolean;
+      exactNumberMatches: boolean;
+      exactMapped: boolean;
+      inboundValidated: boolean;
+      lastValidatedInboundAt: string | null;
+    }>;
+    unexpectedActiveMappings: Array<{
+      company: string;
+      maskedPhoneNumber: string | null;
+      routingKey: string;
+    }>;
+  };
+  inboundValidated: boolean;
+  outboundDisabled: boolean;
   communicationsSent: boolean;
-  testSms: {
-    attempted: boolean;
-    sent: boolean;
-    message: string;
-  };
 };
 
 type GoogleWorkspaceReadinessResult = {
@@ -42514,70 +42490,6 @@ type GmailSendApiResult = {
     sent?: boolean;
   };
 };
-
-const TWILIO_TEST_ENDPOINT = "/api/integrations/twilio/test";
-const TWILIO_FROM_NUMBER_WARNING =
-  "TWILIO_FROM_NUMBER is blank. Outbound sending requires a sender number after buying one or porting an existing business number.";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function getOptionalStringValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function getStringArrayValue(value: unknown) {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
-    : [];
-}
-
-function normalizeTwilioConnectionStatus(value: unknown): TwilioConnectionTestResult["status"] {
-  return value === "configured" ||
-    value === "configured_with_warning" ||
-    value === "missing_config"
-    ? value
-    : "missing_config";
-}
-
-function normalizeTwilioTestResult(value: unknown): TwilioConnectionTestResult {
-  const result = isRecord(value) ? value : {};
-  const credentials = isRecord(result.credentials) ? result.credentials : {};
-  const testSms = isRecord(result.testSms) ? result.testSms : {};
-  const warnings = Array.isArray(result.warnings)
-    ? result.warnings.map((warning) => {
-        const warningRecord = isRecord(warning) ? warning : {};
-
-        return {
-          code: getOptionalStringValue(warningRecord.code) ?? "warning",
-          message: getOptionalStringValue(warningRecord.message) ?? "",
-        };
-      }).filter((warning) => warning.message)
-    : [];
-
-  return {
-    ok: result.ok === true,
-    status: normalizeTwilioConnectionStatus(result.status),
-    checkedAt: getOptionalStringValue(result.checkedAt),
-    outboundReady: result.outboundReady === true,
-    missing: getStringArrayValue(result.missing),
-    warnings,
-    credentials: {
-      accountSid: getOptionalStringValue(credentials.accountSid),
-      authToken: getOptionalStringValue(credentials.authToken),
-      messagingServiceSid: getOptionalStringValue(credentials.messagingServiceSid),
-      fromNumber: getOptionalStringValue(credentials.fromNumber),
-    },
-    messagesEndpoint: getOptionalStringValue(result.messagesEndpoint) ?? "",
-    communicationsSent: result.communicationsSent === true,
-    testSms: {
-      attempted: testSms.attempted === true,
-      sent: testSms.sent === true,
-      message: getOptionalStringValue(testSms.message) ?? "",
-    },
-  };
-}
 
 function formatOptionalDateTime(value: string | null | undefined) {
   if (!value) {
@@ -43425,28 +43337,25 @@ function countGoHighLevelResourceMode(
 }
 
 function getTwilioStatusTone(
-  status: TwilioConnectionTestResult["status"] | "not_checked",
+  status: TwilioLiveReadinessStatus | "not_checked",
 ): "blue" | "green" | "amber" {
-  if (status === "configured") {
+  if (status === "connected") {
     return "green";
   }
 
-  if (status === "configured_with_warning") {
+  if (status === "error") {
     return "amber";
   }
 
-  return "blue";
+  return status === "ready_for_live_test" || status === "backend_ready"
+    ? "blue"
+    : "amber";
 }
 
-function formatTwilioStatus(status: TwilioConnectionTestResult["status"] | "not_checked") {
-  const labels: Record<TwilioConnectionTestResult["status"] | "not_checked", string> = {
-    configured: "Configured",
-    configured_with_warning: "Configured with warning",
-    missing_config: "Missing config",
-    not_checked: "Not checked",
-  };
-
-  return labels[status];
+function formatTwilioStatus(status: TwilioLiveReadinessStatus | "not_checked") {
+  return status === "not_checked"
+    ? "Not checked"
+    : twilioLiveReadinessLabels[status];
 }
 
 function IntegrationsView({
@@ -43502,17 +43411,9 @@ function IntegrationsView({
   const emailPreviewPayload = previewEmail
     ? buildGmailSendPreview(previewEmail)
     : null;
-  const twilioConnections = snapshot.integrationConnections.filter(
-    (connection) => connection.provider === "twilio_sms",
+  const inboundSmsMessages = snapshot.smsMessages.filter(
+    (message) => message.direction === "inbound",
   );
-  const primaryTwilioConnection = twilioConnections[0];
-  const smsSummary = getSmsOutboxSummary(snapshot.smsMessages);
-  const previewSms = snapshot.smsMessages[0];
-  const smsPreviewPayload = previewSms ? buildTwilioSmsPreview(previewSms) : null;
-  const primaryTwilioFromNumber =
-    typeof primaryTwilioConnection?.settings.fromNumber === "string"
-      ? primaryTwilioConnection.settings.fromNumber
-      : null;
   const goHighLevelConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "gohighlevel",
   );
@@ -43551,10 +43452,10 @@ function IntegrationsView({
   const [goHighLevelLeadDryRunLeadId, setGoHighLevelLeadDryRunLeadId] = useState(
     snapshot.leads[0]?.id ?? "",
   );
-  const [twilioTestResult, setTwilioTestResult] =
-    useState<TwilioConnectionTestResult | null>(null);
-  const [twilioTestError, setTwilioTestError] = useState("");
-  const [isTestingTwilio, setIsTestingTwilio] = useState(false);
+  const [twilioReadinessResult, setTwilioReadinessResult] =
+    useState<TwilioInboundReadinessResult | null>(null);
+  const [twilioReadinessError, setTwilioReadinessError] = useState("");
+  const [isCheckingTwilio, setIsCheckingTwilio] = useState(false);
   const [googleWorkspaceReadinessResult, setGoogleWorkspaceReadinessResult] =
     useState<GoogleWorkspaceReadinessResult | null>(null);
   const [isCheckingGoogleWorkspace, setIsCheckingGoogleWorkspace] = useState(false);
@@ -43629,18 +43530,7 @@ function IntegrationsView({
       : latestGoHighLevelLogAt
         ? formatDateTime(latestGoHighLevelLogAt)
         : "Not synced yet";
-  const twilioStatus = twilioTestResult?.status ?? "not_checked";
-  const twilioFromNumberMissing =
-    Boolean(twilioTestResult) && !twilioTestResult?.credentials.fromNumber;
-  const twilioWarningMessages = Array.from(
-    new Set([
-      ...(twilioTestResult?.warnings.map((warning) => warning.message) ?? []),
-      ...(twilioFromNumberMissing ? [TWILIO_FROM_NUMBER_WARNING] : []),
-    ]),
-  );
-  const twilioAdditionalWarningMessages = twilioWarningMessages.filter(
-    (message) => message !== TWILIO_FROM_NUMBER_WARNING,
-  );
+  const twilioStatus = twilioReadinessResult?.status ?? "not_checked";
   const googleWorkspaceStatusLabel =
     googleWorkspaceReadinessResult?.statusLabel ??
     (primaryGmailConnection
@@ -43712,28 +43602,23 @@ function IntegrationsView({
     setGoHighLevelLeadDryRunLeadId(snapshot.leads[0].id);
   }, [goHighLevelLeadDryRunLeadId, snapshot.leads]);
 
-  const handleTestTwilioConnection = useCallback(
+  const handleCheckTwilioReadiness = useCallback(
     async ({ showNotice = true }: { showNotice?: boolean } = {}) => {
-      setIsTestingTwilio(true);
-      setTwilioTestError("");
+      setIsCheckingTwilio(true);
+      setTwilioReadinessError("");
 
       try {
-        const response = await fetch(TWILIO_TEST_ENDPOINT, {
+        const response = await fetch(twilioInboundReadinessEndpoint, {
           method: "GET",
           headers: {
             Accept: "application/json",
           },
         });
-        const responseText = await response.text();
-        const rawResult = responseText ? JSON.parse(responseText) : {};
-        const result = normalizeTwilioTestResult(rawResult);
-        setTwilioTestResult(result);
+        const result = (await response.json()) as TwilioInboundReadinessResult;
 
-        if (!response.ok || !result.ok) {
-          const message = result.missing.length
-            ? `Twilio config is missing ${result.missing.join(", ")}.`
-            : "Twilio configuration check needs attention.";
-          setTwilioTestError(message);
+        if (!response.ok || !result.status) {
+          const message = result.message || "Twilio readiness could not be checked.";
+          setTwilioReadinessError(message);
 
           if (showNotice) {
             onError(message);
@@ -43741,33 +43626,35 @@ function IntegrationsView({
           return;
         }
 
+        setTwilioReadinessResult(result);
+
         if (showNotice) {
-          onNotice(
-            result.status === "configured_with_warning"
-              ? "Twilio is configured with a sender-number warning. No SMS was sent."
-              : "Twilio configuration check passed. No SMS was sent.",
-          );
+          if (result.status === "error") {
+            onError(result.message);
+          } else {
+            onNotice(result.message);
+          }
         }
       } catch (error) {
         const message =
           error instanceof Error
             ? error.message
-            : "Could not test Twilio configuration.";
-        setTwilioTestError(message);
+            : "Could not check Twilio readiness.";
+        setTwilioReadinessError(message);
 
         if (showNotice) {
           onError(message);
         }
       } finally {
-        setIsTestingTwilio(false);
+        setIsCheckingTwilio(false);
       }
     },
     [onError, onNotice],
   );
 
   useEffect(() => {
-    void handleTestTwilioConnection({ showNotice: false });
-  }, [handleTestTwilioConnection]);
+    void handleCheckTwilioReadiness({ showNotice: false });
+  }, [handleCheckTwilioReadiness]);
 
   const handleCheckGoogleWorkspaceReadiness = async () => {
     setIsCheckingGoogleWorkspace(true);
@@ -44406,153 +44293,6 @@ function IntegrationsView({
     }
   };
 
-  const handleCreateTwilioConnection = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-    const companyId = getFormString(formData, "company_id");
-    const displayName = getFormString(formData, "display_name");
-    const accountLabel = getOptionalFormString(formData, "account_label");
-    const messagingServiceSid = getOptionalFormString(formData, "messaging_service_sid");
-    const fromNumber = getOptionalFormString(formData, "from_phone");
-
-    try {
-      await createIntegrationConnection(client, {
-        company_id: companyId,
-        provider: "twilio_sms",
-        status: "connected",
-        display_name: displayName,
-        account_email: null,
-        external_account_id: accountLabel,
-        scopes: [],
-        sync_direction: "weathertech_to_provider",
-        credential_reference: `vault://twilio/${companyId}`,
-        settings: {
-          messagingServiceSid,
-          fromNumber,
-          optOutText: "Reply STOP to opt out.",
-          deliveryReceipts: true,
-        },
-      });
-      onNotice("Twilio SMS connection saved.");
-      await onReload();
-      form.reset();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not save Twilio connection.");
-    }
-  };
-
-  const handleCreateSmsMessage = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-    const companyId = getFormString(formData, "company_id");
-    const targetKey = getFormString(formData, "target_key", "general:none");
-    const [targetType, targetId] = targetKey.split(":");
-    const category = getFormString(
-      formData,
-      "category",
-      "general",
-    ) as SmsMessageCategory;
-    const toPhoneOverride = getOptionalFormString(formData, "to_phone");
-    const bodyOverride = getOptionalFormString(formData, "body");
-    const intent = getFormString(formData, "intent", "draft");
-
-    const selectedCustomer =
-      targetType === "customer"
-        ? snapshot.customers.find((customer) => customer.id === targetId)
-        : undefined;
-    const selectedLead =
-      targetType === "lead"
-        ? snapshot.leads.find((lead) => lead.id === targetId)
-        : undefined;
-    const selectedJob =
-      targetType === "job" ? snapshot.jobs.find((job) => job.id === targetId) : undefined;
-    const selectedScheduleEvent =
-      targetType === "schedule"
-        ? snapshot.scheduleEvents.find((scheduleEvent) => scheduleEvent.id === targetId)
-        : undefined;
-    const selectedInvoice =
-      targetType === "invoice"
-        ? snapshot.invoices.find((invoice) => invoice.id === targetId)
-        : undefined;
-    const scheduleJob = selectedScheduleEvent?.job_id
-      ? snapshot.jobs.find((job) => job.id === selectedScheduleEvent.job_id)
-      : undefined;
-    const resolvedCustomerId =
-      selectedCustomer?.id ??
-      selectedLead?.customer_id ??
-      selectedJob?.customer_id ??
-      selectedScheduleEvent?.customer_id ??
-      scheduleJob?.customer_id ??
-      selectedInvoice?.customer_id ??
-      null;
-    const resolvedCustomer = resolvedCustomerId
-      ? snapshot.customers.find((customer) => customer.id === resolvedCustomerId)
-      : undefined;
-    const resolvedLeadId =
-      selectedLead?.id ??
-      selectedJob?.lead_id ??
-      selectedScheduleEvent?.lead_id ??
-      scheduleJob?.lead_id ??
-      null;
-    const resolvedJobId =
-      selectedJob?.id ?? selectedScheduleEvent?.job_id ?? selectedInvoice?.job_id ?? null;
-    const targetName =
-      selectedCustomer?.contact_name ??
-      selectedLead?.contact_name ??
-      resolvedCustomer?.contact_name ??
-      selectedJob?.title ??
-      selectedScheduleEvent?.title ??
-      selectedInvoice?.invoice_number ??
-      "there";
-    const toPhone =
-      toPhoneOverride ??
-      selectedCustomer?.phone ??
-      selectedLead?.phone ??
-      resolvedCustomer?.phone ??
-      null;
-
-    if (!toPhone) {
-      onError("Add a recipient phone number before saving the SMS.");
-      return;
-    }
-
-    const companyName = companyMap.get(companyId)?.name ?? "WeatherTech OS";
-    const body =
-      bodyOverride ??
-      buildDefaultSmsBody({
-        category,
-        companyName,
-        targetName,
-        event: selectedScheduleEvent,
-        invoice: selectedInvoice,
-        job: selectedJob ?? scheduleJob,
-      });
-
-    try {
-      await createSmsMessage(client, {
-        company_id: companyId,
-        customer_id: resolvedCustomerId,
-        lead_id: resolvedLeadId,
-        job_id: resolvedJobId,
-        schedule_event_id: selectedScheduleEvent?.id ?? null,
-        invoice_id: selectedInvoice?.id ?? null,
-        integration_connection_id: primaryTwilioConnection?.id ?? null,
-        category,
-        status: intent === "queue" ? "queued" : "draft",
-        to_phone: toPhone,
-        from_phone: primaryTwilioFromNumber,
-        body,
-      });
-      onNotice(intent === "queue" ? "SMS queued for Twilio." : "SMS draft saved.");
-      await onReload();
-      form.reset();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not save SMS message.");
-    }
-  };
-
   const handleCreateGoogleConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -44758,37 +44498,6 @@ function IntegrationsView({
     } finally {
       setSendingGmailMessageId(null);
       setPendingGmailApprovalMessageId(null);
-    }
-  };
-
-  const queueSmsMessage = async (message: SmsMessageRecord) => {
-    try {
-      await updateSmsMessage(client, message.id, {
-        status: "queued",
-        queued_at: new Date().toISOString(),
-        last_error: null,
-      });
-      onNotice("SMS queued for Twilio.");
-      await onReload();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not queue SMS.");
-    }
-  };
-
-  const markSmsSent = async (message: SmsMessageRecord) => {
-    const now = new Date().toISOString();
-
-    try {
-      await updateSmsMessage(client, message.id, {
-        status: "sent",
-        sent_at: now,
-        twilio_message_sid: message.twilio_message_sid ?? `twilio-${message.id}`,
-        last_error: null,
-      });
-      onNotice("SMS marked sent.");
-      await onReload();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update SMS.");
     }
   };
 
@@ -45752,57 +45461,57 @@ function IntegrationsView({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase text-sky-700">
-                Phase 5 - Twilio SMS
+                Production connections - Twilio inbound SMS
               </p>
               <h3 className="mt-1 text-xl font-bold text-slate-950">
-                Customer and field text outbox
+                Authenticated inbound communications
               </h3>
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
-                Draft and queue appointment reminders, estimate follow-ups, invoice
-                nudges, job updates, and weather-delay texts for a secure Twilio worker.
+                Signed Twilio messages appear in the Unified Inbox after exact account,
+                number, connection, and company routing. Outbound SMS is unavailable in
+                this inbound-only phase.
               </p>
             </div>
-            {primaryTwilioConnection ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  label={integrationStatusLabel(primaryTwilioConnection.status)}
-                  tone={getIntegrationStatusTone(primaryTwilioConnection.status)}
-                />
-                <button
-                  type="button"
-                  onClick={() => void toggleConnectionStatus(primaryTwilioConnection)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  {primaryTwilioConnection.status === "paused" ? "Resume" : "Pause"}
-                </button>
-              </div>
-            ) : null}
+            <Badge
+              label={formatTwilioStatus(twilioStatus)}
+              tone={getTwilioStatusTone(twilioStatus)}
+            />
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-4">
-            <ProfileStat label="Drafts" value={smsSummary.draft} />
-            <ProfileStat label="Queued" value={smsSummary.queued} />
-            <ProfileStat label="Sent" value={smsSummary.sent} />
-            <ProfileStat label="Failed" value={smsSummary.failed} />
+            <ProfileStat label="Inbound messages" value={inboundSmsMessages.length} />
+            <ProfileStat
+              label="Configured numbers"
+              value={twilioReadinessResult?.mapping.configuredNumberCount ?? 0}
+            />
+            <ProfileStat
+              label="Exact mappings"
+              value={twilioReadinessResult?.mapping.exactMappedNumberCount ?? 0}
+            />
+            <ProfileStat
+              label="Outbound SMS"
+              value={twilioReadinessResult?.outboundDisabled === false ? "Unsafe" : "Disabled"}
+            />
           </div>
 
           <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-sm font-bold text-slate-950">Twilio SMS outbox</p>
+              <p className="text-sm font-bold text-slate-950">Twilio inbound audit</p>
             </div>
             <div className="divide-y divide-slate-200">
-              {snapshot.smsMessages.map((message) => (
-                <article
-                  key={message.id}
-                  className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto]"
-                >
+              {inboundSmsMessages.map((message) => (
+                <article key={message.id} className="p-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className="font-bold text-slate-950">
                         {getSmsTargetName(snapshot, message)}
                       </h4>
                       <Badge
-                        label={smsMessageStatusLabel(message.status)}
+                        label={
+                          message.direction === "inbound" && message.delivery_status === "received"
+                            ? "Received"
+                            : smsMessageStatusLabel(message.status)
+                        }
                         tone={
                           message.status === "sent"
                             ? "green"
@@ -45814,8 +45523,7 @@ function IntegrationsView({
                       <Badge label={smsCategoryLabel(message.category)} tone="blue" />
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      To {message.to_phone} · {countSmsSegments(message.body)} segment
-                      {countSmsSegments(message.body) === 1 ? "" : "s"} ·{" "}
+                      From {message.from_phone ?? "Unknown sender"} to {message.to_phone} ·{" "}
                       {companyMap.get(message.company_id)?.name ?? "Company"}
                     </p>
                     <p className="mt-2 line-clamp-2 text-sm text-slate-500">
@@ -45827,33 +45535,11 @@ function IntegrationsView({
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                    {message.status !== "queued" && message.status !== "sent" ? (
-                      <button
-                        type="button"
-                        onClick={() => void queueSmsMessage(message)}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                        Queue
-                      </button>
-                    ) : null}
-                    {message.status !== "sent" ? (
-                      <button
-                        type="button"
-                        onClick={() => void markSmsSent(message)}
-                        className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        Mark sent
-                      </button>
-                    ) : null}
-                  </div>
                 </article>
               ))}
-              {!snapshot.smsMessages.length ? (
+              {!inboundSmsMessages.length ? (
                 <div className="p-4">
-                  <EmptyState label="No SMS drafts or queued texts yet." />
+                  <EmptyState label="No authenticated inbound SMS has been recorded yet." />
                 </div>
               ) : null}
             </div>
@@ -45862,165 +45548,17 @@ function IntegrationsView({
 
         <aside className="space-y-4">
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Twilio connection</h3>
-            {primaryTwilioConnection ? (
-              <div className="mt-4 space-y-3 text-sm">
-                <ProfileStat
-                  label="Account"
-                  value={primaryTwilioConnection.external_account_id ?? "Vault credential"}
-                />
-                <ProfileStat
-                  label="From"
-                  value={primaryTwilioFromNumber ?? "Messaging service"}
-                />
-                <ProfileStat
-                  label="Last SMS sync"
-                  value={
-                    primaryTwilioConnection.last_sync_at
-                      ? formatDateTime(primaryTwilioConnection.last_sync_at)
-                      : "Not synced yet"
-                  }
-                />
-              </div>
-            ) : (
-              <form onSubmit={handleCreateTwilioConnection} className="mt-4 grid gap-3">
-                <select
-                  name="company_id"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                >
-                  {snapshot.companies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  required
-                  name="display_name"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="Connection name"
-                />
-                <input
-                  name="account_label"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="Twilio account label"
-                />
-                <input
-                  name="messaging_service_sid"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="Messaging service SID"
-                />
-                <input
-                  name="from_phone"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="Fallback from number"
-                />
-                <button
-                  type="submit"
-                  className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Save Twilio connection
-                </button>
-              </form>
-            )}
-          </section>
-
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Create SMS</h3>
-            <form onSubmit={handleCreateSmsMessage} className="mt-4 grid gap-3">
-              <select
-                name="company_id"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                {snapshot.companies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="target_key"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="general:none">General message</option>
-                {snapshot.customers.map((customer) => (
-                  <option key={customer.id} value={`customer:${customer.id}`}>
-                    Customer · {customer.display_name}
-                  </option>
-                ))}
-                {snapshot.leads.map((lead) => (
-                  <option key={lead.id} value={`lead:${lead.id}`}>
-                    Lead · {lead.contact_name}
-                  </option>
-                ))}
-                {snapshot.jobs.map((job) => (
-                  <option key={job.id} value={`job:${job.id}`}>
-                    Job · {job.title}
-                  </option>
-                ))}
-                {snapshot.scheduleEvents.map((scheduleEvent) => (
-                  <option key={scheduleEvent.id} value={`schedule:${scheduleEvent.id}`}>
-                    Appointment · {scheduleEvent.title}
-                  </option>
-                ))}
-                {snapshot.invoices.map((invoice) => (
-                  <option key={invoice.id} value={`invoice:${invoice.id}`}>
-                    Invoice · {invoice.invoice_number}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="category"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              >
-                {smsCategories.map((category) => (
-                  <option key={category.value} value={category.value}>
-                    {category.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                name="to_phone"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Recipient phone override"
-              />
-              <textarea
-                name="body"
-                className="min-h-32 rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Message override"
-              />
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button
-                  type="submit"
-                  name="intent"
-                  value="draft"
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Save draft
-                </button>
-                <button
-                  type="submit"
-                  name="intent"
-                  value="queue"
-                  className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Queue SMS
-                </button>
-              </div>
-            </form>
-          </section>
-
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm font-semibold uppercase text-sky-700">
-                  Communications status
+                  Owner-only readiness
                 </p>
                 <h3 className="mt-1 text-lg font-bold text-slate-950">
-                  Twilio health check
+                  Twilio inbound status
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Checks server configuration only. No SMS is sent from this screen.
+                  Reads masked configuration and persisted routing evidence. It never
+                  sends an SMS.
                 </p>
               </div>
               <Badge
@@ -46031,91 +45569,89 @@ function IntegrationsView({
 
             <div className="mt-4 grid gap-3 text-sm">
               <ProfileStat
-                label="Twilio connection"
-                value={twilioStatus}
+                label="Configuration"
+                value={twilioReadinessResult?.configuration.configured ? "Configured" : "Incomplete"}
               />
               <ProfileStat
                 label="Account SID"
-                value={twilioTestResult?.credentials.accountSid ?? "Not checked"}
+                value={twilioReadinessResult?.configuration.accountSid ?? "Not checked"}
               />
               <ProfileStat
                 label="Auth token configured"
-                value={
-                  twilioTestResult
-                    ? twilioTestResult.credentials.authToken
-                      ? "Configured"
-                      : "Not configured"
-                    : "Not checked"
-                }
+                value={twilioReadinessResult?.configuration.authTokenConfigured ? "Yes" : "No"}
               />
               <ProfileStat
-                label="Messaging service"
-                value={twilioTestResult?.credentials.messagingServiceSid ?? "Not checked"}
+                label="Inbound gate"
+                value={twilioReadinessResult?.configuration.inboundGateEnabled ? "Enabled" : "Disabled"}
               />
               <ProfileStat
-                label="From number"
-                value={twilioTestResult?.credentials.fromNumber ?? "Not configured yet"}
+                label="Inbound validated"
+                value={twilioReadinessResult?.inboundValidated ? "Yes" : "No"}
               />
               <ProfileStat
-                label="Outbound ready"
-                value={twilioTestResult?.outboundReady ? "Yes" : "No"}
+                label="Outbound SMS"
+                value={twilioReadinessResult?.outboundDisabled === false ? "Enabled unexpectedly" : "Disabled"}
               />
             </div>
 
-            {twilioFromNumberMissing ? (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
-                {TWILIO_FROM_NUMBER_WARNING}
-              </div>
-            ) : null}
-
-            {twilioAdditionalWarningMessages.length ? (
-              <div className="mt-3 grid gap-2">
-                {twilioAdditionalWarningMessages.map((warning) => (
-                  <div
-                    key={warning}
-                    className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800"
-                  >
-                    {warning}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            {twilioTestError ? (
+            {twilioReadinessError ? (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
-                {twilioTestError}
+                {twilioReadinessError}
               </div>
             ) : null}
 
-            {twilioTestResult ? (
-              <p className="mt-3 text-xs text-slate-500">
-                Last checked {formatOptionalDateTime(twilioTestResult.checkedAt)} · SMS sent:{" "}
-                {twilioTestResult.communicationsSent ? "yes" : "no"}
-              </p>
+            {twilioReadinessResult ? (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                <p>{twilioReadinessResult.message}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Last checked {formatOptionalDateTime(twilioReadinessResult.checkedAt)} · Communications sent: no
+                </p>
+              </div>
             ) : null}
 
             <button
               type="button"
-              onClick={() => void handleTestTwilioConnection()}
-              disabled={isTestingTwilio}
+              onClick={() => void handleCheckTwilioReadiness()}
+              disabled={isCheckingTwilio}
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
             >
               <RefreshCcw className="h-4 w-4" />
-              {isTestingTwilio ? "Checking" : "Run Twilio Test"}
+              {isCheckingTwilio ? "Checking" : "Check inbound readiness"}
             </button>
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-bold text-slate-950">Twilio payload preview</h3>
-            {smsPreviewPayload ? (
-              <pre className="mt-4 max-h-80 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
-                {JSON.stringify(smsPreviewPayload, null, 2)}
-              </pre>
-            ) : (
-              <div className="mt-4">
-                <EmptyState label="Create an SMS to preview Twilio send payload." />
-              </div>
-            )}
+            <h3 className="text-lg font-bold text-slate-950">Exact number mapping</h3>
+            <div className="mt-4 grid gap-3">
+              {(twilioReadinessResult?.mapping.routes ?? []).map((route) => (
+                <div key={route.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">{route.label}</p>
+                      <p className="mt-1 text-slate-500">
+                        {route.company} · {route.maskedPhoneNumber ?? "Not configured"}
+                      </p>
+                    </div>
+                    <Badge
+                      label={route.inboundValidated ? "Validated" : route.exactMapped ? "Mapped" : route.configured ? "Needs mapping" : "Unconfigured"}
+                      tone={route.inboundValidated ? "green" : route.exactMapped ? "blue" : "amber"}
+                    />
+                  </div>
+                </div>
+              ))}
+              {!twilioReadinessResult ? (
+                <EmptyState label="Check inbound readiness to load mapped-number status." />
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-950">Inbound-only guardrails</h3>
+            <div className="mt-3 grid gap-2 text-sm text-slate-600">
+              {twilioInboundGuardrails.map((guardrail) => (
+                <p key={guardrail}>{guardrail}</p>
+              ))}
+            </div>
           </section>
         </aside>
       </section>
@@ -47126,17 +46662,30 @@ function getTwilioReadinessTone(status: TwilioLiveReadinessStatus): ProviderBadg
 }
 
 function TwilioLiveFoundationPanel() {
-  const statuses: TwilioLiveReadinessStatus[] = [
-    "not_connected",
-    "backend_ready",
-    "configuration_required",
-    "credentials_required",
-    "migration_required",
-    "webhook_setup_required",
-    "ready_for_live_test",
-    "connected",
-    "error",
-  ];
+  const [readiness, setReadiness] = useState<TwilioInboundReadinessResult | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    void fetch(twilioInboundReadinessEndpoint, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    })
+      .then(async (response) => {
+        const result = (await response.json()) as TwilioInboundReadinessResult;
+
+        if (active && response.ok && result.status) {
+          setReadiness(result);
+        }
+      })
+      .catch(() => null);
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const status = readiness?.status ?? "not_connected";
 
   return (
     <section
@@ -47149,33 +46698,37 @@ function TwilioLiveFoundationPanel() {
             Twilio Live Integration Foundation
           </p>
           <h3 className="mt-1 text-xl font-bold text-slate-950">
-            Calls and SMS routing setup
+            Inbound SMS routing and validation
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-            Signed inbound webhook handlers can record routed calls and SMS
-            after migration 0021, credentials, phone ownership, business-number
-            mapping, Twilio Console webhooks, and controlled live tests are
-            complete. Outbound SMS remains disabled until explicitly enabled.
+            Signed inbound SMS can be recorded only after credentials, phone
+            ownership, exact business-number mapping, the Twilio Console webhook,
+            and a controlled live test are verified. Outbound SMS remains disabled
+            until a separate owner-approved phase.
           </p>
         </div>
-        <ProviderStatusBadge label="No Production Messaging" tone="red" />
+        <ProviderStatusBadge
+          label={readiness?.outboundDisabled === false ? "Outbound enabled unexpectedly" : "Outbound SMS disabled"}
+          tone={readiness?.outboundDisabled === false ? "red" : "green"}
+        />
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
-        {statuses.map((status) => (
-          <ProviderStatusBadge
-            key={status}
-            label={twilioLiveReadinessLabels[status]}
-            tone={getTwilioReadinessTone(status)}
-          />
-        ))}
+        <ProviderStatusBadge
+          label={twilioLiveReadinessLabels[status]}
+          tone={getTwilioReadinessTone(status)}
+        />
+        <ProviderStatusBadge
+          label={readiness?.inboundValidated ? "Inbound validated" : "Inbound not validated"}
+          tone={readiness?.inboundValidated ? "green" : "amber"}
+        />
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <ProfileStat label="Required numbers" value={twilioBusinessNumberRouteTemplates.length} />
-        <ProfileStat label="Production SMS" value="Disabled" />
-        <ProfileStat label="Inbound webhooks" value="Ready after setup" />
-        <ProfileStat label="Database" value="Migration 0021" />
+        <ProfileStat label="Configured numbers" value={readiness?.mapping.configuredNumberCount ?? 0} />
+        <ProfileStat label="Exact mappings" value={readiness?.mapping.exactMappedNumberCount ?? 0} />
+        <ProfileStat label="Inbound gate" value={readiness?.configuration.inboundGateEnabled ? "Enabled" : "Disabled"} />
+        <ProfileStat label="Database" value={readiness?.schema.applied ? "Available" : "Not verified"} />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
@@ -47183,7 +46736,14 @@ function TwilioLiveFoundationPanel() {
           <p className="text-sm font-bold uppercase text-slate-500">
             Business Number Routing
           </p>
-          {twilioBusinessNumberRouteTemplates.map((route) => (
+          {twilioBusinessNumberRouteTemplates.map((route) => {
+            const routeReadiness = readiness?.mapping.routes.find(
+              (candidate) =>
+                candidate.key.replace(/_/g, "-") ===
+                route.key.replace("-primary", ""),
+            );
+
+            return (
             <div
               key={route.key}
               className="rounded-lg border border-slate-200 bg-slate-50 p-3"
@@ -47198,13 +46758,31 @@ function TwilioLiveFoundationPanel() {
                     channel {route.communicationChannel}; timezone {route.timeZone}.
                   </p>
                 </div>
-                <ProviderStatusBadge label="Configuration Required" tone="amber" />
+                <ProviderStatusBadge
+                  label={
+                    routeReadiness?.inboundValidated
+                      ? "Validated"
+                      : routeReadiness?.exactMapped
+                        ? "Mapped"
+                        : routeReadiness?.configured
+                          ? "Needs Mapping"
+                          : "Unconfigured"
+                  }
+                  tone={
+                    routeReadiness?.inboundValidated
+                      ? "green"
+                      : routeReadiness?.exactMapped
+                        ? "blue"
+                        : "amber"
+                  }
+                />
               </div>
               <p className="mt-2 text-xs font-semibold uppercase text-slate-400">
-                Phone number not stored in code
+                {routeReadiness?.maskedPhoneNumber ?? "Phone number not configured"}
               </p>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="grid gap-3">
@@ -47223,7 +46801,20 @@ function TwilioLiveFoundationPanel() {
                     {endpoint.method} {endpoint.path}
                   </code>
                 </div>
-                <ProviderStatusBadge label="Webhook Setup Required" tone="amber" />
+                <ProviderStatusBadge
+                  label={
+                    endpoint.id === "inbound_sms" &&
+                    readiness?.configuration.inboundGateEnabled
+                      ? "Inbound Gate Enabled"
+                      : "Disabled / Not In Scope"
+                  }
+                  tone={
+                    endpoint.id === "inbound_sms" &&
+                    readiness?.configuration.inboundGateEnabled
+                      ? "green"
+                      : "amber"
+                  }
+                />
               </div>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 {endpoint.summary}

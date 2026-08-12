@@ -1,103 +1,112 @@
-# Twilio Phase 1 Setup
+# Twilio Phase 1: Inbound SMS
 
-This document records the production communications foundation for WeatherTech OS. It prepares WeatherTech Roofing LLC and IHC Painting for live Twilio SMS and call routing without enabling real outbound messaging by default.
+This runbook is the authoritative setup contract for the owner-approved inbound-only Twilio phase. WeatherTech OS may receive an SMS only after the Twilio account, Messaging Service, receiving number, active database route, and company connection all agree exactly. Outbound customer SMS, voice, recording, automatic replies, reminders, campaigns, and bulk messaging remain unavailable.
 
-## Supported Business Lines
+## Verified Product Boundary
 
-WeatherTech OS is prepared to route one or more Twilio numbers to these business lines:
+- Active endpoint for this phase: `POST /api/integrations/twilio/webhook`.
+- Authentication: the official Twilio SDK validates `X-Twilio-Signature` against the exact canonical URL derived from `TWILIO_PUBLIC_BASE_URL` and all form fields.
+- Content type: `application/x-www-form-urlencoded` only.
+- Media boundary: text-only SMS with `NumMedia=0`. MMS/media is unsupported in this phase and is rejected without acknowledging or dropping attachments.
+- Routing: exact `AccountSid`, `MessagingServiceSid`, receiving E.164 number, active `business_phone_numbers` row, connected same-company `integration_connections` row, and configured company-number environment value.
+- CRM association: an exact, unique phone match inside the routed company may link a customer or lead. Unknown or ambiguous senders remain visible and unlinked for owner review. Receiving an SMS never creates a customer or lead.
+- Idempotency: Twilio's globally unique `MessageSid` produces a deterministic local message identity. An identical replay is acknowledged without creating another message; conflicting reuse is rejected.
+- Audit: a completed inbound message is paired with one company-scoped `communication_provider_events` record.
+- Unified Inbox: persisted `sms_messages` remain the source of truth; no parallel inbox is created.
+- Outbound status: hard-locked in application code; the independent `TWILIO_OUTBOUND_SMS_ENABLED` production gate must also remain `false`.
 
-- WeatherTech Roofing LLC Phoenix
-- WeatherTech Roofing LLC Tucson
-- IHC Painting
+The status, voice, and recording callback routes remain disabled in this sprint. Do not configure them in Twilio Console.
 
-Do not commit real phone numbers, tokens, or account identifiers. Store production values only in the hosting provider's server-side environment configuration and in the live database records protected by RLS.
+## Server-Only Production Configuration
 
-## Server Environment Variables
+Store these values only in Vercel Production environment configuration. Never place them in Git, browser variables, logs, screenshots, support messages, or `.env.local`.
 
-Required for signed webhooks and safe configuration checks:
+Required for one connected inbound number:
 
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_MESSAGING_SERVICE_SID`
-- `TWILIO_PUBLIC_BASE_URL`
+- `TWILIO_PUBLIC_BASE_URL=https://weathertech-os.vercel.app`
+- exactly one verified company-number variable, initially one of:
+  - `TWILIO_WEATHERTECH_PHOENIX_NUMBER`
+  - `TWILIO_WEATHERTECH_TUCSON_NUMBER`
+  - `TWILIO_IHC_NUMBER`
+- `TWILIO_INBOUND_SMS_ENABLED=false` during configuration, then `true` only for the controlled inbound validation
+- `TWILIO_OUTBOUND_SMS_ENABLED=false` at all times in this phase
 
-Optional or controlled-rollout variables:
+`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, and `TWILIO_FROM_NUMBER` are not required for inbound processing and must not be treated as permission to send. Configure only the company number that is independently verified. Leave IHC unconfigured unless IHC has its own verified company-controlled number.
 
-- `TWILIO_API_KEY_SID`
-- `TWILIO_API_KEY_SECRET`
-- `TWILIO_FROM_NUMBER`
-- `TWILIO_WEATHERTECH_PHOENIX_NUMBER`
-- `TWILIO_WEATHERTECH_TUCSON_NUMBER`
-- `TWILIO_IHC_NUMBER`
-- `TWILIO_OUTBOUND_SMS_ENABLED`
+## Database Mapping Contract
 
-`TWILIO_OUTBOUND_SMS_ENABLED` must remain `false` or unset until the owner approves controlled live sending. Automated tests must not send real SMS messages.
+Migrations `0008_twilio_sms_integration.sql`, `0021_twilio_live_integration_foundation.sql`, and `0024_security_company_access_hardening.sql` provide the existing company-scoped schema and RLS policies.
 
-## Webhook URLs
+For every enabled inbound number, create exactly one `integration_connections` row and one linked `business_phone_numbers` row. Verify all of the following before enabling the inbound gate:
 
-Use the production value of `TWILIO_PUBLIC_BASE_URL` as the base URL.
+- the connection belongs to the intended company, uses provider `twilio_sms`, has status `connected`, and identifies the exact Twilio Account SID;
+- the number row belongs to the same company and connection;
+- `provider_account_sid` matches `TWILIO_ACCOUNT_SID` exactly;
+- `messaging_service_sid` matches `TWILIO_MESSAGING_SERVICE_SID` exactly;
+- `phone_number_e164` matches the single configured company-number environment value exactly;
+- `communication_channel` is `sms` or `sms_voice`;
+- `routing_status` is `active`;
+- no active unexpected number mapping exists;
+- the other company remains unmapped unless its own number is independently verified.
 
-- Inbound SMS: `POST /api/integrations/twilio/webhook`
-- SMS status callback: `POST /api/integrations/twilio/status`
-- Voice webhook: `POST /api/integrations/twilio/voice`
-- Recording callback: `POST /api/integrations/twilio/recording`
+Message text, sender identity, a global fallback connection, or the presence of only one database row can never choose a company.
 
-Every webhook validates `X-Twilio-Signature` using the server-side `TWILIO_AUTH_TOKEN`. Invalid signatures are rejected and are not stored as trusted CRM activity.
+## Twilio Console Configuration
 
-## Business Number Mapping
+For the independently verified receiving number or Messaging Service, configure the incoming-message callback exactly as:
 
-Migration `0021_twilio_live_integration_foundation.sql` provides the `business_phone_numbers`, `communication_provider_events`, and `call_records` foundation.
+```text
+POST https://weathertech-os.vercel.app/api/integrations/twilio/webhook
+```
 
-For each live Twilio number, create or verify one active `business_phone_numbers` row with:
+Do not configure WeatherTech OS as the status, voice, or recording callback in this phase. Do not enable an auto-response, Studio flow, marketing campaign, appointment reminder, or other outbound behavior.
 
-- `company_id`
-- `integration_connection_id`, when available
-- `provider`
-- `provider_account_sid`
-- `messaging_service_sid`
-- `phone_number_e164`
-- `display_name`
-- `routing_key`
-- `business_location`
-- `team_queue`
-- `lead_source`
-- `routing_status`
+## Readiness And Live Validation
 
-The receiving Twilio number is used to determine the company and business line before matching or creating CRM records.
+The authenticated owner-only endpoint `GET /api/integrations/twilio/readiness` distinguishes:
 
-## Runtime Behavior
+- server configuration present;
+- inbound gate state;
+- exact active company-number mapping;
+- unexpected active mappings;
+- authenticated inbound validation evidence;
+- application outbound lock and production outbound gate state.
 
-Inbound SMS and voice webhooks:
+Credentials alone are not a successful connection. The status becomes connected only after one signed inbound message has been durably recorded through the exact mapped route.
 
-- normalize sender and recipient phone numbers
-- match existing customers by company and phone
-- match existing leads by company and phone
-- create or queue a lead through the existing lead-intake workflow when no CRM match exists
-- record safe provider activity for Customer 360 and communications timelines
-- use Twilio Message SIDs and Call SIDs for idempotency
-- store masked/sanitized summaries in integration logs and provider-event metadata
+Controlled live sequence:
 
-Voice final states such as no-answer, busy, failed, and canceled are marked as follow-up eligible. Automatic missed-call text-back remains disabled until an owner-approved outbound messaging sprint.
+1. Keep inbound and outbound gates false while entering secrets and creating the exact mapping.
+2. Verify the owner-only readiness response reports configuration and mapping ready, with outbound disabled.
+3. Configure the one incoming-message callback in Twilio Console.
+4. Enable only `TWILIO_INBOUND_SMS_ENABLED` and redeploy the exact reviewed commit.
+5. Send one owner-authorized SMS with the supplied unique validation text to the verified number.
+6. Verify one received `sms_messages` row, one completed `sms_inbound` provider event, the exact company, safe contact association or unmatched state, and Unified Inbox visibility.
+7. Replay the same signed provider delivery when available and verify it is an idempotent no-op; do not send a second SMS merely to test duplication.
+8. Confirm no outbound request and no unrelated CRM mutation occurred.
+9. Leave outbound false. The inbound gate may remain true only after the live evidence is complete and the exact mapping remains healthy; otherwise return it to false.
 
-## Safe Testing
+## Isolated Regression
 
-Use Twilio test credentials or controlled internal test numbers only.
+Routine tests use only the approved non-production Supabase project. They use synthetic Twilio identifiers and locally generated valid signatures; they never call Twilio APIs or send an SMS. Every test fixture uses captured IDs, exact cleanup, and final zero-residue verification. Production is prohibited as a regression target.
 
-Before controlled live testing:
+The isolated suite must cover valid and invalid signatures, canonical-URL tampering, wrong account/number/service, disabled or missing mapping, known customer, known lead, unknown sender, ambiguous sender, cross-company data, identical replay, conflicting `MessageSid`, retryable persistence failure, secret sanitization, and proof that no outbound network call occurs.
 
-1. Configure server-side environment variables in the hosting platform.
-2. Apply and verify migration `0021_twilio_live_integration_foundation.sql` if it is not already applied.
-3. Add the three business-number mappings for WeatherTech Phoenix, WeatherTech Tucson, and IHC.
-4. Configure the Twilio Console webhook URLs.
-5. Send one controlled inbound SMS and one controlled inbound call per business line.
-6. Verify the CRM timeline, lead-intake fallback, integration logs, and duplicate retry behavior.
-7. Keep `TWILIO_OUTBOUND_SMS_ENABLED=false` until outbound sending is separately approved.
+## Troubleshooting
 
-## Still Requires Owner Access
+- `403`: missing or invalid Twilio signature. Verify the exact canonical HTTPS URL and Auth Token; do not trust forwarded host headers.
+- `400` or `415`: malformed or unsupported request. Twilio must send a bounded form-encoded text-only SMS payload with valid SID and E.164 fields and `NumMedia=0`; MMS is not accepted in this phase.
+- `403`: wrong account, receiving number, Messaging Service, or company route.
+- `409`: conflicting reuse of an existing provider message identifier.
+- `503`: inbound gate/configuration/mapping is disabled or durable persistence did not complete. Twilio may safely retry after the underlying issue is corrected.
+- readiness `ready_for_live_test`: configuration and mapping are ready, but no completed signed inbound message has been observed.
+- readiness `connected`: at least one exact mapped signed inbound message was durably validated; outbound remains disabled.
 
-- Twilio account ownership and billing access
-- Twilio phone number purchase or porting
-- Twilio Messaging Service configuration
-- Production hosting environment-variable access
-- Live Supabase business-number mapping records
-- Controlled live phone/SMS validation
+Never paste the Auth Token into chat or diagnostics. Readiness exposes only booleans, missing variable names, masked identifiers, and masked phone suffixes.
+
+## Owner Handoff When External Access Is Required
+
+If Codex has no authenticated Twilio Console access or secure source for the credentials, the remaining owner action is to use the company-controlled Twilio account to select or verify one SMS-capable WeatherTech number and its Messaging Service, store the required server-only values in Vercel Production, and set the exact incoming-message callback above. Keep outbound disabled and leave IHC unmapped. Do not send credentials in chat.

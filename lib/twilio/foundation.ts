@@ -118,10 +118,22 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
   },
 ];
 
+export const twilioInboundReadinessEndpoint =
+  "/api/integrations/twilio/readiness";
+
+export const twilioInboundGuardrails = [
+  "Only a signed, form-encoded Twilio inbound webhook may persist an SMS.",
+  "The receiving E.164 number, Twilio account, active connection, and company must match exactly.",
+  "Provider MessageSid deduplication prevents duplicate inbox or CRM records.",
+  "Unknown or ambiguous senders remain safely unmatched for owner review.",
+  "Outbound SMS is locked in the application and remains disabled by production configuration.",
+];
+
 export const twilioLiveFoundationChecklist = [
-  "Apply the additive Twilio live integration migration.",
-  "Add the WeatherTech Phoenix, WeatherTech Tucson, and IHC business phone number records.",
-  "Verify Twilio account ownership, sender numbers, and messaging service configuration.",
-  "Configure signed SMS, voice, status, and recording webhook URLs in Twilio Console.",
-  "Run controlled live tests before enabling production SMS or calling workflows.",
+  "Verify the existing Twilio schema and company-scoped security foundation.",
+  "Map only each independently verified company-controlled number; leave every other company unconfigured.",
+  "Verify Twilio account ownership, Auth Token signature validation, and the canonical HTTPS webhook URL.",
+  "Configure the signed inbound SMS webhook URL in Twilio Console.",
+  "Run one controlled live inbound test before marking the mapped number validated.",
+  "Keep outbound SMS disabled until a separate owner-approved sprint.",
 ];

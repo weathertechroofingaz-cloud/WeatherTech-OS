@@ -6442,7 +6442,7 @@ async function testUnifiedInboxSearchAndFilters(
           text.includes("last activity") &&
           text.includes("error state") &&
           text.includes("business phone") &&
-          text.includes("twilio live setup required") &&
+          text.includes("twilio inbound safety") &&
         text.includes("no outbound sms or calls") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
@@ -7603,10 +7603,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     estimateLocation,
     "estimate location",
   );
-  await clickVisibleDomSubmitByText(
-    tab,
-    "Create estimate",
+  await clickUnique(
+    tab.playwright.locator('#estimate-builder button[type="submit"]'),
     "Create estimate without customer",
+    { retryTransientClick: true },
   );
   await waitFor(
     tab,
@@ -8292,12 +8292,12 @@ async function testSettingsIntegrationCenter(tab) {
         (text.includes("connect gmail oauth later before enabling live send or mailbox sync") ||
           text.includes("gmail mailbox is saved for")) &&
         text.includes("twilio live integration foundation") &&
-        text.includes("calls and sms routing setup") &&
-        text.includes("backend ready") &&
-        text.includes("credentials required") &&
-        text.includes("migration required") &&
-        text.includes("webhook setup required") &&
-        text.includes("ready for live test") &&
+        text.includes("inbound sms routing and validation") &&
+        text.includes("outbound sms disabled") &&
+        text.includes("inbound not validated") &&
+        text.includes("business number routing") &&
+        text.includes("twilio console webhooks") &&
+        text.includes("owner setup checklist") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
         text.includes("ihc painting - ihc") &&
