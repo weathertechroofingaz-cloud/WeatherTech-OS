@@ -75,4 +75,4 @@ Codex must never automatically promote this file. Promotion requires an explicit
 
 ## Last Review
 
-During the owner-approved Production Data Isolation & Clean Baseline sprint, no subsequent product-development sprint has been selected or approved. Status remains `Awaiting owner direction`.
+At completion of the owner-approved Non-Production Regression Environment & CI Test-Data Lifecycle sprint, no subsequent product-development sprint has been selected or approved. Status remains `Awaiting owner direction`.

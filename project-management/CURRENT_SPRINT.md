@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved.
+Completed.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
@@ -118,7 +118,7 @@ Routine non-production resource configuration, CI changes, test fixes, schema re
 
 ## Final Status
 
-In progress.
+Completed. The focused implementation shipped in `6354429976fb7a549bbc738fc0b76b3c5ea2022b`. WeatherTech OS now uses the dedicated isolated Supabase regression project `hygtnhmmaoboduqghhwg`; the complete browser suite passed all 24 groups and 28 assertions with zero console errors, zero console warnings, successful bounded cleanup, and zero run residue. Repository validation passed all 25 top-level tests, type-check, lint, production build, dependency audit, patch checks, workflow checks, and credential scanning. Production remained read-only and unchanged.
 
 ## Notes
 

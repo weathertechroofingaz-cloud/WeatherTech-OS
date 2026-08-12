@@ -4,6 +4,16 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### Non-Production Regression Environment & CI Test-Data Lifecycle
+
+- Implementation commit: `6354429976fb7a549bbc738fc0b76b3c5ea2022b`
+- Closeout: this documentation-only commit; use Git history as its immutable hash.
+- Status: Completed after isolated schema provisioning, a complete 24-group/28-assertion browser pass, zero console errors or warnings, deterministic cleanup with zero residue, successful repository and protected CI validation, push, exact-commit deployment, and read-only production verification.
+- Approved scope: dedicated non-production Supabase regression architecture, fail-closed target identity, synthetic test-data ownership and cleanup, safe CI lifecycle checks, and reproducible operating documentation.
+- Runbook: [Non-Production Regression Environment](./docs/NON_PRODUCTION_REGRESSION_ENVIRONMENT.md).
+
+## Recent Verified Milestones
+
 ### Production Data Isolation & Clean Baseline
 
 - Implementation commit: `c57698786e83732e49b8cb4ace83e3128539b28f`
@@ -11,8 +21,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Status: Completed after guarded production cleanup, full safe repository validation, push, exact-commit deployment, signed-in read-only production smoke, final database counts, and protected-file hash verification.
 - Approved scope: fail-closed automated-test target isolation, evidence-backed removal of proven synthetic production records, trustworthy operational aggregates, regression coverage, and narrowly reconciled governance/documentation.
 - Evidence record: [Production Data Isolation And Clean Baseline](./docs/PRODUCTION_DATA_ISOLATION_AND_BASELINE.md).
-
-## Recent Verified Milestones
 
 ### Production Connections Phase 1 - Verified Production Foundation
 

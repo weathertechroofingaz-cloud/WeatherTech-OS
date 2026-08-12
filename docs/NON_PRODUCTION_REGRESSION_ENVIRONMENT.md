@@ -159,6 +159,18 @@ A future CI browser runner is acceptable only when it:
 
 Do not add a conditional job that reports success when secrets or browser capability are absent.
 
+## Verified Sprint Result
+
+- Implementation commit: `6354429976fb7a549bbc738fc0b76b3c5ea2022b`.
+- Isolated browser run ID: `20260812062716532` against `hygtnhmmaoboduqghhwg`.
+- Complete suite: 24 of 24 expected groups and 28 of 28 recorded assertions passed.
+- Browser diagnostics: zero console errors and zero console warnings.
+- Lifecycle: bounded cleanup completed and both the harness and independent `verify-residue` command proved zero current-run residue.
+- Provider isolation: all 22 checked provider, connection, credential, synchronization, Stripe, and payment tables remained empty in regression.
+- Repository validation: all 25 top-level tests, type-check, lint, production build, full dependency audit, workflow checks, patch checks, and credential scan passed.
+- CI: GitHub Actions run `31570826433` completed successfully; both the repository-only validation job and protected isolated-Supabase lifecycle job succeeded.
+- Initial deployment: Vercel production deployment `dpl_9JKf41MdzW1uHV7s2MVs5nJtPDgo` was READY and `/api/health` reported the exact implementation commit. Production remained read-only and retained its clean baseline; `/api/readiness` truthfully remained blocked by the existing provider-approval policy.
+
 ## Emergency Troubleshooting
 
 - **Target rejected:** compare the URL hostname, expected project reference, credential identity, linked production reference, rendered public-origin marker, and rendered demo-fallback marker. Never weaken the check.

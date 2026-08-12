@@ -4,6 +4,28 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Non-Production Regression Environment & CI Test-Data Lifecycle
+
+- Implementation commit: `6354429976fb7a549bbc738fc0b76b3c5ea2022b`
+- Message: `test: add isolated regression environment lifecycle`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, pushed, deployed, and production-verified.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `25/25 pass`
+  - Complete non-production Codex Browser suite: `24/24 groups`, `28/28 assertions`, zero console errors, zero console warnings
+  - Test-data cleanup and independent residue verification: `pass`, zero current-run residue
+  - Type-check, lint, production build, dependency audit, `git diff --check`, workflow checks, and credential scan: `pass`
+  - GitHub Actions run `31570826433`: repository validation and isolated Supabase lifecycle jobs both `success`
+- Notes:
+  - Provisioned the dedicated free hosted Supabase project `WeatherTech OS Regression` (`hygtnhmmaoboduqghhwg`) without copying production data or provider credentials.
+  - Reproduced all 38 committed migrations and verified parity with production across 70 RLS-enabled public tables, 185 policies, and 915 Data API grants.
+  - Added permanent production-target rejection, positive browser/server/service-role target agreement, aggregate provider-side-effect markers, exact synthetic-owner authentication, unique run ownership, collision refusal, captured-ID cleanup, Stripe-linked cleanup refusal, and zero-residue proof.
+  - Added protected CI lifecycle verification without falsely representing GitHub-hosted CI as capable of running the proprietary Codex Browser suite.
+  - Kept production data unchanged, all Stripe write gates false, and IHC at zero Stripe connections, accounts, mappings, events, and payments.
+  - Preserved `.env.local` and the two owner-designated Property Intelligence working changes byte-for-byte and excluded them from both sprint commits.
+
 ### Production Data Isolation & Clean Baseline
 
 - Implementation commit: `c57698786e83732e49b8cb4ace83e3128539b28f`

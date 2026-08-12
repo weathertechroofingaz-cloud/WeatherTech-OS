@@ -36,7 +36,7 @@ WeatherTech OS is intended to support:
 
 WeatherTech OS is an actively implemented Next.js/Supabase application deployed to Vercel for WeatherTech Roofing LLC and IHC Painting. Production health, dependency readiness, provider write gates, company isolation, and activation approval remain separate controls; a healthy deployment must not be described as full production activation when `/api/readiness` is blocked.
 
-The Production Data Isolation & Clean Baseline sprint established fail-closed automated-test isolation and removed only evidence-proven synthetic production contamination. The current owner-approved sprint is establishing a dedicated non-production regression target and deterministic test-data lifecycle; production remains prohibited as an ordinary write-capable test target. AI Command Center 3.0 and the WeatherTech-only Stripe payment/refund foundation already exist and are not rebuild backlog items. IHC Stripe and other external providers remain separately gated.
+The completed Production Data Isolation & Clean Baseline sprint established fail-closed automated-test isolation and removed only evidence-proven synthetic production contamination. The completed Non-Production Regression Environment & CI Test-Data Lifecycle sprint added a dedicated hosted test target, deterministic synthetic-data cleanup, and protected CI lifecycle verification; production remains prohibited as an ordinary write-capable test target. AI Command Center 3.0 and the WeatherTech-only Stripe payment/refund foundation already exist and are not rebuild backlog items. IHC Stripe and other external providers remain separately gated.
 
 ## Sprint Management
 
