@@ -6,6 +6,8 @@ export const BROWSER_REGRESSION_EXPECTED_PROJECT_REF =
   "WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF";
 export const WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF =
   "gahfcgyjtfwwmsterhzu";
+export const WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF =
+  "hygtnhmmaoboduqghhwg";
 
 function parseUrl(value, label) {
   try {
@@ -176,12 +178,93 @@ export function assertBrowserResourceTarget({ resourceUrls = [], target } = {}) 
   };
 }
 
+export function assertBrowserPublicTargetMarker({
+  publicSupabaseOrigin,
+  target,
+} = {}) {
+  if (!target?.supabaseOrigin || !target?.kind || !target?.projectRef) {
+    throw new Error("Browser regression requires a fully guarded Supabase target.");
+  }
+
+  if (!publicSupabaseOrigin || publicSupabaseOrigin === "unconfigured") {
+    throw new Error(
+      "The local app exposes no configured public Supabase origin; refusing database writes.",
+    );
+  }
+
+  if (publicSupabaseOrigin === "malformed") {
+    throw new Error(
+      "The local app exposes a malformed public Supabase origin; refusing database writes.",
+    );
+  }
+
+  const markerUrl = parseUrl(
+    publicSupabaseOrigin,
+    "Browser-observed public Supabase origin",
+  );
+  const expectedUrl = parseUrl(
+    target.supabaseOrigin,
+    "Guarded Supabase resource origin",
+  );
+  const markerOrigin = markerUrl.origin.toLowerCase();
+  const expectedOrigin = expectedUrl.origin.toLowerCase();
+  const markerHostedProjectRef = getHostedSupabaseProjectRef(markerUrl);
+
+  if (
+    markerUrl.pathname !== "/" ||
+    markerUrl.search ||
+    markerUrl.hash ||
+    (target.kind === "local" && !isLocalHostname(markerUrl.hostname)) ||
+    (target.kind === "hosted_non_production" &&
+      markerHostedProjectRef !== target.projectRef)
+  ) {
+    throw new Error(
+      "The local app public Supabase marker is not a valid guarded target origin.",
+    );
+  }
+
+  if (markerOrigin !== expectedOrigin) {
+    throw new Error(
+      "The local app public Supabase origin does not match the guarded target; refusing database writes.",
+    );
+  }
+
+  return {
+    supabaseOrigin: markerOrigin,
+    projectRef: target.projectRef,
+  };
+}
+
+export function assertBrowserApplicationSafetyMarkers({
+  publicSupabaseOrigin,
+  demoFallbackState,
+  providerSideEffectState,
+  target,
+} = {}) {
+  if (demoFallbackState !== "disabled") {
+    throw new Error(
+      "The browser app must disable CRM demo fallback before isolated write-capable regression begins.",
+    );
+  }
+
+  if (providerSideEffectState !== "disabled") {
+    throw new Error(
+      "The browser app must disable every provider/live-write side effect before isolated regression begins.",
+    );
+  }
+
+  return assertBrowserPublicTargetMarker({ publicSupabaseOrigin, target });
+}
+
 export function assertBrowserRegressionTarget({
   baseUrl,
   supabaseUrl,
   serviceRoleKey,
   runtimeEnv = {},
   productionProjectRefs = [WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF],
+  approvedNonProductionProjectRefs = [
+    WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  ],
 } = {}) {
   const appUrl = parseUrl(baseUrl, "Browser regression base URL");
 
@@ -210,6 +293,21 @@ export function assertBrowserRegressionTarget({
   if (hostedProjectRef && normalizedProductionRefs.has(hostedProjectRef)) {
     throw new Error(
       `Browser regression is permanently blocked from WeatherTech OS production Supabase project ${hostedProjectRef}.`,
+    );
+  }
+
+  const normalizedApprovedNonProductionRefs = new Set(
+    approvedNonProductionProjectRefs
+      .filter(Boolean)
+      .map((value) => value.trim().toLowerCase()),
+  );
+
+  if (
+    hostedProjectRef &&
+    !normalizedApprovedNonProductionRefs.has(hostedProjectRef)
+  ) {
+    throw new Error(
+      `Browser regression target ${hostedProjectRef} is not an explicitly approved non-production Supabase project.`,
     );
   }
 

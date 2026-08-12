@@ -36,7 +36,7 @@ WeatherTech OS is intended to support:
 
 WeatherTech OS is an actively implemented Next.js/Supabase application deployed to Vercel for WeatherTech Roofing LLC and IHC Painting. Production health, dependency readiness, provider write gates, company isolation, and activation approval remain separate controls; a healthy deployment must not be described as full production activation when `/api/readiness` is blocked.
 
-The Production Data Isolation & Clean Baseline sprint established fail-closed automated-test isolation and removed only evidence-proven synthetic production contamination. AI Command Center 3.0 and the WeatherTech-only Stripe payment/refund foundation already exist and are not rebuild backlog items. IHC Stripe and other external providers remain separately gated.
+The Production Data Isolation & Clean Baseline sprint established fail-closed automated-test isolation and removed only evidence-proven synthetic production contamination. The current owner-approved sprint is establishing a dedicated non-production regression target and deterministic test-data lifecycle; production remains prohibited as an ordinary write-capable test target. AI Command Center 3.0 and the WeatherTech-only Stripe payment/refund foundation already exist and are not rebuild backlog items. IHC Stripe and other external providers remain separately gated.
 
 ## Sprint Management
 
@@ -54,6 +54,7 @@ not begin work when the current sprint is awaiting owner approval.
 - [Design System](./docs/DESIGN_SYSTEM.md)
 - [Testing Standard](./docs/TESTING_STANDARD.md)
 - [Browser Regression Safety](./docs/codex-browser-regression.md)
+- [Non-Production Regression Environment](./docs/NON_PRODUCTION_REGRESSION_ENVIRONMENT.md)
 - [Production Data Isolation and Clean Baseline](./docs/PRODUCTION_DATA_ISOLATION_AND_BASELINE.md)
 - [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md)
 - [Google Workspace / Gmail Production Activation](./docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md)

@@ -1,0 +1,183 @@
+name: Repository Validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repository-validation:
+    name: Repository-only checks (no browser or database writes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+
+    steps:
+      - name: Require main for manual execution
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "Manual repository and lifecycle validation is restricted to refs/heads/main." >&2
+          exit 1
+
+      - name: Check out the exact revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.8.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run every repository test
+        shell: bash
+        run: |
+          mapfile -t test_files < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
+          if (( ${#test_files[@]} == 0 )); then
+            echo "No tests/*.test.mjs files were found; refusing a false-green test job." >&2
+            exit 1
+          fi
+          printf 'Running %s repository test files.\n' "${#test_files[@]}"
+          for test_file in "${test_files[@]}"; do
+            node "$test_file"
+          done
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Audit installed dependencies
+        run: npm audit --audit-level=high
+
+      - name: Verify patch whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$PULL_REQUEST_BASE_SHA"
+          else
+            base_sha="$PUSH_BASE_SHA"
+          fi
+
+          if [[ -n "$base_sha" && ! "$base_sha" =~ ^0+$ ]] && git cat-file -e "$base_sha^{commit}"; then
+            git diff --check "$base_sha"...HEAD
+          else
+            git log --check --format=oneline -1 HEAD
+          fi
+
+      - name: Record browser-regression boundary
+        shell: bash
+        run: |
+          {
+            echo '### Browser-regression boundary'
+            echo
+            echo 'This repository-only workflow does not execute or claim the 24-group write-capable Codex Browser regression.'
+            echo 'That suite requires the signed-in Codex in-app Browser and a positively verified non-production Supabase target.'
+            echo 'A separate browser run must report all expected groups, nonzero assertions, console results, cleanup, and zero residue before release.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  regression-environment-lifecycle:
+    name: Isolated Supabase lifecycle (no browser or provider writes)
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: repository-validation
+    runs-on: ubuntu-latest
+    environment: regression
+    timeout-minutes: 10
+    concurrency:
+      group: weathertech-os-regression-environment-lifecycle
+      cancel-in-progress: false
+    env:
+      WTOS_BROWSER_REGRESSION_REMOTE_WRITES_ENABLED: "true"
+      AI_ACTION_EXECUTION_ENABLED: "false"
+      AI_ENABLED: "false"
+      DOCUSIGN_PROVIDER_WRITES_ENABLED: "false"
+      DOCUSIGN_SIGNATURE_REQUESTS_ENABLED: "false"
+      DROPBOX_SIGN_PROVIDER_WRITES_ENABLED: "false"
+      DROPBOX_SIGN_SIGNATURE_REQUESTS_ENABLED: "false"
+      GHL_SYNC_ENABLED: "false"
+      GOOGLE_BUSINESS_PROFILE_REVIEW_REPLY_ENABLED: "false"
+      GOOGLE_BUSINESS_PROFILE_SYNC_ENABLED: "false"
+      GOOGLE_CALENDAR_WRITE_ENABLED: "false"
+      GOOGLE_GMAIL_SEND_ENABLED: "false"
+      IHC_WEBSITE_INTAKE_ENABLED: "false"
+      QUICKBOOKS_ACCOUNTING_WRITES_ENABLED: "false"
+      QUICKBOOKS_PAYMENT_PROCESSING_ENABLED: "false"
+      QUICKBOOKS_SYNC_ENABLED: "false"
+      STRIPE_LIVE_PAYMENTS_ENABLED: "false"
+      STRIPE_REFUNDS_ENABLED: "false"
+      STRIPE_WEBHOOK_PROCESSING_ENABLED: "false"
+      TWILIO_OUTBOUND_SMS_ENABLED: "false"
+      WEATHERTECH_TUCSON_WEBSITE_INTAKE_ENABLED: "false"
+      WEATHERTECH_WEBSITE_INTAKE_ENABLED: "false"
+      WEBSITE_INTAKE_ENABLED: "false"
+      WTOS_AUTOMATED_CUSTOMER_NOTIFICATIONS_ENABLED: "false"
+      WTOS_CUSTOMER_PORTAL_ENABLED: "false"
+      WTOS_PRODUCTION_APPROVED: "false"
+      WTOS_PUBLIC_REGISTRATION_ENABLED: "false"
+      YELP_LIVE_SYNC_ENABLED: "false"
+      YELP_LIVE_SYNC_ENABLED_IHC: "false"
+      YELP_LIVE_SYNC_ENABLED_WEATHERTECH_PHOENIX: "false"
+      YELP_LIVE_SYNC_ENABLED_WEATHERTECH_TUCSON: "false"
+      YELP_OUTBOUND_MESSAGING_ENABLED: "false"
+      YELP_OUTBOUND_MESSAGING_ENABLED_IHC: "false"
+      YELP_OUTBOUND_MESSAGING_ENABLED_WEATHERTECH_PHOENIX: "false"
+      YELP_OUTBOUND_MESSAGING_ENABLED_WEATHERTECH_TUCSON: "false"
+
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.8.0
+
+      - name: Verify target, bootstrap identity, and prove zero-residue lifecycle
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.WTOS_REGRESSION_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.WTOS_REGRESSION_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.WTOS_REGRESSION_SUPABASE_SERVICE_ROLE_KEY }}
+          WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF: ${{ secrets.WTOS_REGRESSION_PROJECT_REF }}
+          WTOS_REGRESSION_OWNER_EMAIL: ${{ secrets.WTOS_REGRESSION_OWNER_EMAIL }}
+          WTOS_REGRESSION_OWNER_PASSWORD: ${{ secrets.WTOS_REGRESSION_OWNER_PASSWORD }}
+        run: |
+          node scripts/regression-environment.mjs bootstrap
+          node scripts/regression-environment.mjs verify
+          node scripts/regression-environment.mjs lifecycle-probe
+          node scripts/regression-environment.mjs verify-residue
+
+      - name: Record lifecycle and browser boundary
+        shell: bash
+        run: |
+          {
+            echo '### Non-production lifecycle'
+            echo
+            echo 'The approved isolated Supabase target passed identity, synthetic-owner, provider-isolation, exact-ID write/read/delete, and zero-residue verification.'
+            echo 'No Stripe or external-provider operation was performed.'
+            echo 'This lifecycle probe is not the 24-group Codex Browser pass.'
+          } >> "$GITHUB_STEP_SUMMARY"

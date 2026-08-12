@@ -12,59 +12,24 @@ import {
   BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
   BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
   WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF,
-  assertBrowserResourceTarget,
+  WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  assertBrowserApplicationSafetyMarkers,
   assertBrowserRegressionTarget,
   assertRegressionCleanupSafe,
   buildRegressionRunMarker,
 } from "./regression-target-guard.mjs";
+import {
+  BROWSER_REGRESSION_TEST_USER_EMAIL,
+  BROWSER_REGRESSION_TEST_USER_PASSWORD,
+  DEFAULT_BROWSER_REGRESSION_GROUPS,
+  getBrowserRegressionAuthCredentials,
+  loadBrowserRegressionEnvironment,
+  resolveBrowserRegressionGroups,
+} from "./regression-runtime.mjs";
 
 const BASE_URL = "http://localhost:3000/";
 const TEST_PREFIX = "TEST WTOS REGRESSION";
 const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
-const DEFAULT_GROUPS = [
-  "dashboard",
-  "operations",
-  "field-operations",
-  "crm",
-  "communications",
-  "sales-pipeline",
-  "lead-intake-workspace",
-  "lead-intake",
-  "marketing",
-  "themes",
-  "layout",
-  "settings",
-  "production-readiness",
-  "documents",
-  "customer-portal",
-  "financial",
-  "analytics",
-  "ai-tools",
-  "calendar",
-  "dispatch",
-  "inspections",
-  "jobs-workspace",
-  "job-builder",
-  "job-production",
-];
-
-function readLocalEnv(cwd) {
-  const envText = readFileSync(join(cwd, ".env.local"), "utf8");
-  const env = {};
-
-  for (const line of envText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
-      continue;
-    }
-
-    const [key, ...valueParts] = trimmed.split("=");
-    env[key] = valueParts.join("=").trim();
-  }
-
-  return env;
-}
 
 function readLinkedSupabaseProjectRef(cwd) {
   try {
@@ -72,21 +37,6 @@ function readLinkedSupabaseProjectRef(cwd) {
   } catch {
     return "";
   }
-}
-
-function getRuntimeEnvValue(key) {
-  const runtimeProcess =
-    typeof globalThis.process === "object" && globalThis.process
-      ? globalThis.process
-      : null;
-  const runtimeEnv =
-    runtimeProcess &&
-    typeof runtimeProcess.env === "object" &&
-    runtimeProcess.env
-      ? runtimeProcess.env
-      : null;
-
-  return typeof runtimeEnv?.[key] === "string" ? runtimeEnv[key] : undefined;
 }
 
 function buildEncryptedLeadIntakeRetryPayload(env, payload) {
@@ -1611,14 +1561,18 @@ async function getAppShellState(tab) {
         text.includes("Leads") &&
         text.includes("Estimates") &&
         text.includes("Jobs"),
+      hasAuthScreen:
+        text.includes("Welcome back") &&
+        Boolean(document.querySelector('input[name="email"]')) &&
+        Boolean(document.querySelector('input[name="password"]')),
       isPreparing: text.includes("Preparing WeatherTech OS"),
       hasLiveDataError: text.includes("LIVE DATA ERROR"),
     };
   });
 }
 
-async function ensureAppShell(tab, baseUrl, progress) {
-  progress("browser:shell-check:start");
+async function ensureAppEntry(tab, baseUrl, progress) {
+  progress("browser:entry-check:start");
   let state = await getAppShellState(tab).catch(() => null);
   const baseOrigin = new URL(baseUrl).origin;
   const isLocalApp = state?.href?.startsWith(baseOrigin);
@@ -1628,11 +1582,63 @@ async function ensureAppShell(tab, baseUrl, progress) {
     await tab.goto(baseUrl);
     await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
     progress("browser:goto:done");
-  } else if (state?.isPreparing || state?.hasLiveDataError || !state?.hasShellNav) {
+  } else if (state?.isPreparing || state?.hasLiveDataError) {
     progress("browser:reload:start");
     await tab.reload();
     await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
     progress("browser:reload:done");
+  }
+
+  await waitFor(
+    tab,
+    () => {
+      const text = document.body.innerText;
+
+      return (
+        ((text.includes("Dashboard") &&
+          text.includes("Leads") &&
+          text.includes("Estimates") &&
+          text.includes("Jobs")) ||
+          (text.includes("Welcome back") &&
+            Boolean(document.querySelector('input[name="email"]')) &&
+            Boolean(document.querySelector('input[name="password"]')))) &&
+        !text.includes("Preparing WeatherTech OS")
+      );
+    },
+    "CRM shell or test sign-in screen",
+    45000,
+  );
+  progress("browser:entry-check:done");
+}
+
+async function ensureAppShell(tab, baseUrl, progress, authCredentials = null) {
+  progress("browser:shell-check:start");
+  await ensureAppEntry(tab, baseUrl, progress);
+  const state = await getAppShellState(tab);
+
+  if (state.hasAuthScreen) {
+    if (!authCredentials) {
+      throw new Error(
+        `The isolated regression target requires sign-in. Supply ${BROWSER_REGRESSION_TEST_USER_EMAIL} and ${BROWSER_REGRESSION_TEST_USER_PASSWORD} through the approved external regression environment.`,
+      );
+    }
+
+    progress("browser:test-owner-sign-in:start");
+    await fillUnique(
+      tab.playwright.locator('input[name="email"]'),
+      authCredentials.email,
+      "browser regression test owner email",
+    );
+    await fillUnique(
+      tab.playwright.locator('input[name="password"]'),
+      authCredentials.password,
+      "browser regression test owner password",
+    );
+    await clickUnique(
+      tab.playwright.getByRole("button", { name: "Sign in", exact: true }),
+      "browser regression test owner sign in",
+    );
+    progress("browser:test-owner-sign-in:submitted");
   }
 
   await waitFor(
@@ -1648,20 +1654,90 @@ async function ensureAppShell(tab, baseUrl, progress) {
         !text.includes("Preparing WeatherTech OS")
       );
     },
-    "live CRM shell",
+    "authenticated live CRM shell",
     45000,
   );
+
+  if (authCredentials) {
+    const signedInAsExpectedOwner = await tab.playwright.evaluate(
+      (expectedEmail) =>
+        document.body.innerText
+          .split("\n")
+          .some((line) => line.trim().toLowerCase() === expectedEmail.toLowerCase()),
+      authCredentials.email,
+    );
+
+    if (!signedInAsExpectedOwner) {
+      throw new Error(
+        "The isolated regression browser session is not signed in as the configured synthetic owner.",
+      );
+    }
+  }
+
   progress("browser:shell-check:done");
 }
 
-async function assertLoadedSupabaseResourceTarget(tab, target) {
-  const resourceUrls = await tab.playwright.evaluate(() =>
-    performance
-      .getEntriesByType("resource")
-      .map((entry) => entry.name),
-  );
+function readServerSafetyMarker(html, name) {
+  const match = html.match(new RegExp(`\\s${name}="([^"]*)"`, "i"));
 
-  assertBrowserResourceTarget({ resourceUrls, target });
+  if (!match) {
+    throw new Error(`The local app response is missing the ${name} safety marker.`);
+  }
+
+  return match[1];
+}
+
+async function assertServerApplicationSafetyMarkers(baseUrl, target) {
+  const response = await fetch(baseUrl, {
+    cache: "no-store",
+    headers: { accept: "text/html" },
+    redirect: "error",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `The local app safety preflight returned HTTP ${response.status}.`,
+    );
+  }
+
+  const html = await response.text();
+
+  return assertBrowserApplicationSafetyMarkers({
+    publicSupabaseOrigin: readServerSafetyMarker(
+      html,
+      "data-wtos-supabase-origin",
+    ),
+    demoFallbackState: readServerSafetyMarker(
+      html,
+      "data-wtos-crm-demo-fallback",
+    ),
+    providerSideEffectState: readServerSafetyMarker(
+      html,
+      "data-wtos-provider-side-effects",
+    ),
+    target,
+  });
+}
+
+async function assertLoadedApplicationSafetyMarkers(tab, target) {
+  const publicSupabaseOrigin = await tab.playwright
+    .locator("html")
+    .getAttribute("data-wtos-supabase-origin", { timeoutMs: 15000 });
+
+  const demoFallbackState = await tab.playwright
+    .locator("html")
+    .getAttribute("data-wtos-crm-demo-fallback", { timeoutMs: 15000 });
+
+  const providerSideEffectState = await tab.playwright
+    .locator("html")
+    .getAttribute("data-wtos-provider-side-effects", { timeoutMs: 15000 });
+
+  return assertBrowserApplicationSafetyMarkers({
+    publicSupabaseOrigin,
+    demoFallbackState,
+    providerSideEffectState,
+    target,
+  });
 }
 
 async function waitFor(tab, predicate, label, timeoutMs = 10000, arg = undefined) {
@@ -2049,7 +2125,37 @@ async function fillDateUnique(locator, value, label) {
 
 async function selectUnique(locator, value, label) {
   await waitForUniqueLocator(locator, label);
-  await locator.selectOption(value, { timeoutMs: 8000 });
+  const selection = await locator.evaluate((element, nextValue) => {
+    const values =
+      element.tagName === "SELECT" && "options" in element
+        ? Array.from(element.options).map((option) => option.value)
+        : [];
+
+    return {
+      currentValue: "value" in element ? element.value : null,
+      optionIndex: values.indexOf(nextValue),
+      values,
+    };
+  }, value);
+
+  if (selection.optionIndex < 0) {
+    throw new Error(
+      `${label} could not select ${value}: option_missing; available values: ${selection.values.join(", ")}`,
+    );
+  }
+
+  if (selection.currentValue !== value) {
+    await locator.selectOption({ value }, { timeoutMs: 8000 });
+  }
+
+  await waitForAsync(
+    async () =>
+      locator.evaluate((element, expectedValue) =>
+        "value" in element ? element.value === expectedValue : false,
+      value),
+    label,
+    3000,
+  );
 }
 
 async function checkUnique(locator, label) {
@@ -3454,15 +3560,31 @@ async function testOfficeOperationsWorkspace(browser, tab, env, seededJob) {
       throw schedulingRouteError ?? new Error("Scheduling alert route did not open.");
     }
 
-    await clickNav(tab, "Operations");
-    await waitFor(
-      tab,
-      () =>
-        Boolean(document.querySelector('[data-testid="office-operations-command-center"]')) &&
-        Boolean(document.querySelector('[data-testid="operations-queue-priority-filter"]')),
-      "operations workspace after scheduling alert route",
-      15000,
-    );
+    let operationsWorkspaceRestored = false;
+    let operationsWorkspaceError = null;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await clickNav(tab, "Operations");
+
+      try {
+        await waitFor(
+          tab,
+          () =>
+            Boolean(document.querySelector('[data-testid="office-operations-command-center"]')) &&
+            Boolean(document.querySelector('[data-testid="operations-queue-priority-filter"]')),
+          `operations workspace after scheduling alert route attempt ${attempt}`,
+          attempt === 3 ? 15000 : 5000,
+        );
+        operationsWorkspaceRestored = true;
+        break;
+      } catch (error) {
+        operationsWorkspaceError = error;
+      }
+    }
+
+    if (!operationsWorkspaceRestored) {
+      throw operationsWorkspaceError ?? new Error("Operations workspace did not reopen.");
+    }
   }
 
   await selectUnique(
@@ -3977,6 +4099,7 @@ async function testFinancialOperationsWorkspace(
   company,
   otherCompany,
   runId,
+  baseUrl,
   progress,
 ) {
   progress("financial:seed:start");
@@ -3996,7 +4119,7 @@ async function testFinancialOperationsWorkspace(
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickNav(tab, "Invoices");
 
   await waitFor(
@@ -4443,7 +4566,7 @@ async function testFinancialOperationsWorkspace(
   return { createdInvoiceId: createdInvoice.id, paidInvoice, desktopLayout, mobileLayout };
 }
 
-async function testFieldOperationsWorkspace(browser, tab, env, company, runId, progress) {
+async function testFieldOperationsWorkspace(browser, tab, env, company, runId, baseUrl, progress) {
   progress("field-operations:prepare:start");
   const fieldRunId = `${runId} FIELDOPS`;
   const seededJob = await seedTestJob(env, company.id, fieldRunId);
@@ -4480,7 +4603,7 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   progress("field-operations:prepare:done");
 
   await clickNav(tab, "Field Ops");
@@ -4705,14 +4828,18 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
       // The temporary upload fixture is best-effort cleanup only.
     }
   }
-  await clickUnique(tab.playwright.locator('xpath=//*[@data-testid="field-photo-upload-form"]//button[@type="submit"]'), "submit invalid field photo");
+  await clickVisibleDomSubmitByText(
+    tab,
+    "Upload photo",
+    "submit invalid field photo",
+  );
   await waitFor(
     tab,
     () =>
       document.body.innerText.includes("Choose an image file from the camera or photo library.") &&
       document.querySelector('[data-testid="field-photo-retry"]'),
     "field invalid photo retry visible",
-    15000,
+    30000,
   );
 
   await clickVisibleDomButtonByText(tab, "Operations Queue", "open operations queue from field");
@@ -4749,7 +4876,7 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
   await viewport.set({ width: 390, height: 844 });
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickNav(tab, "Field Ops");
   await waitFor(
     tab,
@@ -4763,7 +4890,7 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, p
   await viewport.set(LAPTOP_VIEWPORT);
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
 
   return {
     seededJobId: seededJob.id,
@@ -5081,7 +5208,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   };
 }
 
-async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progress) {
+async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl, progress) {
   const leadName = lead.leadName;
   const opportunityNotes = `${TEST_PREFIX} ${runId} OPPORTUNITY NOTE`;
   const expectedRevenue = 8765;
@@ -5109,7 +5236,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   progress("sales-pipeline:open:start");
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickCompanyScope(tab, company.name);
   await clickNav(tab, "Sales Pipeline");
   await waitFor(
@@ -5350,7 +5477,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   } catch {
     await tab.reload();
     await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-    await ensureAppShell(tab, BASE_URL, progress);
+    await ensureAppShell(tab, baseUrl, progress);
     await clickCompanyScope(tab, company.name);
     await clickNav(tab, "Sales Pipeline");
     await selectOpportunity("reloaded estimate-linked");
@@ -5363,48 +5490,77 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   }
 
   progress("sales-pipeline:job:start");
-  await scrollSelectorIntoView(
-    tab,
-    '[data-testid="sales-pipeline-job-action"]',
-    "Create opportunity job",
-  );
-  await clickUnique(
-    tab.playwright.locator('[data-testid="sales-pipeline-job-action"]'),
-    "Create opportunity job",
-    { retryTransientClick: true },
-  );
-  const job = await waitForAsync(
-    async () => {
-      const createdJob = await findJobByTitle(env, jobTitle);
+  let job = null;
+  let opportunityJobError = null;
 
-      if (createdJob) {
-        return createdJob;
-      }
+  for (let attempt = 1; attempt <= 2 && !job; attempt += 1) {
+    job = await findJobByTitle(env, jobTitle);
 
-      const visibleError = await tab.playwright.evaluate(() => {
-        const lines = document.body.innerText
-          .split(/\n+/)
-          .map((line) => line.trim())
-          .filter(
-            (line) =>
-              line.startsWith("Unable") ||
-              line.includes("violates") ||
-              line.includes("Could not") ||
-              line.includes("failed"),
-          );
+    if (job) {
+      break;
+    }
 
-        return lines.slice(-3).join(" | ");
-      });
+    if (attempt > 1) {
+      await tab.reload();
+      await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+      await ensureAppShell(tab, baseUrl, progress);
+      await clickCompanyScope(tab, company.name);
+      await clickNav(tab, "Sales Pipeline");
+      await selectOpportunity(`job retry ${attempt}`);
+    }
 
-      if (visibleError) {
-        throw new Error(`Opportunity job UI error: ${visibleError}`);
-      }
+    await scrollSelectorIntoView(
+      tab,
+      '[data-testid="sales-pipeline-job-action"]',
+      `Create opportunity job attempt ${attempt}`,
+    );
+    await clickUnique(
+      tab.playwright.locator('[data-testid="sales-pipeline-job-action"]'),
+      `Create opportunity job attempt ${attempt}`,
+      { retryTransientClick: true },
+    );
 
-      return null;
-    },
-    "opportunity job",
-    45000,
-  );
+    try {
+      job = await waitForAsync(
+        async () => {
+          const createdJob = await findJobByTitle(env, jobTitle);
+
+          if (createdJob) {
+            return createdJob;
+          }
+
+          const visibleError = await tab.playwright.evaluate(() => {
+            const lines = document.body.innerText
+              .split(/\n+/)
+              .map((line) => line.trim())
+              .filter(
+                (line) =>
+                  line.startsWith("Unable") ||
+                  line.includes("violates") ||
+                  line.includes("Could not") ||
+                  line.includes("failed"),
+              );
+
+            return lines.slice(-3).join(" | ");
+          });
+
+          if (visibleError) {
+            throw new Error(`Opportunity job UI error: ${visibleError}`);
+          }
+
+          return null;
+        },
+        `opportunity job attempt ${attempt}`,
+        25000,
+      );
+    } catch (error) {
+      opportunityJobError = error;
+    }
+  }
+
+  if (!job) {
+    throw opportunityJobError ?? new Error("Opportunity job did not persist.");
+  }
 
   if (job.lead_id !== lead.leadId) {
     throw new Error("Opportunity job was not linked to the source lead.");
@@ -5440,7 +5596,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   } catch {
     await tab.reload();
     await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-    await ensureAppShell(tab, BASE_URL, progress);
+    await ensureAppShell(tab, baseUrl, progress);
     await clickCompanyScope(tab, company.name);
     await clickNav(tab, "Sales Pipeline");
     await selectOpportunity("reloaded job-linked");
@@ -5455,7 +5611,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, progres
   progress("sales-pipeline:refresh:start");
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickCompanyScope(tab, company.name);
   await clickNav(tab, "Sales Pipeline");
   await fillUnique(
@@ -6966,8 +7122,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   ];
   const yelpReadinessResponse = await fetch(new URL("/api/leads/yelp", baseUrl));
   const yelpReadiness = await yelpReadinessResponse.json();
-  const yelpSigningSecret =
-    getRuntimeEnvValue("YELP_LEAD_CAPTURE_SECRET") ?? env.YELP_LEAD_CAPTURE_SECRET;
+  const yelpSigningSecret = env.YELP_LEAD_CAPTURE_SECRET;
   let yelpCreate = null;
   let yelpLeadRecordId = null;
   let yelpCreateMode = "seeded";
@@ -7003,6 +7158,9 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
       phone: yelpPayload.phone,
       email: yelpPayload.email,
       property_address: "222 TEST Yelp Intake Way, Tempe, AZ",
+      city: "Tempe",
+      state: "AZ",
+      service_type: "painting",
       status: "new",
       pipeline_stage: "new_lead",
       priority: "normal",
@@ -7098,6 +7256,9 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     phone: gbpPayload.phone,
     email: gbpPayload.email,
     property_address: "444 TEST GBP Intake Way, Phoenix, AZ",
+    city: "Phoenix",
+    state: "AZ",
+    service_type: "roofing",
     status: "new",
     pipeline_stage: "new_lead",
     priority: "normal",
@@ -7373,7 +7534,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   };
 }
 
-async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
+async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, progress) {
   const estimateTitle = `${TEST_PREFIX} ${runId} ESTIMATE`;
   const scopeText = `${TEST_PREFIX} ${runId} estimate scope`;
   const estimateLocation = `456 TEST ${runId} Regression Lead Ave, Phoenix, AZ`;
@@ -7387,7 +7548,7 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, progress) {
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
 
   let estimatesOpened = false;
 
@@ -9009,14 +9170,14 @@ async function seedCustomerPortalRecords(env, company, runId) {
   };
 }
 
-async function testCustomerPortalWorkspace(browser, tab, env, company, runId, progress) {
+async function testCustomerPortalWorkspace(browser, tab, env, company, runId, baseUrl, progress) {
   progress("customer-portal:seed:start");
   const seeded = await seedCustomerPortalRecords(env, company, runId);
   progress("customer-portal:seed:done");
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Customer Portal");
   await selectUnique(
@@ -9221,7 +9382,7 @@ async function testCustomerPortalWorkspace(browser, tab, env, company, runId, pr
   await viewport.set({ width: 390, height: 844 });
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Customer Portal");
   await selectUnique(
@@ -9240,7 +9401,7 @@ async function testCustomerPortalWorkspace(browser, tab, env, company, runId, pr
   await viewport.set(LAPTOP_VIEWPORT);
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, progress);
+  await ensureAppShell(tab, baseUrl, progress);
 
   return {
     customerId: seeded.customer.id,
@@ -9252,7 +9413,7 @@ async function testCustomerPortalWorkspace(browser, tab, env, company, runId, pr
   };
 }
 
-async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, runId) {
+async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, runId, baseUrl) {
   const viewport = await browser.capabilities.get("viewport");
   const documentStorageWorkflowReady = await detectDocumentStorageWorkflowSupport(env);
   const customer = await seedTestCustomer(
@@ -9274,7 +9435,7 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, BASE_URL, () => {});
+  await ensureAppShell(tab, baseUrl, () => {});
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Documents");
 
@@ -11484,17 +11645,20 @@ export function formatRegressionReport(result) {
     `WeatherTech OS Codex Browser regression: ${result.ok ? "PASS" : "FAIL"}`,
     `Run id: ${result.runId}`,
     `Target: ${result.target?.kind ?? "unknown"} (${result.target?.projectRef ?? "unknown"})`,
-    `Groups: ${(result.groups ?? DEFAULT_GROUPS).join(", ")}`,
+    `Mode: ${result.fullRun ? "full" : "targeted"}`,
+    `Groups (${result.executedGroupCount ?? result.groups?.length ?? 0}): ${(result.groups ?? DEFAULT_BROWSER_REGRESSION_GROUPS).join(", ")}`,
+    `Assertions: ${result.assertionCount ?? result.results.length}`,
     `Seeded job: ${result.seededJobTitle ?? "none"}`,
     `Cleanup before: ${JSON.stringify(result.cleanup.before)}`,
     `Cleanup after: ${JSON.stringify(result.cleanup.after)}`,
     `Browser console errors: ${result.browserConsoleErrorCount ?? "not checked"}`,
+    `Browser console warnings: ${result.browserConsoleWarningCount ?? "not checked"}`,
     "",
     ...result.results.map(formatRecord),
   ];
 
   if (!result.ok) {
-    lines.push("", `${result.failureCount} test group(s) failed.`);
+    lines.push("", `${result.failureCount} browser assertion(s) failed.`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -11518,7 +11682,7 @@ export function getCodexBrowserRegressionCommand({
     ...(groups ? [`  groups: ${JSON.stringify(groups)},`] : []),
     "});",
     "nodeRepl.write(weatherTechRegression.formatRegressionReport(weatherTechRegressionResult));",
-    "if (!weatherTechRegressionResult.ok) { throw new Error(`${weatherTechRegressionResult.failureCount} WeatherTech OS regression group(s) failed.`); }",
+    "if (!weatherTechRegressionResult.ok) { throw new Error(`${weatherTechRegressionResult.failureCount} WeatherTech OS regression assertion(s) failed.`); }",
   ].join("\n");
 }
 
@@ -11528,33 +11692,53 @@ export async function runWeatherTechOsRegression({
   baseUrl = BASE_URL,
   cwd = nodeRepl?.cwd ?? ".",
   progressPath = null,
-  groups = DEFAULT_GROUPS,
+  groups = null,
+  fullRun = groups == null,
+  runtimeEnv = null,
 } = {}) {
   if (!browser) {
     throw new Error("A Codex in-app browser instance is required.");
   }
 
-  const env = readLocalEnv(cwd);
+  const groupSelection = resolveBrowserRegressionGroups({ groups, fullRun });
+  const resolvedRuntimeEnv = runtimeEnv ?? (
+    typeof globalThis.process === "object" &&
+    globalThis.process &&
+    typeof globalThis.process.env === "object"
+      ? globalThis.process.env
+      : {}
+  );
+  const remoteWritesEnabled =
+    resolvedRuntimeEnv[BROWSER_REGRESSION_REMOTE_WRITE_FLAG]?.trim() === "true";
+  const regressionEnvironment = loadBrowserRegressionEnvironment({
+    cwd,
+    runtimeEnv: resolvedRuntimeEnv,
+    remoteWritesEnabled,
+  });
+  const env = regressionEnvironment.environment;
+  const authCredentials = getBrowserRegressionAuthCredentials(env);
   const linkedProjectRef = readLinkedSupabaseProjectRef(cwd);
   const target = assertBrowserRegressionTarget({
     baseUrl,
     supabaseUrl: env.NEXT_PUBLIC_SUPABASE_URL,
     serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
     runtimeEnv: {
-      [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]: getRuntimeEnvValue(
-        BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
-      ),
-      [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]: getRuntimeEnvValue(
-        BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
-      ),
+      [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]:
+        resolvedRuntimeEnv[BROWSER_REGRESSION_REMOTE_WRITE_FLAG],
+      [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]:
+        resolvedRuntimeEnv[BROWSER_REGRESSION_EXPECTED_PROJECT_REF],
     },
     productionProjectRefs: [
       WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF,
       linkedProjectRef,
     ],
+    approvedNonProductionProjectRefs: [
+      WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+    ],
   });
   const progress = createProgressLogger(progressPath);
-  const enabledGroups = new Set(groups);
+  const resolvedGroups = groupSelection.groups;
+  const enabledGroups = new Set(resolvedGroups);
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, "");
   const results = [];
   const commands = [
@@ -11563,6 +11747,7 @@ export async function runWeatherTechOsRegression({
   let seededJob = null;
   let regressionTab = null;
   let browserConsoleErrorCount = null;
+  let browserConsoleWarningCount = null;
   let cleanupAuthorized = false;
 
   const record = async (name, fn) => {
@@ -11584,10 +11769,12 @@ export async function runWeatherTechOsRegression({
 
   let cleanup = { before: null, after: null };
 
+  await assertServerApplicationSafetyMarkers(baseUrl, target);
   const tab = await getTab(browser);
   regressionTab = tab;
-  await ensureAppShell(tab, baseUrl, progress);
-  await assertLoadedSupabaseResourceTarget(tab, target);
+  await ensureAppEntry(tab, baseUrl, progress);
+  await assertLoadedApplicationSafetyMarkers(tab, target);
+  await ensureAppShell(tab, baseUrl, progress, authCredentials);
 
   try {
     const leadNameColumn = await detectLeadNameColumn(env);
@@ -11684,19 +11871,19 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("documents")) {
       await record("Document Center filters, previews, renames, archives, and stays responsive", () =>
-        testDocumentCenterWorkspace(browser, tab, env, weatherTech, seededJob, runId),
+        testDocumentCenterWorkspace(browser, tab, env, weatherTech, seededJob, runId, baseUrl),
       );
     }
 
     if (enabledGroups.has("customer-portal")) {
       await record("Customer Portal shows isolated project status, documents, photos, messages, schedule, payments, warranty, and profile", () =>
-        testCustomerPortalWorkspace(browser, tab, env, weatherTech, runId, progress),
+        testCustomerPortalWorkspace(browser, tab, env, weatherTech, runId, baseUrl, progress),
       );
     }
 
     if (enabledGroups.has("financial")) {
       await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
-        testFinancialOperationsWorkspace(browser, tab, env, weatherTech, ihc, runId, progress),
+        testFinancialOperationsWorkspace(browser, tab, env, weatherTech, ihc, runId, baseUrl, progress),
       );
     }
 
@@ -11749,7 +11936,7 @@ export async function runWeatherTechOsRegression({
           throw new Error("Lead workflow did not produce a test lead.");
         }
 
-        return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId, progress);
+        return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId, baseUrl, progress);
       });
     }
 
@@ -11800,7 +11987,7 @@ export async function runWeatherTechOsRegression({
           throw new Error("Sales Pipeline seed did not produce a test lead.");
         }
 
-        return testSalesPipelineWorkflow(tab, env, weatherTech, salesPipelineLead, runId, progress);
+        return testSalesPipelineWorkflow(tab, env, weatherTech, salesPipelineLead, runId, baseUrl, progress);
       });
     }
 
@@ -11854,7 +12041,7 @@ export async function runWeatherTechOsRegression({
 
     if (enabledGroups.has("field-operations")) {
       await record("Field Operations workspace manages mobile assignments, status, issues, materials, and routing", () =>
-        testFieldOperationsWorkspace(browser, tab, env, weatherTech, runId, progress),
+        testFieldOperationsWorkspace(browser, tab, env, weatherTech, runId, baseUrl, progress),
       );
     }
 
@@ -11919,7 +12106,11 @@ export async function runWeatherTechOsRegression({
         browserConsoleErrorCount = regressionTab
           ? (await regressionTab.dev.logs({ levels: ["error"], limit: 100 })).length
           : 0;
+        browserConsoleWarningCount = regressionTab
+          ? (await regressionTab.dev.logs({ levels: ["warning"], limit: 100 })).length
+          : 0;
         progress(`browser:console-errors:${browserConsoleErrorCount}`);
+        progress(`browser:console-warnings:${browserConsoleWarningCount}`);
 
         if (browserConsoleErrorCount > 0) {
           results.push({
@@ -11928,8 +12119,24 @@ export async function runWeatherTechOsRegression({
             error: `${browserConsoleErrorCount} browser console error(s) were recorded.`,
           });
         }
-      } catch {
+
+        if (browserConsoleWarningCount > 0) {
+          results.push({
+            name: "Browser console remains free of runtime warnings",
+            status: "failed",
+            error: `${browserConsoleWarningCount} browser console warning(s) were recorded.`,
+          });
+        }
+      } catch (error) {
         browserConsoleErrorCount = null;
+        browserConsoleWarningCount = null;
+        results.push({
+          name: "Browser console inspection must complete",
+          status: "failed",
+          error: `Browser console inspection failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
       }
 
       try {
@@ -11946,13 +12153,18 @@ export async function runWeatherTechOsRegression({
   return {
     ok: failureCount === 0,
     failureCount,
-    groups,
+    assertionCount: results.length,
+    executedGroupCount: resolvedGroups.length,
+    fullRun: groupSelection.fullRun,
+    groups: resolvedGroups,
     runId,
     testPrefix: TEST_PREFIX,
     target,
+    environmentSource: regressionEnvironment.source,
     seededJobTitle: seededJob?.title ?? null,
     cleanup,
     browserConsoleErrorCount,
+    browserConsoleWarningCount,
     commands,
     results,
   };

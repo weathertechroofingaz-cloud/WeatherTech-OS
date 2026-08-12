@@ -292,6 +292,21 @@ try {
   assert(createdResult.leadId, "New intake creates one lead");
   assertEqual(newLeadDb.state.leads.length, 1, "New intake inserts one lead");
   assertEqual(
+    newLeadDb.state.leads[0]?.contact_name,
+    "Sam Newlead",
+    "New intake writes the canonical contact_name column",
+  );
+  assertEqual(
+    newLeadDb.state.leads[0]?.service_type,
+    "roofing",
+    "New intake writes the canonical service_type column",
+  );
+  assertEqual(
+    newLeadDb.state.leads[0]?.customer_name,
+    undefined,
+    "New intake does not prefer the legacy customer_name column",
+  );
+  assertEqual(
     newLeadDb.state.lead_intake_records[0]?.linked_lead_id,
     createdResult.leadId,
     "Intake record links to the created lead",

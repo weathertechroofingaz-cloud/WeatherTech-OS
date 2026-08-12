@@ -5,6 +5,9 @@ import {
   BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
   BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
   WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF,
+  WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  assertBrowserApplicationSafetyMarkers,
+  assertBrowserPublicTargetMarker,
   assertBrowserResourceTarget,
   assertBrowserRegressionTarget,
   assertRegressionCleanupSafe,
@@ -98,7 +101,38 @@ const hostedOptions = {
   baseUrl: "http://localhost:3000/",
   supabaseUrl: `https://${nonProductionRef}.supabase.co`,
   serviceRoleKey: fakeServiceRoleJwt(nonProductionRef),
+  approvedNonProductionProjectRefs: [nonProductionRef],
 };
+
+assertThrows(
+  () =>
+    assertBrowserRegressionTarget({
+      ...hostedOptions,
+      approvedNonProductionProjectRefs: [
+        WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+      ],
+      runtimeEnv: {
+        [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]: "true",
+        [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]: nonProductionRef,
+      },
+    }),
+  "not an explicitly approved non-production",
+  "An unknown hosted project is rejected even when both runtime authorizations match it",
+);
+assertThrows(
+  () =>
+    assertBrowserRegressionTarget({
+      baseUrl: "http://localhost:3000/",
+      supabaseUrl: "not-a-supabase-url",
+      serviceRoleKey: fakeServiceRoleJwt(nonProductionRef),
+      runtimeEnv: {
+        [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]: "true",
+        [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]: nonProductionRef,
+      },
+    }),
+  "must be a valid URL",
+  "A malformed hosted target is rejected before any authorization is considered",
+);
 
 assertThrows(
   () => assertBrowserRegressionTarget(hostedOptions),
@@ -143,6 +177,84 @@ assertEqual(
   hostedTarget.supabaseOrigin,
   `https://${nonProductionRef}.supabase.co`,
   "Hosted target identifies the exact public Supabase origin",
+);
+
+const fixedRegressionTarget = assertBrowserRegressionTarget({
+  baseUrl: "http://localhost:3000/",
+  supabaseUrl: `https://${WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF}.supabase.co`,
+  serviceRoleKey: fakeServiceRoleJwt(
+    WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  ),
+  runtimeEnv: {
+    [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]: "true",
+    [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]:
+      WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  },
+});
+assertEqual(
+  fixedRegressionTarget.projectRef,
+  WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
+  "The fixed WeatherTech regression project is approved by default",
+);
+
+const matchingPublicTargetMarker = assertBrowserPublicTargetMarker({
+  target: fixedRegressionTarget,
+  publicSupabaseOrigin:
+    `https://${WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF}.supabase.co`,
+});
+assertEqual(
+  matchingPublicTargetMarker.supabaseOrigin,
+  fixedRegressionTarget.supabaseOrigin,
+  "The browser-observed public origin marker matches the fixed regression target",
+);
+assertEqual(
+  assertBrowserApplicationSafetyMarkers({
+    target: fixedRegressionTarget,
+    publicSupabaseOrigin:
+      `https://${WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF}.supabase.co`,
+    demoFallbackState: "disabled",
+    providerSideEffectState: "disabled",
+  }).supabaseOrigin,
+  fixedRegressionTarget.supabaseOrigin,
+  "The complete browser application safety marker set passes only for the isolated target",
+);
+assertThrows(
+  () =>
+    assertBrowserApplicationSafetyMarkers({
+      target: fixedRegressionTarget,
+      publicSupabaseOrigin: fixedRegressionTarget.supabaseOrigin,
+      demoFallbackState: "disabled",
+      providerSideEffectState: "enabled",
+    }),
+  "disable every provider/live-write side effect",
+  "An app server with an enabled provider side effect fails closed",
+);
+assertThrows(
+  () =>
+    assertBrowserPublicTargetMarker({
+      target: fixedRegressionTarget,
+      publicSupabaseOrigin: "unconfigured",
+    }),
+  "no configured public Supabase origin",
+  "A missing public target configuration marker fails closed",
+);
+assertThrows(
+  () =>
+    assertBrowserPublicTargetMarker({
+      target: fixedRegressionTarget,
+      publicSupabaseOrigin: "malformed",
+    }),
+  "malformed public Supabase origin",
+  "A malformed public target configuration marker fails closed",
+);
+assertThrows(
+  () =>
+    assertBrowserPublicTargetMarker({
+      target: fixedRegressionTarget,
+      publicSupabaseOrigin: "https://different-project.supabase.co",
+    }),
+  "not a valid guarded target origin",
+  "A public target marker for another hosted project fails closed",
 );
 
 const matchingHostedResourceTarget = assertBrowserResourceTarget({
@@ -275,6 +387,12 @@ assertRegressionCleanupSafe({
 const runnerStart = harness.indexOf("export async function runWeatherTechOsRegression");
 const runner = harness.slice(runnerStart);
 const targetGuardIndex = runner.indexOf("const target = assertBrowserRegressionTarget(");
+const serverSafetyMarkerIndex = runner.indexOf(
+  "await assertServerApplicationSafetyMarkers(baseUrl, target)",
+);
+const publicTargetMarkerIndex = runner.indexOf(
+  "await assertLoadedApplicationSafetyMarkers(tab, target)",
+);
 const firstDatabaseReadIndex = runner.indexOf("await detectLeadNameColumn(env)");
 const firstCleanupIndex = runner.indexOf("await cleanupTestRecords(env, runId");
 
@@ -284,9 +402,14 @@ assert(
   "Target guard runs before every database read, cleanup, or seed operation",
 );
 assert(
-  runner.indexOf("await assertLoadedSupabaseResourceTarget(tab, target)") <
-    firstDatabaseReadIndex,
-  "Loaded public Supabase resource target is verified before database reads or writes",
+  serverSafetyMarkerIndex >= 0 &&
+    serverSafetyMarkerIndex < runner.indexOf("const tab = await getTab(browser)"),
+  "Server target and side-effect markers are verified before opening the browser app",
+);
+assert(
+  publicTargetMarkerIndex >= 0 &&
+    publicTargetMarkerIndex < firstDatabaseReadIndex,
+  "Browser-observed public Supabase target marker is verified before database reads or writes",
 );
 assert(
   !harness.includes("document.cookie") &&

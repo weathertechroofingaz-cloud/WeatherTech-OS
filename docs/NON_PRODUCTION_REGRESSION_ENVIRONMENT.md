@@ -1,0 +1,175 @@
+# Non-Production Regression Environment
+
+This runbook defines the only approved hosted target and operating contract for routine write-capable WeatherTech OS regression testing. Production is never an acceptable fallback.
+
+## Approved Architecture
+
+| Item | Approved value |
+| --- | --- |
+| Supabase target type | Dedicated hosted project on the existing WeatherTech OS organization |
+| Project name | `WeatherTech OS Regression` |
+| Project reference | `hygtnhmmaoboduqghhwg` |
+| Region | `us-west-1` |
+| Purpose | Synthetic browser/regression fixtures only |
+| Production project reference | `gahfcgyjtfwwmsterhzu` — permanently prohibited |
+
+A dedicated project was selected because it provides an isolated database, Auth tenant, API endpoint, migration ledger, and credentials without sharing production data. The available Supabase branch option would incur hourly cost, while the verified dedicated project was available at `$0/month`. Local Supabase remains a valid developer option when a supported container runtime is available, but it is not the shared hosted regression target.
+
+The project reference and URL hostname are identifiers, not credentials. API keys, service-role credentials, and test-user credentials remain secret and must never appear in this document, source control, logs, screenshots, command output, or test reports.
+
+## Non-Negotiable Isolation Contract
+
+Before the harness performs its first database read, seed, write, cleanup, or delete, it must prove all of the following:
+
+1. The application URL is locally served.
+2. The configured Supabase URL is valid and is not the immutable production reference.
+3. Hosted writes are explicitly authorized with `WTOS_BROWSER_REGRESSION_REMOTE_WRITES_ENABLED=true`.
+4. `WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF` exactly equals `hygtnhmmaoboduqghhwg`.
+5. The service credential belongs to the same project as the URL.
+6. The browser-rendered public Supabase-origin marker exactly matches the expected target origin.
+7. The server and browser-rendered CRM demo-fallback markers prove fallback is disabled.
+8. The server and browser-rendered aggregate provider-side-effect markers prove every write gate is disabled.
+9. The target's remote identity is positively verified as the approved regression project.
+10. The current run marker is new and has no collision.
+
+Missing, malformed, unknown, mismatched, or production configuration must terminate the run before database access. Do not add a general production override.
+
+## Schema Provisioning
+
+Apply the committed WeatherTech OS migration history to the isolated target in repository order. Never clone production rows, auth users, Vault values, connection records, provider mappings, or provider secrets.
+
+The two owner-preserved Property Intelligence working-tree files are not an approved schema source for this sprint. Any schema application while they remain modified must use a clean `HEAD` archive or another clean checkout so their unstaged content cannot reach the regression project.
+
+Supabase projects created under the current Data API default may require explicit table privileges for `anon`, `authenticated`, or `service_role` in addition to RLS policies. Provision only the privileges required by the established application model, retain RLS on exposed tables, and verify access rather than assuming migration success implies Data API access.
+
+Schema readiness must prove:
+
+- the remote ledger contains exactly the intended committed migrations;
+- required companies, memberships, and one synthetic test identity exist without production data;
+- browser-authenticated and service-role requests resolve to the same project;
+- RLS preserves WeatherTech Roofing versus IHC company isolation; and
+- provider connections, Stripe mappings, webhook events, and payment rows begin empty.
+
+## Secure Configuration
+
+Do not modify or reuse `.env.local` for regression. Use a permission-restricted environment file outside the repository or protected CI secrets. The local harness configuration contains these names:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK
+SUPABASE_SERVICE_ROLE_KEY
+WTOS_BROWSER_REGRESSION_REMOTE_WRITES_ENABLED
+WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF
+```
+
+`NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK` must equal `true` for a hosted regression run. This prevents a successful database mutation from being masked by an in-memory demo fallback.
+
+The lifecycle bootstrap uses `WTOS_REGRESSION_OWNER_EMAIL` and `WTOS_REGRESSION_OWNER_PASSWORD`. The in-app Browser uses the same synthetic identity through `WTOS_BROWSER_REGRESSION_TEST_USER_EMAIL` and `WTOS_BROWSER_REGRESSION_TEST_USER_PASSWORD`. Never use an owner account or production user. The verified workstation file is `/Users/spotty/.config/weathertech-os/regression.env`, has mode `0600`, and lives outside the checkout. For the browser harness, do not source the target credentials into the parent process. Select the file and independently export only the explicit hosted-write authorization:
+
+```text
+WTOS_BROWSER_REGRESSION_ENV_FILE=/Users/spotty/.config/weathertech-os/regression.env
+WTOS_BROWSER_REGRESSION_REMOTE_WRITES_ENABLED=true
+WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF=hygtnhmmaoboduqghhwg
+```
+
+The harness rejects simultaneous process-environment target credentials and `WTOS_BROWSER_REGRESSION_ENV_FILE`. The lifecycle script has the opposite interface: it never reads `.env.local` or the selected external file, so load the file's required values into that command's process without printing them, run the lifecycle commands, and clear them afterward.
+
+All provider/live-write gates must be false or unset in the regression application process, including:
+
+```text
+STRIPE_LIVE_PAYMENTS_ENABLED
+STRIPE_REFUNDS_ENABLED
+STRIPE_WEBHOOK_PROCESSING_ENABLED
+GOOGLE_GMAIL_SEND_ENABLED
+GOOGLE_CALENDAR_WRITE_ENABLED
+TWILIO_OUTBOUND_SMS_ENABLED
+QUICKBOOKS_SYNC_ENABLED
+QUICKBOOKS_ACCOUNTING_WRITES_ENABLED
+QUICKBOOKS_PAYMENT_PROCESSING_ENABLED
+YELP_LIVE_SYNC_ENABLED
+YELP_OUTBOUND_MESSAGING_ENABLED
+AI_ENABLED
+AI_ACTION_EXECUTION_ENABLED
+GHL_SYNC_ENABLED
+```
+
+The harness fetches the local server's raw HTML before opening the application and then checks the same non-secret markers in the rendered page. A target mismatch, enabled demo fallback, or enabled aggregate side-effect state fails before authentication or browser/database/API work.
+
+Source-specific provider flags are also false. Ordinary regression must not contain live provider credentials merely because a corresponding gate is false.
+
+## Local Browser Workflow
+
+1. Confirm the repository, branch, commit, and protected-file hashes.
+2. Load the approved external environment values into only the lifecycle command process; do not source `.env.local` and do not print the values.
+3. Prove the project, schema, synthetic identity, provider isolation, and clean starting state:
+
+   ```bash
+   node scripts/regression-environment.mjs bootstrap
+   node scripts/regression-environment.mjs verify
+   node scripts/regression-environment.mjs lifecycle-probe
+   node scripts/regression-environment.mjs verify-residue
+   ```
+
+4. Clear the lifecycle command variables. Start the local WeatherTech OS server with the public URL and anon/publishable key for the approved regression project, `NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true`, and all live-write gates false.
+5. Select the permission-restricted file with `WTOS_BROWSER_REGRESSION_ENV_FILE`, export the two explicit hosted-write authorization values shown above, open the locally served app in the Codex in-app Browser, and authenticate only as the synthetic test user.
+6. Run the complete default group set. A subset is a diagnostic shard, not a full pass.
+7. Require the final report to include the complete expected group list, a nonzero assertion count, console error/warning counts, before/after cleanup evidence, and `residueVerified: true`.
+8. Run `node scripts/regression-environment.mjs verify-residue` again and confirm production counts are unchanged with read-only checks.
+
+The executable entrypoint and group-selection examples live in [Codex Browser Regression Suite](./codex-browser-regression.md).
+
+## Test-Data Ownership And Cleanup
+
+Each run owns exactly one millisecond-resolution run ID and marker. The harness must capture every created row ID as soon as it is returned. Related/generated rows may be discovered only through current-run foreign keys or fields containing the exact current-run marker; unrelated historical pattern matches are not owned by the run.
+
+Cleanup runs in dependency-safe order and remains bounded to the captured run graph. It covers every synthetic object the enabled groups create, including leads, customers, jobs, estimates and lines, inspections, documents/signatures, schedules, job child records, invoices and lines, offline payments, change orders, intake/provider logs, messages, notifications, and generated office tasks.
+
+Before deleting financial records, cleanup must inspect payment methods, provider references, and Stripe mappings. Any Stripe-linked record aborts cleanup. Missing fixture ownership, a marker collision, a changed target, or nonzero final residue is a failed run and requires diagnostics; it is never repaired with a broad prefix sweep.
+
+Cleanup runs after success and in `finally` after ordinary assertion failure once preflight has authorized that exact marker and target. If preflight fails, cleanup must not run.
+
+## CI Contract
+
+[Repository Validation](../.github/workflows/repository-validation.yml) runs repository-only checks on pull requests, pushes to `main`, and manual dispatch. That job installs the committed lockfile, discovers and executes every top-level `tests/*.test.mjs` file, type-checks, lints, builds, audits all installed dependencies, and checks patch whitespace. It receives no database or provider credentials.
+
+On pushes to `main` and manual dispatches of `main`, a second serialized job uses the protected GitHub environment named `regression` and maps these environment-scoped secrets into the fail-closed lifecycle script. A manual dispatch of another ref fails before secret-bearing work:
+
+```text
+WTOS_REGRESSION_SUPABASE_URL
+WTOS_REGRESSION_SUPABASE_ANON_KEY
+WTOS_REGRESSION_SUPABASE_SERVICE_ROLE_KEY
+WTOS_REGRESSION_PROJECT_REF
+WTOS_REGRESSION_OWNER_EMAIL
+WTOS_REGRESSION_OWNER_PASSWORD
+```
+
+That job runs `bootstrap`, `verify`, `lifecycle-probe`, and `verify-residue`. The probe creates exactly one in-app-only WeatherTech notification using a pre-generated UUID, reads the exact ID/company/marker, deletes only that ID in `finally`, and proves zero marker and ID residue. All provider gates are explicitly false. It never runs for a pull request, creates no Stripe/provider object, and is serialized without cancellation so a newer workflow cannot interrupt cleanup.
+
+The current browser suite depends on the signed-in Codex in-app Browser API. GitHub-hosted runners do not provide that surface, so neither CI job claims a browser pass. This is a genuine CI capability gap, not a silent skip. Until a reviewed headless adapter or dedicated compatible runner exists, release evidence must include the separately executed complete Codex Browser report.
+
+A future CI browser runner is acceptable only when it:
+
+- obtains regression URL/key/test-user values from a protected GitHub environment;
+- verifies the exact approved project reference before starting the server or touching data;
+- executes every required group and rejects unknown, duplicate, empty, or partial group sets for a full-run job;
+- fails if zero assertions ran, any group failed, console errors/warnings violate policy, cleanup failed, or residue remains;
+- uploads a redacted report containing no credential or customer data; and
+- runs cleanup reliably after ordinary failures without ever targeting production.
+
+Do not add a conditional job that reports success when secrets or browser capability are absent.
+
+## Emergency Troubleshooting
+
+- **Target rejected:** compare the URL hostname, expected project reference, credential identity, linked production reference, rendered public-origin marker, and rendered demo-fallback marker. Never weaken the check.
+- **Origin marker missing or mismatched:** verify the local app was started with the approved public URL/key and that its rendered marker exactly matches the expected Supabase origin.
+- **Demo fallback enabled:** restart the local app with `NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true`; never accept a hosted write-capable run while fallback is available.
+- **Schema cache or relation error:** compare the remote migration ledger and Data API grants; do not make the harness silently downgrade required coverage.
+- **Marker collision:** stop. Generate a new run ID only after proving the older marker's ownership; never delete the collision automatically.
+- **Cleanup residue:** retain the redacted run report and exact captured IDs, inspect dependencies, and perform only evidence-bounded cleanup on the verified regression target.
+- **External provider activity:** stop the suite, disable the affected gate, record what occurred, and verify production/IHC isolation. Do not retry until the cause is proven.
+- **Authentication failure:** repair only the synthetic regression identity. Do not substitute an owner or production user.
+
+## Production Boundary
+
+Production receives only read-only smoke and baseline checks after a successful non-production run. Never seed production, run write-capable regression against it, or change the expected HTTP 503 readiness state by weakening provider-approval controls. A separately owner-authorized live provider validation remains outside this harness and requires its own narrow limits.

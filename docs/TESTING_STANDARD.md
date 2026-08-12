@@ -43,6 +43,8 @@ npm run test:browser:codex
 
 Current browser regression coverage includes high-value workflows across dashboard, office operations, settings integrations, AI Tools, Website & Marketing, calendar, leads, estimates, customers, inbox, lead intake, themes, inspections, dispatch, jobs, and job production flows.
 
+The approved hosted environment, secure configuration names, schema contract, test-data ownership, and cleanup procedure are defined in [Non-Production Regression Environment](./NON_PRODUCTION_REGRESSION_ENVIRONMENT.md). Production is prohibited as an ordinary regression target.
+
 Rules:
 
 - Do not count a command that only prints runner instructions as a browser pass.
@@ -52,8 +54,19 @@ Rules:
 - Track disposable records by IDs created during the current run and clean them only after re-verifying the same authorized non-production target.
 - A purpose-built production validation requires explicit owner authorization for that exact workflow and must not reuse or weaken the ordinary regression override boundary.
 - Report infrastructure failures separately from product failures.
+- A full pass must run the complete expected group set, execute a nonzero number of assertions, report browser console errors and warnings, complete bounded cleanup, and prove zero current-run residue. Empty, unknown, duplicate, or partial group selections cannot report a full pass.
 
 The isolation guard must have targeted automated coverage proving production-target rejection, cleanup rejection, approved non-production operation, and preservation of separately authorized production-validation workflows. Do not run a write-capable browser suite merely to prove that Production Supabase rejects it; test the guard before the write boundary.
+
+## Continuous Integration
+
+The repository-only job runs without database or provider credentials and validates every top-level repository test, type-check, lint, production build, full installed-dependency audit, and patch whitespace. Its job name and summary explicitly state that boundary.
+
+On pushes to `main` and manual dispatches of `main`, a separate serialized job obtains only the approved regression project and marked synthetic-user values from the protected GitHub environment named `regression`. Manual dispatch of another ref fails before secret-bearing work. The job fail-closes on any target or credential mismatch, explicitly disables every provider/live-write flag, bootstraps and verifies the test identity, performs one captured-ID in-app notification write/read/delete probe, and verifies zero residue. It does not run for pull requests and is not browser evidence.
+
+The write-capable browser suite currently requires the signed-in Codex in-app Browser API, which is not supplied by GitHub-hosted runners. A green repository workflow is not browser-regression evidence. Until a compatible reviewed runner exists, the release record must attach the separate complete browser result with every expected group, nonzero assertions, console results, cleanup, and zero residue.
+
+CI must never silently skip a critical browser group and report success. Missing protected secrets, target mismatch, absent browser capability, zero assertions, incomplete groups, cleanup failure, or residue must be represented as not executed or failed, never passed.
 
 ## Targeted Workflow Validation
 

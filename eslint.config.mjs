@@ -1,23 +1,23 @@
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { FlatCompat } from "@eslint/eslintrc";
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
-
-const eslintConfig = [
+const eslintConfig = defineConfig([
+  ...nextVitals,
   {
-    ignores: [
-      ".next/**",
-      "node_modules/**",
-      "out/**",
-      "next-env.d.ts",
-      "WeatherTech-OS.zip",
-    ],
+    rules: {
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/set-state-in-effect": "off",
+    },
   },
-  ...compat.extends("next/core-web-vitals"),
-];
+  globalIgnores([
+    ".next/**",
+    "node_modules/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    "WeatherTech-OS.zip",
+  ]),
+]);
 
 export default eslintConfig;

@@ -1033,6 +1033,61 @@ function buildLiveLeadInput(input: LeadInput) {
   };
 }
 
+function buildCanonicalLeadInput(input: LeadInput) {
+  const pipelineStage = normalizePipelineStage(input.pipeline_stage, input.status);
+
+  return {
+    company_id: input.company_id,
+    ...(input.customer_id !== undefined
+      ? { customer_id: input.customer_id ?? null }
+      : {}),
+    ...(input.property_id !== undefined
+      ? { property_id: input.property_id ?? null }
+      : {}),
+    contact_name: input.contact_name,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    property_address: input.property_address,
+    city: input.city ?? null,
+    state: input.state ?? "AZ",
+    postal_code: input.postal_code ?? null,
+    ...(input.latitude !== undefined ? { latitude: input.latitude ?? null } : {}),
+    ...(input.longitude !== undefined ? { longitude: input.longitude ?? null } : {}),
+    ...(input.google_place_id !== undefined
+      ? { google_place_id: input.google_place_id ?? null }
+      : {}),
+    ...(input.address_verified_at !== undefined
+      ? { address_verified_at: input.address_verified_at ?? null }
+      : {}),
+    service_type: input.service_type,
+    source: input.source ?? "Website",
+    status: pipelineStageToLeadStatus(pipelineStage),
+    pipeline_stage: pipelineStage,
+    priority: input.priority ?? "normal",
+    estimated_value: input.estimated_value ?? 0,
+    next_follow_up: input.next_follow_up ?? null,
+    notes: input.notes ?? null,
+    ...(input.created_by !== undefined
+      ? { created_by: input.created_by ?? null }
+      : {}),
+  };
+}
+
+function isMissingLeadColumnError(error: unknown) {
+  const details = describeSafeSupabaseMutationError(error);
+  const message = [details.message, details.details, details.hint]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    details.code === "PGRST204" ||
+    /could not find the ['\"]?[^'\"]+['\"]? column of ['\"]?leads['\"]? in the schema cache/i.test(
+      message,
+    ) ||
+    /column .* of relation ['\"]?leads['\"]? does not exist/i.test(message)
+  );
+}
+
 function describeSafeSupabaseMutationError(error: unknown) {
   if (!error || typeof error !== "object") {
     return {
@@ -1059,24 +1114,35 @@ function describeSafeSupabaseMutationError(error: unknown) {
 }
 
 export async function createLead(client: CrmClient, input: LeadInput) {
-  const liveInput = buildLiveLeadInput(input);
-  const { data, error } = await client
+  const canonicalInput = buildCanonicalLeadInput(input);
+  let attemptedInput: Record<string, unknown> = canonicalInput;
+  let { data, error } = await client
     .from("leads")
-    .insert(liveInput as unknown as LeadInput)
+    .insert(canonicalInput as unknown as LeadInput)
     .select("*")
     .single();
+
+  if (error && isMissingLeadColumnError(error)) {
+    const legacyInput = buildLiveLeadInput(input);
+    attemptedInput = legacyInput;
+    ({ data, error } = await client
+      .from("leads")
+      .insert(legacyInput as unknown as LeadInput)
+      .select("*")
+      .single());
+  }
 
   if (error) {
     console.error("[CRM] Lead create failed", {
       ...describeSafeSupabaseMutationError(error),
-      attemptedColumns: Object.keys(liveInput).sort(),
+      attemptedColumns: Object.keys(attemptedInput).sort(),
     });
     throw error;
   }
 
   if (!data) {
     console.error("[CRM] Lead create returned no row", {
-      attemptedColumns: Object.keys(liveInput).sort(),
+      attemptedColumns: Object.keys(attemptedInput).sort(),
     });
     throw new Error("Lead created, but Supabase did not return the new lead.");
   }
