@@ -126,8 +126,8 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 
 ## Blocked Handoff Evidence
 
-- Implementation commit `e7a5a57f42f3d9dfc482d6b412af9768cf31af94` is pushed to `main` and deployed to Vercel production as `dpl_7QT3DFkDboF9S7AKNZCZAJVSbhJi` (`weathertech-kwctnp2u7-weathertech-os1.vercel.app`). The canonical production alias resolves to that deployment.
-- Production `/api/health` is HTTP 200 and reports the exact implementation commit. `/api/readiness` remains truthfully blocked at HTTP 503 by the pre-existing Gmail/Calendar write-versus-broad-approval control; the new Twilio inbound and outbound gates both report false.
+- At the implementation checkpoint, commit `e7a5a57f42f3d9dfc482d6b412af9768cf31af94` was pushed to `main` and verified through the canonical production alias on READY Vercel deployment `dpl_7QT3DFkDboF9S7AKNZCZAJVSbhJi` (`weathertech-kwctnp2u7-weathertech-os1.vercel.app`).
+- At that checkpoint, production `/api/health` returned HTTP 200 and reported the exact implementation commit. `/api/readiness` remained truthfully blocked at HTTP 503 by the pre-existing Gmail/Calendar write-versus-broad-approval control; the new Twilio inbound and outbound gates both reported false.
 - GitHub Actions run `31617231755` completed successfully at the exact implementation commit. Repository validation and the isolated Supabase lifecycle job both passed.
 - The Twilio security/foundation suite passed 114 assertions. The compiled real-route isolated Twilio regression passed 54 assertions against `hygtnhmmaoboduqghhwg`, including official signatures, exact company/contact routing, unknown and ambiguous senders, duplicate/reordered/conflicting deliveries, eight concurrent retries, recovery, zero provider requests, and zero residue.
 - All 26 top-level repository tests, type-check, lint, production build, dependency audit, credential scan, and diff checks passed. The complete isolated browser regression covered all 24 groups and 28 assertions; bounded reruns resolved two interaction flakes, with zero console errors or warnings and zero residue.
