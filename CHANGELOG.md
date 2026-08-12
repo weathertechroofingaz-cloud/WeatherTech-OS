@@ -2,7 +2,33 @@
 
 This changelog records verified WeatherTech OS repository milestones. Future entries should be concise and reference the commit that shipped the change.
 
+## Latest Verified Release
+
+### Production Data Isolation & Clean Baseline
+
+- Implementation commit: `c57698786e83732e49b8cb4ace83e3128539b28f`
+- Closeout: documentation-only commit containing this entry; use Git history as the immutable hash because a commit cannot contain its own hash.
+- Status: Completed after guarded production cleanup, full safe repository validation, push, exact-commit deployment, signed-in read-only production smoke, final database counts, and protected-file hash verification.
+- Approved scope: fail-closed automated-test target isolation, evidence-backed removal of proven synthetic production records, trustworthy operational aggregates, regression coverage, and narrowly reconciled governance/documentation.
+- Evidence record: [Production Data Isolation And Clean Baseline](./docs/PRODUCTION_DATA_ISOLATION_AND_BASELINE.md).
+
 ## Recent Verified Milestones
+
+### Production Connections Phase 1 - Verified Production Foundation
+
+- Release checkpoint: `68943206451322de3ae6bdbcbe497f8117290e19`
+- Summary:
+  - Verified the production Supabase, document storage, Gmail, Google Calendar, GoHighLevel, Vercel, and WeatherTech-only Stripe checkpoints completed under owner-controlled gates.
+  - Completed the company-isolated Stripe Payment Element, webhook accounting, atomic refund reconciliation, and owner refund surface for WeatherTech Roofing.
+  - Kept IHC Stripe, Twilio/SMS, QuickBooks, and unrelated providers unactivated.
+
+### AI Command Center 3.0 - Operating Brain
+
+- Commit: `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`
+- Message: `feat: add ai command center operating brain`
+- Summary:
+  - Added executive recommendations, advisor modes, company-scoped operating context, grounded responses, and approval-gated behavior to the existing AI workspace.
+  - AI Command Center 3.0 is implemented and is not a future rebuild item.
 
 ### AI Tools 2.1 - Live Provider Connection, Command Execution, and Controlled AI Pilot
 

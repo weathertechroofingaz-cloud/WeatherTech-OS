@@ -25,12 +25,14 @@ Before modifying any product or application files, Codex must verify all of the 
 - Explicit exclusions are present.
 - Completion criteria are present.
 - Validation plan is present.
-- The working tree is clean.
+- The working tree is clean, except for any exact paths the owner explicitly designated as preserved before the sprint and whose starting hashes are recorded in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md).
 - The current local branch is identified.
 - Local `HEAD` matches the intended remote branch.
 - There is no unresolved conflict with [NEXT_SPRINT.md](./NEXT_SPRINT.md), [ROADMAP.md](../ROADMAP.md), or [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md).
 
 If any approval-gate item fails, Codex must stop before modifying files and report the exact missing or conflicting condition.
+
+An owner-designated preserved-path exception does not authorize changing, staging, committing, stashing, discarding, resetting, or reconstructing that work. Codex must verify each recorded hash before implementation, before staging, and at sprint completion. Any additional or hash-changed working-tree path fails the gate.
 
 ## Mandatory Stop Conditions
 
@@ -41,7 +43,7 @@ Codex must stop without modifying files when:
 - Approval status is `Draft`.
 - Approval status is `Blocked`.
 - The approved scope is ambiguous.
-- The repository is dirty before the sprint begins.
+- The repository contains an unapproved working-tree change, or an owner-designated preserved path no longer matches its recorded starting hash.
 - Local and remote branches do not match.
 - The requested work conflicts with completed work.
 - Required owner decisions are missing.

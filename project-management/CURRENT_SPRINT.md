@@ -4,17 +4,17 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved.
+Completed.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
 ## Sprint Name
 
-Production Connections Phase 1
+Production Data Isolation & Clean Baseline
 
 ## Objective
 
-Begin connecting WeatherTech OS to real production services safely while preserving existing Customer Portal, Estimates, AI Command Center, CRM, company isolation, and approval-only AI behavior.
+Make WeatherTech OS safe to begin operating with trustworthy real business data by preventing ordinary automated regression tests from writing to Production Supabase and by removing only production records whose synthetic origin is proven.
 
 ## Owner
 
@@ -22,108 +22,93 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-04.
+2026-08-11.
 
 ## Owner-Approved Scope
 
-- Connect and validate one provider at a time.
-- Start with Production Supabase verification before any other provider work.
-- Proceed in this priority order only after the previous provider is verified:
-  - Production Supabase verification
-  - Document storage
-  - Stripe payments
-  - Business email
-  - SMS
-  - Google Calendar
-  - QuickBooks
-- Verify required production configuration without printing or committing secrets.
-- Preserve existing Customer Portal workflows.
-- Preserve existing Estimate and Proposal workflows.
-- Preserve the existing AI Command Center.
-- Keep all AI actions approval-only.
-- Keep `AI_ACTION_EXECUTION_ENABLED=false`.
-- Validate each provider before moving to the next provider.
-- Run full regression after each integration.
-- Commit only after validation passes.
-- Report screenshots, validation results, commit hash, and remaining blockers.
+- Prove the starting repository, production deployment, Supabase target, regression architecture, and affected production-data state without guessing.
+- Implement a fail-closed target-verification mechanism for automated browser/regression seed and cleanup operations.
+- Require an explicit, narrow authorization path for purpose-built production validation; ordinary regression credentials or synthetic names are never sufficient authorization.
+- Identify synthetic records using database evidence, including markers, known test IDs, relationships, timestamps, sources, and records created by the regression harness.
+- Delete or correct only records whose synthetic origin and dependent relationships are proven.
+- Leave uncertain records unchanged and report them for owner review.
+- Verify dashboard, invoice, payment, overdue, AI-summary, analytics, and other operational aggregates after safe cleanup.
+- Add regression coverage for production-target rejection, cleanup rejection, allowed non-production operation, and preservation of narrowly authorized production-validation paths.
+- Update only governance and documentation required to record the implemented isolation contract, cleanup evidence, verified current product state, and sprint completion.
+- Run all safe applicable validation, commit the focused implementation, push it, close the sprint with a documentation-only commit, and verify the deployed result.
+
+## Explicitly Preserved Working-Tree Changes
+
+The owner explicitly designated these two pre-existing unstaged files as preserved exceptions to the normal clean-tree gate:
+
+| File | Starting SHA-256 |
+| --- | --- |
+| `supabase/migrations/0026_property_intelligence_foundation.sql` | `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` |
+| `tests/supabase-migration-integrity.test.mjs` | `0b3e9801402ee7014556cfee750ee0d5f26a002922551ead602ddae4c3184ad4` |
+
+They must remain byte-for-byte unchanged, unstaged, and uncommitted throughout this sprint. Any additional pre-existing or unexplained working-tree change is a blocker.
 
 ## Explicit Exclusions
 
-- Do not begin a later provider before the current provider is verified.
-- Do not deploy.
-- Do not apply migrations unless the provider step explicitly requires it and the target project, deployment path, and rollback/safety conditions are verified.
-- Do not modify production data manually.
-- Do not print, log, or commit secrets.
-- Do not modify `.env.local`.
-- Do not enable automatic AI execution.
-- Do not send live communications without explicit approval.
-- Do not activate live payments without explicit approval.
-- Do not weaken authentication, RLS, company isolation, or approval gates.
-- Do not redesign the UI.
-- Do not add unrelated CRM features or new modules.
-- Do not break existing workflows.
+- Do not redesign the UI or add unrelated product functionality.
+- Do not rebuild AI Command Center 3.0 or the completed WeatherTech Roofing Stripe foundation.
+- Do not remove or remap the verified WeatherTech Stripe production account/connection configuration as synthetic cleanup.
+- Do not work on Yelp; live Yelp remains an external dependency awaiting the Mighty Apes/Yelp webhook handoff.
+- Do not activate Twilio, QuickBooks, AI providers, IHC Stripe, CompanyCam, or another unrelated provider.
+- Do not delete, change, or manufacture any record whose origin is uncertain.
+- Do not run an ordinary write-capable browser regression against Production Supabase.
+- Do not perform destructive schema work or an irreversible migration.
+- Do not expose or commit secrets, modify `.env.local`, or weaken authentication, RLS, approval gates, or company isolation.
+- Do not modify, stage, commit, stash, discard, reset, or reconstruct the two preserved Property Intelligence files.
+- Do not select, approve, promote, or begin a next sprint.
+
+## Mandatory Stop Conditions
+
+Stop only when:
+
+- a destructive production-data action cannot be proven safe;
+- a production record cannot be confidently classified as legitimate or synthetic;
+- owner credentials or external account interaction are required;
+- an irreversible migration or destructive schema operation is required; or
+- another owner decision cannot be resolved from verified evidence.
 
 ## Completion Criteria
 
-- Production Supabase verification is completed first.
-- Every connected provider is validated before moving to the next provider.
-- Customer Portal still works.
-- Estimates and Proposal Builder still work.
-- AI Command Center still works.
-- Automatic AI execution remains disabled.
-- No secrets are committed or exposed.
-- No unapproved production data changes are made.
-- Full regression passes after each integration.
-- `npm run type-check` passes.
-- `npm run lint` passes.
-- `npm run build` passes.
-- `git diff --check` passes.
-- Relevant provider-specific automated tests pass.
-- Targeted browser validation passes for each connected provider.
-- Final scope audit confirms no unrelated changes.
-- One focused conventional commit is created only after validation passes.
-- Local `main` equals `origin/main`.
-- Working tree is clean except for any explicitly documented local-only files.
+- Starting state and protected-file hashes are recorded.
+- Ordinary regression seed and cleanup operations fail closed before any production write or delete.
+- Approved non-production test targets continue to work.
+- Any narrow production-validation override requires explicit purpose-built authorization and does not weaken ordinary regression protections.
+- Every cleaned record has evidence-backed synthetic classification and safe dependency handling.
+- All uncertain records remain untouched and are reported.
+- Production aggregates no longer include records proven to be regression contamination.
+- Relevant isolation, cleanup, migration-integrity, security, company-isolation, and repository tests pass without creating production test data. A full write-capable browser regression may be omitted only when no verified safe non-production target exists, with direct fail-closed guard proof and the residual coverage gap recorded.
+- Type-check, lint, production build, `git diff --check`, and secret/diff scans pass.
+- `.env.local` is unchanged and no credentials or secret fragments are present in the diff.
+- The two preserved Property Intelligence files retain their recorded hashes and remain unstaged and uncommitted.
+- One focused implementation commit and, where needed to record its immutable hash, one documentation-only closeout commit are pushed.
+- Local `HEAD` equals `origin/main`, the intended Vercel deployment reaches the pushed code commit, production health is verified, and readiness is reported truthfully.
+- [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md), [NEXT_SPRINT.md](./NEXT_SPRINT.md), and current-state documentation are accurate without selecting another sprint.
 
 ## Validation Plan
 
-- Confirm [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) has been read.
-- Confirm explicit owner approval from the task request.
-- Confirm current local branch is `main`.
-- Confirm local `HEAD` matches `origin/main` before development begins.
-- Confirm the working tree is clean or every local-only file is explicitly documented.
-- Confirm there is no interrupted Git operation.
-- For Production Supabase verification:
-  - Verify the linked Supabase project is the intended WeatherTech OS project before any remote action.
-  - Verify migration state without applying migrations unless separately safe and required.
-  - Verify storage readiness before document-storage activation.
-  - Verify anonymous and authenticated access behavior remains safe.
-- For each later provider:
-  - Verify official provider capability and production setup requirements.
-  - Verify required configuration is present without printing values.
-  - Verify provider stays disabled until safe activation gates pass.
-  - Run targeted provider tests and direct browser validation.
-- Run `npm run type-check`.
-- Run `npm run lint`.
-- Run `npm run build`.
-- Run `git diff --check`.
-- Run relevant automated tests.
-- Run full signed-in browser regression after each integration where supported.
-- Capture screenshots for owner review.
+- Verify repository path, branch, local/remote commit equality, production deployment commit, Git operation state, and protected-file hashes.
+- Verify the linked Supabase project before every production read or approved cleanup action.
+- Capture pre-cleanup row counts and relationships without exposing customer data or secrets.
+- Exercise isolation guards with mocked or non-production target identities; prove production detection and cleanup rejection without mutating production.
+- Run repository tests, targeted isolation tests, migration-integrity tests, relevant security/company-isolation tests, type-check, lint, build, and `git diff --check`.
+- Run browser regression only against a verified safe non-production target. If none exists, validate fail-closed behavior and document the unrun browser coverage and residual risk.
+- Inspect the signed-in production application read-only after deployment, including console output and major operational aggregates.
+- Recheck protected-file hashes before staging, after commit, and at final completion.
 
-## Planned Commit Message
+## Planned Commit Messages
 
-`feat: connect production services phase 1`
-
-## Blockers
-
-- Do not begin Production Connections until repository housekeeping confirms this sprint file is current and the Supabase CLI project files are either committed or explicitly documented as local-only.
-- Any missing production credentials, owner-controlled OAuth setup, billing decision, destructive database change, live communication, live payment, or deployment approval must stop the sprint until owner action is provided.
+- Implementation: `fix: isolate regression data from production`
+- Documentation-only closeout, if required: `docs: close production data isolation sprint`
 
 ## Final Status
 
-Approved and awaiting implementation.
+Completed. The focused implementation shipped in `c57698786e83732e49b8cb4ace83e3128539b28f`; exact cleanup, validation, deployment, production baseline, and preservation evidence is recorded in [Production Data Isolation And Clean Baseline](../docs/PRODUCTION_DATA_ISOLATION_AND_BASELINE.md). The documentation-only closeout commit is identified by Git history because it cannot contain its own immutable hash.
 
 ## Notes
 
-Use [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) as the mandatory lifecycle for this sprint. Connect one provider at a time and stop before the next provider if validation, safety, or owner-approval gates fail.
+Yelp remains unapproved external work awaiting the Mighty Apes/Yelp webhook handoff. AI Command Center 3.0 and the WeatherTech Roofing Stripe foundation already exist and are not backlog items for this sprint.

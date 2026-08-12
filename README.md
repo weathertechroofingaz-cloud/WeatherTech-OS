@@ -34,7 +34,9 @@ WeatherTech OS is intended to support:
 
 ## Status
 
-This repository contains the initial project definition and README documentation for WeatherTech OS.
+WeatherTech OS is an actively implemented Next.js/Supabase application deployed to Vercel for WeatherTech Roofing LLC and IHC Painting. Production health, dependency readiness, provider write gates, company isolation, and activation approval remain separate controls; a healthy deployment must not be described as full production activation when `/api/readiness` is blocked.
+
+The Production Data Isolation & Clean Baseline sprint established fail-closed automated-test isolation and removed only evidence-proven synthetic production contamination. AI Command Center 3.0 and the WeatherTech-only Stripe payment/refund foundation already exist and are not rebuild backlog items. IHC Stripe and other external providers remain separately gated.
 
 ## Sprint Management
 
@@ -51,6 +53,8 @@ not begin work when the current sprint is awaiting owner approval.
 - [Module Registry](./docs/MODULE_REGISTRY.md)
 - [Design System](./docs/DESIGN_SYSTEM.md)
 - [Testing Standard](./docs/TESTING_STANDARD.md)
+- [Browser Regression Safety](./docs/codex-browser-regression.md)
+- [Production Data Isolation and Clean Baseline](./docs/PRODUCTION_DATA_ISOLATION_AND_BASELINE.md)
 - [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md)
 - [Google Workspace / Gmail Production Activation](./docs/GOOGLE_WORKSPACE_PHASE_1_SETUP.md)
 - [Google Calendar Phase 1 Setup](./docs/GOOGLE_CALENDAR_PHASE_1_SETUP.md)

@@ -46,9 +46,14 @@ Current browser regression coverage includes high-value workflows across dashboa
 Rules:
 
 - Do not count a command that only prints runner instructions as a browser pass.
-- Use safe `TEST WTOS REGRESSION` records where browser validation requires writes.
-- Clean up disposable test records after test runs.
+- Before any seed, write, or cleanup, verify the target project identity and require the repository's explicit non-production test-target authorization.
+- Ordinary automated regression must fail closed before writing or deleting when the target is Production Supabase, even when valid production credentials are present locally.
+- A `TEST WTOS REGRESSION` name, synthetic-looking value, localhost URL, or service-role credential is never proof that a target is safe.
+- Track disposable records by IDs created during the current run and clean them only after re-verifying the same authorized non-production target.
+- A purpose-built production validation requires explicit owner authorization for that exact workflow and must not reuse or weaken the ordinary regression override boundary.
 - Report infrastructure failures separately from product failures.
+
+The isolation guard must have targeted automated coverage proving production-target rejection, cleanup rejection, approved non-production operation, and preservation of separately authorized production-validation workflows. Do not run a write-capable browser suite merely to prove that Production Supabase rejects it; test the guard before the write boundary.
 
 ## Targeted Workflow Validation
 
@@ -68,7 +73,7 @@ Use targeted validation when a sprint changes a specific workflow:
 - Electronic Signatures: DocuSign and Dropbox Sign OAuth-required state, company account readiness, duplicate-safe signature request drafts, disabled live request/send gates, provider status labels, Customer 360 signature events, proposal signature readiness, and provider audit-log support.
 - AI Tools: AI Tools 2.1 command bar, provider-disabled honesty, controlled provider readiness, grounded responses, supporting records, missing information, usage/cost limits, action previews, approval gates, company scoping, prompt-safety blocking, and no live AI/provider activation during normal regression.
 - Documents: proposal and signed-proposal categories, customer-safe proposal packet drafts, required-document flags, document search/filtering, and no customer-facing internal notes.
-- Invoices: proposal deposit draft creation, disabled online payment collection, invoice search/filtering, and no fake paid or provider-collected status.
+- Invoices: proposal deposit draft creation, WeatherTech-only owner-approved Stripe payment/refund readiness, invoice search/filtering, IHC payment isolation, and no fake paid or provider-collected status.
 - Production Readiness: deployment blocker honesty, private staging health/readiness endpoints, guided launch sequence, launch-gate evidence, missing environment-variable guidance, pending migration verification, provider activation cards, three-company mapping guidance, controlled-test plans, provider activation guides, unified production checklist, Settings and Integration Center navigation, and no fake green/connected launch status.
 
 ## Manual QA Checklist
@@ -95,6 +100,7 @@ Before committing:
 - Confirm no package or lockfile changes unless explicitly approved.
 - Confirm no migrations, schema changes, RLS changes, or destructive database changes unless explicitly approved.
 - Confirm no live provider activation or customer messaging was introduced without owner approval.
+- Confirm browser/regression seed and cleanup cannot target Production Supabase without an exact, separately authorized production-validation path.
 
 ## Final Scope Audit
 

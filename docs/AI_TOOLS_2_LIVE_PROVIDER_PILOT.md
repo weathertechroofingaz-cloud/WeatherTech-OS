@@ -4,6 +4,10 @@
 
 AI Tools 2.1 extends the existing AI Tools workspace into a controlled live-provider pilot for WeatherTech Roofing LLC and IHC Painting. It keeps the AI workspace, Scope Writer, Estimate Assistant, Proposal Review, Inspection, Sales, Operations, Financial, Communications, Weather, Marketing, and Document assistant surfaces in one place.
 
+## Current-State Note
+
+AI Command Center 3.0 is already implemented on top of this pilot foundation in commit `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`. Future sessions must not propose rebuilding it as a new sprint. Live model-provider credentials, production activation, or executable actions remain separate owner-controlled decisions.
+
 The pilot is designed for grounded internal assistance only. It prepares server-side OpenAI or Anthropic connectivity, structured answers, cost controls, context retrieval, prompt-safety checks, and approval-gated action previews without enabling production AI automation.
 
 ## Current Production State

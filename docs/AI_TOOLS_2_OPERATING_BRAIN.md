@@ -6,6 +6,10 @@ AI Tools 2.0 extended the existing AI Tools workspace into a safe operating-brai
 
 AI Tools 2.1 builds on this foundation with a controlled live-provider pilot. See [AI Tools 2.1 - Live Provider Pilot](./AI_TOOLS_2_LIVE_PROVIDER_PILOT.md) for server-side provider readiness, cost controls, action previews, and activation requirements.
 
+## Current-State Note
+
+AI Command Center 3.0 is already implemented on this foundation in commit `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`. It extends the same AI workspace with executive recommendations, advisor modes, cross-module operating context, and approval-gated behavior. It is an established capability, not a future rebuild sprint. Provider activation or executable actions still require separate owner approval.
+
 ## Current Mode
 
 Live AI remains disabled by default.

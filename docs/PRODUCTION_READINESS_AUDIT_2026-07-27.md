@@ -1,5 +1,7 @@
 # WeatherTech OS Production Readiness Audit
 
+> **Historical snapshot — 2026-07-27.** This report must not be used as the current backlog or production-state authority. WeatherTech OS was subsequently deployed, AI Command Center 3.0 was implemented, and the WeatherTech-only Stripe payment/webhook/refund foundation was completed and production-validated. Use [MODULE_REGISTRY.md](./MODULE_REGISTRY.md), [PRODUCTION_ACTIVATION_READINESS.md](./PRODUCTION_ACTIVATION_READINESS.md), and the active sprint records for current status. Yelp remains an external dependency awaiting the Mighty Apes/Yelp webhook handoff.
+
 Audit date: 2026-07-27
 
 Audited product: WeatherTech OS for WeatherTech Roofing LLC and IHC Painting

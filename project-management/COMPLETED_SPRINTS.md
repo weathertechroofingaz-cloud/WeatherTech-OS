@@ -4,6 +4,61 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Production Data Isolation & Clean Baseline
+
+- Implementation commit: `c57698786e83732e49b8cb4ace83e3128539b28f`
+- Message: `fix: isolate regression data from production`
+- Closeout: documentation-only commit containing this record; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, pushed, deployed, and production-verified.
+- Validation:
+  - Every `tests/*.test.mjs` file: `pass`
+  - Type-check: `pass`
+  - Lint: `pass`
+  - Production build: `pass`
+  - `git diff --check` and secret scan: `pass`
+  - Signed-in read-only production smoke: `pass`, zero warning/error entries
+- Notes:
+  - Added a permanent fail-closed Production Supabase guard, exact hosted-nonproduction authorization, local-app and public-resource-origin verification, exact-run cleanup, collision/residue detection, and Stripe-linked cleanup refusal to the write-capable browser regression harness.
+  - Removed only evidence-proven regression and sample records in two guarded production transactions; uncertain mixed-origin records remained untouched.
+  - Restored the production financial baseline to zero invoices, zero outstanding balance, and zero overdue invoices while preserving two refunded Stripe payments, four mappings, eight processed webhook events, and two payment-intent sync logs.
+  - Kept all Stripe write gates false and IHC at zero Stripe connections, mappings, events, and payments.
+  - Preserved the owner-designated Property Intelligence working changes byte-for-byte and excluded them from both sprint commits.
+  - Full write-capable browser regression was not run because no safe non-production Supabase project, branch, or local container runtime was available; direct fail-closed production targeting and all safe repository tests passed.
+
+### Production Connections Phase 1 - Verified Production Foundation
+
+- Release checkpoint: `68943206451322de3ae6bdbcbe497f8117290e19`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed through the verified production checkpoint preceding the Production Data Isolation & Clean Baseline sprint.
+- Notable focused commits:
+  - `9dc94ba6ae044deab42d406dd92f87e8f94b3a0f` — Next.js 16.3.0 security upgrade.
+  - `bc23ce7c12c30e6bf4fafaafa2b93203f73547a3` — company-isolated Stripe payment foundation.
+  - `95903d2c05b8ea63e0c55914490fdd788e292d7e` — Stripe Payment Element workflow.
+  - `86c447b3e8d912ce28b8dbcfcdfaf7f5c932c419` — atomic Stripe refund reconciliation.
+  - `0dc98f9` through `6894320` — owner refund surface, active-PaymentIntent recovery, and payment-confirmation hardening.
+- Notes:
+  - Production Supabase, document storage, Gmail, Google Calendar, both GoHighLevel company connections, Vercel deployment, and WeatherTech-only Stripe passed their approved connection checkpoints.
+  - WeatherTech Stripe payment, authenticated webhook, database reconciliation, and full-refund behavior were validated under narrow owner authorization.
+  - IHC remained unmapped from the WeatherTech Stripe account. Twilio/SMS, QuickBooks, IHC Stripe, and unrelated providers were not activated.
+  - Production health and provider activation readiness remain separate controls; ordinary live-write gates must stay fail-closed except during exact owner-approved operations.
+
+### AI Command Center 3.0 - Operating Brain
+
+- Commit: `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`
+- Message: `feat: add ai command center operating brain`
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed and pushed.
+- Notes:
+  - Added AI Command Center 3.0 to the existing AI Tools workspace with executive recommendations, advisor modes, company-scoped operating context, grounded responses, and approval-gated behavior.
+  - Preserved the AI Tools 2.1 provider safety and non-executing action boundary.
+  - This is an established capability and must not be scheduled as a rebuild without an owner-approved rework sprint.
+
+> Older entries containing `<this sprint commit>` predate the immutable-hash closeout rule and are retained as historical records, not current release provenance. New sprint records must use observed commit hashes.
+
 ### AI Tools 2.1 - Live Provider Connection, Command Execution, and Controlled AI Pilot
 
 - Commit: `<this sprint commit>`

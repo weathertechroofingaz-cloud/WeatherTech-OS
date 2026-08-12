@@ -1,14 +1,16 @@
 # Production Activation Readiness
 
-This document records the WeatherTech OS production activation foundation. It is a deployment-readiness guide only: it does not deploy the application, enable production credentials, activate live providers, send customer communications, process payments, or change Supabase state.
+This document records the WeatherTech OS production deployment and activation controls. It is operational guidance, not authorization to deploy, enable a provider, send a customer communication, process a payment, or change Supabase state.
 
 ## Scope
 
-- Sprint: Production Activation & Deployment Readiness
-- Owner approval: Approved
+- Current clean baseline: Production Data Isolation & Clean Baseline, completed 2026-08-11
+- Owner approval: Completed for that exact isolation/cleanup scope; no broad production activation approval is implied
 - Companies: WeatherTech Roofing LLC and IHC Painting
-- Production deployment: not performed by this sprint
-- Live integrations: disabled until explicit owner activation
+- Production deployment: Vercel at `https://weathertech-os.vercel.app`
+- Production database: verified WeatherTech OS Supabase project; migration state must be rechecked before every remote schema action
+- Live integrations: individually gated; connection and health status must be reported truthfully
+- Stripe: WeatherTech-only payment/webhook/refund foundation exists; IHC remains unmapped and disabled
 - Credentials: owner-controlled and never committed
 
 ## Production Readiness Center
@@ -28,6 +30,7 @@ The application includes a Production Readiness Center under the existing admini
 - Google Business Profile
 - Gmail / Google Workspace
 - Google Calendar
+- Stripe payments and refunds for WeatherTech Roofing
 - Twilio
 - QuickBooks Online
 - Electronic Signatures
@@ -37,22 +40,22 @@ The application includes a Production Readiness Center under the existing admini
 
 The center reports readiness conservatively. Missing credentials, OAuth setup, pending migration verification, missing webhook configuration, disabled production gates, absent monitoring, or missing regression evidence must not display as green.
 
-## Private Staging Deployment
+## Deployment History And Current Production
 
-Production Deployment Phase 1 adds repository-side preparation for a private staging deployment. The staging deployment is for controlled owner and employee testing only; it is not final public production launch.
+Production Deployment Phase 1 originally added repository-side preparation for private staging. WeatherTech OS has since been deployed to Vercel at the canonical production URL. Deployment health and activation readiness remain separate: `/api/health` can pass while `/api/readiness` remains blocked by provider-write or owner-approval controls.
 
-Permanent staging runbook: [Private Staging Deployment](./PRIVATE_STAGING_DEPLOYMENT.md).
+The [Private Staging Deployment](./PRIVATE_STAGING_DEPLOYMENT.md) document remains a runbook for a future isolated non-production environment; it is not evidence that such an environment currently exists.
 
 Prepared staging readiness artifacts:
 
 - `GET /api/health` reports only process health and safe deployment metadata.
-- `GET /api/readiness` reports dependency readiness and returns a blocked status while staging prerequisites are incomplete.
+- `GET /api/readiness` reports dependency readiness and returns a blocked status while activation prerequisites are incomplete.
 - Readiness checks distinguish runtime health, dependency readiness, and final production approval.
 - Readiness checks never return customer records, database credentials, provider tokens, stack traces, or secret values.
-- Live provider writes, public intake, customer portal access, public registration, automated customer notifications, accounting writes, calendar writes, and signature requests remain disabled by default.
+- Provider write flags are reported individually. The current readiness result is blocked because Gmail send and Google Calendar write are enabled pending owner review; listed public intake, portal, registration, automated-notification, accounting, signature, and unrelated provider gates remain disabled or unset.
 - Staging deployment status is not marked successful unless a real HTTPS staging URL, deployed commit, health check, readiness check, auth configuration, and browser regression evidence exist.
 
-The current repository environment does not contain a committed deployment-provider project file or deployment credentials. If the deployment provider requires login, billing, organization selection, or secret entry, the owner must complete that step outside the repository and then resume validation with the staging URL.
+Vercel project credentials and production environment values remain outside the repository. Repository documentation must record only non-secret deployment identity and observed health/readiness results.
 
 ## Guided Launch Control
 
@@ -103,23 +106,11 @@ The launch gates remain blocked until evidence exists.
 - Ready for internal pilot: requires signed-in regression, controlled provider tests, company-routing verification, disposable test-data cleanup, monitoring, and owner acceptance.
 - Daily production use: requires pilot completion, customer-facing automation approval, support ownership, backup/restore evidence, and final owner approval.
 
-### Pending Migration Inventory
+### Production Migration Inventory
 
-Git presence is not production proof. The Production Readiness Center intentionally reports remote migration status as unknown until the verified Supabase CLI path confirms the correct WeatherTech OS project and migration history.
+Git presence is not production proof. At the Production Data Isolation sprint starting checkpoint, the linked production ledger had been verified through `20260810225320_stripe_refund_reconciliation.sql`. That observation must be rechecked before a later remote migration; it is not blanket authorization to apply pending files.
 
-The owner must verify production application status for provider and security migrations including:
-
-- `0012_integration_sync_logs.sql`
-- `0014_website_lead_intake_provider.sql`
-- `0021_twilio_live_integration_foundation.sql`
-- `0022_gohighlevel_sync_foundation.sql`
-- `0024_security_company_access_hardening.sql`
-- `0025_document_storage_signature_workflow.sql`
-- `0027_gmail_workspace_email_foundation.sql`
-- `0028_google_calendar_scheduling_foundation.sql`
-- `0029_google_business_profile_foundation.sql`
-- `0030_quickbooks_online_foundation.sql`
-- `0031_electronic_signatures_foundation.sql`
+Remote verification must positively identify the WeatherTech OS production project, compare the authoritative ledger with the intended local migration set, and stop on any unexpected missing, duplicate, or additional migration.
 
 ### Environment Readiness
 
@@ -150,6 +141,8 @@ Unknown mappings are blockers. The system must not infer a provider account, pho
 
 Every provider test must use an approved test contact, test account, sandbox mode, or dry-run path where available. Stop immediately if a test routes to the wrong WeatherTech/IHC company, creates duplicate records, sends a real unapproved customer communication, exposes a secret, fails signature/webhook validation, or creates disposable data that cannot be cleaned up.
 
+Ordinary browser/regression tooling must additionally verify an explicitly authorized non-production database identity before seed or cleanup and fail closed on Production Supabase. A synthetic name, localhost, or production credential does not authorize test writes. Purpose-built owner-approved production validations must remain separate and narrowly bounded.
+
 ### Owner Responsibilities
 
 The owner controls:
@@ -177,7 +170,7 @@ Codex may:
 
 Codex must not:
 
-- Deploy production.
+- Deploy production without explicit owner authorization for that deployment.
 - Apply remote migrations unless separately approved with a positively verified project and path.
 - Activate providers.
 - Send customer communications.
@@ -238,6 +231,13 @@ Before production activation, the owner must verify:
 - Testing sequence: discover calendars, confirm company mapping, validate write-disabled sync, and enable writes only after a separate activation approval.
 - Rollback: disable calendar write gate, pause connection records, and remove webhook channels if configured.
 
+### Stripe - WeatherTech Roofing Only
+
+- Current capability: the company-isolated Payment Element, PaymentIntent route, authenticated webhook accounting, and atomic full-refund reconciliation are implemented and production-validated for WeatherTech Roofing.
+- Safety boundary: ordinary payment, refund, and webhook-processing gates remain disabled unless an exact owner-approved operation requires temporary activation.
+- Company boundary: IHC must remain unmapped and cannot reuse the WeatherTech Stripe account or credentials.
+- Future work: do not rebuild the Stripe foundation. Any IHC capability requires its own separately authorized account/configuration and sprint.
+
 ### Google Business Profile
 
 - Required credentials: Google Business Profile OAuth app values, Pub/Sub topic, account IDs, and location IDs for WeatherTech Phoenix, WeatherTech Tucson, and IHC.
@@ -285,6 +285,7 @@ Before production activation, the owner must verify:
 - Authentication: validate owner/admin, staff, portal, and anonymous access boundaries.
 - Integrations: configure credentials outside the repository, validate OAuth, confirm webhooks, and keep live sends/writes disabled until approved.
 - Security: verify company isolation, anonymous CRM denial, no committed secrets, and no exposed server credentials.
+- Test isolation: verify ordinary regression seed and cleanup fail closed on Production Supabase and use only an explicitly authorized non-production target.
 - Documents: confirm document visibility rules, required-document workflows, and signature provider gates.
 - Customer Portal: verify customer-only visibility before public rollout.
 - Financial: confirm QuickBooks remains disabled until accounting activation and sandbox approval.
@@ -307,4 +308,4 @@ Before production activation, the owner must verify:
 
 ## Readiness Verdict
 
-WeatherTech OS is ready for staged internal deployment planning, but it is not ready for broad production activation until owner-controlled credentials, OAuth approvals, provider webhooks, live migration verification, monitoring, backups, and final signed-in regression evidence are complete.
+WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression now fails closed against Production Supabase. It is not broadly production-activated merely because runtime and baseline checks pass. `/api/readiness` remains blocked by provider-write/owner-approval controls; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.

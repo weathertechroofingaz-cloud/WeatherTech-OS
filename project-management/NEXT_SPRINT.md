@@ -65,6 +65,14 @@ To be provided or selected after implementation with an accurate conventional co
 
 Codex must never automatically promote this file. Promotion requires an explicit owner instruction naming the sprint and approving the transfer into [CURRENT_SPRINT.md](./CURRENT_SPRINT.md).
 
+## Completed-Work And External-Dependency Guardrails
+
+- AI Command Center 3.0 is implemented and must not be proposed as a rebuild without an owner-approved rework sprint.
+- The WeatherTech Roofing Stripe payment/webhook/refund foundation is implemented and production-validated; only separately approved activation or hardening work may extend it.
+- IHC Stripe requires its own separately authorized account/configuration.
+- Yelp remains an external dependency awaiting the Mighty Apes/Yelp webhook handoff and is not an actionable sprint until the owner approves work after that handoff.
+- These guardrails do not select or recommend a next sprint.
+
 ## Last Review
 
-After AI Tools 2.1 completion, no next product-development sprint has been selected or approved in this file. Status remains `Awaiting owner direction`.
+During the owner-approved Production Data Isolation & Clean Baseline sprint, no subsequent product-development sprint has been selected or approved. Status remains `Awaiting owner direction`.
