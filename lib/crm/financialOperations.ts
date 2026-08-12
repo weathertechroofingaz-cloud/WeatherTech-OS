@@ -296,7 +296,10 @@ export function buildFinancialOperationsSummary(
       !invoices.some((invoice) => invoice.estimate_id === estimate.id)
     );
   });
-  const unappliedPayments = payments.filter((payment) => !payment.invoice_id);
+  const unappliedPayments = payments.filter(
+    (payment) =>
+      !payment.invoice_id && getFinancialPaymentWorkflowStatus(payment) === "completed",
+  );
   const recentPayments = [...payments]
     .sort((a, b) => (b.paid_at ?? b.created_at).localeCompare(a.paid_at ?? a.created_at))
     .slice(0, 6);

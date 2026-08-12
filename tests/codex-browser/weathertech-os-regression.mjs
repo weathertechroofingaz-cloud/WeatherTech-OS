@@ -8,6 +8,15 @@ import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
+  BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
+  WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF,
+  assertBrowserResourceTarget,
+  assertBrowserRegressionTarget,
+  assertRegressionCleanupSafe,
+  buildRegressionRunMarker,
+} from "./regression-target-guard.mjs";
 
 const BASE_URL = "http://localhost:3000/";
 const TEST_PREFIX = "TEST WTOS REGRESSION";
@@ -55,6 +64,14 @@ function readLocalEnv(cwd) {
   }
 
   return env;
+}
+
+function readLinkedSupabaseProjectRef(cwd) {
+  try {
+    return readFileSync(join(cwd, "supabase", ".temp", "project-ref"), "utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 function getRuntimeEnvValue(key) {
@@ -228,7 +245,40 @@ async function deleteByIds(env, table, column, ids) {
   await restRequest(env, `${table}?${column}=in.${idFilter}`, { method: "DELETE" });
 }
 
-async function deleteByLike(env, table, column, prefix = TEST_PREFIX) {
+async function findByIds(env, table, ids) {
+  if (!ids.length) {
+    return [];
+  }
+
+  const idFilter = encodeURIComponent(`(${ids.join(",")})`);
+  return restRequest(env, `${table}?select=id&id=in.${idFilter}`);
+}
+
+async function findByForeignIdsIfPresent(env, table, column, ids) {
+  if (!ids.length) {
+    return [];
+  }
+
+  try {
+    const idFilter = encodeURIComponent(`(${ids.join(",")})`);
+    return await restRequest(
+      env,
+      `${table}?select=id&${column}=in.${idFilter}`,
+    );
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+async function deleteByLike(env, table, column, prefix) {
+  if (!prefix) {
+    throw new Error("Browser regression cleanup requires an exact run marker.");
+  }
+
   const titleFilter = encodeURIComponent(`${prefix}%`);
   await restRequest(env, `${table}?${column}=like.${titleFilter}`, { method: "DELETE" });
 }
@@ -245,7 +295,7 @@ function isMissingRelationError(error) {
   );
 }
 
-async function deleteByLikeIfPresent(env, table, column, prefix = TEST_PREFIX) {
+async function deleteByLikeIfPresent(env, table, column, prefix) {
   try {
     await deleteByLike(env, table, column, prefix);
     return "requested";
@@ -256,6 +306,105 @@ async function deleteByLikeIfPresent(env, table, column, prefix = TEST_PREFIX) {
 
     throw error;
   }
+}
+
+async function findByLikeIfPresent(env, table, column, prefix) {
+  try {
+    const markerFilter = encodeURIComponent(`${prefix}%`);
+    return await restRequest(
+      env,
+      `${table}?select=id&${column}=like.${markerFilter}`,
+    );
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+function mergeRowsById(...groups) {
+  return [
+    ...new Map(groups.flat().map((row) => [row.id, row])).values(),
+  ];
+}
+
+async function findLeadIntakeRecordsForRun(env, runMarker) {
+  const [byCorrelation, byProviderEvent, byContactName] = await Promise.all([
+    findByLikeIfPresent(env, "lead_intake_records", "correlation_id", runMarker),
+    findByLikeIfPresent(env, "lead_intake_records", "provider_event_id", runMarker),
+    findByLikeIfPresent(env, "lead_intake_records", "contact_name", runMarker),
+  ]);
+
+  return mergeRowsById(byCorrelation, byProviderEvent, byContactName);
+}
+
+async function findNotificationsForRun(env, runMarker) {
+  const [directNotifications, followUpNotifications] = await Promise.all([
+    findByLikeIfPresent(env, "notifications", "title", runMarker),
+    findByLikeIfPresent(env, "notifications", "title", `Follow up: ${runMarker}`),
+  ]);
+
+  return mergeRowsById(directNotifications, followUpNotifications);
+}
+
+async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
+  const runMarker = buildRegressionRunMarker(runId, TEST_PREFIX);
+  const derivedInvoiceMarker = `Invoice for ${runMarker}`;
+  const checks = await Promise.all([
+    findByLikeIfPresent(env, "jobs", "title", runMarker),
+    findByLikeIfPresent(env, "estimates", "title", runMarker),
+    findByLikeIfPresent(env, "inspections", "title", runMarker),
+    findByLikeIfPresent(env, "documents", "title", runMarker),
+    findByLikeIfPresent(env, "invoices", "title", runMarker),
+    findByLikeIfPresent(env, "invoices", "title", derivedInvoiceMarker),
+    findByLikeIfPresent(env, "change_orders", "title", runMarker),
+    findByLikeIfPresent(env, "leads", leadNameColumn, runMarker),
+    findByLikeIfPresent(env, "customers", "display_name", runMarker),
+    findByLikeIfPresent(env, "schedule_events", "title", runMarker),
+    findByLikeIfPresent(env, "scopes", "title", runMarker),
+    findByLikeIfPresent(env, "job_tasks", "title", runMarker),
+    findByLikeIfPresent(env, "job_notes", "note", runMarker),
+    findByLikeIfPresent(env, "job_materials", "name", runMarker),
+    findByLikeIfPresent(env, "job_photos", "caption", runMarker),
+    findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker),
+    findByLikeIfPresent(env, "invoice_line_items", "description", runMarker),
+    findByLikeIfPresent(env, "estimate_line_items", "name", runMarker),
+    findByLikeIfPresent(env, "signatures", "signer_name", runMarker),
+    findByLikeIfPresent(env, "payments", "reference", runMarker),
+    findByLikeIfPresent(env, "integration_sync_logs", "external_id", runMarker),
+    findLeadIntakeRecordsForRun(env, runMarker),
+    findByLikeIfPresent(env, "call_records", "correlation_id", runMarker),
+    findByLikeIfPresent(
+      env,
+      "communication_provider_events",
+      "correlation_id",
+      runMarker,
+    ),
+    findByLikeIfPresent(env, "sms_messages", "correlation_id", runMarker),
+    findByLikeIfPresent(env, "email_messages", "subject", runMarker),
+    findByLikeIfPresent(env, "business_phone_numbers", "routing_key", runMarker),
+    findNotificationsForRun(env, runMarker),
+  ]);
+  const count = checks.reduce((total, rows) => total + rows.length, 0);
+
+  return {
+    count,
+    residueVerified: count === 0,
+  };
+}
+
+async function assertNoRegressionMarkerResidue(env, runId, leadNameColumn) {
+  const residue = await findRegressionMarkerResidue(env, runId, leadNameColumn);
+
+  if (!residue.residueVerified) {
+    throw new Error(
+      `Browser regression run marker already exists in ${residue.count} record(s); refusing to clean or reuse a potentially concurrent run.`,
+    );
+  }
+
+  return residue;
 }
 
 async function detectLeadNameColumn(env) {
@@ -350,9 +499,11 @@ async function detectDocumentStorageWorkflowSupport(env) {
   }
 }
 
-async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
+async function cleanupTestRecords(env, runId, leadNameColumn = null) {
+  const runMarker = buildRegressionRunMarker(runId, TEST_PREFIX);
   const resolvedLeadNameColumn = leadNameColumn ?? await detectLeadNameColumn(env);
-  const prefixFilter = encodeURIComponent(`${TEST_PREFIX}%`);
+  const prefixFilter = encodeURIComponent(`${runMarker}%`);
+  const derivedInvoiceFilter = encodeURIComponent(`Invoice for ${runMarker}%`);
   const jobs = await restRequest(
     env,
     `jobs?select=id,title&title=like.${prefixFilter}`,
@@ -369,10 +520,19 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     env,
     `documents?select=id,title&title=like.${prefixFilter}`,
   );
-  const invoices = await restRequest(
+  const directInvoices = await restRequest(
     env,
     `invoices?select=id,title&title=like.${prefixFilter}`,
   );
+  const derivedInvoices = await restRequest(
+    env,
+    `invoices?select=id,title&title=like.${derivedInvoiceFilter}`,
+  );
+  const invoices = [
+    ...new Map(
+      [...directInvoices, ...derivedInvoices].map((invoice) => [invoice.id, invoice]),
+    ).values(),
+  ];
   const changeOrders = await restRequest(
     env,
     `change_orders?select=id,title&title=like.${prefixFilter}`,
@@ -385,82 +545,125 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
     env,
     `customers?select=id,display_name&display_name=like.${prefixFilter}`,
   );
-  const scopedJobs = runId
-    ? jobs.filter((job) => job.title.includes(runId))
-    : jobs;
-  const scopedEstimates = runId
-    ? estimates.filter((estimate) => estimate.title.includes(runId))
-    : estimates;
-  const scopedInspections = runId
-    ? inspections.filter((inspection) => inspection.title.includes(runId))
-    : inspections;
-  const scopedDocuments = runId
-    ? documents.filter((document) => document.title.includes(runId))
-    : documents;
-  const scopedInvoices = runId
-    ? invoices.filter((invoice) => invoice.title.includes(runId))
-    : invoices;
-  const scopedChangeOrders = runId
-    ? changeOrders.filter((changeOrder) => changeOrder.title.includes(runId))
-    : changeOrders;
-  const scopedLeads = runId
-    ? leads.filter((lead) => String(lead[resolvedLeadNameColumn] ?? "").includes(runId))
-    : leads;
-  const scopedCustomers = runId
-    ? customers.filter((customer) => String(customer.display_name ?? "").includes(runId))
-    : customers;
-  const jobIds = scopedJobs.map((job) => job.id);
-  const estimateIds = scopedEstimates.map((estimate) => estimate.id);
-  const inspectionIds = scopedInspections.map((inspection) => inspection.id);
-  const documentIds = scopedDocuments.map((document) => document.id);
-  const invoiceIds = scopedInvoices.map((invoice) => invoice.id);
-  const changeOrderIds = scopedChangeOrders.map((changeOrder) => changeOrder.id);
-  const leadIds = scopedLeads.map((lead) => lead.id);
-  const customerIds = scopedCustomers.map((customer) => customer.id);
+  const [leadIntakeRecords, notifications] = await Promise.all([
+    findLeadIntakeRecordsForRun(env, runMarker),
+    findNotificationsForRun(env, runMarker),
+  ]);
+  const jobIds = jobs.map((job) => job.id);
+  const estimateIds = estimates.map((estimate) => estimate.id);
+  const inspectionIds = inspections.map((inspection) => inspection.id);
+  const documentIds = documents.map((document) => document.id);
+  const invoiceIds = invoices.map((invoice) => invoice.id);
+  const changeOrderIds = changeOrders.map((changeOrder) => changeOrder.id);
+  const leadIds = leads.map((lead) => lead.id);
+  const customerIds = customers.map((customer) => customer.id);
+  const officeTasks = mergeRowsById(
+    ...(await Promise.all([
+      findByForeignIdsIfPresent(env, "office_tasks", "lead_id", leadIds),
+      findByForeignIdsIfPresent(env, "office_tasks", "inspection_id", inspectionIds),
+      findByForeignIdsIfPresent(env, "office_tasks", "estimate_id", estimateIds),
+      findByForeignIdsIfPresent(env, "office_tasks", "job_id", jobIds),
+    ])),
+  );
+  const invoiceIdFilter = encodeURIComponent(`(${invoiceIds.join(",")})`);
+  const payments = invoiceIds.length
+    ? await restRequest(
+      env,
+      `payments?select=id,invoice_id,method,reference&invoice_id=in.${invoiceIdFilter}`,
+    )
+    : [];
+  const paymentIds = payments.map((payment) => payment.id);
+  const paymentIdFilter = encodeURIComponent(`(${paymentIds.join(",")})`);
+  let stripeMappings = [];
+
+  try {
+    const [invoiceMappings, paymentMappings] = await Promise.all([
+      invoiceIds.length
+        ? restRequest(
+          env,
+          `stripe_object_mappings?select=id,invoice_id,payment_id&invoice_id=in.${invoiceIdFilter}`,
+        )
+        : [],
+      paymentIds.length
+        ? restRequest(
+          env,
+          `stripe_object_mappings?select=id,invoice_id,payment_id&payment_id=in.${paymentIdFilter}`,
+        )
+        : [],
+    ]);
+    stripeMappings = [
+      ...new Map(
+        [...invoiceMappings, ...paymentMappings].map((mapping) => [mapping.id, mapping]),
+      ).values(),
+    ];
+  } catch (error) {
+    if (!isMissingRelationError(error)) {
+      throw error;
+    }
+  }
+
+  assertRegressionCleanupSafe({ payments, stripeMappings });
 
   const communicationCleanup = {
-    integrationLogsDeleted: await deleteByLikeIfPresent(env, "integration_sync_logs", "external_id"),
-    leadIntakeDeleted: await deleteByLikeIfPresent(env, "lead_intake_records", "correlation_id"),
-    callRecordsDeleted: await deleteByLikeIfPresent(env, "call_records", "correlation_id"),
+    integrationLogsDeleted: await deleteByLikeIfPresent(
+      env,
+      "integration_sync_logs",
+      "external_id",
+      runMarker,
+    ),
+    leadIntakeDeleted: leadIntakeRecords.length,
+    callRecordsDeleted: await deleteByLikeIfPresent(
+      env,
+      "call_records",
+      "correlation_id",
+      runMarker,
+    ),
     providerEventsDeleted: await deleteByLikeIfPresent(
       env,
       "communication_provider_events",
       "correlation_id",
+      runMarker,
     ),
-    smsMessagesDeleted: await deleteByLikeIfPresent(env, "sms_messages", "correlation_id"),
-    emailMessagesDeleted: await deleteByLikeIfPresent(env, "email_messages", "subject"),
+    smsMessagesDeleted: await deleteByLikeIfPresent(
+      env,
+      "sms_messages",
+      "correlation_id",
+      runMarker,
+    ),
+    emailMessagesDeleted: await deleteByLikeIfPresent(
+      env,
+      "email_messages",
+      "subject",
+      runMarker,
+    ),
     businessPhoneRoutesDeleted: await deleteByLikeIfPresent(
       env,
       "business_phone_numbers",
       "routing_key",
+      runMarker,
     ),
   };
 
-  if (
-    !jobIds.length &&
-    !estimateIds.length &&
-    !inspectionIds.length &&
-    !documentIds.length &&
-    !invoiceIds.length &&
-    !changeOrderIds.length &&
-    !leadIds.length &&
-    !customerIds.length
-  ) {
-    return {
-      jobsDeleted: 0,
-      estimatesDeleted: 0,
-      inspectionsDeleted: 0,
-      documentsDeleted: 0,
-      invoicesDeleted: 0,
-      changeOrdersDeleted: 0,
-      leadsDeleted: 0,
-      customersDeleted: 0,
-        ...communicationCleanup,
-      };
-    }
-
-  await deleteByLike(env, "schedule_events", "title");
-  await deleteByLike(env, "scopes", "title");
+  await deleteByIds(
+    env,
+    "lead_intake_records",
+    "id",
+    leadIntakeRecords.map((record) => record.id),
+  );
+  await deleteByIds(
+    env,
+    "notifications",
+    "id",
+    notifications.map((notification) => notification.id),
+  );
+  await deleteByIds(
+    env,
+    "office_tasks",
+    "id",
+    officeTasks.map((task) => task.id),
+  );
+  await deleteByLike(env, "schedule_events", "title", runMarker);
+  await deleteByLike(env, "scopes", "title", runMarker);
   await deleteByIds(env, "signatures", "document_id", documentIds);
   await deleteByIds(env, "inspections", "id", inspectionIds);
   await deleteByIds(env, "schedule_events", "job_id", jobIds);
@@ -470,7 +673,7 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   await deleteByIds(env, "job_notes", "job_id", jobIds);
   await deleteByIds(env, "job_materials", "job_id", jobIds);
   await deleteByIds(env, "job_photos", "job_id", jobIds);
-  await deleteByIds(env, "payments", "invoice_id", invoiceIds);
+  await deleteByIds(env, "payments", "id", paymentIds);
   await deleteByIds(env, "invoice_line_items", "invoice_id", invoiceIds);
   await deleteByIds(env, "jobs", "id", jobIds);
   await deleteByIds(env, "estimate_line_items", "estimate_id", estimateIds);
@@ -481,18 +684,51 @@ async function cleanupTestRecords(env, runId = "", leadNameColumn = null) {
   await deleteByIds(env, "leads", "id", leadIds);
   await deleteByIds(env, "customers", "id", customerIds);
 
+  const [capturedIdResidue, markerResidue] = await Promise.all([
+    Promise.all([
+      findByIds(env, "jobs", jobIds),
+      findByIds(env, "estimates", estimateIds),
+      findByIds(env, "inspections", inspectionIds),
+      findByIds(env, "documents", documentIds),
+      findByIds(env, "invoices", invoiceIds),
+      findByIds(env, "payments", paymentIds),
+      findByIds(env, "change_orders", changeOrderIds),
+      findByIds(env, "leads", leadIds),
+      findByIds(env, "customers", customerIds),
+      findByIds(
+        env,
+        "office_tasks",
+        officeTasks.map((task) => task.id),
+      ),
+    ]),
+    findRegressionMarkerResidue(env, runId, resolvedLeadNameColumn),
+  ]);
+  const residueCount =
+    capturedIdResidue.reduce((count, rows) => count + rows.length, 0) +
+    markerResidue.count;
+
+  if (residueCount > 0) {
+    throw new Error(
+      `Browser regression cleanup left ${residueCount} exact-run record(s); the run is not clean.`,
+    );
+  }
+
   return {
     jobsDeleted: jobIds.length,
     estimatesDeleted: estimateIds.length,
     inspectionsDeleted: inspectionIds.length,
     documentsDeleted: documentIds.length,
     invoicesDeleted: invoiceIds.length,
+    paymentsDeleted: paymentIds.length,
     changeOrdersDeleted: changeOrderIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
-      ...communicationCleanup,
-    };
-  }
+    notificationsDeleted: notifications.length,
+    officeTasksDeleted: officeTasks.length,
+    ...communicationCleanup,
+    residueVerified: true,
+  };
+}
 
 async function seedTestJob(env, companyId, runId) {
   const title = `${TEST_PREFIX} ${runId} JOB`;
@@ -1416,6 +1652,16 @@ async function ensureAppShell(tab, baseUrl, progress) {
     45000,
   );
   progress("browser:shell-check:done");
+}
+
+async function assertLoadedSupabaseResourceTarget(tab, target) {
+  const resourceUrls = await tab.playwright.evaluate(() =>
+    performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name),
+  );
+
+  assertBrowserResourceTarget({ resourceUrls, target });
 }
 
 async function waitFor(tab, predicate, label, timeoutMs = 10000, arg = undefined) {
@@ -11237,6 +11483,7 @@ export function formatRegressionReport(result) {
   const lines = [
     `WeatherTech OS Codex Browser regression: ${result.ok ? "PASS" : "FAIL"}`,
     `Run id: ${result.runId}`,
+    `Target: ${result.target?.kind ?? "unknown"} (${result.target?.projectRef ?? "unknown"})`,
     `Groups: ${(result.groups ?? DEFAULT_GROUPS).join(", ")}`,
     `Seeded job: ${result.seededJobTitle ?? "none"}`,
     `Cleanup before: ${JSON.stringify(result.cleanup.before)}`,
@@ -11288,9 +11535,27 @@ export async function runWeatherTechOsRegression({
   }
 
   const env = readLocalEnv(cwd);
+  const linkedProjectRef = readLinkedSupabaseProjectRef(cwd);
+  const target = assertBrowserRegressionTarget({
+    baseUrl,
+    supabaseUrl: env.NEXT_PUBLIC_SUPABASE_URL,
+    serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+    runtimeEnv: {
+      [BROWSER_REGRESSION_REMOTE_WRITE_FLAG]: getRuntimeEnvValue(
+        BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
+      ),
+      [BROWSER_REGRESSION_EXPECTED_PROJECT_REF]: getRuntimeEnvValue(
+        BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
+      ),
+    },
+    productionProjectRefs: [
+      WEATHERTECH_PRODUCTION_SUPABASE_PROJECT_REF,
+      linkedProjectRef,
+    ],
+  });
   const progress = createProgressLogger(progressPath);
   const enabledGroups = new Set(groups);
-  const runId = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, "");
   const results = [];
   const commands = [
     `await import("${new URL(import.meta.url).pathname}").then((module) => module.runWeatherTechOsRegression({ browser, nodeRepl }))`,
@@ -11298,6 +11563,7 @@ export async function runWeatherTechOsRegression({
   let seededJob = null;
   let regressionTab = null;
   let browserConsoleErrorCount = null;
+  let cleanupAuthorized = false;
 
   const record = async (name, fn) => {
     try {
@@ -11318,20 +11584,26 @@ export async function runWeatherTechOsRegression({
 
   let cleanup = { before: null, after: null };
 
+  const tab = await getTab(browser);
+  regressionTab = tab;
+  await ensureAppShell(tab, baseUrl, progress);
+  await assertLoadedSupabaseResourceTarget(tab, target);
+
   try {
     const leadNameColumn = await detectLeadNameColumn(env);
-    progress("cleanup:before:start");
-    cleanup.before = await cleanupTestRecords(env, "", leadNameColumn);
-    progress("cleanup:before:done");
+    progress("isolation-preflight:start");
+    cleanup.before = await assertNoRegressionMarkerResidue(
+      env,
+      runId,
+      leadNameColumn,
+    );
+    cleanupAuthorized = true;
+    progress("isolation-preflight:done");
     const companies = await findCompanies(env);
     const { weatherTech, ihc } = companies;
     progress("seed:start");
     seededJob = await seedTestJob(env, weatherTech.id, runId);
     progress("seed:done");
-
-    const tab = await getTab(browser);
-    regressionTab = tab;
-    await ensureAppShell(tab, baseUrl, progress);
 
     const shouldRunLeadWorkflow =
       enabledGroups.has("crm") ||
@@ -11629,9 +11901,11 @@ export async function runWeatherTechOsRegression({
     }
   } finally {
     try {
-      progress("cleanup:after:start");
-      cleanup.after = await cleanupTestRecords(env, runId);
-      progress("cleanup:after:done");
+      if (cleanupAuthorized) {
+        progress("cleanup:after:start");
+        cleanup.after = await cleanupTestRecords(env, runId);
+        progress("cleanup:after:done");
+      }
     } finally {
       try {
         const viewport = await browser.capabilities.get("viewport");
@@ -11675,6 +11949,7 @@ export async function runWeatherTechOsRegression({
     groups,
     runId,
     testPrefix: TEST_PREFIX,
+    target,
     seededJobTitle: seededJob?.title ?? null,
     cleanup,
     browserConsoleErrorCount,
