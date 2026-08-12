@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved.
+Blocked on one owner-only external authentication action.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
@@ -121,12 +121,30 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 ## Planned Commit Messages
 
 - Implementation: `feat: validate production Twilio inbound SMS`
-- Documentation-only closeout, if required: `docs: close Twilio inbound sprint`
+- Blocked handoff: `docs: record Twilio owner handoff`
+- Documentation-only completion closeout, after live validation: `docs: close Twilio inbound sprint`
+
+## Blocked Handoff Evidence
+
+- Implementation commit `e7a5a57f42f3d9dfc482d6b412af9768cf31af94` is pushed to `main` and deployed to Vercel production as `dpl_7QT3DFkDboF9S7AKNZCZAJVSbhJi` (`weathertech-kwctnp2u7-weathertech-os1.vercel.app`). The canonical production alias resolves to that deployment.
+- Production `/api/health` is HTTP 200 and reports the exact implementation commit. `/api/readiness` remains truthfully blocked at HTTP 503 by the pre-existing Gmail/Calendar write-versus-broad-approval control; the new Twilio inbound and outbound gates both report false.
+- GitHub Actions run `31617231755` completed successfully at the exact implementation commit. Repository validation and the isolated Supabase lifecycle job both passed.
+- The Twilio security/foundation suite passed 114 assertions. The compiled real-route isolated Twilio regression passed 54 assertions against `hygtnhmmaoboduqghhwg`, including official signatures, exact company/contact routing, unknown and ambiguous senders, duplicate/reordered/conflicting deliveries, eight concurrent retries, recovery, zero provider requests, and zero residue.
+- All 26 top-level repository tests, type-check, lint, production build, dependency audit, credential scan, and diff checks passed. The complete isolated browser regression covered all 24 groups and 28 assertions; bounded reruns resolved two interaction flakes, with zero console errors or warnings and zero residue.
+- Production remains unconfigured for Twilio: no Twilio credentials are stored in Vercel, and production has zero Twilio connections, business-number mappings, SMS messages, provider events, call records, or sync logs. IHC remains unmapped. No real SMS was sent or received.
+- `TWILIO_INBOUND_SMS_ENABLED=false` and `TWILIO_OUTBOUND_SMS_ENABLED=false` are verified in production. The application also hard-locks outbound SMS independently of configuration.
+- The production business baseline, all Stripe gates, IHC Stripe isolation, `.env.local`, and both protected Property Intelligence hashes remain unchanged.
+
+### Exact Owner Action
+
+Sign in to the company-controlled WeatherTech Twilio account in the visible in-app Browser and leave the Twilio Console open. Do not purchase or select a number, change settings, or paste credentials into chat.
+
+After that sign-in, Codex can resume this sprint to inspect account/number ownership, determine whether existing authorized resources are sufficient, configure the exact inbound mapping and signed callback without enabling outbound SMS, and prepare the single controlled owner-sent inbound validation. A number purchase, billing acceptance, or unavailable credential may become a separate genuine blocker only if the authenticated account proves one is required.
 
 ## Final Status
 
-Approved and in progress.
+Blocked after implementation, isolated validation, CI, push, and production deployment. The sole current blocker is owner authentication to the company-controlled Twilio Console. The sprint is not complete and no live inbound-validation claim has been made.
 
 ## Notes
 
-The owner chooses the next sprint. Completion of this sprint does not authorize outbound SMS or another provider/product sprint.
+The owner chooses the next sprint. Do not select or start another sprint while this Twilio sprint remains blocked. This sprint does not authorize outbound SMS.
