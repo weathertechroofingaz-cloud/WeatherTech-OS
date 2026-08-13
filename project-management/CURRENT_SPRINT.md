@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Blocked on one owner-only phone-number selection, purchase, and recurring billing action in the authenticated Twilio account.
+IMPLEMENTATION COMPLETE — LIVE INBOUND VALIDATION EXTERNALLY BLOCKED BY PHONE-NUMBER AVAILABILITY.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
@@ -125,30 +125,31 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 - Number-acquisition handoff: `docs: record Twilio number blocker`
 - Documentation-only completion closeout, after live validation: `docs: close Twilio inbound sprint`
 
-## Blocked Handoff Evidence
+## Implementation And Partial Production Evidence
 
-- At the implementation checkpoint, commit `e7a5a57f42f3d9dfc482d6b412af9768cf31af94` was pushed to `main` and verified through the canonical production alias on READY Vercel deployment `dpl_7QT3DFkDboF9S7AKNZCZAJVSbhJi` (`weathertech-kwctnp2u7-weathertech-os1.vercel.app`).
-- At that checkpoint, production `/api/health` returned HTTP 200 and reported the exact implementation commit. `/api/readiness` remained truthfully blocked at HTTP 503 by the pre-existing Gmail/Calendar write-versus-broad-approval control; the new Twilio inbound and outbound gates both reported false.
-- GitHub Actions run `31617231755` completed successfully at the exact implementation commit. Repository validation and the isolated Supabase lifecycle job both passed.
-- The Twilio security/foundation suite passed 114 assertions. The compiled real-route isolated Twilio regression passed 54 assertions against `hygtnhmmaoboduqghhwg`, including official signatures, exact company/contact routing, unknown and ambiguous senders, duplicate/reordered/conflicting deliveries, eight concurrent retries, recovery, zero provider requests, and zero residue.
-- All 26 top-level repository tests, type-check, lint, production build, dependency audit, credential scan, and diff checks passed. The complete isolated browser regression covered all 24 groups and 28 assertions; bounded reruns resolved two interaction flakes, with zero console errors or warnings and zero residue.
-- Production remains unconfigured for Twilio: no Twilio credentials are stored in Vercel, and production has zero Twilio connections, business-number mappings, SMS messages, provider events, call records, or sync logs. IHC remains unmapped. No real SMS was sent or received.
-- `TWILIO_INBOUND_SMS_ENABLED=false` and `TWILIO_OUTBOUND_SMS_ENABLED=false` are verified in production. The application also hard-locks outbound SMS independently of configuration.
-- The production business baseline, all Stripe gates, IHC Stripe isolation, `.env.local`, and both protected Property Intelligence hashes remain unchanged.
-- The owner completed authentication to the Twilio account on 2026-08-12. Read-only Console inspection verified an active account but zero owned phone numbers.
-- Two Messaging Services named `WeatherTech OS` exist, both with zero senders and both configured to retain inbound messages in Twilio without invoking a webhook if a sender is later attached. Neither service was changed or selected as authoritative because no owned number exists yet.
-- SMS-capable Phoenix-area inventory searches for `602`, `480`, and `623` returned no results. SMS-capable Tucson `520` local numbers were available at the displayed recurring price of `$1.15/month`. No number was selected or purchased.
+- The production implementation shipped in `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`. Local `HEAD`, `origin/main`, live GitHub `main`, and the canonical Vercel deployment matched `ecaf3f77337160ba165bb1e330271c0fa145110f` before this documentation update.
+- GitHub Actions run `31664353558` passed every top-level repository test, type-check, lint, production build, dependency audit, patch validation, and the isolated Supabase lifecycle at that exact checkpoint. The CI workflow explicitly does not claim the proprietary Codex Browser run.
+- Production has one exact active WeatherTech Tucson mapping, recorded only by masked ending `3145`. One owner-authorized live SMS reached the canonical HTTPS webhook, passed official signature verification, and produced exactly one received message and one completed provider event.
+- Production also has one exact active IHC mapping, recorded only by masked ending `6930`. It is `ready_for_live_test` with zero inbound messages, zero outbound messages, and zero validation events; no IHC live-ingress claim has been made.
+- WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. The latest 480 inventory check found no purchasable option and made no number purchase, number assignment, provider configuration, database mapping, or environment change.
+- The server-only credential was provisioned without entering it in the repository or `.env.local` and was securely rotated before the live SMS validation. No credential, full number, provider identifier, or message body is recorded in repository documentation.
+- The Tucson validation sender had no unique company-scoped CRM match. The message was retained visibly as unmatched, and no customer or lead was created or modified.
+- Official signed simulations and isolated regression prove application behavior but cannot prove carrier ingress, number ownership, sender-pool attachment, or public webhook delivery for an unowned WeatherTech Phoenix number. There is no legitimate numberless live-validation substitute.
+- The Twilio security/foundation suite passed 114 assertions. Previously executed isolated live-route regression passed 54 assertions with zero provider requests and zero residue; the current documentation audit separately passed the 35-assertion runner contract and did not rerun hosted writes. The recorded complete isolated browser regression passed 24/24 groups and 28/28 assertions with zero console errors, zero console warnings, and zero residue.
+- Application outbound SMS remains hard-locked, the production outbound gate remains false, and production contains zero outbound SMS messages.
+- Production `/api/health` returned HTTP 200. Global `/api/readiness` truthfully remained HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad `WTOS_PRODUCTION_APPROVED` remains false; this is an intentional safety-control result, not a runtime-health failure.
+- Production retained the clean business baseline apart from the single deliberate inbound SMS audit record and provider event. Stripe gates remained false, IHC Stripe remained isolated, and no unrelated CRM/business data changed.
+- `.env.local` and both protected Property Intelligence files retained their starting hashes and remained unstaged and uncommitted.
+- No scheduled Twilio inventory search or monitoring automation remains.
 
-### Exact Owner Action
+### Resume Condition
 
-In the visible Twilio **Buy A Number** screen, decide whether WeatherTech should use a Tucson `520` local number, select one SMS-capable number, and complete Twilio's review/purchase at the displayed `$1.15/month`; then reply `done`. Do not purchase an IHC number or change any Messaging Service/webhook settings.
-
-After that purchase, Codex can resume this sprint to verify the acquired number and sender/service ownership, choose one authoritative Messaging Service without deleting the unused duplicate, provision the server credential securely, configure the exact inbound mapping and signed callback without enabling outbound SMS, and prepare the single controlled owner-sent inbound validation.
+Resume only when Twilio inventory exposes an owner-approved eligible 480 Voice-and-SMS number for WeatherTech Phoenix. Then purchase only that selected number, configure its exact fail-closed route, perform the controlled owner-sent live inbound validation, validate IHC ingress independently, and re-run the required closeout gates. Do not substitute another area code or infer carrier success from simulations.
 
 ## Final Status
 
-Blocked after implementation, isolated validation, CI, push, production deployment, and authenticated read-only Twilio inventory inspection. The sole current blocker is owner selection and purchase of one WeatherTech-designated SMS-capable number, including acceptance of the displayed recurring price. The sprint is not complete and no live inbound-validation claim has been made.
+IMPLEMENTATION COMPLETE — LIVE INBOUND VALIDATION EXTERNALLY BLOCKED BY PHONE-NUMBER AVAILABILITY. The sprint remains open and must not be recorded as completed. WeatherTech Tucson is live-validated, IHC is mapped and ready for its controlled live test, WeatherTech Phoenix is unconfigured, and outbound SMS remains disabled with zero sends.
 
 ## Notes
 
-The owner chooses the next sprint. Do not select or start another sprint while this Twilio sprint remains blocked. This sprint does not authorize outbound SMS.
+The owner chooses the next sprint. Do not select or start another sprint while this Twilio sprint remains blocked. This sprint does not authorize outbound SMS, A2P outbound registration, voice, MMS, auto-replies, reminders, campaigns, or any other provider activation.

@@ -4,15 +4,26 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### Production Connections Phase 1: Twilio/SMS — Implementation Checkpoint
+
+- Implementation commit: `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`
+- Production checkpoint before this documentation update: `ecaf3f77337160ba165bb1e330271c0fa145110f`
+- Status: `IMPLEMENTATION COMPLETE — LIVE INBOUND VALIDATION EXTERNALLY BLOCKED BY PHONE-NUMBER AVAILABILITY`.
+- Verified state: WeatherTech Tucson, documented only by masked ending `3145`, is mapped and live-validated with exactly one received SMS record and one completed provider event. IHC, documented only by masked ending `6930`, is mapped and active with readiness `ready_for_live_test`, but has zero received messages and zero validation events.
+- External blocker: WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. No number purchase, number assignment, or provider/database configuration changed during the latest inventory check, and no scheduled inventory automation remains.
+- Validation boundary: official signed simulations verify application behavior but cannot prove carrier ingress, Twilio number ownership, sender-pool attachment, or public webhook delivery for an unowned number. The sprint is not recorded as completed.
+- Safety: outbound remains hard-locked and disabled with zero outbound SMS, and global readiness truthfully remains HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false.
+- Runbook: [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md).
+
+## Recent Verified Milestones
+
 ### Non-Production Regression Environment & CI Test-Data Lifecycle
 
 - Implementation commit: `6354429976fb7a549bbc738fc0b76b3c5ea2022b`
-- Closeout: this documentation-only commit; use Git history as its immutable hash.
+- Closeout: documentation-only commit containing this entry; use Git history as its immutable hash because a commit cannot contain its own hash.
 - Status: Completed after isolated schema provisioning, a complete 24-group/28-assertion browser pass, zero console errors or warnings, deterministic cleanup with zero residue, successful repository and protected CI validation, push, exact-commit deployment, and read-only production verification.
 - Approved scope: dedicated non-production Supabase regression architecture, fail-closed target identity, synthetic test-data ownership and cleanup, safe CI lifecycle checks, and reproducible operating documentation.
 - Runbook: [Non-Production Regression Environment](./docs/NON_PRODUCTION_REGRESSION_ENVIRONMENT.md).
-
-## Recent Verified Milestones
 
 ### Production Data Isolation & Clean Baseline
 

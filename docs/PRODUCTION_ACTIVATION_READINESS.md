@@ -52,7 +52,7 @@ Prepared staging readiness artifacts:
 - `GET /api/readiness` reports dependency readiness and returns a blocked status while activation prerequisites are incomplete.
 - Readiness checks distinguish runtime health, dependency readiness, and final production approval.
 - Readiness checks never return customer records, database credentials, provider tokens, stack traces, or secret values.
-- Provider write flags are reported individually. The current readiness result is blocked because Gmail send and Google Calendar write are enabled pending owner review; listed public intake, portal, registration, automated-notification, accounting, signature, and unrelated provider gates remain disabled or unset.
+- Provider write flags are reported individually. The current readiness result is blocked because Gmail send, Google Calendar write, and the Twilio inbound gate are enabled while broad `WTOS_PRODUCTION_APPROVED` remains false; only the exact WeatherTech Tucson route has live inbound evidence. Listed public intake, portal, registration, automated-notification, accounting, signature, Twilio outbound, and unrelated provider gates remain disabled or unset.
 - Staging deployment status is not marked successful unless a real HTTPS staging URL, deployed commit, health check, readiness check, auth configuration, and browser regression evidence exist.
 
 Vercel project credentials and production environment values remain outside the repository. Repository documentation must record only non-secret deployment identity and observed health/readiness results.
@@ -211,9 +211,13 @@ Before production activation, the owner must verify:
 
 - Required credentials: Twilio account SID, auth token, messaging service or numbers, approved public callback base URL, and company/branch number mapping.
 - OAuth: not used in the current foundation.
-- External approvals: Twilio account ownership, phone-number ownership, messaging compliance, sender verification, webhook URL approval.
-- Testing sequence: run readiness checks, validate signed webhook payloads, and test one exact mapped inbound SMS with an approved owner-controlled sender. Voice and outbound messaging remain future, separately approved work.
-- Rollback: remove webhook URLs in Twilio, disable outbound gates, and pause connection records if errors appear.
+- Verified inbound state: the WeatherTech Tucson route, documented only by masked ending `3145`, is exact, active, and live-validated through the signature-authenticated canonical callback with one durable inbound message and one completed provider event.
+- Partial inbound state: the IHC route, documented only by masked ending `6930`, is exact and active at `ready_for_live_test`, but has zero inbound messages and zero validation events. WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available.
+- CRM behavior: the Tucson live sender was safely retained as unmatched and did not create or modify a lead or customer. No IHC or WeatherTech Phoenix live-message claim has been made.
+- Credential handling: the server-only token was securely rotated before live validation and is not stored in Git or `.env.local`.
+- Validation boundary: official signed simulations prove application behavior but do not prove carrier ingress, number ownership, sender-pool attachment, or public webhook delivery for an unowned number. The latest inventory check made no number or configuration change, and no scheduled inventory automation remains.
+- Outbound boundary: outbound SMS is hard-locked in the application and disabled in production; zero outbound messages occurred. Voice, MMS, automatic replies, reminders, campaigns, and A2P outbound activation require separate approval.
+- Rollback: remove or disable the incoming-message callback, set the inbound gate false, redeploy, and pause the exact connection/number route if errors appear. Keep the outbound gate false.
 
 ### Gmail / Google Workspace
 
@@ -308,4 +312,4 @@ Before production activation, the owner must verify:
 
 ## Readiness Verdict
 
-WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression now fails closed against Production Supabase. It is not broadly production-activated merely because runtime and baseline checks pass. `/api/readiness` remains blocked by provider-write/owner-approval controls; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.
+WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression fails closed against Production Supabase. The inbound-only Twilio implementation is deployed: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test` without a live message, and WeatherTech Phoenix remains externally blocked on eligible number availability. This Twilio sprint is not complete. `/api/health` returns HTTP 200, while `/api/readiness` truthfully returns HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false. Twilio outbound remains disabled with zero sends; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.
