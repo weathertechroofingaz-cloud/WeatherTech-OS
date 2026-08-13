@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Blocked on one owner-only external authentication action.
+Blocked on one owner-only phone-number selection, purchase, and recurring billing action in the authenticated Twilio account.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
@@ -122,6 +122,7 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 
 - Implementation: `feat: validate production Twilio inbound SMS`
 - Blocked handoff: `docs: record Twilio owner handoff`
+- Number-acquisition handoff: `docs: record Twilio number blocker`
 - Documentation-only completion closeout, after live validation: `docs: close Twilio inbound sprint`
 
 ## Blocked Handoff Evidence
@@ -134,16 +135,19 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 - Production remains unconfigured for Twilio: no Twilio credentials are stored in Vercel, and production has zero Twilio connections, business-number mappings, SMS messages, provider events, call records, or sync logs. IHC remains unmapped. No real SMS was sent or received.
 - `TWILIO_INBOUND_SMS_ENABLED=false` and `TWILIO_OUTBOUND_SMS_ENABLED=false` are verified in production. The application also hard-locks outbound SMS independently of configuration.
 - The production business baseline, all Stripe gates, IHC Stripe isolation, `.env.local`, and both protected Property Intelligence hashes remain unchanged.
+- The owner completed authentication to the Twilio account on 2026-08-12. Read-only Console inspection verified an active account but zero owned phone numbers.
+- Two Messaging Services named `WeatherTech OS` exist, both with zero senders and both configured to retain inbound messages in Twilio without invoking a webhook if a sender is later attached. Neither service was changed or selected as authoritative because no owned number exists yet.
+- SMS-capable Phoenix-area inventory searches for `602`, `480`, and `623` returned no results. SMS-capable Tucson `520` local numbers were available at the displayed recurring price of `$1.15/month`. No number was selected or purchased.
 
 ### Exact Owner Action
 
-Sign in to the company-controlled WeatherTech Twilio account in the visible in-app Browser and leave the Twilio Console open. Do not purchase or select a number, change settings, or paste credentials into chat.
+In the visible Twilio **Buy A Number** screen, decide whether WeatherTech should use a Tucson `520` local number, select one SMS-capable number, and complete Twilio's review/purchase at the displayed `$1.15/month`; then reply `done`. Do not purchase an IHC number or change any Messaging Service/webhook settings.
 
-After that sign-in, Codex can resume this sprint to inspect account/number ownership, determine whether existing authorized resources are sufficient, configure the exact inbound mapping and signed callback without enabling outbound SMS, and prepare the single controlled owner-sent inbound validation. A number purchase, billing acceptance, or unavailable credential may become a separate genuine blocker only if the authenticated account proves one is required.
+After that purchase, Codex can resume this sprint to verify the acquired number and sender/service ownership, choose one authoritative Messaging Service without deleting the unused duplicate, provision the server credential securely, configure the exact inbound mapping and signed callback without enabling outbound SMS, and prepare the single controlled owner-sent inbound validation.
 
 ## Final Status
 
-Blocked after implementation, isolated validation, CI, push, and production deployment. The sole current blocker is owner authentication to the company-controlled Twilio Console. The sprint is not complete and no live inbound-validation claim has been made.
+Blocked after implementation, isolated validation, CI, push, production deployment, and authenticated read-only Twilio inventory inspection. The sole current blocker is owner selection and purchase of one WeatherTech-designated SMS-capable number, including acceptance of the displayed recurring price. The sprint is not complete and no live inbound-validation claim has been made.
 
 ## Notes
 
