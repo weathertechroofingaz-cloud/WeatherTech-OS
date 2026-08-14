@@ -4,6 +4,18 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
+
+- Implementation commit: `8ab9f55af5e15ba1706ab71f06ade8312c0f6639`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Status: completed after isolated and production-schema validation, with no production business-record reconciliation.
+- Capability: the Customers/Customer 360 workflow now provides company-partitioned exact-evidence review, explicit graph selection, owner/admin approval, transactional and idempotent reconciliation, immutable audit history, and fail-closed handling for stale, ambiguous, insufficient, or cross-company input.
+- Database: the exact five-migration chain is applied through the normal linked Supabase path, with isolated regression and Production ledgers at `43/43` committed migrations. All `41` company-link/reverse-property checks were zero, Production remained at zero customers and zero reconciliation audit entries, and all `70/70` pre-existing public-table row counts and canonical full-row SHA-256 fingerprints were unchanged.
+- Validation: `28/28` top-level test files, `80/80` isolated hosted assertions, targeted browser checks, the complete `24/24`-group and `29/29`-assertion isolated browser suite, type-check, lint, production build, dependency audit, migration integrity, GitHub Actions run `31779710356`, and deployment/health checks passed. An authenticated read-only production UI check found the reconciliation surface schema-ready and company-isolated with unsafe IHC approval disabled, no mutations, and zero console errors or warnings.
+- Safety: no automatic backfill, bulk merge, destructive migration, provider write, or production graph mutation occurred. A future production reconciliation requires one exact owner-selected company-scoped graph.
+
+## Recent Verified Milestones
+
 ### Production Connections Phase 1: Twilio/SMS — Owner-Accepted Closeout
 
 - Implementation commit: `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`
@@ -15,8 +27,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Validation boundary: official signed simulations verify application behavior but cannot prove carrier ingress, Twilio number ownership, sender-pool attachment, or public webhook delivery for an unowned number. Governance closeout does not constitute WeatherTech Phoenix or IHC live validation or broad provider activation.
 - Safety: outbound remains hard-locked and disabled with zero outbound SMS, and global readiness truthfully remains HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false.
 - Runbook: [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md).
-
-## Recent Verified Milestones
 
 ### Non-Production Regression Environment & CI Test-Data Lifecycle
 

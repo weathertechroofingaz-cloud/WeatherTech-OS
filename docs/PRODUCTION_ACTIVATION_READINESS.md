@@ -108,9 +108,18 @@ The launch gates remain blocked until evidence exists.
 
 ### Production Migration Inventory
 
-Git presence is not production proof. At the Production Data Isolation sprint starting checkpoint, the linked production ledger had been verified through `20260810225320_stripe_refund_reconciliation.sql`. That observation must be rechecked before a later remote migration; it is not blanket authorization to apply pending files.
+Git presence is not production proof. CRM Identity Integrity Phase 1 positively reverified the WeatherTech OS Production project, completed a read-only zero-mismatch preflight, and applied the exact five-file reconciliation chain through `20260814063407_crm_identity_reconciliation_release_hardening.sql` using the normal linked Supabase migration path. The local and Production ledgers then matched all `43/43` committed migrations. This is release evidence, not blanket authorization for a later remote migration; target identity and ledger parity must be rechecked before every future schema action.
 
 Remote verification must positively identify the WeatherTech OS production project, compare the authoritative ledger with the intended local migration set, and stop on any unexpected missing, duplicate, or additional migration.
+
+### CRM Identity Reconciliation Release
+
+- Implementation commit `8ab9f55af5e15ba1706ab71f06ade8312c0f6639` is pushed, deployed, and covered by successful GitHub Actions run `31779710356`.
+- The company-partitioned Customer 360 review queue, immutable reconciliation audit ledger, owner/admin-only transactional function, idempotency and stale-version controls, and same-company relationship guards are deployed.
+- Isolated hosted lifecycle validation passed `80/80` assertions with zero residue, and the complete isolated browser regression passed `24/24` groups and `29/29` assertions with zero console errors or warnings.
+- Production validation was non-destructive: the exact audit table, `12/12` functions, and `39/39` triggers were present; all `41` company-link/reverse-property checks were zero; zero customer rows and zero reconciliation audit entries remained; and all `70/70` pre-existing public-table row counts and canonical full-row SHA-256 fingerprints were unchanged.
+- Authenticated read-only production UI validation found the reconciliation surface schema-ready and the WeatherTech/IHC queues company-isolated, with unsafe IHC approval disabled. No production mutation was clicked, and the browser console had zero errors or warnings.
+- A real production reconciliation remains an individually reviewed operational action. The owner must identify one exact company-scoped graph; no automatic reconciliation, bulk backfill, or inferred linkage is authorized.
 
 ### Environment Readiness
 
@@ -312,4 +321,4 @@ Before production activation, the owner must verify:
 
 ## Readiness Verdict
 
-WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression fails closed against Production Supabase. The inbound-only Twilio implementation is deployed: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test` without a live message, and WeatherTech Phoenix remains externally blocked on eligible number availability. The sprint is owner-accepted closed, but provider activation remains partial. `/api/health` returns HTTP 200, while `/api/readiness` truthfully returns HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false. Twilio outbound remains disabled with zero sends; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.
+WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression fails closed against Production Supabase. CRM Identity Integrity Phase 1 is complete: its five-file schema chain is applied at `43/43` migration parity, and the reviewed Customer & Property Reconciliation capability is deployed without changing any production business graph. Production remained at zero customers and zero reconciliation audit entries; an owner-selected graph is still required before any production reconciliation. The inbound-only Twilio implementation is deployed: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test` without a live message, and WeatherTech Phoenix remains externally blocked on eligible number availability. Provider activation remains partial. `/api/health` returns HTTP 200, while `/api/readiness` truthfully returns HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false. Twilio outbound remains disabled with zero sends; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.

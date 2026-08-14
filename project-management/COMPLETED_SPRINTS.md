@@ -4,6 +4,29 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
+
+- Implementation commit: `8ab9f55af5e15ba1706ab71f06ade8312c0f6639`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, pushed, deployed, and production-schema validated without reconciling a production business record.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `28/28 pass`
+  - Isolated hosted database lifecycle: `80/80 assertions pass`, with zero residue
+  - Targeted reconciliation, Sales, and Estimates browser checks: `pass`
+  - Complete isolated Codex Browser suite: `24/24 groups`, `29/29 assertions`, zero console errors, zero console warnings, and zero residue
+  - Authenticated read-only production UI check: schema-ready, WeatherTech/IHC company-isolated, unsafe IHC approval disabled, zero mutations, and zero console errors or warnings
+  - Type-check, lint, production build, dependency audit, `git diff --check`, migration-integrity checks, and GitHub Actions run `31779710356`: `pass`
+- Notes:
+  - Added a company-partitioned Customer 360 review queue, conservative exact-evidence candidate selection, explicit reviewed graph selection, and one owner/admin-only transactional reconciliation boundary.
+  - Added an immutable audit ledger, stable operation keys, optimistic row versions, deterministic locking, retry/idempotency behavior, and database enforcement that rejects stale, ambiguous, insufficient, or cross-company reconciliation.
+  - Applied the exact five-migration chain through the normal linked Supabase path. The isolated regression and Production migration ledgers each matched all `43/43` committed migrations afterward.
+  - Production validation found all `41` company-link/reverse-property checks at zero and the exact audit table, `12/12` functions, and `39/39` triggers present. No destructive migration, bulk reconciliation, automatic backfill, merge, customer deletion, provider write, or production business-record reconciliation occurred.
+  - Production remained at zero customers and zero reconciliation audit entries, with all `70/70` pre-existing public-table row counts and canonical full-row SHA-256 fingerprints unchanged.
+  - A future production reconciliation requires the owner to identify one exact company-scoped graph for explicit review; that is an operational action, not unfinished sprint implementation.
+  - Preserved `supabase/migrations/0026_property_intelligence_foundation.sql` at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and `.env.local` at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+
 ### Production Connections Phase 1: Twilio/SMS — Owner-Accepted Closeout
 
 - Implementation commit: `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`
