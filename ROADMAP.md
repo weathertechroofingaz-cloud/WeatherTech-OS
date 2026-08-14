@@ -4,7 +4,7 @@ This roadmap records verified product boundaries and candidate future work. It d
 
 ## Latest Completed Owner-Approved Sprint
 
-- **Non-Production Regression Environment & CI Test-Data Lifecycle** — completed. WeatherTech OS has a dedicated hosted regression target, fail-closed environment identity, deterministic synthetic-data ownership and cleanup, protected CI lifecycle verification, and a full recorded browser pass. Production remains prohibited as an ordinary write-capable regression target. See [Non-Production Regression Environment](./docs/NON_PRODUCTION_REGRESSION_ENVIRONMENT.md).
+- **Production Connections Phase 1: Twilio/SMS** — completed by explicit owner acceptance with documented external follow-up, not as a full provider-readiness pass. The inbound-only implementation is deployed and outbound SMS remains disabled: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test`, and WeatherTech Phoenix remains unconfigured pending an owner-approved eligible number. See [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md).
 
 ## Established Capabilities — Do Not Rebuild As New Sprints
 

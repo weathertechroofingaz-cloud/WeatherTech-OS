@@ -4,6 +4,27 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Production Connections Phase 1: Twilio/SMS — Owner-Accepted Closeout
+
+- Implementation commit: `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`
+- Inventory-blocker checkpoint: `5c1bb7538a023b11606532a1b555b91905b6df42`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed by explicit owner acceptance with known external follow-up; implementation is pushed and deployed, while provider activation remains partial.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `26/26 pass`
+  - Twilio security/foundation suite: `114/114 assertions pass`
+  - Twilio isolated runner contract: `35/35 assertions pass`; the previously executed hosted route regression passed `54 assertions` with zero provider requests and zero residue
+  - Complete non-production Codex Browser suite: `24/24 groups`, `28/28 assertions`, zero console errors, zero console warnings, and zero residue
+  - Type-check, lint, production build, dependency audit, `git diff --check`, credential scan, and protected CI lifecycle: `pass`
+- Notes:
+  - WeatherTech Tucson ending `3145` is the only live-validated route, with exactly one received SMS record and one completed provider event.
+  - IHC ending `6930` is exactly mapped and active at `ready_for_live_test` with zero messages and zero validation events; no IHC live-ingress claim is made.
+  - WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. Signed simulations do not prove carrier ingress for an unowned route.
+  - Outbound SMS remains hard-locked and disabled with zero outbound messages. Voice, MMS, campaigns, reminders, auto-replies, and broader provider activation remain outside this closeout.
+  - No scheduled Twilio inventory automation remains. `.env.local` and both owner-designated Property Intelligence changes remained byte-for-byte unchanged, unstaged, and uncommitted.
+
 ### Non-Production Regression Environment & CI Test-Data Lifecycle
 
 - Implementation commit: `6354429976fb7a549bbc738fc0b76b3c5ea2022b`

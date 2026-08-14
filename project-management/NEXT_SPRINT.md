@@ -71,8 +71,9 @@ Codex must never automatically promote this file. Promotion requires an explicit
 - The WeatherTech Roofing Stripe payment/webhook/refund foundation is implemented and production-validated; only separately approved activation or hardening work may extend it.
 - IHC Stripe requires its own separately authorized account/configuration.
 - Yelp remains an external dependency awaiting the Mighty Apes/Yelp webhook handoff and is not an actionable sprint until the owner approves work after that handoff.
+- The inbound-only Twilio implementation is complete and must not be rebuilt. WeatherTech Tucson is live-validated; IHC live validation and WeatherTech Phoenix number acquisition remain external follow-up and do not authorize outbound SMS.
 - These guardrails do not select or recommend a next sprint.
 
 ## Last Review
 
-During the active owner-approved Production Connections Phase 1: Twilio/SMS sprint, no subsequent product-development sprint has been selected or approved. The Twilio implementation is complete, but live inbound validation remains externally blocked by WeatherTech Phoenix phone-number availability; IHC is mapped and still awaits its controlled live test. No scheduled inventory automation remains. Status remains `Awaiting owner direction`, and no next sprint may begin while the current sprint remains blocked.
+Production Connections Phase 1: Twilio/SMS was closed by explicit owner acceptance with documented external follow-up: WeatherTech Tucson is live-validated, IHC remains mapped at `ready_for_live_test`, WeatherTech Phoenix remains unconfigured pending an owner-approved eligible number, and no scheduled inventory automation remains. Status remains `Awaiting owner direction`; no subsequent product-development sprint has been selected, approved, promoted, or started.

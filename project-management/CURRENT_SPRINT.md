@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-IMPLEMENTATION COMPLETE — LIVE INBOUND VALIDATION EXTERNALLY BLOCKED BY PHONE-NUMBER AVAILABILITY.
+Completed.
 
 This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
 
@@ -123,7 +123,7 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 - Implementation: `feat: validate production Twilio inbound SMS`
 - Blocked handoff: `docs: record Twilio owner handoff`
 - Number-acquisition handoff: `docs: record Twilio number blocker`
-- Documentation-only completion closeout, after live validation: `docs: close Twilio inbound sprint`
+- Owner-accepted documentation closeout: `docs: close Twilio sprint with accepted blockers`
 
 ## Implementation And Partial Production Evidence
 
@@ -142,14 +142,18 @@ Routine implementation, isolated testing, safe migrations, CI changes, commits, 
 - `.env.local` and both protected Property Intelligence files retained their starting hashes and remained unstaged and uncommitted.
 - No scheduled Twilio inventory search or monitoring automation remains.
 
-### Resume Condition
+### Owner-Accepted Closeout Exception
 
-Resume only when Twilio inventory exposes an owner-approved eligible 480 Voice-and-SMS number for WeatherTech Phoenix. Then purchase only that selected number, configure its exact fail-closed route, perform the controlled owner-sent live inbound validation, validate IHC ingress independently, and re-run the required closeout gates. Do not substitute another area code or infer carrier success from simulations.
+On 2026-08-13, the owner explicitly accepted administrative closure of this sprint at its verified partial-production state. This owner direction overrides the default completion gate for this sprint only; it does not convert deferred provider-validation criteria into passes. WeatherTech Phoenix remains externally blocked on eligible number availability, and IHC remains mapped and active at `ready_for_live_test` with zero messages and zero validation events.
+
+### External Follow-Up Boundary
+
+Future work may resume only under separate owner direction when Twilio inventory exposes an owner-approved eligible 480 Voice-and-SMS number for WeatherTech Phoenix. Then purchase only that selected number, configure its exact fail-closed route, perform the controlled owner-sent live inbound validation, and validate IHC ingress independently. Do not substitute another area code or infer carrier success from simulations. This is not an active sprint, and no scheduled inventory automation remains.
 
 ## Final Status
 
-IMPLEMENTATION COMPLETE — LIVE INBOUND VALIDATION EXTERNALLY BLOCKED BY PHONE-NUMBER AVAILABILITY. The sprint remains open and must not be recorded as completed. WeatherTech Tucson is live-validated, IHC is mapped and ready for its controlled live test, WeatherTech Phoenix is unconfigured, and outbound SMS remains disabled with zero sends.
+Completed by explicit owner acceptance with documented external follow-up. WeatherTech Tucson ending `3145` is live-validated with one received message and one completed provider event. IHC ending `6930` is mapped and active at `ready_for_live_test` with zero messages and zero validation events. WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. Outbound SMS remains disabled with zero sends.
 
 ## Notes
 
-The owner chooses the next sprint. Do not select or start another sprint while this Twilio sprint remains blocked. This sprint does not authorize outbound SMS, A2P outbound registration, voice, MMS, auto-replies, reminders, campaigns, or any other provider activation.
+The owner chooses and approves the next sprint. No subsequent product sprint was started during this closeout. This sprint does not authorize outbound SMS, A2P outbound registration, voice, MMS, auto-replies, reminders, campaigns, or any other provider activation.
