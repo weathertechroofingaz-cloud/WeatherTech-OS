@@ -312,6 +312,13 @@ async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
     findByLikeIfPresent(env, "change_orders", "title", runMarker),
     findByLikeIfPresent(env, "leads", leadNameColumn, runMarker),
     findByLikeIfPresent(env, "customers", "display_name", runMarker),
+    findByLikeIfPresent(env, "properties", "display_name", runMarker),
+    findByLikeIfPresent(
+      env,
+      "crm_identity_reconciliation_events",
+      "operation_key",
+      runMarker,
+    ),
     findByLikeIfPresent(env, "schedule_events", "title", runMarker),
     findByLikeIfPresent(env, "scopes", "title", runMarker),
     findByLikeIfPresent(env, "job_tasks", "title", runMarker),
@@ -495,6 +502,14 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     env,
     `customers?select=id,display_name&display_name=like.${prefixFilter}`,
   );
+  const properties = await restRequest(
+    env,
+    `properties?select=id,display_name&display_name=like.${prefixFilter}`,
+  );
+  const reconciliationEventsByOperation = await restRequest(
+    env,
+    `crm_identity_reconciliation_events?select=id,operation_key&operation_key=like.${prefixFilter}`,
+  );
   const [leadIntakeRecords, notifications] = await Promise.all([
     findLeadIntakeRecordsForRun(env, runMarker),
     findNotificationsForRun(env, runMarker),
@@ -506,7 +521,19 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   const invoiceIds = invoices.map((invoice) => invoice.id);
   const changeOrderIds = changeOrders.map((changeOrder) => changeOrder.id);
   const leadIds = leads.map((lead) => lead.id);
+  const reconciliationEventsByLead = await findByForeignIdsIfPresent(
+    env,
+    "crm_identity_reconciliation_events",
+    "source_lead_id",
+    leadIds,
+  );
+  const reconciliationEvents = mergeRowsById(
+    reconciliationEventsByOperation,
+    reconciliationEventsByLead,
+  );
   const customerIds = customers.map((customer) => customer.id);
+  const propertyIds = properties.map((property) => property.id);
+  const reconciliationEventIds = reconciliationEvents.map((event) => event.id);
   const officeTasks = mergeRowsById(
     ...(await Promise.all([
       findByForeignIdsIfPresent(env, "office_tasks", "lead_id", leadIds),
@@ -612,6 +639,12 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     "id",
     officeTasks.map((task) => task.id),
   );
+  await deleteByIds(
+    env,
+    "crm_identity_reconciliation_events",
+    "id",
+    reconciliationEventIds,
+  );
   await deleteByLike(env, "schedule_events", "title", runMarker);
   await deleteByLike(env, "scopes", "title", runMarker);
   await deleteByIds(env, "signatures", "document_id", documentIds);
@@ -632,6 +665,7 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   await deleteByIds(env, "change_orders", "id", changeOrderIds);
   await deleteByIds(env, "estimates", "id", estimateIds);
   await deleteByIds(env, "leads", "id", leadIds);
+  await deleteByIds(env, "properties", "id", propertyIds);
   await deleteByIds(env, "customers", "id", customerIds);
 
   const [capturedIdResidue, markerResidue] = await Promise.all([
@@ -645,6 +679,8 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       findByIds(env, "change_orders", changeOrderIds),
       findByIds(env, "leads", leadIds),
       findByIds(env, "customers", customerIds),
+      findByIds(env, "properties", propertyIds),
+      findByIds(env, "crm_identity_reconciliation_events", reconciliationEventIds),
       findByIds(
         env,
         "office_tasks",
@@ -673,6 +709,8 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     changeOrdersDeleted: changeOrderIds.length,
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
+    propertiesDeleted: propertyIds.length,
+    reconciliationEventsDeleted: reconciliationEventIds.length,
     notificationsDeleted: notifications.length,
     officeTasksDeleted: officeTasks.length,
     ...communicationCleanup,
@@ -5208,6 +5246,146 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   };
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalJson(nested)]),
+    );
+  }
+
+  return value;
+}
+
+function auditedReconciliationRequest(event) {
+  const selectedTargets = event?.selected_targets;
+
+  if (
+    !event?.company_id ||
+    !event.operation_key ||
+    !event.decision ||
+    !selectedTargets?.lead ||
+    !selectedTargets.links
+  ) {
+    throw new Error("Reconciliation audit event cannot reconstruct the exact reviewed request.");
+  }
+
+  return {
+    company_id: event.company_id,
+    operation_key: event.operation_key,
+    decision: event.decision,
+    lead: selectedTargets.lead,
+    ...(selectedTargets.customer ? { customer: selectedTargets.customer } : {}),
+    ...(selectedTargets.property ? { property: selectedTargets.property } : {}),
+    links: selectedTargets.links,
+  };
+}
+
+function regressionApiUrl(env, path) {
+  const target = new URL(env.NEXT_PUBLIC_SUPABASE_URL);
+  const url = new URL(path, target);
+
+  if (url.origin !== target.origin) {
+    throw new Error("Regression authentication/RPC request escaped the guarded Supabase origin.");
+  }
+
+  return url;
+}
+
+const REGRESSION_OWNER_REQUEST_TIMEOUT_MS = 20_000;
+
+async function guardedRegressionOwnerFetch(env, path, options, label) {
+  try {
+    return await fetch(regressionApiUrl(env, path), {
+      ...options,
+      signal: AbortSignal.timeout(REGRESSION_OWNER_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error(`${label} failed before receiving a response.`);
+  }
+}
+
+async function replayAuditedReconciliationAsOwner(env, event) {
+  const authResponse = await guardedRegressionOwnerFetch(
+    env,
+    "/auth/v1/token?grant_type=password",
+    {
+      method: "POST",
+      headers: {
+        apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        email: env.WTOS_REGRESSION_OWNER_EMAIL,
+        password: env.WTOS_REGRESSION_OWNER_PASSWORD,
+      }),
+    },
+    "Synthetic regression owner authentication",
+  );
+
+  if (!authResponse.ok) {
+    throw new Error(`Synthetic regression owner authentication failed (${authResponse.status}).`);
+  }
+
+  const session = await authResponse.json();
+  const accessToken = session?.access_token;
+
+  if (
+    !accessToken ||
+    session?.user?.email !== env.WTOS_REGRESSION_OWNER_EMAIL ||
+    (event.actor_user_id && session?.user?.id !== event.actor_user_id)
+  ) {
+    throw new Error("Synthetic regression owner authentication returned an invalid session.");
+  }
+
+  try {
+    const rpcResponse = await guardedRegressionOwnerFetch(
+      env,
+      "/rest/v1/rpc/wtos_reconcile_customer_property",
+      {
+        method: "POST",
+        headers: {
+          apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          reconciliation_request: auditedReconciliationRequest(event),
+        }),
+      },
+      "Audited reconciliation retry",
+    );
+
+    if (!rpcResponse.ok) {
+      throw new Error(`Audited reconciliation retry failed (${rpcResponse.status}).`);
+    }
+
+    return rpcResponse.json();
+  } finally {
+    const logoutResponse = await guardedRegressionOwnerFetch(
+      env,
+      "/auth/v1/logout?scope=local",
+      {
+        method: "POST",
+        headers: {
+          apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+          authorization: `Bearer ${accessToken}`,
+        },
+      },
+      "Synthetic regression owner logout",
+    );
+
+    if (!logoutResponse.ok) {
+      throw new Error(`Synthetic regression owner logout failed (${logoutResponse.status}).`);
+    }
+  }
+}
+
 async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl, progress) {
   const leadName = lead.leadName;
   const opportunityNotes = `${TEST_PREFIX} ${runId} OPPORTUNITY NOTE`;
@@ -5398,6 +5576,153 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
     "opportunity linked workflow ready",
     10000,
   );
+
+  const assertNoImplicitCustomerOrWorkflowWrite = async (label) => {
+    const [currentLead, matchingCustomers, currentEstimateCount, currentJobCount] =
+      await Promise.all([
+        findLeadById(env, lead.leadId),
+        restRequest(
+          env,
+          `customers?select=id&company_id=eq.${encodeURIComponent(company.id)}&email=eq.${encodeURIComponent(`regression-${runId}@example.test`)}`,
+        ),
+        countEstimatesByTitle(env, estimateTitle),
+        countJobsByTitle(env, jobTitle),
+      ]);
+
+    if (
+      currentLead?.customer_id ||
+      matchingCustomers.length !== 0 ||
+      currentEstimateCount !== 0 ||
+      currentJobCount !== 0
+    ) {
+      throw new Error(`${label} created or linked CRM records before reviewed approval.`);
+    }
+  };
+  const waitForFocusedIdentityReview = (label) =>
+    waitFor(
+      tab,
+      ({ leadId, companyId }) => {
+        const review = document.querySelector('[data-testid="identity-reconciliation-review"]');
+        const activeCase = document.querySelector(
+          `[data-testid="identity-reconciliation-case"][data-company-id="${companyId}"][aria-pressed="true"]`,
+        );
+
+        return Boolean(
+          review?.getAttribute("data-case-key")?.includes(leadId) && activeCase,
+        );
+      },
+      label,
+      15000,
+      { leadId: lead.leadId, companyId: company.id },
+    );
+
+  progress("sales-pipeline:unlinked-estimate-refusal:start");
+  await scrollSelectorIntoView(
+    tab,
+    '[data-testid="sales-pipeline-estimate-action"]',
+    "Refuse unlinked opportunity estimate",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-estimate-action"]'),
+    "Refuse unlinked opportunity estimate",
+    { retryTransientClick: true },
+  );
+  await waitForFocusedIdentityReview(
+    "unlinked estimate routed to the exact company-scoped identity review",
+  );
+  await assertNoImplicitCustomerOrWorkflowWrite("Unlinked estimate action");
+  progress("sales-pipeline:unlinked-estimate-refusal:done");
+
+  await clickNav(tab, "Sales Pipeline");
+  await selectOpportunity("unlinked job refusal");
+  progress("sales-pipeline:unlinked-job-refusal:start");
+  await scrollSelectorIntoView(
+    tab,
+    '[data-testid="sales-pipeline-job-action"]',
+    "Refuse unlinked opportunity job",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="sales-pipeline-job-action"]'),
+    "Refuse unlinked opportunity job",
+    { retryTransientClick: true },
+  );
+  await waitForFocusedIdentityReview(
+    "unlinked job routed to the exact company-scoped identity review",
+  );
+  await assertNoImplicitCustomerOrWorkflowWrite("Unlinked job action");
+  progress("sales-pipeline:unlinked-job-refusal:done");
+
+  progress("sales-pipeline:identity-review:start");
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="identity-reconciliation-queue"]')),
+    "sales opportunity identity queue",
+    15000,
+  );
+  const salesIdentityCase = tab.playwright
+    .locator('[data-testid="identity-reconciliation-case"][data-state="ready_create"]')
+    .filter({ hasText: leadName });
+  await clickUnique(salesIdentityCase, "sales opportunity identity case", {
+    retryTransientClick: true,
+  });
+  await waitFor(
+    tab,
+    ({ leadId, companyId }) => {
+      const review = document.querySelector('[data-testid="identity-reconciliation-review"]');
+      const activeCase = document.querySelector(
+        `[data-testid="identity-reconciliation-case"][data-company-id="${companyId}"][aria-pressed="true"]`,
+      );
+
+      return Boolean(
+        review?.getAttribute("data-case-key")?.includes(leadId) && activeCase,
+      );
+    },
+    "company-scoped sales opportunity identity review",
+    10000,
+    { leadId: lead.leadId, companyId: company.id },
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="identity-reconciliation-approve"]'),
+    "Approve reviewed sales opportunity identity",
+    { retryTransientClick: true },
+  );
+  const approvedLead = await waitForAsync(async () => {
+    const currentLead = await findLeadById(env, lead.leadId);
+    return currentLead?.customer_id ? currentLead : null;
+  }, "approved sales opportunity customer link", 15000);
+  const salesAuditRows = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      `crm_identity_reconciliation_events?select=id,company_id,operation_key,decision,source_lead_id,customer_id,selected_targets,result&source_lead_id=eq.${encodeURIComponent(lead.leadId)}`,
+    );
+    return rows.length === 1 ? rows : null;
+  }, "single sales opportunity reconciliation audit event", 15000);
+  const salesAudit = salesAuditRows[0];
+  const approvedCustomers = await restRequest(
+    env,
+    `customers?select=id,company_id,email&company_id=eq.${encodeURIComponent(company.id)}&email=eq.${encodeURIComponent(`regression-${runId}@example.test`)}`,
+  );
+  if (
+    approvedCustomers.length !== 1 ||
+    approvedCustomers[0].id !== approvedLead.customer_id ||
+    approvedCustomers[0].company_id !== company.id ||
+    approvedCustomers[0].email !== `regression-${runId}@example.test` ||
+    salesAudit.company_id !== company.id ||
+    salesAudit.source_lead_id !== lead.leadId ||
+    salesAudit.customer_id !== approvedLead.customer_id ||
+    salesAudit.decision !== "create_customer" ||
+    salesAudit.result?.event_id !== salesAudit.id ||
+    salesAudit.result?.status !== "applied" ||
+    salesAudit.result?.duplicate !== false
+  ) {
+    throw new Error(
+      "Sales opportunity approval did not create one company-scoped customer and immutable audit event.",
+    );
+  }
+  progress("sales-pipeline:identity-review:done");
+
+  await clickNav(tab, "Sales Pipeline");
+  await selectOpportunity("after identity approval");
 
   progress("sales-pipeline:estimate:start");
   await scrollSelectorIntoView(
@@ -5652,8 +5977,10 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
     estimateId: estimate.id,
     jobId: job.id,
     customerId: estimate.customer_id,
+    explicitIdentityApproval: true,
     finalStage: finalLead.pipeline_stage,
     finalStatus: finalLead.status,
+    unlinkedWritesRefused: true,
   };
 }
 
@@ -5802,6 +6129,299 @@ async function testLeadIntakeWorkspace(tab, env, company, runId, leadNameColumn)
     leadName,
     pipelineStage: createdLead.pipeline_stage,
     status: createdLead.status,
+  };
+}
+
+async function testIdentityReconciliationWorkflow(
+  tab,
+  env,
+  companies,
+  runId,
+  leadNameColumn,
+) {
+  const marker = `${TEST_PREFIX} ${runId} RECONCILIATION`;
+  const exactLeadName = `${marker} EXACT LEAD`;
+  const exactCustomerName = `${marker} EXACT CUSTOMER`;
+  const ihcCustomerName = `${marker} IHC EXCLUDED CUSTOMER`;
+  const ambiguousLeadName = `${marker} AMBIGUOUS LEAD`;
+  const phoneSeed = Number(runId.slice(-7));
+  const exactPhone = `+1480${String((phoneSeed + 101) % 10_000_000).padStart(7, "0")}`;
+  const ambiguousPhone = `+1480${String((phoneSeed + 202) % 10_000_000).padStart(7, "0")}`;
+  const exactAddress = `${runId.slice(-5)} TEST Reconciliation Way, Scottsdale, AZ`;
+  const ambiguousAddress = `${runId.slice(-5)} TEST Ambiguous Way, Scottsdale, AZ`;
+  const customerPayload = ({ companyId, displayName, phone, address }) => ({
+    company_id: companyId,
+    display_name: displayName,
+    contact_name: displayName,
+    phone,
+    email: null,
+    property_address: address,
+    city: "Scottsdale",
+    state: "AZ",
+    postal_code: "85251",
+    customer_type: "homeowner",
+    status: "active",
+    notes: marker,
+  });
+  const [exactCustomer] = await restRequest(env, "customers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(
+      customerPayload({
+        companyId: companies.weatherTech.id,
+        displayName: exactCustomerName,
+        phone: exactPhone,
+        address: exactAddress,
+      }),
+    ),
+  });
+  await restRequest(env, "customers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify([
+      customerPayload({
+        companyId: companies.ihc.id,
+        displayName: ihcCustomerName,
+        phone: exactPhone,
+        address: exactAddress,
+      }),
+      customerPayload({
+        companyId: companies.weatherTech.id,
+        displayName: `${marker} AMBIGUOUS CUSTOMER A`,
+        phone: ambiguousPhone,
+        address: ambiguousAddress,
+      }),
+      customerPayload({
+        companyId: companies.weatherTech.id,
+        displayName: `${marker} AMBIGUOUS CUSTOMER B`,
+        phone: ambiguousPhone,
+        address: ambiguousAddress,
+      }),
+    ]),
+  });
+
+  const leadPayload = (name, phone, address) => ({
+    company_id: companies.weatherTech.id,
+    customer_id: null,
+    [leadNameColumn]: name,
+    phone,
+    email: null,
+    property_address: address,
+    city: "Scottsdale",
+    state: "AZ",
+    postal_code: "85251",
+    service_type: "roofing",
+    source: marker,
+    status: "contacted",
+    pipeline_stage: "contacted",
+    priority: "normal",
+    estimated_value: 0,
+    notes: marker,
+  });
+  const [exactLead, ambiguousLead] = await restRequest(env, "leads", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify([
+      leadPayload(exactLeadName, exactPhone, exactAddress),
+      leadPayload(ambiguousLeadName, ambiguousPhone, ambiguousAddress),
+    ]),
+  });
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickNav(tab, "Customers");
+  await clickCompanyScope(tab, "All companies");
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="identity-reconciliation-queue"]')),
+    "identity reconciliation queue",
+    15000,
+  );
+  const exactCase = tab.playwright
+    .locator('[data-testid="identity-reconciliation-case"][data-state="ready_link"]')
+    .filter({ hasText: exactLeadName });
+  await exactCase.click();
+  await waitFor(
+    tab,
+    (leadId) =>
+      document
+        .querySelector('[data-testid="identity-reconciliation-review"]')
+        ?.getAttribute("data-case-key")
+        ?.includes(leadId) ?? false,
+    "exact reconciliation review",
+    10000,
+    exactLead.id,
+  );
+  const exactReviewText = await tab.playwright
+    .locator('[data-testid="identity-reconciliation-review"]')
+    .innerText();
+  if (
+    !exactReviewText.includes(exactCustomerName) ||
+    !exactReviewText.includes("1 exact other-company match was excluded") ||
+    exactReviewText.includes(ihcCustomerName)
+  ) {
+    throw new Error("Exact review did not prove same-company selection and IHC exclusion.");
+  }
+
+  await clickUnique(
+    tab.playwright.locator('[data-testid="identity-reconciliation-approve"]'),
+    "Approve exact reviewed reconciliation",
+    { retryTransientClick: true },
+  );
+  const linkedLead = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      `leads?select=id,customer_id,status,pipeline_stage&id=eq.${encodeURIComponent(exactLead.id)}`,
+    );
+    return rows[0]?.customer_id === exactCustomer.id ? rows[0] : null;
+  }, "approved customer link", 15000);
+  if (
+    linkedLead.status !== exactLead.status ||
+    linkedLead.pipeline_stage !== exactLead.pipeline_stage
+  ) {
+    throw new Error("Identity approval changed the lead status or pipeline stage.");
+  }
+  const auditRows = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      `crm_identity_reconciliation_events?select=id,company_id,operation_key,request_sha256,decision,source_lead_id,actor_user_id,customer_id,property_id,selected_targets,result&source_lead_id=eq.${encodeURIComponent(exactLead.id)}`,
+    );
+    return rows.length === 1 ? rows : null;
+  }, "single reconciliation audit event", 15000);
+  const auditEvent = auditRows[0];
+  if (
+    auditEvent.company_id !== companies.weatherTech.id ||
+    auditEvent.customer_id !== exactCustomer.id ||
+    auditEvent.decision !== "link_existing" ||
+    !auditEvent.operation_key ||
+    !/^[0-9a-f]{64}$/i.test(auditEvent.request_sha256 ?? "") ||
+    auditEvent.result?.event_id !== auditEvent.id ||
+    auditEvent.result?.status !== "applied" ||
+    auditEvent.result?.duplicate !== false
+  ) {
+    throw new Error("Identity audit event has the wrong company, customer, or decision.");
+  }
+  const exactCompanyCustomersBeforeRetry = await restRequest(
+    env,
+    `customers?select=id&company_id=eq.${encodeURIComponent(companies.weatherTech.id)}&phone=eq.${encodeURIComponent(exactPhone)}`,
+  );
+  if (
+    exactCompanyCustomersBeforeRetry.length !== 1 ||
+    exactCompanyCustomersBeforeRetry[0].id !== exactCustomer.id
+  ) {
+    throw new Error("Reviewed exact match did not retain exactly one same-company customer.");
+  }
+
+  const duplicateResult = await replayAuditedReconciliationAsOwner(env, auditEvent);
+  const expectedDuplicateResult = {
+    ...auditEvent.result,
+    status: "duplicate",
+    duplicate: true,
+  };
+  if (
+    JSON.stringify(canonicalJson(duplicateResult)) !==
+      JSON.stringify(canonicalJson(expectedDuplicateResult))
+  ) {
+    throw new Error("Audited owner retry did not return the same durable result as a duplicate.");
+  }
+  const [replayedLeadRows, replayedAuditRows, exactCompanyCustomersAfterRetry] =
+    await Promise.all([
+      restRequest(
+        env,
+        `leads?select=id,customer_id,status,pipeline_stage&id=eq.${encodeURIComponent(exactLead.id)}`,
+      ),
+      restRequest(
+        env,
+        `crm_identity_reconciliation_events?select=id,result&source_lead_id=eq.${encodeURIComponent(exactLead.id)}`,
+      ),
+      restRequest(
+        env,
+        `customers?select=id&company_id=eq.${encodeURIComponent(companies.weatherTech.id)}&phone=eq.${encodeURIComponent(exactPhone)}`,
+      ),
+    ]);
+  if (
+    replayedLeadRows.length !== 1 ||
+    replayedLeadRows[0].customer_id !== exactCustomer.id ||
+    replayedLeadRows[0].status !== exactLead.status ||
+    replayedLeadRows[0].pipeline_stage !== exactLead.pipeline_stage ||
+    replayedAuditRows.length !== 1 ||
+    replayedAuditRows[0].id !== auditEvent.id ||
+    JSON.stringify(canonicalJson(replayedAuditRows[0].result)) !==
+      JSON.stringify(canonicalJson(auditEvent.result)) ||
+    exactCompanyCustomersAfterRetry.length !== 1 ||
+    exactCompanyCustomersAfterRetry[0].id !== exactCustomer.id
+  ) {
+    throw new Error("Audited retry duplicated or changed the reconciled customer, lead, or event.");
+  }
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickNav(tab, "Customers");
+  await waitFor(
+    tab,
+    (customerName) => document.body.innerText.includes(customerName),
+    "reconciled Customer 360 persistence",
+    15000,
+    exactCustomerName,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    exactCustomerName,
+    "reconciled customer search",
+  );
+  await clickListRowByParagraph(
+    tab,
+    "Customer management",
+    exactCustomerName,
+    "reconciled Customer 360 row",
+  );
+  await waitFor(
+    tab,
+    (customerName) =>
+      document
+        .querySelector('[data-testid="customer-workspace"]')
+        ?.textContent
+        ?.includes(customerName) ?? false,
+    "reconciled Customer 360 workspace",
+    10000,
+    exactCustomerName,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    "",
+    "clear reconciled customer search",
+  );
+  const ambiguousCase = tab.playwright
+    .locator('[data-testid="identity-reconciliation-case"][data-state="ambiguous"]')
+    .filter({ hasText: ambiguousLeadName });
+  await ambiguousCase.click();
+  await waitFor(
+    tab,
+    (leadId) =>
+      document
+        .querySelector('[data-testid="identity-reconciliation-review"]')
+        ?.getAttribute("data-case-key")
+        ?.includes(leadId) ?? false,
+    "ambiguous reconciliation review",
+    10000,
+    ambiguousLead.id,
+  );
+  const approveEnabled = await tab.playwright
+    .locator('[data-testid="identity-reconciliation-approve"]')
+    .isEnabled();
+  if (approveEnabled) {
+    throw new Error("Ambiguous reconciliation exposed an enabled approval action.");
+  }
+
+  return {
+    auditEvents: auditRows.length,
+    auditedRetryIdempotent: true,
+    companyIsolation: true,
+    customerId: exactCustomer.id,
+    doubleSubmitIdempotent: true,
+    leadId: exactLead.id,
+    statusAndStagePreserved: true,
+    unsafeApprovalDisabled: true,
   };
 }
 
@@ -11804,6 +12424,8 @@ export async function runWeatherTechOsRegression({
       enabledGroups.has("crm-estimates") && !shouldRunLeadWorkflow;
     const shouldRunCustomersWorkflow =
       enabledGroups.has("crm") || enabledGroups.has("crm-customers");
+    const shouldRunReconciliationWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-reconciliation");
     const shouldRunInboxWorkflow =
       enabledGroups.has("crm") ||
       enabledGroups.has("crm-inbox") ||
@@ -11813,6 +12435,7 @@ export async function runWeatherTechOsRegression({
       shouldRunEstimatesWorkflow ||
       shouldRunSalesPipelineWorkflow ||
       shouldRunCustomersWorkflow ||
+      shouldRunReconciliationWorkflow ||
       shouldRunInboxWorkflow ||
         enabledGroups.has("operations") ||
         enabledGroups.has("financial") ||
@@ -11938,6 +12561,18 @@ export async function runWeatherTechOsRegression({
 
         return testEstimatesWorkflow(tab, env, weatherTech, leadWorkflow, runId, baseUrl, progress);
       });
+    }
+
+    if (shouldRunReconciliationWorkflow) {
+      await record("CRM identity review reconciles one exact graph and refuses unsafe matches", () =>
+        testIdentityReconciliationWorkflow(
+          tab,
+          env,
+          companies,
+          runId,
+          leadNameColumn,
+        ),
+      );
     }
 
     if (shouldRunCustomersWorkflow) {

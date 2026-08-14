@@ -4,17 +4,17 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Completed.
+Approved.
 
-This sprint was explicitly owner-approved in the Codex task request and must use the mandatory lifecycle in [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md).
+The owner explicitly approved this sprint in the Codex task and subsequently resolved the Property Intelligence prerequisite at commit `5718a7afb4a882c1e24861f7c494467630ea782f`.
 
 ## Sprint Name
 
-Production Connections Phase 1: Twilio/SMS
+CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
 
 ## Objective
 
-Connect and validate the production Twilio inbound-SMS workflow for WeatherTech Roofing LLC and, only when an independently verified company-controlled number exists, IHC Painting. Signed inbound messages must be routed by an exact account-and-number mapping, persisted once in the existing communications model, matched to CRM context without ambiguity, visible in the Unified Inbox, and auditable. General outbound customer SMS remains disabled.
+Give WeatherTech Roofing LLC and IHC Painting a safe, reviewed way to reconcile an existing lead/property operational graph to exactly one same-company customer. The workflow must be evidence-based, transactional, idempotent, auditable, and fail closed on ambiguity, stale data, or any cross-company relationship.
 
 ## Owner
 
@@ -22,138 +22,85 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-12.
+2026-08-13.
 
 ## Verified Starting State
 
 - Repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`.
 - Branch: `main`.
-- Starting local `HEAD`, `origin/main`, and live GitHub `main`: `cb4b45473b25b5a0927e1b7c3b5350a9b092669f`.
-- Canonical production URL: `https://weathertech-os.vercel.app`.
-- Production Supabase reference: `gahfcgyjtfwwmsterhzu`.
-- Isolated regression Supabase reference: `hygtnhmmaoboduqghhwg`.
-- Production `/api/health`: HTTP 200 and healthy at the starting commit.
-- Production `/api/readiness`: HTTP 503 because Gmail send and Google Calendar write are enabled while broad production-provider approval remains false; this is the expected truthful safety state and must not be weakened.
-- Production clean baseline: Customers 0, Employees 0, Leads 10, Properties 8, Jobs 6, Invoices 0, Invoice line items 0, Outstanding `$0`, Overdue 0, only two preserved refunded Stripe audit payments, and zero proven regression residue.
-- Stripe payment, refund, and webhook-processing gates are false. IHC Stripe connections, accounts, mappings, events, and payments are zero.
-- The existing Twilio schema/routes/tests are present, but production has zero Twilio connections, business-number mappings, SMS messages, provider events, call records, or Twilio sync logs at sprint start.
-
-## Explicitly Preserved Working-Tree Changes
-
-The owner explicitly designated these two pre-existing unstaged files as preserved exceptions to the normal clean-tree gate:
-
-| File | Starting SHA-256 |
-| --- | --- |
-| `supabase/migrations/0026_property_intelligence_foundation.sql` | `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` |
-| `tests/supabase-migration-integrity.test.mjs` | `0b3e9801402ee7014556cfee750ee0d5f26a002922551ead602ddae4c3184ad4` |
-
-They must remain byte-for-byte unchanged, unstaged, and uncommitted throughout this sprint. `.env.local` must also remain unchanged. Any additional unexplained starting change is a blocker.
+- Starting local `HEAD`, `origin/main`, and live GitHub `main`: `5718a7afb4a882c1e24861f7c494467630ea782f`.
+- The working tree and index were clean at the approval gate.
+- `supabase/migrations/0026_property_intelligence_foundation.sql` was committed by the owner-authorized standalone prerequisite and has SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e`.
+- `tests/supabase-migration-integrity.test.mjs` started this sprint at SHA-256 `0b3e9801402ee7014556cfee750ee0d5f26a002922551ead602ddae4c3184ad4` and may receive only the strictly additive registry and contract assertions required for this sprint's legitimate migration chain.
+- `.env.local` started at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0` and must remain unchanged.
+- Production has zero customers while existing leads, properties, jobs, estimates, inspections, schedules, and office tasks contain operational graphs with missing customer links. Individual production-record provenance is not assumed.
+- Existing direct lead conversion and opportunity flows can create/link records through multiple non-transactional writes and can silently alter lead status or stage.
+- Existing property links are company scoped in application use, but the database does not comprehensively enforce same-company customer/property relationships across the approved operational graph.
 
 ## Owner-Approved Scope
 
-- Audit the existing Twilio foundation, production configuration, Unified Inbox, role/company authorization, provider readiness, webhook security, persistence, retry behavior, and isolated-test architecture before implementation.
-- Reuse the existing Twilio and communications architecture; implement only the smallest robust inbound-SMS completion required for production.
-- Authenticate Twilio requests with the supported signature model and server-only credentials; reject unsigned, invalid, malformed, unsupported, or wrong-account requests without exposing secrets.
-- Route an inbound message only through an exact active company-controlled Twilio account-and-number mapping. Never infer company from message content and never map IHC unless its own number is verified.
-- Normalize sender/recipient numbers; match an exact unambiguous customer or lead within the routed company; preserve unknown or ambiguous senders as unmatched communications without silently creating duplicate CRM records.
-- Make inbound message persistence exactly-once, provider-event accounting retry-convergent, duplicate handling durable, and every write company scoped; reject conflicting reuse of a provider identifier.
-- Keep the existing Unified Inbox/communications model authoritative instead of creating a parallel inbox.
-- Keep every outbound SMS path disabled or explicitly approval-gated. Do not send any outbound SMS during ordinary tests or this inbound validation.
-- Use only the isolated non-production Supabase target for write-capable automated/browser regression and leave all provider side effects disabled there.
-- Configure production secrets/mapping/webhook through authorized connected tooling when possible. If an owner-only Twilio login, number selection/purchase, billing acceptance, credential entry, or manual inbound send is unavoidable, complete all other work first and request one exact owner action.
-- After deployment and configuration, perform one narrowly controlled real inbound SMS validation, verify exact-once persistence/UI/company/contact behavior, prove duplicate replay idempotency without sending a second SMS when safely possible, and confirm no outbound or unrelated data mutation.
-- Update minimum necessary setup, security, troubleshooting, readiness, module, and sprint-governance documentation based only on verified state.
-- Run the complete repository, Twilio, communications, company-isolation, security, migration, type, lint, build, dependency, isolated browser, console, and production read-only verification gates before closeout.
-- Commit, push, verify the exact production deployment, and close the sprint only after the approved implementation and live validation are complete.
+- Add one logical, additive, non-destructive Supabase schema change through the normal migration directory and register its immutable five-migration validation/hardening chain additively in the existing migration-integrity system.
+- Add an immutable, company-scoped reconciliation audit ledger and one tightly authorized transactional reconciliation function.
+- Require explicit owner/admin review, a stable operation key, exact expected row versions, deterministic row locking, and exact same-company validation before any mutation.
+- Reconcile exactly one reviewed lead graph by either linking one unique evidenced same-company customer or creating exactly one customer from the locked lead's identity fields.
+- Propagate only explicitly selected customer/property links through the approved tables: leads, properties, estimates, inspections, jobs, schedule events, and office tasks.
+- Preserve lead status and pipeline stage byte-for-byte during reconciliation.
+- Add database enforcement that rejects cross-company customer/property/source links for the in-scope tables; abort on pre-existing mismatches rather than repairing or backfilling them.
+- Add a company-partitioned Identity Reconciliation review queue within the existing Customers/Customer 360 workflow, with a compact Office Operations entry point only if needed. Do not add a new top-level module.
+- Use conservative normalized exact evidence. Refuse shared, conflicting, ambiguous, insufficient, stale, or cross-company matches. Address alone is property evidence, not sufficient customer identity.
+- Provide explicit preview, approve, and dismiss behavior. Do not automatically merge or delete customer records.
+- Replace unsafe direct lead/opportunity conversion with the reviewed reconciliation path. Unlinked estimate/job workflows must wait for an approved customer link rather than silently creating one.
+- Add targeted unit, migration, authorization, concurrency, rollback, retry, company-isolation, hosted regression, residue-cleanup, and browser coverage.
+- Apply and validate the exact migration chain against the isolated regression project first. Production schema application is allowed only after every registered migration passes all checks and a read-only zero-mismatch preflight; production record reconciliation requires an individually owner-selected, evidence-proven graph.
+- Commit, push, deploy the validated capability, verify exact Git/deployment identity and health, and close the sprint only after all approved non-destructive validation passes.
 
 ## Explicit Exclusions
 
-- Do not enable general outbound SMS, marketing, bulk messages, auto-replies, reminders, or campaigns.
-- Do not send any real outbound SMS or use production as the routine browser-regression target.
-- Do not infer company from message text, silently choose among ambiguous CRM matches, or create customers/leads merely because an SMS arrived unless an existing explicitly supported path is proven safe and retained by design.
-- Do not configure IHC with a WeatherTech number/account or guess any company mapping.
-- Do not weaken Twilio signature verification, RLS, company isolation, regression target guards, `/api/readiness`, or broader provider-approval controls.
-- Do not alter Stripe gates, activate IHC Stripe, start Yelp/Mighty Apes, CompanyCam, QuickBooks, OpenAI/Anthropic, or perform broad UI redesign.
-- Do not pollute production with synthetic browser fixtures or modify the deliberately preserved mixed-provenance IHC graph.
-- Do not expose or commit Twilio credentials, phone numbers when they are not intended public configuration, service-role keys, or other secrets.
-- Do not modify `.env.local` or touch the two preserved Property Intelligence files.
-- Do not select, approve, promote, or begin another sprint.
-
-## Mandatory Stop Conditions
-
-Stop only when:
-
-- the owner must complete Twilio login/authentication, accept terms or billing, purchase/select a number, or enter a credential unavailable through authorized tooling;
-- a real charge or destructive/irreversible production action requires separate owner action;
-- the production Twilio account/number cannot be positively identified before mapping or validation;
-- a controlled live action could send or route anything beyond the single approved inbound validation;
-- required credentials cannot be securely provisioned through existing authorized tooling; or
-- a genuine unresolved business/security decision cannot be determined from the repository and verified architecture.
-
-Routine implementation, isolated testing, safe migrations, CI changes, commits, pushes, deployments, configuration updates through authorized tooling, and read-only verification are approved and are not stop conditions.
+- No destructive migration, bulk reconciliation, automatic backfill, automatic merge, customer deletion, or guessed production linkage.
+- No cross-company matching or relationship propagation between WeatherTech Roofing LLC and IHC Painting.
+- Do not mutate the preserved mixed-provenance IHC graph or any production record without exact owner-selected provenance.
+- Do not modify `supabase/migrations/0026_property_intelligence_foundation.sql`.
+- Do not weaken, bypass, delete, disable, or circumvent migration-integrity, RLS, authorization, regression-isolation, or security tests.
+- Do not use direct SQL, runtime DDL, seeds, alternate migration directories, or out-of-ledger schema changes.
+- Do not modify `.env.local` or add secrets.
+- Do not activate or modify Twilio, Yelp, Gmail/Calendar writes, QuickBooks, AI, CompanyCam, portals, provider accounts, OAuth settings, Stripe gates, or broad production approval.
+- Do not perform broad UI redesign, unrelated cleanup, or unrelated feature work.
+- Do not begin Yelp Lead Intake or any next sprint.
 
 ## Completion Criteria
 
-- Production has an exact, verified Twilio account-and-number-to-company mapping for each company actually connected; unconfigured companies remain explicitly unconfigured.
-- The inbound SMS endpoint is HTTPS, authenticates the exact Twilio request, validates content/account/payload, and fails closed before persistence on invalid input.
-- One signed inbound MessageSid creates exactly one company-scoped `sms_messages` record and converges to one auditable provider event; duplicates are no-ops and conflicting identifiers fail closed.
-- Exact, unambiguous company-scoped CRM phone matches are linked; unknown/ambiguous senders remain safely visible without guessed association or duplicate record creation.
-- The communication appears in the correct Unified Inbox/company context with no cross-company exposure.
-- General outbound SMS remains false/disabled in production and tests, and no outbound SMS is sent during validation.
-- The complete isolated browser suite and all applicable repository/security/company-isolation/Twilio tests pass with zero unexplained browser console errors or warnings and zero regression residue.
-- One controlled real inbound SMS is received, signature-verified, persisted once, visible in the correct UI, and duplicate replay is proven idempotent without an additional SMS when possible.
-- Production baseline remains clean except the single deliberate inbound audit record and any exact contact/context association it legitimately uses; no unrelated CRM or provider data changes.
-- Documentation and readiness accurately distinguish configured, authenticated, mapped, reachable, inbound validated, and outbound disabled states.
-- `.env.local` and both protected Property Intelligence files retain their starting hashes and remain unstaged/uncommitted.
-- A focused implementation commit and, when required, one documentation-only closeout commit are pushed; local `HEAD`, `origin/main`, live GitHub main, and Vercel production are verified.
+- The additive migration chain creates the immutable audit ledger, authorization boundary, idempotent transaction function, and same-company enforcement without destructive data changes or backfill.
+- Exact retry of an operation returns the same durable result; conflicting reuse, concurrent submissions, stale versions, partial failures, ambiguity, and cross-company inputs fail safely without partial writes.
+- Only explicitly reviewed graph rows receive customer/property links, and lead status/stage remain unchanged.
+- Duplicate detection and reconciliation candidate selection are intrinsically company scoped.
+- The existing Customers workflow shows evidence, proposed action, exact selected rows, and disables unsafe approval; reviewed dismissal is auditable.
+- Unsafe direct conversion/implicit customer creation paths no longer bypass review.
+- Migration-integrity, repository, type-check, lint, build, dependency/security, targeted reconciliation, company-isolation, and isolated hosted regression checks pass without weakened assertions.
+- Targeted reconciliation browser validation and the complete isolated browser regression pass with zero unexplained console errors/warnings and zero residue.
+- Production schema is applied only after a zero-mismatch preflight. No production business record is reconciled unless the owner identifies one exact graph with proven provenance; otherwise capability deployment is validated read-only and the data mutation is explicitly deferred.
+- Production health remains HTTP 200 and readiness remains truthful; no provider or financial side effects occur.
+- The Property Intelligence migration and `.env.local` retain their starting hashes.
+- A focused implementation commit and, if required, one documentation closeout commit are pushed; local `HEAD`, `origin/main`, live GitHub main, and the deployment are verified.
 
 ## Validation Plan
 
-- Verify Git/deployment identity, production and regression Supabase identity/ledger/schema/RLS, baseline counts, current Twilio config, env-name inventory, and all preserved hashes before mutation.
-- Exercise unit/route/database cases for valid, missing, invalid, tampered, malformed, wrong-account, wrong-number, disabled/missing mapping, known customer, known lead, unknown, ambiguous, duplicate, conflicting duplicate, retry, and cross-company requests.
-- Apply any additive migration first to the isolated regression project, verify schema/function/ACL/RLS, run transaction rollback tests, then apply only the exact validated migration to production when authorized by this sprint and safe.
-- Run every `tests/*.test.mjs` file, type-check, lint, production build, `git diff --check`, credential/secret scan, and dependency/security audit.
-- Run the full 24-group isolated browser regression plus targeted communications/Twilio validation, and prove cleanup/residue zero.
-- Commit/push/deploy exact scope, verify production SHA/health/truthful readiness, then configure only inbound Twilio secrets/mapping/webhook with outbound false.
-- Perform one controlled signed inbound validation and exact duplicate replay; verify provider delivery, database ledger, Unified Inbox, company isolation, no outbound request, and non-target production fingerprints.
-- Recheck production baseline, Stripe gates, IHC isolation, `.env.local`, protected hashes, staging scope, and final Git/deployment identity before closeout.
+- Verify branch/ref identity, clean tree, prerequisite hashes, linked migration ledger, and production/regression targets before implementation.
+- Run migration-integrity and migration contract tests, including RLS/grants, immutable audit behavior, same-company guards, transaction/locking, no status mutation, and no provider/financial targets.
+- Run pure matching tests for exact, no-match, shared, conflicting, ambiguous, and cross-company identities.
+- Run isolated hosted database cases for existing-customer link, reviewed create, dismiss, retry, conflicting operation key, concurrency, stale versions, rollback, permission refusal, audit immutability, side-effect absence, and zero cleanup residue.
+- Run every top-level repository test, `npm run type-check`, `npm run lint`, `npm run build`, `npm audit --audit-level=high`, `git diff --check`, and credential/secret scans.
+- Run targeted `crm-reconciliation` browser validation and the complete isolated browser regression, including reload persistence, Customer 360/Office Operations context, ambiguity refusal, double-submit idempotency, company isolation, unchanged status/stage, zero console errors/warnings, and zero residue.
+- Perform a final diff/scope audit, confirm the Property Intelligence migration and `.env.local` hashes, stage only approved files, commit, push, and verify Git/CI/deployment/production health.
 
 ## Planned Commit Messages
 
-- Implementation: `feat: validate production Twilio inbound SMS`
-- Blocked handoff: `docs: record Twilio owner handoff`
-- Number-acquisition handoff: `docs: record Twilio number blocker`
-- Owner-accepted documentation closeout: `docs: close Twilio sprint with accepted blockers`
-
-## Implementation And Partial Production Evidence
-
-- The production implementation shipped in `e7a5a57f42f3d9dfc482d6b412af9768cf31af94`. Local `HEAD`, `origin/main`, live GitHub `main`, and the canonical Vercel deployment matched `ecaf3f77337160ba165bb1e330271c0fa145110f` before this documentation update.
-- GitHub Actions run `31664353558` passed every top-level repository test, type-check, lint, production build, dependency audit, patch validation, and the isolated Supabase lifecycle at that exact checkpoint. The CI workflow explicitly does not claim the proprietary Codex Browser run.
-- Production has one exact active WeatherTech Tucson mapping, recorded only by masked ending `3145`. One owner-authorized live SMS reached the canonical HTTPS webhook, passed official signature verification, and produced exactly one received message and one completed provider event.
-- Production also has one exact active IHC mapping, recorded only by masked ending `6930`. It is `ready_for_live_test` with zero inbound messages, zero outbound messages, and zero validation events; no IHC live-ingress claim has been made.
-- WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. The latest 480 inventory check found no purchasable option and made no number purchase, number assignment, provider configuration, database mapping, or environment change.
-- The server-only credential was provisioned without entering it in the repository or `.env.local` and was securely rotated before the live SMS validation. No credential, full number, provider identifier, or message body is recorded in repository documentation.
-- The Tucson validation sender had no unique company-scoped CRM match. The message was retained visibly as unmatched, and no customer or lead was created or modified.
-- Official signed simulations and isolated regression prove application behavior but cannot prove carrier ingress, number ownership, sender-pool attachment, or public webhook delivery for an unowned WeatherTech Phoenix number. There is no legitimate numberless live-validation substitute.
-- The Twilio security/foundation suite passed 114 assertions. Previously executed isolated live-route regression passed 54 assertions with zero provider requests and zero residue; the current documentation audit separately passed the 35-assertion runner contract and did not rerun hosted writes. The recorded complete isolated browser regression passed 24/24 groups and 28/28 assertions with zero console errors, zero console warnings, and zero residue.
-- Application outbound SMS remains hard-locked, the production outbound gate remains false, and production contains zero outbound SMS messages.
-- Production `/api/health` returned HTTP 200. Global `/api/readiness` truthfully remained HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad `WTOS_PRODUCTION_APPROVED` remains false; this is an intentional safety-control result, not a runtime-health failure.
-- Production retained the clean business baseline apart from the single deliberate inbound SMS audit record and provider event. Stripe gates remained false, IHC Stripe remained isolated, and no unrelated CRM/business data changed.
-- `.env.local` and both protected Property Intelligence files retained their starting hashes and remained unstaged and uncommitted.
-- No scheduled Twilio inventory search or monitoring automation remains.
-
-### Owner-Accepted Closeout Exception
-
-On 2026-08-13, the owner explicitly accepted administrative closure of this sprint at its verified partial-production state. This owner direction overrides the default completion gate for this sprint only; it does not convert deferred provider-validation criteria into passes. WeatherTech Phoenix remains externally blocked on eligible number availability, and IHC remains mapped and active at `ready_for_live_test` with zero messages and zero validation events.
-
-### External Follow-Up Boundary
-
-Future work may resume only under separate owner direction when Twilio inventory exposes an owner-approved eligible 480 Voice-and-SMS number for WeatherTech Phoenix. Then purchase only that selected number, configure its exact fail-closed route, perform the controlled owner-sent live inbound validation, and validate IHC ingress independently. Do not substitute another area code or infer carrier success from simulations. This is not an active sprint, and no scheduled inventory automation remains.
+- Implementation: `feat: add reviewed customer property reconciliation`
+- Documentation closeout, if required: `docs: close CRM identity reconciliation sprint`
 
 ## Final Status
 
-Completed by explicit owner acceptance with documented external follow-up. WeatherTech Tucson ending `3145` is live-validated with one received message and one completed provider event. IHC ending `6930` is mapped and active at `ready_for_live_test` with zero messages and zero validation events. WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. Outbound SMS remains disabled with zero sends.
+In progress.
 
 ## Notes
 
-The owner chooses and approves the next sprint. No subsequent product sprint was started during this closeout. This sprint does not authorize outbound SMS, A2P outbound registration, voice, MMS, auto-replies, reminders, campaigns, or any other provider activation.
+The owner stated that Yelp Lead Intake is intended to be the next owner-approved sprint after this sprint closes. That statement does not authorize Yelp implementation or promotion during this sprint.

@@ -636,6 +636,81 @@ export type CustomerRecord = {
   updated_at: string;
 };
 
+export type IdentityReconciliationDecision =
+  | "link_existing"
+  | "create_customer"
+  | "dismiss";
+
+export type IdentityReconciliationVersionedRecord = {
+  id: string;
+  expected_updated_at: string;
+};
+
+export type IdentityReconciliationCustomerSelection = {
+  id?: string;
+  expected_updated_at?: string;
+  display_name?: string;
+  contact_name?: string;
+  customer_type?: CustomerType;
+};
+
+export type IdentityReconciliationLinks = {
+  estimates: IdentityReconciliationVersionedRecord[];
+  inspections: IdentityReconciliationVersionedRecord[];
+  jobs: IdentityReconciliationVersionedRecord[];
+  schedule_events: IdentityReconciliationVersionedRecord[];
+  office_tasks: IdentityReconciliationVersionedRecord[];
+};
+
+export type IdentityReconciliationRequest = {
+  company_id: string;
+  operation_key: string;
+  decision: IdentityReconciliationDecision;
+  lead: IdentityReconciliationVersionedRecord;
+  customer?: IdentityReconciliationCustomerSelection;
+  property?: IdentityReconciliationVersionedRecord | null;
+  links: IdentityReconciliationLinks;
+};
+
+export type IdentityReconciliationResult = {
+  event_id: string;
+  operation_key: string;
+  decision: IdentityReconciliationDecision;
+  status: "applied" | "dismissed" | "duplicate";
+  company_id: string;
+  lead_id: string;
+  customer_id: string | null;
+  property_id: string | null;
+  customer_created?: boolean;
+  duplicate: boolean;
+  updated: {
+    leads: number;
+    properties: number;
+    estimates: number;
+    inspections: number;
+    jobs: number;
+    schedule_events: number;
+    office_tasks: number;
+  };
+};
+
+export type IdentityReconciliationEventRecord = {
+  id: string;
+  company_id: string;
+  operation_key: string;
+  request_sha256: string;
+  decision: IdentityReconciliationDecision;
+  source_lead_id: string;
+  source_updated_at: string;
+  actor_user_id: string;
+  customer_id: string | null;
+  property_id: string | null;
+  evidence_types: string[];
+  selected_targets: Record<string, unknown>;
+  result: Record<string, unknown>;
+  created_at: string;
+};
+
 export type PropertyRecord = {
   id: string;
   company_id: string;
@@ -3876,6 +3951,12 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["customers"]["Insert"]>;
         Relationships: [];
       };
+      crm_identity_reconciliation_events: {
+        Row: IdentityReconciliationEventRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       properties: {
         Row: PropertyRecord;
         Insert: PropertyInsert;
@@ -4355,6 +4436,12 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_reconcile_customer_property: {
+        Args: {
+          reconciliation_request: IdentityReconciliationRequest;
+        };
+        Returns: IdentityReconciliationResult;
+      };
       wtos_record_stripe_payment: {
         Args: {
           target_mapping_id: string;

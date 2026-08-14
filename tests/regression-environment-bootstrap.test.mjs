@@ -116,6 +116,16 @@ assert.match(source, /const id = randomUUID\(\)/);
 assert.match(source, /restDeleteExactId\(config, fetchImpl, "notifications", id\)/);
 assert.match(source, /exactIdCleanupVerified: true/);
 assert.match(source, /auth\/v1\/logout\?scope=local/);
+assert.match(
+  source,
+  /\["crm_identity_reconciliation_events", "operation_key"\]/,
+  "Reconciliation operation markers participate in zero-residue verification",
+);
+assert.match(
+  source,
+  /\["crm_identity_reconciliation_events", "actor_user_id"\]/,
+  "The synthetic owner cannot be removed while reconciliation audit events reference it",
+);
 assert.doesNotMatch(source, /readFile(?:Sync)?\s*\(/);
 const cleanupSource = source.slice(source.indexOf("async function cleanupOwner"));
 assert.ok(

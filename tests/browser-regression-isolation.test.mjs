@@ -450,9 +450,44 @@ assert(
   harness.includes('findByLikeIfPresent(env, "job_notes", "note", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "job_photos", "caption", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker)') &&
+    harness.includes('findByLikeIfPresent(env, "properties", "display_name", runMarker)') &&
+    harness.includes('"crm_identity_reconciliation_events",\n      "operation_key"') &&
+    harness.includes('"crm_identity_reconciliation_events",\n    "source_lead_id",\n    leadIds') &&
     harness.includes('findByForeignIdsIfPresent(env, "office_tasks", "job_id", jobIds)') &&
+    harness.includes('"crm_identity_reconciliation_events",\n    "id",\n    reconciliationEventIds') &&
     harness.includes("residueVerified: true"),
-  "Cleanup verifies run residue across direct, child, and generated office-task records",
+  "Cleanup verifies run residue across direct, child, reconciliation-audit, property, and generated office-task records",
+);
+assert(
+  harness.includes('enabledGroups.has("crm-reconciliation")') &&
+    harness.includes("testIdentityReconciliationWorkflow(") &&
+    harness.includes('[data-testid="identity-reconciliation-case"][data-state="ambiguous"]') &&
+    harness.includes("replayAuditedReconciliationAsOwner(env, auditEvent)") &&
+    harness.includes('status: "duplicate"') &&
+    harness.includes("same durable result as a duplicate") &&
+    harness.includes("Identity approval changed the lead status or pipeline stage") &&
+    harness.includes("single reconciliation audit event"),
+  "Targeted browser coverage proves reviewed approval, ambiguity refusal, authenticated audited-retry idempotency, auditability, and status preservation",
+);
+assert(
+  !harness.includes("window.fetch") &&
+    !harness.includes("window.crypto") &&
+    !harness.includes("__wtosIdentityReconciliationRpcTracker") &&
+    harness.includes("const REGRESSION_OWNER_REQUEST_TIMEOUT_MS = 20_000") &&
+    harness.includes("signal: AbortSignal.timeout(REGRESSION_OWNER_REQUEST_TIMEOUT_MS)") &&
+    harness.includes("guardedRegressionOwnerFetch(") &&
+    harness.includes('"crm_identity_reconciliation_events",\n    "source_lead_id",\n    leadIds') &&
+    harness.indexOf("reconciliationEventsByLead") <
+      harness.indexOf('await deleteByIds(env, "leads", "id", leadIds)'),
+  "Browser reconciliation uses supported clicks, bounded guarded owner requests, and exact run-owned lead cleanup",
+);
+assert(
+  harness.includes("Unlinked estimate action") &&
+    harness.includes("Unlinked job action") &&
+    harness.includes("assertNoImplicitCustomerOrWorkflowWrite") &&
+    harness.includes("explicitIdentityApproval: true") &&
+    harness.includes("unlinkedWritesRefused: true"),
+  "Sales Pipeline browser coverage refuses implicit customer/workflow writes before explicit identity approval",
 );
 
 console.log("Browser regression production-isolation guard: PASS");

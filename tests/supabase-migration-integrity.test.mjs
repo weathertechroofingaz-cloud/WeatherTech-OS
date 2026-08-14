@@ -140,6 +140,26 @@ const expectedMigrations = [
     "20260810225320_stripe_refund_reconciliation.sql",
     "c8fd0509a40c7848e2b7f34793889fb9747568db5e3af2b2d524474ca6ea0a11",
   ],
+  [
+    "20260814051533_crm_identity_reconciliation.sql",
+    "c145d0d7551132d9f384720969b74d68c600c87991b8377049b11ba80893aca3",
+  ],
+  [
+    "20260814053339_crm_identity_reconciliation_runtime_hardening.sql",
+    "c6e1fd59cb44e9e463028fc4cbcde5d3587f6b243b0221890e78d5a306693f04",
+  ],
+  [
+    "20260814054250_crm_identity_reconciliation_invariant_hardening.sql",
+    "df8de08f7214ee9326b5a671f06547b261da3c8cbb5ef403bbb4c4c8f811d890",
+  ],
+  [
+    "20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql",
+    "b26e3601a762297030a8be3d3e6c46720ed49b30a9c0a40185a6c269edb88b40",
+  ],
+  [
+    "20260814063407_crm_identity_reconciliation_release_hardening.sql",
+    "38c16883b9f9be5976f09ceca0989f3d902e9e8e5e8abd77300c9fac45448afd",
+  ],
 ];
 
 const files = fs
@@ -193,7 +213,7 @@ if (JSON.stringify(files) !== JSON.stringify(orderedByVersion)) {
 
 if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
   failures.push(
-    "Migration files must be sequential from 0001 through 0036 followed by the registered Stripe migrations.",
+    "Migration files must be sequential from 0001 through 0036 followed by the registered timestamped migrations.",
   );
 }
 
@@ -227,6 +247,21 @@ const stripeCompanyIsolationIndex = files.indexOf(
 );
 const stripeRefundReconciliationIndex = files.indexOf(
   "20260810225320_stripe_refund_reconciliation.sql",
+);
+const crmIdentityReconciliationIndex = files.indexOf(
+  "20260814051533_crm_identity_reconciliation.sql",
+);
+const crmIdentityReconciliationHardeningIndex = files.indexOf(
+  "20260814053339_crm_identity_reconciliation_runtime_hardening.sql",
+);
+const crmIdentityReconciliationInvariantHardeningIndex = files.indexOf(
+  "20260814054250_crm_identity_reconciliation_invariant_hardening.sql",
+);
+const crmIdentityReconciliationStaleVersionHardeningIndex = files.indexOf(
+  "20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql",
+);
+const crmIdentityReconciliationReleaseHardeningIndex = files.indexOf(
+  "20260814063407_crm_identity_reconciliation_release_hardening.sql",
 );
 
 if (
@@ -321,17 +356,30 @@ if (
   goHighLevelOAuthIndex === -1 ||
   stripeCompanyIsolationIndex === -1 ||
   stripeRefundReconciliationIndex === -1 ||
+  crmIdentityReconciliationIndex === -1 ||
+  crmIdentityReconciliationHardeningIndex === -1 ||
+  crmIdentityReconciliationInvariantHardeningIndex === -1 ||
+  crmIdentityReconciliationStaleVersionHardeningIndex === -1 ||
+  crmIdentityReconciliationReleaseHardeningIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
     officeTaskCascadeIndex < goHighLevelOAuthIndex &&
     goHighLevelOAuthIndex < stripeCompanyIsolationIndex &&
-    stripeCompanyIsolationIndex < stripeRefundReconciliationIndex
+    stripeCompanyIsolationIndex < stripeRefundReconciliationIndex &&
+    stripeRefundReconciliationIndex < crmIdentityReconciliationIndex &&
+    crmIdentityReconciliationIndex < crmIdentityReconciliationHardeningIndex &&
+    crmIdentityReconciliationHardeningIndex <
+      crmIdentityReconciliationInvariantHardeningIndex &&
+    crmIdentityReconciliationInvariantHardeningIndex <
+      crmIdentityReconciliationStaleVersionHardeningIndex &&
+    crmIdentityReconciliationStaleVersionHardeningIndex <
+      crmIdentityReconciliationReleaseHardeningIndex
   ) ||
-  stripeRefundReconciliationIndex !== files.length - 1
+  crmIdentityReconciliationReleaseHardeningIndex !== files.length - 1
 ) {
   failures.push(
-    "Stripe refund reconciliation must order after Stripe company isolation and remain last.",
+    "CRM identity reconciliation and its additive hardening migrations must order after Stripe refund reconciliation and remain last.",
   );
 }
 
@@ -1191,6 +1239,423 @@ if (/api[_ -]?key|access[_ -]?token|refresh[_ -]?token|sk-[a-z0-9]/i.test(aiTool
   failures.push("0033 must not contain secret material or credential placeholders.");
 }
 
+const crmIdentityReconciliationMigration = fs.readFileSync(
+  path.join(migrationsDir, "20260814051533_crm_identity_reconciliation.sql"),
+  "utf8",
+);
+const crmIdentityReconciliationHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260814053339_crm_identity_reconciliation_runtime_hardening.sql",
+  ),
+  "utf8",
+);
+const crmIdentityReconciliationInvariantHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260814054250_crm_identity_reconciliation_invariant_hardening.sql",
+  ),
+  "utf8",
+);
+const crmIdentityReconciliationStaleVersionHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql",
+  ),
+  "utf8",
+);
+const crmIdentityReconciliationReleaseHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260814063407_crm_identity_reconciliation_release_hardening.sql",
+  ),
+  "utf8",
+);
+
+for (const requiredContract of [
+  "begin;",
+  "commit;",
+  "create table public.crm_identity_reconciliation_events",
+  "unique (company_id, operation_key)",
+  "alter table public.crm_identity_reconciliation_events enable row level security",
+  "crm_identity_reconciliation_events_immutable",
+  "audit events are immutable",
+  "security definer",
+  "set search_path = ''",
+  "public.wtos_can_reconcile_customer_property(request_company_id)",
+  "profile.role in ('owner', 'admin')",
+  "membership.role in ('owner', 'admin')",
+  "create or replace function public.wtos_reconcile_customer_property",
+  "reconciliation_request jsonb",
+  "pg_advisory_xact_lock",
+  "for update",
+  "expected_updated_at",
+  "changed after review",
+  "ambiguous within the selected company",
+  "conflicting customer link",
+  "outside the reviewed lead/property graph",
+  "Existing CRM graph contains a cross-company relationship",
+  "before update of company_id",
+  "update public.leads",
+  "update public.properties",
+  "update public.estimates",
+  "update public.inspections",
+  "update public.jobs",
+  "update public.schedule_events",
+  "update public.office_tasks",
+  "revoke all on function public.wtos_reconcile_customer_property(jsonb)",
+  "from public, anon, authenticated, service_role",
+  "grant execute on function public.wtos_reconcile_customer_property(jsonb)",
+  "to authenticated",
+  "like 'TEST WTOS REGRESSION%'",
+]) {
+  if (!crmIdentityReconciliationMigration.includes(requiredContract)) {
+    failures.push(
+      `CRM identity reconciliation migration is missing required contract: ${requiredContract}.`,
+    );
+  }
+}
+
+if (!crmIdentityReconciliationMigration.trimStart().startsWith("begin;") ||
+    !crmIdentityReconciliationMigration.trimEnd().endsWith("commit;")) {
+  failures.push("CRM identity reconciliation migration must use one explicit transaction wrapper.");
+}
+
+if (/\bset\s+(?:status|pipeline_stage)\s*=/i.test(crmIdentityReconciliationMigration)) {
+  failures.push("CRM identity reconciliation must not mutate lead status or pipeline stage.");
+}
+
+for (const forbiddenMutationTarget of [
+  "public.invoices",
+  "public.invoice_line_items",
+  "public.payments",
+  "public.stripe_company_accounts",
+  "public.stripe_object_mappings",
+  "public.stripe_webhook_events",
+  "public.sms_messages",
+  "public.communication_provider_events",
+  "public.integration_connections",
+  "public.email_messages",
+]) {
+  if (crmIdentityReconciliationMigration.includes(forbiddenMutationTarget)) {
+    failures.push(
+      `CRM identity reconciliation must not reference out-of-scope table ${forbiddenMutationTarget}.`,
+    );
+  }
+}
+
+if (/\busing\s*\(\s*true\s*\)|\bwith\s+check\s*\(\s*true\s*\)/i.test(
+  crmIdentityReconciliationMigration,
+)) {
+  failures.push("CRM identity reconciliation must not add broad true RLS policies.");
+}
+
+for (const requiredHardeningContract of [
+  "begin;",
+  "commit;",
+  "create or replace function public.wtos_reconcile_customer_property",
+  "set search_path = ''",
+  "extensions.digest(reconciliation_request::text, 'sha256')",
+  "to_jsonb(source_lead) ->> 'contact_name'",
+  "to_jsonb(source_lead) ->> 'customer_name'",
+  "revoke insert on table public.crm_identity_reconciliation_events from service_role",
+  "(select auth.jwt() ->> 'role') = 'service_role'",
+  "get diagnostics linked_property = row_count",
+  "get diagnostics linked_lead = row_count",
+  "get diagnostics affected_rows = row_count",
+  "'customer', reconciliation_request -> 'customer'",
+  "revoke all on function public.wtos_reconcile_customer_property(jsonb)",
+  "grant execute on function public.wtos_reconcile_customer_property(jsonb)",
+]) {
+  if (!crmIdentityReconciliationHardeningMigration.includes(requiredHardeningContract)) {
+    failures.push(
+      `CRM identity runtime hardening is missing required contract: ${requiredHardeningContract}.`,
+    );
+  }
+}
+
+if (!crmIdentityReconciliationHardeningMigration.trimStart().startsWith("begin;") ||
+    !crmIdentityReconciliationHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push("CRM identity runtime hardening must use one explicit transaction wrapper.");
+}
+
+if (crmIdentityReconciliationHardeningMigration.includes("source_lead.contact_name")) {
+  failures.push("CRM identity runtime hardening must preserve legacy production lead-name compatibility.");
+}
+
+if (/\bset\s+(?:status|pipeline_stage)\s*=/i.test(crmIdentityReconciliationHardeningMigration)) {
+  failures.push("CRM identity runtime hardening must not mutate lead status or pipeline stage.");
+}
+
+for (const forbiddenHardeningTarget of [
+  "public.invoices",
+  "public.invoice_line_items",
+  "public.payments",
+  "public.stripe_company_accounts",
+  "public.stripe_object_mappings",
+  "public.stripe_webhook_events",
+  "public.sms_messages",
+  "public.communication_provider_events",
+  "public.integration_connections",
+  "public.email_messages",
+]) {
+  if (crmIdentityReconciliationHardeningMigration.includes(forbiddenHardeningTarget)) {
+    failures.push(
+      `CRM identity runtime hardening must not reference out-of-scope table ${forbiddenHardeningTarget}.`,
+    );
+  }
+}
+
+for (const requiredInvariantHardeningContract of [
+  "begin;",
+  "commit;",
+  "revoke all on table public.crm_identity_reconciliation_events from service_role",
+  "grant select, delete on table public.crm_identity_reconciliation_events to service_role",
+  "set local lock_timeout = '5s'",
+  "lock table",
+  "in share row exclusive mode",
+  "Existing CRM graph contains a property/customer mismatch; invariant hardening aborted.",
+  "create or replace function public.wtos_enforce_crm_identity_property_customer_invariant()",
+  "security definer",
+  "set search_path = ''",
+  "create or replace function public.wtos_acquire_crm_identity_invariant_lock()",
+  "pg_try_advisory_xact_lock",
+  "pg_advisory_xact_lock",
+  "wtos:crm-identity-property-invariant:coordinator",
+  "Concurrent CRM identity mutation completed; retry with fresh versions.",
+  "using errcode = '40001'",
+  "create or replace function public.wtos_serialize_crm_identity_link_statement()",
+  "rename to wtos_reconcile_customer_property_serialized_core",
+  "revoke all on function public.wtos_reconcile_customer_property_serialized_core(jsonb)",
+  "return public.wtos_reconcile_customer_property_serialized_core(reconciliation_request)",
+  "grant execute on function public.wtos_reconcile_customer_property(jsonb)",
+  "before update of company_id, customer_id on public.properties",
+  "before update of company_id, customer_id, property_id on public.leads",
+  "before update of company_id, customer_id, property_id on public.estimates",
+  "before update of company_id, customer_id, property_id on public.inspections",
+  "before update of company_id, customer_id, property_id on public.jobs",
+  "before update of company_id, customer_id, property_id on public.schedule_events",
+  "before update of company_id, customer_id, property_id on public.office_tasks",
+  "unnest(array[current_property_id, prior_property_id])",
+  "join public.leads as child on child.property_id = property.id",
+  "join public.estimates as child on child.property_id = property.id",
+  "join public.inspections as child on child.property_id = property.id",
+  "join public.jobs as child on child.property_id = property.id",
+  "join public.schedule_events as child on child.property_id = property.id",
+  "join public.office_tasks as child on child.property_id = property.id",
+  "Property customer assignment conflicts with an existing CRM graph row.",
+  "create constraint trigger properties_enforce_crm_identity_property_customer",
+  "create constraint trigger leads_enforce_crm_identity_property_customer",
+  "create constraint trigger estimates_enforce_crm_identity_property_customer",
+  "create constraint trigger inspections_enforce_crm_identity_property_customer",
+  "create constraint trigger jobs_enforce_crm_identity_property_customer",
+  "create constraint trigger schedule_events_enforce_crm_identity_property_customer",
+  "create constraint trigger office_tasks_enforce_crm_identity_property_customer",
+  "deferrable initially deferred",
+  "revoke all on function public.wtos_enforce_crm_identity_property_customer_invariant()",
+  "from public, anon, authenticated, service_role",
+]) {
+  if (!crmIdentityReconciliationInvariantHardeningMigration.includes(
+    requiredInvariantHardeningContract,
+  )) {
+    failures.push(
+      `CRM identity invariant hardening is missing required contract: ${requiredInvariantHardeningContract}.`,
+    );
+  }
+}
+
+if (!crmIdentityReconciliationInvariantHardeningMigration.trimStart().startsWith("begin;") ||
+    !crmIdentityReconciliationInvariantHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push("CRM identity invariant hardening must use one explicit transaction wrapper.");
+}
+
+if (/grant\s+[^;]*(?:insert|update|truncate)[^;]*on\s+table\s+public\.crm_identity_reconciliation_events[^;]*to\s+service_role/i.test(
+  crmIdentityReconciliationInvariantHardeningMigration,
+)) {
+  failures.push(
+    "CRM identity invariant hardening must not grant service_role insert, update, or truncate access to the audit ledger.",
+  );
+}
+
+if (/\b(?:insert\s+into|update|delete\s+from)\s+public\.(?:leads|customers|properties|estimates|inspections|jobs|schedule_events|office_tasks)\b/i.test(
+  crmIdentityReconciliationInvariantHardeningMigration,
+)) {
+  failures.push("CRM identity invariant hardening must not backfill or mutate CRM business rows.");
+}
+
+if (/\bfor\s+(?:share|update)\b/i.test(
+  crmIdentityReconciliationInvariantHardeningMigration,
+)) {
+  failures.push(
+    "CRM identity invariant hardening must not introduce a property/child tuple-lock inversion.",
+  );
+}
+
+for (const requiredStaleVersionHardeningContract of [
+  "begin;",
+  "commit;",
+  "create or replace function public.wtos_reconcile_customer_property",
+  "security definer",
+  "set search_path = ''",
+  "perform public.wtos_acquire_crm_identity_invariant_lock()",
+  "return public.wtos_reconcile_customer_property_serialized_core(",
+  "when serialization_failure then",
+  "message = sqlerrm",
+  "errcode = 'P0001'",
+  "revoke all on function public.wtos_reconcile_customer_property(jsonb)",
+  "from public, anon, authenticated, service_role",
+  "grant execute on function public.wtos_reconcile_customer_property(jsonb)",
+  "to authenticated",
+]) {
+  if (!crmIdentityReconciliationStaleVersionHardeningMigration.includes(
+    requiredStaleVersionHardeningContract,
+  )) {
+    failures.push(
+      `CRM identity stale-version hardening is missing required contract: ${requiredStaleVersionHardeningContract}.`,
+    );
+  }
+}
+
+if (!crmIdentityReconciliationStaleVersionHardeningMigration.trimStart().startsWith("begin;") ||
+    !crmIdentityReconciliationStaleVersionHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push("CRM identity stale-version hardening must use one explicit transaction wrapper.");
+}
+
+if (!/perform public\.wtos_acquire_crm_identity_invariant_lock\(\);\s*begin\s*return public\.wtos_reconcile_customer_property_serialized_core\(/s.test(
+  crmIdentityReconciliationStaleVersionHardeningMigration,
+)) {
+  failures.push(
+    "CRM identity stale-version hardening must acquire the coordinator outside the core exception block.",
+  );
+}
+
+if (/when\s+others/i.test(crmIdentityReconciliationStaleVersionHardeningMigration)) {
+  failures.push("CRM identity stale-version hardening must catch only serialization_failure.");
+}
+
+if (/\b(?:insert\s+into|update|delete\s+from)\s+public\.(?:leads|customers|properties|estimates|inspections|jobs|schedule_events|office_tasks)\b/i.test(
+  crmIdentityReconciliationStaleVersionHardeningMigration,
+)) {
+  failures.push("CRM identity stale-version hardening must not mutate CRM business rows.");
+}
+
+for (const requiredReleaseHardeningContract of [
+  "begin;",
+  "commit;",
+  "set local lock_timeout = '5s'",
+  "create or replace function public.wtos_reconcile_customer_property_serialized_core(",
+  "security definer",
+  "set search_path = ''",
+  "extensions.digest(reconciliation_request::text, 'sha256')",
+  "to_jsonb(source_lead) ->> 'contact_name'",
+  "to_jsonb(source_lead) ->> 'customer_name'",
+  "Creating a customer requires reviewed name, address, and phone or email evidence.",
+  "when normalized_name is null or normalized_address is null then null",
+  "normalized_address is not null",
+  "normalized_name is not null",
+  "or office_task_record.property_id is distinct from target_property.id",
+  "revoke all on function public.wtos_reconcile_customer_property_serialized_core(jsonb)",
+  "create trigger customers_serialize_crm_identity_insert",
+  "before insert on public.customers",
+  "create trigger customers_serialize_crm_identity_update",
+  "before update of company_id, display_name, contact_name, phone, email, property_address",
+  "drop trigger properties_serialize_crm_identity_update on public.properties",
+  "before update of company_id, customer_id, address, postal_code on public.properties",
+  "revoke update on table public.leads, public.properties from authenticated",
+  "revoke update (customer_id, property_id) on table public.leads from authenticated",
+  "revoke update (customer_id) on table public.properties from authenticated",
+  "column_name not in ('customer_id', 'property_id')",
+  "column_name <> 'customer_id'",
+  "grant update (%s) on table public.leads to authenticated",
+  "grant update (%s) on table public.properties to authenticated",
+  "lock table",
+  "in share row exclusive mode",
+  "Existing CRM graph contains a cross-company relationship; reconciliation migration aborted.",
+  "Existing CRM graph contains a property/customer mismatch; release hardening aborted.",
+  "create or replace function public.wtos_protect_crm_identity_reconciliation_event()",
+  "(select auth.jwt() ->> 'role') = 'service_role'",
+  "source_lead.id = old.source_lead_id",
+  "to_jsonb(source_lead) ->> 'contact_name'",
+  "to_jsonb(source_lead) ->> 'customer_name'",
+  "like 'TEST WTOS REGRESSION%'",
+  "revoke all on function public.wtos_protect_crm_identity_reconciliation_event()",
+  "create index crm_identity_reconciliation_events_source_lead_fk_idx",
+  "create index crm_identity_reconciliation_events_actor_user_fk_idx",
+  "create index crm_identity_reconciliation_events_customer_fk_idx",
+  "create index crm_identity_reconciliation_events_property_fk_idx",
+]) {
+  if (!crmIdentityReconciliationReleaseHardeningMigration.includes(
+    requiredReleaseHardeningContract,
+  )) {
+    failures.push(
+      `CRM identity release hardening is missing required contract: ${requiredReleaseHardeningContract}.`,
+    );
+  }
+}
+
+for (const requiredCrossCompanySourceTable of [
+  "from public.leads as row_record",
+  "from public.properties as row_record",
+  "from public.estimates as row_record",
+  "from public.inspections as row_record",
+  "from public.jobs as row_record",
+  "from public.schedule_events as row_record",
+  "from public.office_tasks as row_record",
+  "left join public.customers as customer",
+  "left join public.properties as property",
+  "left join public.leads as lead",
+  "left join public.estimates as estimate",
+  "left join public.inspections as inspection",
+  "left join public.jobs as job",
+  "left join public.schedule_events as schedule_event",
+]) {
+  if (!crmIdentityReconciliationReleaseHardeningMigration.includes(
+    requiredCrossCompanySourceTable,
+  )) {
+    failures.push(
+      `CRM identity release hardening cross-company preflight is incomplete: ${requiredCrossCompanySourceTable}.`,
+    );
+  }
+}
+
+for (const requiredReverseInvariantTable of [
+  "join public.leads as child on child.property_id = property.id",
+  "join public.estimates as child on child.property_id = property.id",
+  "join public.inspections as child on child.property_id = property.id",
+  "join public.jobs as child on child.property_id = property.id",
+  "join public.schedule_events as child on child.property_id = property.id",
+  "join public.office_tasks as child on child.property_id = property.id",
+]) {
+  if (!crmIdentityReconciliationReleaseHardeningMigration.includes(
+    requiredReverseInvariantTable,
+  )) {
+    failures.push(
+      `CRM identity release hardening reverse preflight is incomplete: ${requiredReverseInvariantTable}.`,
+    );
+  }
+}
+
+if (!crmIdentityReconciliationReleaseHardeningMigration.trimStart().startsWith("begin;") ||
+    !crmIdentityReconciliationReleaseHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push("CRM identity release hardening must use one explicit transaction wrapper.");
+}
+
+if (/create\s+or\s+replace\s+function\s+public\.wtos_reconcile_customer_property\s*\(/i.test(
+  crmIdentityReconciliationReleaseHardeningMigration,
+)) {
+  failures.push("CRM identity release hardening must preserve the fourth migration's public wrapper.");
+}
+
+if (/old\.operation_key/i.test(crmIdentityReconciliationReleaseHardeningMigration)) {
+  failures.push("CRM identity release hardening cleanup must not trust the operation key marker.");
+}
+
+if (/\bset\s+(?:status|pipeline_stage)\s*=/i.test(
+  crmIdentityReconciliationReleaseHardeningMigration,
+)) {
+  failures.push("CRM identity release hardening must not mutate lead status or pipeline stage.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -1202,7 +1667,7 @@ if (failures.length > 0) {
 console.log("Supabase migration integrity check passed.");
 console.log(`Checked ${files.length} migrations with unique numeric versions.`);
 console.log(
-  "Verified raw filename order matches numeric order from 0001 through 0036 followed by the registered Stripe migrations.",
+  "Verified raw filename order matches numeric order from 0001 through 0036 followed by the registered timestamped migrations.",
 );
 console.log(
   "Verified 0012_integration_sync_logs.sql -> 0013_job_production_details.sql -> 0014_website_lead_intake_provider.sql.",
@@ -1249,6 +1714,21 @@ console.log(
 console.log(
   "Verified 20260808222141_stripe_company_isolation.sql precedes 20260810225320_stripe_refund_reconciliation.sql.",
 );
+console.log(
+  "Verified 20260810225320_stripe_refund_reconciliation.sql precedes 20260814051533_crm_identity_reconciliation.sql.",
+);
+console.log(
+  "Verified 20260814051533_crm_identity_reconciliation.sql precedes 20260814053339_crm_identity_reconciliation_runtime_hardening.sql.",
+);
+console.log(
+  "Verified 20260814053339_crm_identity_reconciliation_runtime_hardening.sql precedes 20260814054250_crm_identity_reconciliation_invariant_hardening.sql.",
+);
+console.log(
+  "Verified 20260814054250_crm_identity_reconciliation_invariant_hardening.sql precedes 20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql.",
+);
+console.log(
+  "Verified 20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql precedes 20260814063407_crm_identity_reconciliation_release_hardening.sql.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -1273,6 +1753,9 @@ console.log(
 );
 console.log(
   "Verified 0033 AI persistence tables, provider-disabled defaults, scoped RLS policies, and authenticated delete revocation.",
+);
+console.log(
+  "Verified CRM identity reconciliation transaction, immutable audit, owner/admin authorization, exact-version locks, same-company guards, and provider/financial isolation.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

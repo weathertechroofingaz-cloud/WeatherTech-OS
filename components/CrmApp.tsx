@@ -65,7 +65,6 @@ import {
 import {
   addJobMaterial,
   addJobNote,
-  convertLeadToCustomer,
   createChangeOrder,
   createDailyLog,
   createDocument,
@@ -93,6 +92,7 @@ import {
   createScopeTemplate,
   createTimeEntry,
   fetchCrmSnapshot,
+  reconcileCustomerPropertyIdentity,
   updateIntegrationConnection,
   updateIntegrationSyncLog,
   updateCalendarEventSync,
@@ -120,6 +120,11 @@ import {
   updateScopeTemplate,
   upsertCalendarEventSync,
 } from "../lib/crm/repository";
+import {
+  buildIdentityReconciliationCases,
+  buildIdentityReconciliationRequest,
+  type IdentityReconciliationCase,
+} from "../lib/crm/identityReconciliation";
 import {
   buildDocumentSourceOptions,
   buildGeneratedDocumentDraft,
@@ -5578,6 +5583,8 @@ function CrmWorkspace({
 
     return window.localStorage.getItem("weathertech-company-scope") ?? "all";
   });
+  const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
+    useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
   const [recentCommandPaletteIds, setRecentCommandPaletteIds] = useState<string[]>(
@@ -5640,6 +5647,13 @@ function CrmWorkspace({
         writeCommandPaletteRecentIds(next);
         return next;
       });
+    },
+    [onViewChange],
+  );
+  const handleOpenIdentityReconciliation = useCallback(
+    (leadId: string) => {
+      setIdentityReconciliationFocusLeadId(leadId);
+      onViewChange("customers");
     },
     [onViewChange],
   );
@@ -5908,6 +5922,7 @@ function CrmWorkspace({
               onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
+              onOpenIdentityReconciliation={handleOpenIdentityReconciliation}
             />
           ) : null}
 
@@ -5923,6 +5938,7 @@ function CrmWorkspace({
               onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
+              onOpenIdentityReconciliation={handleOpenIdentityReconciliation}
             />
           ) : null}
 
@@ -5935,14 +5951,18 @@ function CrmWorkspace({
               onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
+              onOpenIdentityReconciliation={handleOpenIdentityReconciliation}
             />
           ) : null}
 
           {view === "customers" ? (
             <CustomersView
               client={client}
+              isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              user={user}
+              focusLeadId={identityReconciliationFocusLeadId}
               onViewChange={onViewChange}
               onReload={onReload}
               onNotice={onNotice}
@@ -14027,6 +14047,7 @@ type LeadsViewProps = {
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
   onViewChange: (view: WorkspaceView) => void;
+  onOpenIdentityReconciliation: (leadId: string) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
@@ -14183,34 +14204,6 @@ function getOpportunityRelatedJob(
   );
 }
 
-function buildOpportunityCustomerInput(lead: LeadRecord): CustomerInput {
-  return {
-    company_id: lead.company_id,
-    display_name: lead.contact_name,
-    contact_name: lead.contact_name,
-    phone: lead.phone,
-    email: lead.email,
-    property_address: lead.property_address,
-    city: lead.city,
-    state: lead.state,
-    postal_code: lead.postal_code,
-    customer_type: "homeowner",
-    status: "active",
-    notes: lead.notes,
-  };
-}
-
-function findOpportunityCustomerMatch(snapshot: CrmSnapshot, lead: LeadRecord) {
-  if (lead.customer_id) {
-    return snapshot.customers.find((customer) => customer.id === lead.customer_id) ?? null;
-  }
-
-  return (
-    findPotentialCustomerDuplicates(snapshot.customers, buildOpportunityCustomerInput(lead))[0]
-      ?.customer ?? null
-  );
-}
-
 function buildOpportunityEstimateInput(
   lead: LeadRecord,
   customerId: string,
@@ -14285,39 +14278,6 @@ function buildOpportunityJobInput(
     total: lead.estimated_value,
     notes: lead.notes,
   };
-}
-
-function isMissingLeadCustomerIdColumnError(currentError: unknown) {
-  const message = getCaughtErrorMessage(currentError, "").toLowerCase();
-
-  return (
-    message.includes("customer_id") &&
-    message.includes("leads") &&
-    (message.includes("schema cache") || message.includes("could not find"))
-  );
-}
-
-async function updateOpportunityLead(
-  client: CrmClient,
-  leadId: string,
-  updates: Partial<LeadInput>,
-) {
-  try {
-    return await updateLead(client, leadId, updates);
-  } catch (currentError) {
-    if (!("customer_id" in updates) || !isMissingLeadCustomerIdColumnError(currentError)) {
-      throw currentError;
-    }
-
-    const supportedUpdates = { ...updates };
-    delete supportedUpdates.customer_id;
-
-    if (!Object.keys(supportedUpdates).length) {
-      return null;
-    }
-
-    return updateLead(client, leadId, supportedUpdates);
-  }
 }
 
 function getLeadCreateDuplicateMessage({
@@ -15821,6 +15781,7 @@ function SalesPipelineView({
   onReload,
   onDemoSnapshotChange,
   onViewChange,
+  onOpenIdentityReconciliation,
   onNotice,
   onError,
 }: SalesPipelineViewProps) {
@@ -15832,7 +15793,6 @@ function SalesPipelineView({
   const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | "unassigned">("all");
   const [followUpFilter, setFollowUpFilter] = useState<"all" | "due" | "none">("all");
   const [isSavingOpportunity, setIsSavingOpportunity] = useState(false);
-  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [isCreatingEstimate, setIsCreatingEstimate] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
 
@@ -15846,13 +15806,11 @@ function SalesPipelineView({
     : null;
   const selectedOpportunityCustomer = selectedOpportunity?.customer_id
     ? snapshot.customers.find(
-        (customer) => customer.id === selectedOpportunity.customer_id,
+        (customer) =>
+          customer.id === selectedOpportunity.customer_id &&
+          customer.company_id === selectedOpportunity.company_id,
       ) ?? null
     : null;
-  const selectedOpportunityCustomerMatch =
-    selectedOpportunity && !selectedOpportunity.customer_id
-      ? findOpportunityCustomerMatch(snapshot, selectedOpportunity)
-      : null;
   const selectedOpportunityEstimate = selectedOpportunity
     ? getOpportunityRelatedEstimate(snapshot, selectedOpportunity)
     : null;
@@ -15978,64 +15936,6 @@ function SalesPipelineView({
     }));
   };
 
-  const ensureOpportunityCustomer = async (lead: LeadRecord) => {
-    if (lead.customer_id) {
-      return lead.customer_id;
-    }
-
-    const existingCustomer = findOpportunityCustomerMatch(snapshot, lead);
-
-    if (existingCustomer) {
-      if (isDemoMode) {
-        updateDemoOpportunity(lead.id, { customer_id: existingCustomer.id });
-      } else {
-        await updateOpportunityLead(client, lead.id, {
-          customer_id: existingCustomer.id,
-        });
-      }
-
-      return existingCustomer.id;
-    }
-
-    const input = buildOpportunityCustomerInput(lead);
-
-    if (isDemoMode) {
-      const customerId = `demo-customer-${Date.now()}`;
-      const now = new Date().toISOString();
-      const customer: CustomerRecord = {
-        id: customerId,
-        ...input,
-        phone: input.phone ?? null,
-        email: input.email ?? null,
-        city: input.city ?? null,
-        state: input.state ?? "AZ",
-        postal_code: input.postal_code ?? null,
-        customer_type: input.customer_type ?? "homeowner",
-        status: input.status ?? "active",
-        notes: input.notes ?? null,
-        created_at: now,
-        updated_at: now,
-      };
-
-      onDemoSnapshotChange((currentSnapshot) => ({
-        ...currentSnapshot,
-        customers: [customer, ...currentSnapshot.customers],
-        leads: currentSnapshot.leads.map((currentLead) =>
-          currentLead.id === lead.id
-            ? { ...currentLead, customer_id: customerId, updated_at: now }
-            : currentLead,
-        ),
-      }));
-
-      return customerId;
-    }
-
-    const customer = await createCustomer(client, input);
-    await updateOpportunityLead(client, lead.id, { customer_id: customer.id });
-
-    return customer.id;
-  };
-
   const handleSelectOpportunity = (leadId: string) => {
     updateUiPreservingScrollPosition(() => setSelectedOpportunityId(leadId));
   };
@@ -16124,24 +16024,14 @@ function SalesPipelineView({
     }
   };
 
-  const handleEnsureCustomer = async () => {
-    if (!selectedOpportunity || isCreatingCustomer) {
+  const handleEnsureCustomer = () => {
+    if (!selectedOpportunity) {
       return;
     }
 
-    try {
-      setIsCreatingCustomer(true);
-      onError("");
-      await ensureOpportunityCustomer(selectedOpportunity);
-      if (!isDemoMode) {
-        await onReload();
-      }
-      onNotice("Opportunity linked to a customer.");
-    } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to link customer."));
-    } finally {
-      setIsCreatingCustomer(false);
-    }
+    onError("");
+    onNotice("Review the evidence and exact records before linking this opportunity.");
+    onOpenIdentityReconciliation(selectedOpportunity.id);
   };
 
   const handleCreateOpportunityEstimate = async () => {
@@ -16155,10 +16045,16 @@ function SalesPipelineView({
       return;
     }
 
+    if (!selectedOpportunityCustomer) {
+      onError("Reconcile and approve the customer identity before creating an estimate.");
+      onOpenIdentityReconciliation(selectedOpportunity.id);
+      return;
+    }
+
     try {
       setIsCreatingEstimate(true);
       onError("");
-      const customerId = await ensureOpportunityCustomer(selectedOpportunity);
+      const customerId = selectedOpportunityCustomer.id;
       const input = buildOpportunityEstimateInput(
         selectedOpportunity,
         customerId,
@@ -16235,7 +16131,6 @@ function SalesPipelineView({
             lead.id === selectedOpportunity.id
               ? {
                   ...lead,
-                  customer_id: customerId,
                   status: "qualified",
                   pipeline_stage: "estimate_scheduled",
                   updated_at: now,
@@ -16245,8 +16140,7 @@ function SalesPipelineView({
         }));
       } else {
         await createEstimate(client, input, lineItems);
-        await updateOpportunityLead(client, selectedOpportunity.id, {
-          customer_id: customerId,
+        await updateLead(client, selectedOpportunity.id, {
           status: "qualified",
           pipeline_stage: "estimate_scheduled",
         });
@@ -16272,10 +16166,16 @@ function SalesPipelineView({
       return;
     }
 
+    if (!selectedOpportunityCustomer) {
+      onError("Reconcile and approve the customer identity before creating a job.");
+      onOpenIdentityReconciliation(selectedOpportunity.id);
+      return;
+    }
+
     try {
       setIsCreatingJob(true);
       onError("");
-      const customerId = await ensureOpportunityCustomer(selectedOpportunity);
+      const customerId = selectedOpportunityCustomer.id;
       const input = buildOpportunityJobInput(
         { ...selectedOpportunity, customer_id: customerId },
         selectedOpportunityCompany,
@@ -16318,7 +16218,6 @@ function SalesPipelineView({
             lead.id === selectedOpportunity.id
               ? {
                   ...lead,
-                  customer_id: customerId,
                   status: "won",
                   pipeline_stage: "job_scheduled",
                   updated_at: now,
@@ -16328,8 +16227,7 @@ function SalesPipelineView({
         }));
       } else {
         await createJob(client, input);
-        await updateOpportunityLead(client, selectedOpportunity.id, {
-          customer_id: customerId,
+        await updateLead(client, selectedOpportunity.id, {
           status: "won",
           pipeline_stage: "job_scheduled",
         });
@@ -16725,25 +16623,18 @@ function SalesPipelineView({
             <div className="mt-4 space-y-3">
               <OpportunityRelationRow
                 label="Customer"
-                value={
-                  selectedOpportunityCustomer?.display_name ??
-                  selectedOpportunityCustomerMatch?.display_name ??
-                  "Not linked"
-                }
+                value={selectedOpportunityCustomer?.display_name ?? "Not linked"}
                 detail={
                   selectedOpportunityCustomer
                     ? "Customer 360 ready"
-                    : selectedOpportunityCustomerMatch
-                      ? "Matching customer can be linked"
-                      : "Create customer from opportunity"
+                    : "Evidence review is required before creating or linking a customer"
                 }
-                actionLabel={selectedOpportunityCustomer ? "Open Customer 360" : "Link customer"}
+                actionLabel={selectedOpportunityCustomer ? "Open Customer 360" : "Review identity"}
                 onAction={() =>
                   selectedOpportunityCustomer
                     ? onViewChange("customers")
-                    : void handleEnsureCustomer()
+                    : handleEnsureCustomer()
                 }
-                isBusy={isCreatingCustomer}
               />
               <OpportunityRelationRow
                 label="Estimate"
@@ -17115,6 +17006,7 @@ function LeadsView({
   companyMap,
   onReload,
   onViewChange,
+  onOpenIdentityReconciliation,
   onNotice,
   onError,
 }: LeadsViewProps) {
@@ -17300,18 +17192,21 @@ function LeadsView({
     }
   };
 
-  const handleConvertLead = async () => {
+  const handleConvertLead = () => {
     if (!selectedLead) {
       return;
     }
 
-    try {
-      await convertLeadToCustomer(client, selectedLead);
-      await onReload();
-      onNotice("Lead converted to customer.");
-    } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to convert lead."));
+    onError("");
+
+    if (selectedLead.customer_id) {
+      onNotice("The linked Customer 360 record is ready to review.");
+      onViewChange("customers");
+      return;
     }
+
+    onNotice("Review the evidence and exact records before linking this lead.");
+    onOpenIdentityReconciliation(selectedLead.id);
   };
 
   return (
@@ -17622,10 +17517,10 @@ function LeadsView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleConvertLead()}
+                  onClick={handleConvertLead}
                   className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                  Convert
+                  {selectedLead.customer_id ? "Open Customer 360" : "Review identity"}
                 </button>
               </div>
             </form>
@@ -17801,8 +17696,11 @@ function LeadCreateForm({
 
 type CustomersViewProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  user: User | null;
+  focusLeadId: string | null;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -19393,7 +19291,11 @@ function findPotentialCustomerDuplicates(
   const inputName = normalizeCrmLookup(input.contact_name || input.display_name);
 
   return customers
-    .filter((customer) => customer.id !== excludeCustomerId)
+    .filter(
+      (customer) =>
+        customer.company_id === input.company_id &&
+        customer.id !== excludeCustomerId,
+    )
     .map((customer) => {
       const reasons: string[] = [];
       const customerAddress = normalizeCrmLookup(customer.property_address);
@@ -20016,10 +19918,533 @@ function getCustomerIntegrationProviders(providers: IntegrationProviderReadiness
     .filter((provider): provider is IntegrationProviderReadiness => Boolean(provider));
 }
 
-function CustomersView({
+const identityReconciliationManagerRoles = new Set([
+  "owner",
+  "admin",
+]);
+
+function identityReconciliationStateLabel(
+  state: IdentityReconciliationCase["state"],
+) {
+  if (state === "ready_link") return "Ready to link";
+  if (state === "ready_create") return "Ready to create";
+  if (state === "ambiguous") return "Ambiguous - approval blocked";
+  if (state === "conflict") return "Conflicting links - approval blocked";
+  return "More evidence required";
+}
+
+function identityReconciliationStateTone(
+  state: IdentityReconciliationCase["state"],
+): "green" | "amber" {
+  if (state === "ready_link" || state === "ready_create") return "green";
+  return "amber";
+}
+
+function getIdentityOperationKey(
+  operationKeys: Map<string, string>,
+  caseKey: string,
+  decision: string,
+) {
+  const key = `${caseKey}:${decision}`;
+  const existing = operationKeys.get(key);
+
+  if (existing) {
+    return existing;
+  }
+
+  const operationKey = crypto.randomUUID();
+  operationKeys.set(key, operationKey);
+  return operationKey;
+}
+
+function IdentityReconciliationPanel({
   client,
+  isDemoMode,
   snapshot,
   companyMap,
+  user,
+  focusLeadId,
+  onReload,
+  onNotice,
+  onError,
+}: {
+  client: CrmClient;
+  isDemoMode: boolean;
+  snapshot: CrmSnapshot;
+  companyMap: Map<string, CompanyRecord>;
+  user: User | null;
+  focusLeadId: string | null;
+  onReload: () => Promise<void>;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [schemaReady, setSchemaReady] = useState(false);
+  const [globalCanReconcile, setGlobalCanReconcile] = useState(false);
+  const [dismissedLeadVersions, setDismissedLeadVersions] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const cases = useMemo(
+    () => buildIdentityReconciliationCases(snapshot, { dismissedLeadVersions }),
+    [dismissedLeadVersions, snapshot],
+  );
+  const orderedCases = useMemo(() => {
+    if (!focusLeadId) return cases;
+    return [...cases].sort((left, right) => {
+      if (left.lead.id === focusLeadId) return -1;
+      if (right.lead.id === focusLeadId) return 1;
+      return 0;
+    });
+  }, [cases, focusLeadId]);
+  const [activeCaseKey, setActiveCaseKey] = useState(
+    orderedCases[0]?.key ?? "",
+  );
+  const [selectedLinkKeys, setSelectedLinkKeys] = useState<Set<string>>(
+    () => new Set(orderedCases[0]?.links.map((link) => link.key) ?? []),
+  );
+  const [busyDecision, setBusyDecision] = useState<
+    "approve" | "dismiss" | null
+  >(null);
+  const operationKeysRef = useRef<Map<string, string>>(new Map());
+  const focusedReviewRef = useRef<HTMLDivElement | null>(null);
+  const activeCase =
+    orderedCases.find((reconciliationCase) => reconciliationCase.key === activeCaseKey) ??
+    orderedCases[0] ??
+    null;
+  const reviewedPropertyId =
+    activeCase?.targetProperty &&
+    selectedLinkKeys.has(`properties:${activeCase.targetProperty.id}`)
+      ? activeCase.targetProperty.id
+      : null;
+  const groupedCases = useMemo(
+    () =>
+      snapshot.companies
+        .map((company) => ({
+          company,
+          cases: orderedCases.filter(
+            (reconciliationCase) => reconciliationCase.companyId === company.id,
+          ),
+        }))
+        .filter((group) => group.cases.length),
+    [orderedCases, snapshot.companies],
+  );
+  const canManageActiveCompany = Boolean(
+    user &&
+      activeCase &&
+      (globalCanReconcile ||
+        snapshot.companyMemberships.some(
+          (membership) =>
+            membership.user_id === user.id &&
+            membership.company_id === activeCase.companyId &&
+            identityReconciliationManagerRoles.has(membership.role),
+        )),
+  );
+  const writesAvailable =
+    !isDemoMode && schemaReady && canManageActiveCompany && !busyDecision;
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setSchemaReady(false);
+      setDismissedLeadVersions(new Set());
+      return;
+    }
+
+    let isCurrent = true;
+
+    client
+      .from("crm_identity_reconciliation_events")
+      .select("source_lead_id,source_updated_at,decision")
+      .eq("decision", "dismiss")
+      .then(({ data, error: schemaError }) => {
+        if (!isCurrent) return;
+
+        if (schemaError) {
+          setSchemaReady(false);
+          setDismissedLeadVersions(new Set());
+          return;
+        }
+
+        setSchemaReady(true);
+        setDismissedLeadVersions(
+          new Set(
+            (data ?? []).map(
+              (event) => `${event.source_lead_id}:${event.source_updated_at}`,
+            ),
+          ),
+        );
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [client, isDemoMode]);
+
+  useEffect(() => {
+    if (isDemoMode || !user) {
+      setGlobalCanReconcile(false);
+      return;
+    }
+
+    let isCurrent = true;
+
+    client
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+      .then(({ data, error: profileError }) => {
+        if (!isCurrent) return;
+        setGlobalCanReconcile(
+          !profileError && Boolean(data?.role && identityReconciliationManagerRoles.has(data.role)),
+        );
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [client, isDemoMode, user]);
+
+  useEffect(() => {
+    const focusedCase = orderedCases.find(
+      (reconciliationCase) => reconciliationCase.lead.id === focusLeadId,
+    );
+
+    if (!focusedCase) {
+      return;
+    }
+
+    setActiveCaseKey(focusedCase.key);
+    setSelectedLinkKeys(new Set(focusedCase.links.map((link) => link.key)));
+    window.requestAnimationFrame(() =>
+      focusedReviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, [focusLeadId, orderedCases]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      if (activeCaseKey) setActiveCaseKey("");
+      return;
+    }
+
+    if (activeCase.key !== activeCaseKey) {
+      setActiveCaseKey(activeCase.key);
+    }
+
+    setSelectedLinkKeys((current) => {
+      const available = new Set(activeCase.links.map((link) => link.key));
+      const retained = new Set([...current].filter((key) => available.has(key)));
+      return retained.size ? retained : available;
+    });
+  }, [activeCase, activeCaseKey]);
+
+  const selectCase = (reconciliationCase: IdentityReconciliationCase) => {
+    setActiveCaseKey(reconciliationCase.key);
+    setSelectedLinkKeys(new Set(reconciliationCase.links.map((link) => link.key)));
+    onError("");
+  };
+
+  const submitDecision = async (decision: "approve" | "dismiss") => {
+    if (!activeCase || !writesAvailable) {
+      return;
+    }
+
+    const requestedDecision =
+      decision === "dismiss" ? "dismiss" : activeCase.decision;
+
+    if (!requestedDecision) {
+      onError("This case is ambiguous or conflicting and cannot be approved.");
+      return;
+    }
+
+    const operationKey = getIdentityOperationKey(
+      operationKeysRef.current,
+      activeCase.key,
+      requestedDecision,
+    );
+
+    try {
+      setBusyDecision(decision);
+      onError("");
+      const request = buildIdentityReconciliationRequest({
+        reconciliationCase: activeCase,
+        operationKey,
+        selectedLinkKeys,
+        decision: requestedDecision,
+      });
+      const result = await reconcileCustomerPropertyIdentity(client, request);
+      if (requestedDecision === "dismiss") {
+        setDismissedLeadVersions((current) => {
+          const next = new Set(current);
+          next.add(`${activeCase.lead.id}:${activeCase.lead.updated_at}`);
+          return next;
+        });
+      }
+      await onReload();
+      onNotice(
+        requestedDecision === "dismiss"
+          ? "Identity reconciliation case dismissed with an audit record."
+          : result.duplicate
+            ? "The previously approved reconciliation was recovered without duplicate changes."
+            : "Customer and property identity reconciled from the reviewed records.",
+      );
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to apply the reviewed identity reconciliation.",
+        ),
+      );
+    } finally {
+      setBusyDecision(null);
+    }
+  };
+
+  return (
+    <section
+      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      data-testid="identity-reconciliation-queue"
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">
+            Identity Reconciliation
+          </p>
+          <h2 className="mt-1 text-lg font-bold text-slate-950">
+            Review customer and property links
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Evidence is evaluated inside each company. Nothing is linked until the
+            exact customer, property, and record list is reviewed and approved.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge label={`${orderedCases.length} pending`} tone={orderedCases.length ? "amber" : "green"} />
+          <Badge label="No automatic merge" tone="blue" />
+        </div>
+      </div>
+
+      {!schemaReady || isDemoMode ? (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {isDemoMode
+            ? "Demo mode shows evidence only. Identity writes require the isolated or live authenticated database."
+            : "The reconciliation migration is not available on this database. Review is read-only until the schema is verified."}
+        </div>
+      ) : null}
+
+      {!orderedCases.length ? (
+        <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+          No unlinked lead identities require review in this company scope.
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+          <div className="grid content-start gap-3">
+            {groupedCases.map((group) => (
+              <section key={group.company.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-slate-950">{group.company.name}</p>
+                  <Badge label={String(group.cases.length)} tone="blue" />
+                </div>
+                <div className="mt-2 grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
+                  {group.cases.map((reconciliationCase) => (
+                    <button
+                      key={reconciliationCase.key}
+                      type="button"
+                      onClick={() => selectCase(reconciliationCase)}
+                      aria-pressed={activeCase?.key === reconciliationCase.key}
+                      data-testid="identity-reconciliation-case"
+                      data-case-key={reconciliationCase.key}
+                      data-company-id={reconciliationCase.companyId}
+                      data-state={reconciliationCase.state}
+                      className={`rounded-md border p-3 text-left transition ${
+                        activeCase?.key === reconciliationCase.key
+                          ? "border-sky-400 bg-sky-50"
+                          : "border-slate-200 bg-white hover:border-sky-200"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {reconciliationCase.lead.contact_name}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {reconciliationCase.lead.property_address}
+                          </p>
+                        </div>
+                        <Badge
+                          label={identityReconciliationStateLabel(reconciliationCase.state)}
+                          tone={identityReconciliationStateTone(reconciliationCase.state)}
+                        />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          {activeCase ? (
+            <div
+              ref={focusedReviewRef}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+              data-testid="identity-reconciliation-review"
+              data-case-key={activeCase.key}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-500">Reviewed source lead</p>
+                  <h3 className="mt-1 text-lg font-bold text-slate-950">
+                    {activeCase.lead.contact_name}
+                  </h3>
+                  <p className="mt-1 break-all font-mono text-xs text-slate-500">
+                    {activeCase.lead.id}
+                  </p>
+                </div>
+                <Badge
+                  label={identityReconciliationStateLabel(activeCase.state)}
+                  tone={identityReconciliationStateTone(activeCase.state)}
+                />
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <CustomerDetail label="Phone evidence" value={activeCase.lead.phone ?? "Missing"} />
+                <CustomerDetail label="Email evidence" value={activeCase.lead.email ?? "Missing"} />
+                <CustomerDetail label="Address evidence" value={activeCase.lead.property_address} />
+              </div>
+
+              <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+                <p className="font-bold text-slate-950">Proposed customer decision</p>
+                <p className="mt-1 text-slate-600">
+                  {activeCase.targetCustomer
+                    ? `Link to ${activeCase.targetCustomer.display_name}.`
+                    : activeCase.decision === "create_customer"
+                      ? `Create one ${companyMap.get(activeCase.companyId)?.name ?? "company"} homeowner customer from the reviewed lead identity.`
+                      : "No safe customer decision is available."}
+                </p>
+                {activeCase.customerCandidates.map((candidate) => (
+                  <div key={candidate.customer.id} className="mt-2 rounded-md bg-slate-50 p-2">
+                    <p className="font-semibold text-slate-900">{candidate.customer.display_name}</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {candidate.customer.contact_name} - {candidate.customer.phone ?? "no phone"} - {candidate.customer.email ?? "no email"} - {candidate.customer.property_address}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {candidate.evidence.map((item) => item.label).join("; ")}
+                    </p>
+                    <p className="mt-1 break-all font-mono text-[0.68rem] text-slate-400">
+                      {candidate.customer.id}
+                    </p>
+                    <p className="mt-1 text-[0.68rem] text-slate-400">
+                      Expected version {candidate.customer.updated_at}
+                    </p>
+                  </div>
+                ))}
+                {activeCase.crossCompanyMatches.length ? (
+                  <p className="mt-2 text-xs font-semibold text-red-700">
+                    {activeCase.crossCompanyMatches.length} exact other-company match
+                    {activeCase.crossCompanyMatches.length === 1 ? " was" : "es were"} excluded from selection.
+                  </p>
+                ) : null}
+              </div>
+
+              {activeCase.blockers.length ? (
+                <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+                  <p className="font-bold">Approval refused</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {activeCase.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+
+              <div className="mt-3">
+                <p className="text-sm font-bold text-slate-950">Exact selected graph</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  The source lead is mandatory. Select only the additional rows whose customer/property links should change.
+                </p>
+                <div className="mt-2 grid gap-2">
+                  <div
+                    className="rounded-md border border-sky-200 bg-sky-50 p-2"
+                    data-testid="identity-reconciliation-record"
+                  >
+                    <p className="text-xs font-bold uppercase text-sky-800">Lead - mandatory</p>
+                    <p className="mt-1 break-all font-mono text-[0.68rem] text-slate-600">{activeCase.lead.id}</p>
+                    <p className="mt-1 text-xs text-slate-500">Expected version {activeCase.lead.updated_at}</p>
+                  </div>
+                  {activeCase.links.map((link) => (
+                    <label
+                      key={link.key}
+                      className="flex items-start gap-2 rounded-md border border-slate-200 bg-white p-2"
+                      data-testid="identity-reconciliation-record"
+                      data-table={link.table}
+                      data-record-id={link.id}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedLinkKeys.has(link.key)}
+                        onChange={(event) => {
+                          setSelectedLinkKeys((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(link.key);
+                            else next.delete(link.key);
+                            return next;
+                          });
+                        }}
+                        className="mt-1"
+                      />
+                      <span className="min-w-0 text-xs text-slate-600">
+                        <span className="block font-bold uppercase text-slate-800">
+                          {link.table.replace(/_/g, " ")} - {link.label}
+                        </span>
+                        <span className="mt-1 block break-all font-mono text-[0.68rem]">{link.id}</span>
+                        <span className="mt-1 block">
+                          {link.table === "properties"
+                            ? `Customer ${link.currentCustomerId ?? "unlinked"}; selected property ${link.id}`
+                            : `Customer ${link.currentCustomerId ?? "unlinked"}; property ${link.currentPropertyId ?? "unlinked"}${reviewedPropertyId && !link.currentPropertyId ? ` -> ${reviewedPropertyId}` : ""}`}
+                        </span>
+                        <span className="mt-1 block text-slate-400">Expected version {link.expectedUpdatedAt}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="identity-reconciliation-approve"
+                  disabled={!writesAvailable || !activeCase.decision}
+                  onClick={() => void submitDecision("approve")}
+                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {busyDecision === "approve" ? "Applying reviewed links" : "Approve selected links"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="identity-reconciliation-dismiss"
+                  disabled={!writesAvailable}
+                  onClick={() => void submitDecision("dismiss")}
+                  className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {busyDecision === "dismiss" ? "Recording dismissal" : "Dismiss with audit record"}
+                </button>
+              </div>
+              {!canManageActiveCompany && !isDemoMode ? (
+                <p className="mt-2 text-xs font-semibold text-slate-500">
+                  Read-only: approval requires owner or admin access for this company.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CustomersView({
+  client,
+  isDemoMode,
+  snapshot,
+  companyMap,
+  user,
+  focusLeadId,
   onReload,
   onNotice,
   onError,
@@ -20268,7 +20693,20 @@ function CustomersView({
   };
 
   return (
-    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)]">
+    <div className="space-y-5">
+      <IdentityReconciliationPanel
+        client={client}
+        isDemoMode={isDemoMode}
+        snapshot={snapshot}
+        companyMap={companyMap}
+        user={user}
+        focusLeadId={focusLeadId}
+        onReload={onReload}
+        onNotice={onNotice}
+        onError={onError}
+      />
+
+      <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)]">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -20597,6 +21035,7 @@ function CustomersView({
           </section>
         ) : null}
       </aside>
+      </div>
     </div>
   );
 }

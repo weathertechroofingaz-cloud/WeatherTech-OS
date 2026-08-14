@@ -79,6 +79,7 @@ const RESIDUE_PROBES = [
   ["call_records", "correlation_id"],
   ["change_orders", "title"],
   ["communication_provider_events", "correlation_id"],
+  ["crm_identity_reconciliation_events", "operation_key"],
   ["customers", "display_name"],
   ["daily_logs", "work_completed"],
   ["documents", "title"],
@@ -102,6 +103,7 @@ const RESIDUE_PROBES = [
 const OWNER_REFERENCE_PROBES = [
   ["ai_audit_events", "actor_user_id"],
   ["ai_saved_analyses", "created_by"],
+  ["crm_identity_reconciliation_events", "actor_user_id"],
   ["documents", "uploaded_by"],
   ["estimate_proposal_options", "created_by"],
   ["estimate_proposal_options", "selected_by"],

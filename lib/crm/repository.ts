@@ -33,6 +33,8 @@ import type {
   EstimateStatus,
   InspectionInput,
   InspectionRecord,
+  IdentityReconciliationRequest,
+  IdentityReconciliationResult,
   IntegrationConnectionInput,
   IntegrationConnectionRecord,
   IntegrationSyncLogInput,
@@ -1202,6 +1204,87 @@ export async function updateCustomer(
   return data;
 }
 
+export async function reconcileCustomerPropertyIdentity(
+  client: CrmClient,
+  request: IdentityReconciliationRequest,
+) {
+  const { data, error } = await client.rpc("wtos_reconcile_customer_property", {
+    reconciliation_request: request,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  if (!isIdentityReconciliationResult(data)) {
+    throw new Error("Identity reconciliation returned an invalid response.");
+  }
+
+  if (
+    data.operation_key !== request.operation_key ||
+    data.company_id !== request.company_id ||
+    data.lead_id !== request.lead.id ||
+    data.decision !== request.decision
+  ) {
+    throw new Error("Identity reconciliation returned a mismatched response.");
+  }
+
+  return data;
+}
+
+function isIdentityReconciliationResult(
+  value: unknown,
+): value is IdentityReconciliationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const result = value as Partial<IdentityReconciliationResult>;
+  const updated = result.updated;
+  const hasValidUpdatedCounts =
+    Boolean(updated && typeof updated === "object" && !Array.isArray(updated)) &&
+    [
+      updated?.leads,
+      updated?.properties,
+      updated?.estimates,
+      updated?.inspections,
+      updated?.jobs,
+      updated?.schedule_events,
+      updated?.office_tasks,
+    ].every((count) => Number.isInteger(count) && Number(count) >= 0);
+  const statusIsValid =
+    result.status === "applied" ||
+    result.status === "dismissed" ||
+    result.status === "duplicate";
+  const decisionIsValid =
+    result.decision === "link_existing" ||
+    result.decision === "create_customer" ||
+    result.decision === "dismiss";
+
+  return Boolean(
+    typeof result.event_id === "string" &&
+      result.event_id &&
+      typeof result.operation_key === "string" &&
+      result.operation_key &&
+      typeof result.company_id === "string" &&
+      result.company_id &&
+      typeof result.lead_id === "string" &&
+      result.lead_id &&
+      (typeof result.customer_id === "string" || result.customer_id === null) &&
+      (typeof result.property_id === "string" || result.property_id === null) &&
+      (result.customer_created === undefined ||
+        typeof result.customer_created === "boolean") &&
+      typeof result.duplicate === "boolean" &&
+      statusIsValid &&
+      decisionIsValid &&
+      hasValidUpdatedCounts &&
+      (result.status === "duplicate") === result.duplicate &&
+      (result.status !== "dismissed" || result.decision === "dismiss") &&
+      (result.status === "dismissed" || result.decision !== "dismiss" || result.duplicate) &&
+      (result.decision === "dismiss" || typeof result.customer_id === "string"),
+  );
+}
+
 function buildPropertyPayload(input: PropertyInput) {
   return {
     company_id: input.company_id,
@@ -1284,39 +1367,6 @@ export async function updateProperty(
   }
 
   return normalizePropertyRows([data])[0];
-}
-
-export async function convertLeadToCustomer(client: CrmClient, lead: LeadRecord) {
-  const customer = await createCustomer(client, {
-    company_id: lead.company_id,
-    display_name: lead.contact_name,
-    contact_name: lead.contact_name,
-    phone: lead.phone,
-    email: lead.email,
-    property_address: lead.property_address,
-    city: lead.city,
-    state: lead.state,
-    postal_code: lead.postal_code,
-    customer_type: "homeowner",
-    status: "active",
-    notes: lead.notes,
-  });
-
-  await updateLead(client, lead.id, {
-    status: "won",
-    pipeline_stage: "approved",
-  });
-
-  const { error } = await client
-    .from("leads")
-    .update({ customer_id: customer.id })
-    .eq("id", lead.id);
-
-  if (error) {
-    throw error;
-  }
-
-  return customer;
 }
 
 function buildEstimatePayload(input: EstimateInput, lineItems: EstimateLineItemInput[]) {

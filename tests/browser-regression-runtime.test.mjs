@@ -91,6 +91,19 @@ assertEqual(
   "dashboard",
   "A known targeted group is allowed",
 );
+assertEqual(
+  resolveBrowserRegressionGroups({
+    groups: ["crm-reconciliation"],
+    fullRun: false,
+  }).groups[0],
+  "crm-reconciliation",
+  "The focused CRM reconciliation group is allowed without changing full-run defaults",
+);
+assertEqual(
+  DEFAULT_BROWSER_REGRESSION_GROUPS.length,
+  24,
+  "The reconciliation scenario does not increase the established full-run group count",
+);
 assertThrows(
   () => resolveBrowserRegressionGroups({ groups: [], fullRun: false }),
   "at least one",
