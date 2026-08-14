@@ -90,7 +90,7 @@ const expectedMigrations = [
   ],
   [
     "0026_property_intelligence_foundation.sql",
-    "38d70de853c3fff13a41fcc3d8810dc9b9ced78d6fc64a7e73a5cd606cf0862a",
+    "caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e",
   ],
   [
     "0027_gmail_workspace_email_foundation.sql",
@@ -515,6 +515,20 @@ for (const propertyLinkedTable of [
 
   if (!propertyIntelligenceMigration.includes(`${propertyLinkedTable}_property_id_idx`)) {
     failures.push(`0026 must index ${propertyLinkedTable}.property_id.`);
+  }
+}
+
+for (const requiredLeadCompatibilityColumn of [
+  "add column if not exists customer_id uuid references public.customers(id) on delete set null",
+  "add column if not exists city text",
+  "add column if not exists state text",
+  "add column if not exists postal_code text",
+  "add column if not exists service_type text",
+  "add column if not exists service_needed text",
+  "leads_customer_id_idx",
+]) {
+  if (!propertyIntelligenceMigration.includes(requiredLeadCompatibilityColumn)) {
+    failures.push(`0026 must include legacy lead compatibility for ${requiredLeadCompatibilityColumn}.`);
   }
 }
 

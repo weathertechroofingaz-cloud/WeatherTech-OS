@@ -296,6 +296,20 @@ begin
   end loop;
 end $$;
 
+-- Some production projects applied the original CRM foundation before the
+-- normalized lead columns were added to the repository. Keep this migration
+-- compatible with those legacy lead rows before the property backfill reads
+-- lead customer/address/service fields.
+alter table public.leads
+add column if not exists customer_id uuid references public.customers(id) on delete set null,
+add column if not exists city text,
+add column if not exists state text,
+add column if not exists postal_code text,
+add column if not exists service_type text,
+add column if not exists service_needed text;
+
+create index if not exists leads_customer_id_idx on public.leads(customer_id);
+
 insert into public.properties (
   company_id,
   customer_id,
@@ -365,11 +379,11 @@ select
   lead.property_address,
   lead.property_address,
   lead.city,
-  lead.state,
+  coalesce(nullif(lead.state, ''), 'AZ'),
   lead.postal_code,
   case
-    when lead.service_type = 'painting' then 'single_family'
-    when lead.service_type = 'roofing' then 'single_family'
+    when coalesce(lead.service_type, lead.service_needed) = 'painting' then 'single_family'
+    when coalesce(lead.service_type, lead.service_needed) = 'roofing' then 'single_family'
     else 'other'
   end,
   false,
