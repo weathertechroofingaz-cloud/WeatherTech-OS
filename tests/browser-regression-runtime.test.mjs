@@ -65,6 +65,7 @@ const parsedEnvironment = parseRegressionEnvironment([
   "export NEXT_PUBLIC_SUPABASE_URL='http://127.0.0.1:54321'",
   "NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true",
   `SUPABASE_SERVICE_ROLE_KEY=${fakeServiceRoleJwt("local")}`,
+  "MIGHTY_APES_YELP_WEBHOOK_SECRET=synthetic-mighty-apes-secret",
   `${BROWSER_REGRESSION_TEST_USER_EMAIL}="regression-owner@example.test"`,
   `${BROWSER_REGRESSION_TEST_USER_PASSWORD}=synthetic-password`,
 ].join("\n"));
@@ -72,6 +73,11 @@ assertEqual(
   parsedEnvironment.NEXT_PUBLIC_SUPABASE_URL,
   "http://127.0.0.1:54321",
   "Regression environment parser supports quoted values and export declarations",
+);
+assertEqual(
+  parsedEnvironment.MIGHTY_APES_YELP_WEBHOOK_SECRET,
+  "synthetic-mighty-apes-secret",
+  "Mighty Apes signing material stays in the server-only regression environment",
 );
 assertThrows(
   () => parseRegressionEnvironment("not a declaration"),
@@ -159,6 +165,7 @@ writeFileSync(
     `NEXT_PUBLIC_SUPABASE_URL=https://${WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF}.supabase.co`,
     "NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true",
     `SUPABASE_SERVICE_ROLE_KEY=${fakeServiceRoleJwt(WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF)}`,
+    "MIGHTY_APES_YELP_WEBHOOK_SECRET=synthetic-mighty-apes-secret",
     `${BROWSER_REGRESSION_TEST_USER_EMAIL}=regression-owner@example.test`,
     `${BROWSER_REGRESSION_TEST_USER_PASSWORD}=synthetic-password`,
   ].join("\n"),
@@ -188,6 +195,11 @@ try {
     `https://${WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF}.supabase.co`,
     "External hosted target identity is preserved",
   );
+  assertEqual(
+    externalEnvironment.environment.MIGHTY_APES_YELP_WEBHOOK_SECRET,
+    "synthetic-mighty-apes-secret",
+    "External hosted regression loads the Mighty Apes secret without a repository fallback",
+  );
 
   const processEnvironment = loadBrowserRegressionEnvironment({
     cwd: checkoutPath,
@@ -197,6 +209,7 @@ try {
       SUPABASE_SERVICE_ROLE_KEY: fakeServiceRoleJwt(
         WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF,
       ),
+      MIGHTY_APES_YELP_WEBHOOK_SECRET: "synthetic-mighty-apes-secret",
       [BROWSER_REGRESSION_TEST_USER_EMAIL]: "regression-owner@example.test",
       [BROWSER_REGRESSION_TEST_USER_PASSWORD]: "synthetic-password",
     },
@@ -206,6 +219,11 @@ try {
     processEnvironment.source,
     "process_environment",
     "Hosted regression can load credentials directly from protected process environment values",
+  );
+  assertEqual(
+    processEnvironment.environment.MIGHTY_APES_YELP_WEBHOOK_SECRET,
+    "synthetic-mighty-apes-secret",
+    "Process regression environment forwards the Mighty Apes secret only to the local server",
   );
 
   assertThrows(

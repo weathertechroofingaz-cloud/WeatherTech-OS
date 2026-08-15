@@ -29,6 +29,12 @@ import {
 
 const BASE_URL = "http://localhost:3000/";
 const TEST_PREFIX = "TEST WTOS REGRESSION";
+const MIGHTY_APES_TEST_PREFIX = "TEST WTOS MIGHTY APES REGRESSION:";
+const MIGHTY_APES_CAMPAIGN_YELP_ID = "00LZA1SuPKX0yUnsdthgLg";
+const MIGHTY_APES_CAMPAIGN_NAME =
+  "Weather Tech Roofing - Scottsdale, AZ 85255";
+const MIGHTY_APES_WEBHOOK_PATH =
+  "/api/integrations/mighty-apes/yelp/webhook";
 const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
 
 function readLinkedSupabaseProjectRef(cwd) {
@@ -65,10 +71,8 @@ function buildEncryptedLeadIntakeRetryPayload(env, payload) {
   };
 }
 
-function createProviderHmacSignature(rawBody, timestamp, secret) {
-  return createHmac("sha256", secret)
-    .update(`${timestamp}.${rawBody}`)
-    .digest("hex");
+function createMightyApesHmacSignature(rawBody, secret) {
+  return createHmac("sha256", secret).update(rawBody).digest("hex");
 }
 
 function colorKind(rgbText) {
@@ -299,6 +303,35 @@ async function findNotificationsForRun(env, runMarker) {
   return mergeRowsById(directNotifications, followUpNotifications);
 }
 
+async function findMightyApesEventsForRun(env, runId) {
+  const marker = `${MIGHTY_APES_TEST_PREFIX} ${runId}`;
+  const [byDelivery, byProviderLead] = await Promise.all([
+    findByLikeIfPresent(
+      env,
+      "mighty_apes_yelp_webhook_events",
+      "delivery_id",
+      marker,
+    ),
+    findByLikeIfPresent(
+      env,
+      "mighty_apes_yelp_webhook_events",
+      "provider_lead_id",
+      marker,
+    ),
+  ]);
+
+  return mergeRowsById(byDelivery, byProviderLead);
+}
+
+async function findMightyApesSyncLogsForRun(env, runId) {
+  return findByLikeIfPresent(
+    env,
+    "integration_sync_logs",
+    "external_id",
+    `${MIGHTY_APES_TEST_PREFIX} ${runId}`,
+  );
+}
+
 async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
   const runMarker = buildRegressionRunMarker(runId, TEST_PREFIX);
   const derivedInvoiceMarker = `Invoice for ${runMarker}`;
@@ -343,6 +376,8 @@ async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
     findByLikeIfPresent(env, "email_messages", "subject", runMarker),
     findByLikeIfPresent(env, "business_phone_numbers", "routing_key", runMarker),
     findNotificationsForRun(env, runMarker),
+    findMightyApesEventsForRun(env, runId),
+    findMightyApesSyncLogsForRun(env, runId),
   ]);
   const count = checks.reduce((total, rows) => total + rows.length, 0);
 
@@ -510,9 +545,16 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     env,
     `crm_identity_reconciliation_events?select=id,operation_key&operation_key=like.${prefixFilter}`,
   );
-  const [leadIntakeRecords, notifications] = await Promise.all([
+  const [
+    leadIntakeRecords,
+    notifications,
+    mightyApesEvents,
+    mightyApesSyncLogs,
+  ] = await Promise.all([
     findLeadIntakeRecordsForRun(env, runMarker),
     findNotificationsForRun(env, runMarker),
+    findMightyApesEventsForRun(env, runId),
+    findMightyApesSyncLogsForRun(env, runId),
   ]);
   const jobIds = jobs.map((job) => job.id);
   const estimateIds = estimates.map((estimate) => estimate.id);
@@ -582,6 +624,8 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   assertRegressionCleanupSafe({ payments, stripeMappings });
 
   const communicationCleanup = {
+    mightyApesEventsDeleted: mightyApesEvents.length,
+    mightyApesSyncLogsDeleted: mightyApesSyncLogs.length,
     integrationLogsDeleted: await deleteByLikeIfPresent(
       env,
       "integration_sync_logs",
@@ -623,9 +667,21 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
 
   await deleteByIds(
     env,
+    "mighty_apes_yelp_webhook_events",
+    "id",
+    mightyApesEvents.map((event) => event.id),
+  );
+  await deleteByIds(
+    env,
     "lead_intake_records",
     "id",
     leadIntakeRecords.map((record) => record.id),
+  );
+  await deleteByIds(
+    env,
+    "integration_sync_logs",
+    "id",
+    mightyApesSyncLogs.map((log) => log.id),
   );
   await deleteByIds(
     env,
@@ -681,6 +737,16 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       findByIds(env, "customers", customerIds),
       findByIds(env, "properties", propertyIds),
       findByIds(env, "crm_identity_reconciliation_events", reconciliationEventIds),
+      findByIds(
+        env,
+        "mighty_apes_yelp_webhook_events",
+        mightyApesEvents.map((event) => event.id),
+      ),
+      findByIds(
+        env,
+        "integration_sync_logs",
+        mightyApesSyncLogs.map((log) => log.id),
+      ),
       findByIds(
         env,
         "office_tasks",
@@ -1437,12 +1503,13 @@ async function postAppJson(baseUrl, path, payload, headers = {}) {
   };
 }
 
-async function postAppRaw(baseUrl, path, body) {
+async function postAppRaw(baseUrl, path, body, headers = {}) {
   const response = await fetch(new URL(path, baseUrl), {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...headers,
     },
     body,
   });
@@ -7338,8 +7405,11 @@ async function testGoogleWorkspaceOwnerApprovalFoundation(tab) {
 async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNameColumn, progress) {
   const websiteExternalId = `${TEST_PREFIX} ${runId} WEBSITE EXT`;
   const websiteLeadName = `${TEST_PREFIX} ${runId} WEBSITE INTAKE`;
-  const yelpExternalId = `${TEST_PREFIX} ${runId} YELP EXT`;
-  const yelpLeadName = `${TEST_PREFIX} ${runId} YELP INTAKE`;
+  const mightyApesMarker = `${MIGHTY_APES_TEST_PREFIX} ${runId}`;
+  const yelpExternalId = `${mightyApesMarker} LEAD CREATED`;
+  const yelpTestExternalId = `${mightyApesMarker} LEAD TEST`;
+  const yelpLeadName = `${TEST_PREFIX} ${runId} MIGHTY APES YELP INTAKE`;
+  const yelpTestLeadName = `${TEST_PREFIX} ${runId} MIGHTY APES TEST`;
   const gbpExternalId = `${TEST_PREFIX} ${runId} GBP EXT`;
   const gbpLeadName = `${TEST_PREFIX} ${runId} GBP INTAKE`;
   const retryExternalId = `${TEST_PREFIX} ${runId} RETRY EXT`;
@@ -7363,7 +7433,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   progress("lead-intake:invalid-json:done");
 
   progress("lead-intake:yelp:request-guards:start");
-  const unsupportedYelpContentType = await fetch(new URL("/api/leads/yelp", baseUrl), {
+  const unsupportedYelpContentType = await fetch(new URL(MIGHTY_APES_WEBHOOK_PATH, baseUrl), {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -7375,20 +7445,31 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
 
   if (
     unsupportedYelpContentType.status !== 415 ||
-    unsupportedYelpBody?.status !== "unsupported_content_type"
+    unsupportedYelpBody?.code !== "unsupported_content_type"
   ) {
     throw new Error(
       `Yelp unsupported content type was ${unsupportedYelpContentType.status} ${JSON.stringify(unsupportedYelpBody)}`,
     );
   }
 
-  const oversizedYelp = await postAppJson(baseUrl, "/api/leads/yelp", {
-    yelpAccountKey: "ihc",
-    name: `${TEST_PREFIX} ${runId} OVERSIZED YELP`,
-    message: "x".repeat(33000),
+  const oversizedYelp = await postAppJson(baseUrl, MIGHTY_APES_WEBHOOK_PATH, {
+    version: 1,
+    event: "lead.test",
+    campaign: {
+      yelp_id: MIGHTY_APES_CAMPAIGN_YELP_ID,
+      name: MIGHTY_APES_CAMPAIGN_NAME,
+    },
+    lead: {
+      id: `${mightyApesMarker} OVERSIZED`,
+      name: yelpTestLeadName,
+      phone: "+14805550110",
+      zip_code: "85255",
+      message: "x".repeat(33000),
+      created_at: submittedAt,
+    },
   });
 
-  if (oversizedYelp.status !== 413 || oversizedYelp.body?.status !== "payload_too_large") {
+  if (oversizedYelp.status !== 413 || oversizedYelp.body?.code !== "payload_too_large") {
     throw new Error(
       `Yelp oversized payload was ${oversizedYelp.status} ${JSON.stringify(oversizedYelp.body)}`,
     );
@@ -7556,88 +7637,44 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:website:dry-run:done");
 
-  progress("lead-intake:yelp:dry-run:start");
+  progress("lead-intake:mighty-apes:request-auth:start");
+  const yelpMultilineMessage = [
+    `${TEST_PREFIX} ${runId} Yelp questionnaire`,
+    "Roof age: 17 years",
+    "Leak active: yes",
+  ].join("\n");
   const yelpPayload = {
-    yelpAccountKey: "ihc",
-    source: "Yelp",
-    yelpBusinessId: "ihc",
-    yelpConversationId: `${TEST_PREFIX} ${runId} YELP CONVERSATION`,
-    yelpLeadId: yelpExternalId,
-    submittedAt,
-    name: yelpLeadName,
-    phone: "6025550222",
-    email: `yelp-${runId}@example.test`,
-    location: "Tempe",
-    serviceType: "painting",
-    message: `${TEST_PREFIX} ${runId} Yelp intake message`,
+    version: 1,
+    event: "lead.created",
+    campaign: {
+      yelp_id: MIGHTY_APES_CAMPAIGN_YELP_ID,
+      name: MIGHTY_APES_CAMPAIGN_NAME,
+    },
+    lead: {
+      id: yelpExternalId,
+      name: yelpLeadName,
+      phone: "+14805550222",
+      zip_code: "85255",
+      message: yelpMultilineMessage,
+      created_at: submittedAt,
+    },
   };
-  const yelpPhoenixDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
-    ...yelpPayload,
-    yelpAccountKey: "weathertech-phoenix",
-    yelpBusinessId: "weathertech-phoenix",
-    yelpLeadId: `${yelpExternalId} PHOENIX`,
-    yelpConversationId: `${TEST_PREFIX} ${runId} YELP PHOENIX CONVERSATION`,
-    name: `${yelpLeadName} PHOENIX`,
-    phone: "6025550220",
-    email: `yelp-phoenix-${runId}@example.test`,
-    location: "Phoenix",
-    serviceType: "roofing",
-  });
+  const unsignedYelpTimestamp = String(Math.floor(Date.now() / 1000));
+  const unsignedYelp = await postAppRaw(
+    baseUrl,
+    MIGHTY_APES_WEBHOOK_PATH,
+    JSON.stringify(yelpPayload),
+    {
+      "User-Agent": "MightyApes-Webhook/1",
+      "X-MightyApes-Timestamp": unsignedYelpTimestamp,
+      "X-MightyApes-Delivery": `${mightyApesMarker} DELIVERY UNSIGNED`,
+    },
+  );
 
-  if (
-    yelpPhoenixDryRun.status !== 200 ||
-    yelpPhoenixDryRun.body?.routing?.company !== "weathertech_roofing" ||
-    yelpPhoenixDryRun.body?.routing?.branch !== "weathertech_phoenix"
-  ) {
-    throw new Error(`Phoenix Yelp dry run failed: ${yelpPhoenixDryRun.status} ${JSON.stringify(yelpPhoenixDryRun.body)}`);
+  if (unsignedYelp.status !== 401 || unsignedYelp.body?.code !== "missing_signature") {
+    throw new Error(`Unsigned Mighty Apes intake was not safely rejected: ${unsignedYelp.status} ${JSON.stringify(unsignedYelp.body)}`);
   }
-
-  const yelpTucsonDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
-    ...yelpPayload,
-    yelpAccountKey: "weathertech-tucson",
-    yelpBusinessId: "weathertech-tucson",
-    yelpLeadId: `${yelpExternalId} TUCSON`,
-    yelpConversationId: `${TEST_PREFIX} ${runId} YELP TUCSON CONVERSATION`,
-    name: `${yelpLeadName} TUCSON`,
-    phone: "5205550220",
-    email: `yelp-tucson-${runId}@example.test`,
-    location: "Tucson",
-    serviceType: "roofing",
-  });
-
-  if (yelpTucsonDryRun.status !== 200 || yelpTucsonDryRun.body?.routing?.branch !== "weathertech_tucson") {
-    throw new Error(`Tucson Yelp dry run failed: ${yelpTucsonDryRun.status} ${JSON.stringify(yelpTucsonDryRun.body)}`);
-  }
-
-  const yelpIhcDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", yelpPayload);
-
-  if (yelpIhcDryRun.status !== 200 || yelpIhcDryRun.body?.routing?.company !== "ihc_painting") {
-    throw new Error(`IHC Yelp dry run failed: ${yelpIhcDryRun.status} ${JSON.stringify(yelpIhcDryRun.body)}`);
-  }
-
-  const unknownYelpDryRun = await postAppJson(baseUrl, "/api/leads/yelp?dryRun=1", {
-    ...yelpPayload,
-    yelpAccountKey: "unknown-yelp-account",
-    yelpBusinessId: "unknown-yelp-account",
-    yelpLeadId: `${yelpExternalId} UNKNOWN`,
-    yelpConversationId: `${TEST_PREFIX} ${runId} YELP UNKNOWN CONVERSATION`,
-    name: `${yelpLeadName} UNKNOWN`,
-    serviceType: "roofing",
-  });
-
-  if (unknownYelpDryRun.status !== 200 || unknownYelpDryRun.body?.routing?.company !== "unassigned") {
-    throw new Error(`Unknown Yelp account was not unassigned: ${unknownYelpDryRun.status} ${JSON.stringify(unknownYelpDryRun.body)}`);
-  }
-
-  const unsignedYelp = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload);
-
-  if (
-    ![401, 503].includes(unsignedYelp.status) ||
-    !["missing_signature", "verification_required"].includes(String(unsignedYelp.body?.status))
-  ) {
-    throw new Error(`Unsigned Yelp intake was not safely rejected: ${unsignedYelp.status} ${JSON.stringify(unsignedYelp.body)}`);
-  }
-  progress("lead-intake:yelp:dry-run:done");
+  progress("lead-intake:mighty-apes:request-auth:done");
 
   progress("lead-intake:gbp:dry-run:start");
   const gbpPayload = {
@@ -7733,141 +7770,228 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   }
   progress("lead-intake:gbp:dry-run:done");
 
-  progress("lead-intake:yelp:create:start");
-  const yelpSensitiveValues = [
-    yelpLeadName,
-    yelpPayload.phone,
-    yelpPayload.email,
-    yelpPayload.message,
-  ];
-  const yelpReadinessResponse = await fetch(new URL("/api/leads/yelp", baseUrl));
-  const yelpReadiness = await yelpReadinessResponse.json();
-  const yelpSigningSecret = env.YELP_LEAD_CAPTURE_SECRET;
-  let yelpCreate = null;
-  let yelpLeadRecordId = null;
-  let yelpCreateMode = "seeded";
+  progress("lead-intake:mighty-apes:create:start");
+  const yelpSigningSecret = env.MIGHTY_APES_YELP_WEBHOOK_SECRET?.trim();
 
-  if (
-    yelpSigningSecret &&
-    Number(yelpReadiness?.readiness?.configuredVerificationCount ?? 0) > 0
-  ) {
-    const yelpSignatureTimestamp = new Date().toISOString();
-    const yelpRawBody = JSON.stringify(yelpPayload);
-    const yelpSignature = createProviderHmacSignature(
-      yelpRawBody,
-      yelpSignatureTimestamp,
-      yelpSigningSecret,
+  if (!yelpSigningSecret) {
+    throw new Error(
+      "MIGHTY_APES_YELP_WEBHOOK_SECRET is required in the secure isolated browser regression environment.",
     );
-
-    yelpCreate = await postAppJson(baseUrl, "/api/leads/yelp", yelpPayload, {
-      "x-weathertech-timestamp": yelpSignatureTimestamp,
-      "x-weathertech-signature": `sha256=${yelpSignature}`,
-    });
-
-    if (yelpCreate.status !== 503 || yelpCreate.body?.status !== "production_disabled") {
-      throw new Error(`Signed Yelp intake was not held behind the disabled live gate: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
-    }
-
-    yelpCreateMode = "signed_live_disabled";
   }
 
-  if (yelpCreateMode !== "signed_endpoint") {
-    const yelpSeedBase = {
-      company_id: companies.ihc.id,
-      [leadNameColumn]: yelpLeadName,
-      phone: yelpPayload.phone,
-      email: yelpPayload.email,
-      property_address: "222 TEST Yelp Intake Way, Tempe, AZ",
-      city: "Tempe",
-      state: "AZ",
-      service_type: "painting",
-      status: "new",
-      pipeline_stage: "new_lead",
-      priority: "normal",
-      estimated_value: 0,
-      next_follow_up: null,
-      notes: `${TEST_PREFIX} ${runId} seeded Yelp source badge record. Endpoint live create skipped because Yelp live sync is disabled in the local server.`,
-    };
-    const yelpSeedPayloads = [
-      {
-        ...yelpSeedBase,
-        source: "Yelp",
-      },
-      {
-        ...yelpSeedBase,
-        lead_source: "Yelp",
-        service_needed: "painting",
-      },
-    ];
-    let seededYelpLead = null;
-    let lastSeedError = null;
+  const noPipelineTables = [
+    "leads",
+    "lead_intake_records",
+    "integration_sync_logs",
+    "notifications",
+    "office_tasks",
+    "customers",
+    "communication_provider_events",
+    "sms_messages",
+    "email_messages",
+  ];
+  const readTableCounts = async () => Object.fromEntries(
+    await Promise.all(
+      noPipelineTables.map(async (table) => [
+        table,
+        (await restRequest(env, `${table}?select=id`)).length,
+      ]),
+    ),
+  );
+  const pipelineCountsBeforeTest = await readTableCounts();
+  const yelpTimestamp = String(Math.floor(Date.now() / 1000));
+  const yelpTestPayload = {
+    ...yelpPayload,
+    event: "lead.test",
+    lead: {
+      ...yelpPayload.lead,
+      id: yelpTestExternalId,
+      name: yelpTestLeadName,
+      phone: "+14805550221",
+      message: `${TEST_PREFIX} ${runId} authenticated lead.test only`,
+    },
+  };
+  const yelpTestRawBody = JSON.stringify(yelpTestPayload);
+  const yelpTestDelivery = `${mightyApesMarker} DELIVERY TEST`;
+  const yelpTest = await postAppRaw(
+    baseUrl,
+    MIGHTY_APES_WEBHOOK_PATH,
+    yelpTestRawBody,
+    {
+      "User-Agent": "MightyApes-Webhook/1",
+      "X-MightyApes-Timestamp": yelpTimestamp,
+      "X-MightyApes-Delivery": yelpTestDelivery,
+      "X-MightyApes-Signature": `sha256=${createMightyApesHmacSignature(yelpTestRawBody, yelpSigningSecret)}`,
+    },
+  );
 
-    for (const payload of yelpSeedPayloads) {
-      try {
-        [seededYelpLead] = await restRequest(env, "leads", {
-          method: "POST",
-          headers: { Prefer: "return=representation" },
-          body: JSON.stringify(payload),
-        });
-        break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        lastSeedError = error;
-
-        if (
-          message.includes("Could not find") ||
-          message.includes("does not exist") ||
-          message.includes("schema cache")
-        ) {
-          continue;
-        }
-
-        throw error;
-      }
-    }
-
-    if (!seededYelpLead) {
-      throw lastSeedError ?? new Error("Unable to seed Yelp UI regression lead.");
-    }
-
-    yelpLeadRecordId = seededYelpLead.id;
+  if (
+    yelpTest.status !== 200 ||
+    !yelpTest.body?.ok ||
+    yelpTest.body?.status !== "test_accepted" ||
+    yelpTest.body?.created !== false ||
+    !yelpTest.body?.eventId
+  ) {
+    throw new Error(`Authenticated Mighty Apes lead.test failed: ${yelpTest.status} ${JSON.stringify(yelpTest.body)}`);
   }
 
-  const yelpLeads = await findLeadsByContactName(env, yelpLeadName, leadNameColumn);
+  const [yelpTestAudit] = await restRequest(
+    env,
+    `mighty_apes_yelp_webhook_events?select=*&delivery_id=eq.${encodeURIComponent(yelpTestDelivery)}`,
+  );
+  const pipelineCountsAfterTest = await readTableCounts();
 
-  if (yelpLeads.length !== 1) {
-    throw new Error(`Yelp intake created ${yelpLeads.length} matching leads, expected 1.`);
+  if (
+    !yelpTestAudit ||
+    yelpTestAudit.outcome !== "test_accepted" ||
+    yelpTestAudit.linked_lead_id ||
+    yelpTestAudit.lead_intake_record_id ||
+    yelpTestAudit.integration_sync_log_id ||
+    yelpTestAudit.notification_id ||
+    JSON.stringify(pipelineCountsAfterTest) !== JSON.stringify(pipelineCountsBeforeTest)
+  ) {
+    throw new Error("Authenticated Mighty Apes lead.test did not remain audit-only.");
   }
 
-  const yelpLead = yelpLeads[0];
+  const yelpRawBody = JSON.stringify(yelpPayload);
+  const yelpDelivery = `${mightyApesMarker} DELIVERY CREATED`;
+  const yelpHeaders = {
+    "User-Agent": "MightyApes-Webhook/1",
+    "X-MightyApes-Timestamp": yelpTimestamp,
+    "X-MightyApes-Delivery": yelpDelivery,
+    "X-MightyApes-Signature": `sha256=${createMightyApesHmacSignature(yelpRawBody, yelpSigningSecret)}`,
+  };
+  const yelpCreate = await postAppRaw(
+    baseUrl,
+    MIGHTY_APES_WEBHOOK_PATH,
+    yelpRawBody,
+    yelpHeaders,
+  );
 
-  if (yelpLead.company_id !== companies.ihc.id) {
-    throw new Error("Yelp intake did not route to IHC Painting.");
+  if (
+    yelpCreate.status !== 201 ||
+    !yelpCreate.body?.ok ||
+    yelpCreate.body?.status !== "created" ||
+    !yelpCreate.body?.leadId ||
+    !yelpCreate.body?.eventId
+  ) {
+    throw new Error(`Signed Mighty Apes lead.created failed: ${yelpCreate.status} ${JSON.stringify(yelpCreate.body)}`);
   }
 
-  if (!getLeadRowSource(yelpLead).toLowerCase().includes("yelp")) {
-    throw new Error(`Yelp lead source was ${getLeadRowSource(yelpLead)}.`);
+  const yelpExactRetry = await postAppRaw(
+    baseUrl,
+    MIGHTY_APES_WEBHOOK_PATH,
+    yelpRawBody,
+    yelpHeaders,
+  );
+
+  if (
+    yelpExactRetry.status !== 200 ||
+    yelpExactRetry.body?.status !== "duplicate" ||
+    yelpExactRetry.body?.leadId !== yelpCreate.body.leadId ||
+    yelpExactRetry.body?.eventId !== yelpCreate.body.eventId
+  ) {
+    throw new Error(`Exact Mighty Apes retry was not idempotent: ${yelpExactRetry.status} ${JSON.stringify(yelpExactRetry.body)}`);
+  }
+
+  const [yelpLead, yelpIntake, yelpAudit] = await Promise.all([
+    findLeadById(env, yelpCreate.body.leadId),
+    restRequest(
+      env,
+      `lead_intake_records?select=*&provider=eq.yelp&provider_event_id=eq.${encodeURIComponent(yelpExternalId)}&limit=1`,
+    ).then((rows) => rows[0] ?? null),
+    restRequest(
+      env,
+      `mighty_apes_yelp_webhook_events?select=*&delivery_id=eq.${encodeURIComponent(yelpDelivery)}&limit=1`,
+    ).then((rows) => rows[0] ?? null),
+  ]);
+
+  if (
+    !yelpLead ||
+    yelpLead.company_id !== companies.weatherTech.id ||
+    yelpLead.company_id === companies.ihc.id ||
+    yelpLead[leadNameColumn] !== yelpLeadName ||
+    yelpLead.phone !== yelpPayload.lead.phone ||
+    yelpLead.email ||
+    yelpLead.postal_code !== yelpPayload.lead.zip_code ||
+    !getLeadRowSource(yelpLead).toLowerCase().includes("yelp") ||
+    !getLeadRowServiceType(yelpLead).toLowerCase().includes("roof")
+  ) {
+    throw new Error("Mighty Apes Yelp lead did not preserve WeatherTech-only CRM identity and null email.");
   }
 
   if (
-    yelpCreateMode === "signed_endpoint" &&
-    !getLeadRowServiceType(yelpLead).toLowerCase().includes("paint")
+    !yelpIntake ||
+    yelpIntake.company_id !== companies.weatherTech.id ||
+    yelpIntake.company_id === companies.ihc.id ||
+    yelpIntake.linked_lead_id !== yelpLead.id ||
+    yelpIntake.message !== yelpMultilineMessage ||
+    yelpIntake.email ||
+    Date.parse(yelpIntake.original_submission_timestamp) !== Date.parse(submittedAt)
   ) {
-    throw new Error(`Yelp service type was ${getLeadRowServiceType(yelpLead)}.`);
+    throw new Error("Mighty Apes unified intake did not preserve multiline/no-email/provider timestamp evidence.");
   }
 
-  if (yelpCreateMode === "signed_endpoint") {
-    const yelpLogs = await findIntegrationLogsByExternalId(env, "yelp", yelpExternalId);
+  if (
+    !yelpAudit ||
+    yelpAudit.outcome !== "created" ||
+    yelpAudit.linked_lead_id !== yelpLead.id ||
+    yelpAudit.company_id !== companies.weatherTech.id ||
+    yelpAudit.campaign_yelp_id !== MIGHTY_APES_CAMPAIGN_YELP_ID ||
+    yelpAudit.campaign_name !== MIGHTY_APES_CAMPAIGN_NAME ||
+    yelpAudit.provider_lead_id !== yelpExternalId
+  ) {
+    throw new Error("Mighty Apes audit evidence did not preserve provider identity and WeatherTech routing.");
+  }
 
-    if (!yelpLogs.some((log) => log.status === "succeeded")) {
-      throw new Error("Yelp intake did not write a succeeded sync log.");
-    }
+  const yelpLogs = await findIntegrationLogsByExternalId(env, "yelp", yelpExternalId);
 
-    for (const log of yelpLogs) {
-      assertNoSensitiveRequestSummary(log, yelpSensitiveValues, "Yelp intake");
+  if (!yelpLogs.some((log) => log.status === "succeeded")) {
+    throw new Error("Mighty Apes Yelp intake did not write a succeeded sync log.");
+  }
+
+  for (const log of yelpLogs) {
+    assertNoSensitiveRequestSummary(
+      log,
+      [yelpLeadName, yelpPayload.lead.phone, yelpMultilineMessage],
+      "Mighty Apes Yelp intake",
+    );
+  }
+  const [yelpOfficeTasks, pipelineCountsAfterCreated] = await Promise.all([
+    restRequest(
+      env,
+      `office_tasks?select=id,company_id,lead_id,source_type,automation_key&lead_id=eq.${encodeURIComponent(yelpLead.id)}`,
+    ),
+    readTableCounts(),
+  ]);
+
+  if (
+    yelpOfficeTasks.length !== 1 ||
+    yelpOfficeTasks[0].company_id !== companies.weatherTech.id ||
+    yelpOfficeTasks[0].lead_id !== yelpLead.id ||
+    yelpOfficeTasks[0].source_type !== "new_lead" ||
+    yelpOfficeTasks[0].automation_key !== `new_lead:${yelpLead.id}`
+  ) {
+    throw new Error("Mighty Apes Yelp intake did not create exactly one normal WeatherTech new-lead office task.");
+  }
+
+  if (pipelineCountsAfterCreated.office_tasks !== pipelineCountsBeforeTest.office_tasks + 1) {
+    throw new Error("Mighty Apes Yelp intake created an unexpected number of office tasks.");
+  }
+
+  for (const table of [
+    "customers",
+    "communication_provider_events",
+    "sms_messages",
+    "email_messages",
+  ]) {
+    if (pipelineCountsAfterCreated[table] !== pipelineCountsBeforeTest[table]) {
+      throw new Error(`Mighty Apes Yelp intake unexpectedly changed ${table}.`);
     }
   }
-  progress("lead-intake:yelp:create:done");
+  const yelpLeadRecordId = yelpLead.id;
+  const yelpCreateMode = "signed_endpoint";
+  progress("lead-intake:mighty-apes:create:done");
 
   progress("lead-intake:gbp:create:start");
   const gbpSeedBase = {
@@ -8043,7 +8167,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
   await ensureAppShell(tab, baseUrl, progress);
-  await clickCompanyScope(tab, "All companies");
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await clickNav(tab, "Inbox");
   await waitFor(
     tab,
@@ -8059,7 +8183,7 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
         text.includes("Yelp")
       );
     },
-    "Website, GBP, and Yelp intake records in Inbox",
+    "WeatherTech Website, GBP, and Mighty Apes Yelp intake records in Inbox",
     15000,
     { websiteName: retryLeadName, yelpName: yelpLeadName, gbpName: gbpLeadName },
   );
@@ -8101,6 +8225,19 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     15000,
   );
 
+  await clickCompanyScope(tab, "IHC Painting");
+  await waitFor(
+    tab,
+    (name) => {
+      const text = document.body.innerText;
+      return text.includes("Unified Communications Center") && !text.includes(name);
+    },
+    "Mighty Apes Yelp lead excluded from IHC Inbox",
+    15000,
+    yelpLeadName,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+
   await clickNav(tab, "Leads");
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), retryLeadName, "website lead search");
   await waitFor(
@@ -8118,6 +8255,32 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     15000,
     yelpLeadName,
   );
+  await fillUnique(
+    tab.playwright.getByPlaceholder("Search leads", { exact: true }),
+    yelpTestLeadName,
+    "Mighty Apes lead.test absence search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes("Leads") && !document.body.innerText.includes(name),
+    "Mighty Apes lead.test absent from Leads",
+    15000,
+    yelpTestLeadName,
+  );
+  await clickCompanyScope(tab, "IHC Painting");
+  await fillUnique(
+    tab.playwright.getByPlaceholder("Search leads", { exact: true }),
+    yelpLeadName,
+    "IHC Mighty Apes exclusion search",
+  );
+  await waitFor(
+    tab,
+    (name) => document.body.innerText.includes("Leads") && !document.body.innerText.includes(name),
+    "Mighty Apes Yelp lead excluded from IHC Leads",
+    15000,
+    yelpLeadName,
+  );
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await fillUnique(tab.playwright.getByPlaceholder("Search leads", { exact: true }), gbpLeadName, "GBP lead search");
   await waitFor(
     tab,
@@ -8136,11 +8299,10 @@ async function testUnifiedLeadIntake(tab, env, companies, runId, baseUrl, leadNa
     ihcDryRunRouting: ihcDryRun.body.routing,
     unknownDryRunRouting: unknownDryRun.body.routing,
     unsignedWebsiteStatus: unsignedWebsite.body.status,
-    yelpPhoenixDryRunRouting: yelpPhoenixDryRun.body.routing,
-    yelpTucsonDryRunRouting: yelpTucsonDryRun.body.routing,
-    yelpIhcDryRunRouting: yelpIhcDryRun.body.routing,
-    unknownYelpDryRunRouting: unknownYelpDryRun.body.routing,
-    unsignedYelpStatus: unsignedYelp.body.status,
+    unsignedMightyApesCode: unsignedYelp.body.code,
+    mightyApesTestStatus: yelpTest.body.status,
+    mightyApesCreateStatus: yelpCreate.body.status,
+    mightyApesExactRetryStatus: yelpExactRetry.body.status,
     gbpPhoenixDryRunRouting: gbpPhoenixDryRun.body.routing,
     gbpTucsonDryRunRouting: gbpTucsonDryRun.body.routing,
     gbpIhcDryRunRouting: gbpIhcDryRun.body.routing,
@@ -8223,19 +8385,79 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     estimateLocation,
     "estimate location",
   );
-  await clickUnique(
-    tab.playwright.locator('#estimate-builder button[type="submit"]'),
-    "Create estimate without customer",
-    { retryTransientClick: true },
+  const estimateCustomerSelect = tab.playwright.locator(
+    '#estimate-builder select[name="customer_id"]',
   );
-  await waitFor(
-    tab,
-    () => document.body.innerText.includes("Select a customer before saving this estimate."),
-    "estimate requires customer validation",
-    10000,
+  const estimateSubmit = tab.playwright.locator(
+    '#estimate-builder button[type="submit"]',
   );
+  const missingCustomerMessage = "Select a customer before saving this estimate.";
+  let missingCustomerValidationObserved = false;
+  let missingCustomerValidationError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await selectUnique(
+      estimateCustomerSelect,
+      "none",
+      `estimate missing-customer precondition attempt ${attempt}`,
+    );
+    await waitFor(
+      tab,
+      () => document.querySelector('#estimate-builder select[name="customer_id"]')?.value === "none",
+      `estimate missing-customer selection attempt ${attempt}`,
+      3000,
+    );
+
+    if ((await countEstimatesByTitle(env, estimateTitle)) !== 0) {
+      throw new Error("Missing-customer estimate validation wrote an estimate before approval.");
+    }
+
+    try {
+      await clickUnique(
+        estimateSubmit,
+        `Create estimate without customer attempt ${attempt}`,
+        { retryTransientClick: true },
+      );
+      await waitFor(
+        tab,
+        (expected) => {
+          const alert = document.querySelector(
+            '[role="alert"][aria-label="Error notification"]',
+          );
+          return alert?.textContent?.replace(/\s+/g, " ").trim() === expected;
+        },
+        "estimate requires customer validation",
+        3000,
+        missingCustomerMessage,
+      );
+      missingCustomerValidationObserved = true;
+      break;
+    } catch (error) {
+      missingCustomerValidationError = error;
+    }
+  }
+
+  if (!missingCustomerValidationObserved) {
+    const [customerValue, alertTexts, estimateCount] = await Promise.all([
+      estimateCustomerSelect.evaluate((element) => element.value),
+      tab.playwright
+        .locator('[role="alert"][aria-label="Error notification"]')
+        .allTextContents({ timeoutMs: 3000 }),
+      countEstimatesByTitle(env, estimateTitle),
+    ]);
+    const detail = missingCustomerValidationError instanceof Error
+      ? missingCustomerValidationError.message
+      : String(missingCustomerValidationError ?? "no alert observed");
+    throw new Error(
+      `Estimate missing-customer validation was not observed (customer=${customerValue}, estimates=${estimateCount}, alerts=${JSON.stringify(alertTexts)}): ${detail}`,
+    );
+  }
+
+  if ((await countEstimatesByTitle(env, estimateTitle)) !== 0) {
+    throw new Error("Missing-customer estimate validation created an estimate.");
+  }
   await selectUnique(
-    tab.playwright.locator('#estimate-builder select[name="customer_id"]'),
+    estimateCustomerSelect,
     estimateCustomer.id,
     "estimate customer association",
   );

@@ -69,6 +69,7 @@ const PROVIDER_EMPTY_TABLES = [
   "google_calendar_unmatched_events",
   "integration_connections",
   "integration_sync_logs",
+  "mighty_apes_yelp_webhook_events",
   "stripe_company_accounts",
   "stripe_object_mappings",
   "stripe_webhook_events",
@@ -93,6 +94,16 @@ const RESIDUE_PROBES = [
   ["lead_intake_records", "contact_name"],
   ["lead_intake_records", "provider_event_id"],
   ["leads", "contact_name"],
+  [
+    "mighty_apes_yelp_webhook_events",
+    "delivery_id",
+    "TEST WTOS MIGHTY APES REGRESSION:*",
+  ],
+  [
+    "mighty_apes_yelp_webhook_events",
+    "provider_lead_id",
+    "TEST WTOS MIGHTY APES REGRESSION:*",
+  ],
   ["notifications", "title"],
   ["office_tasks", "title"],
   ["schedule_events", "title"],
@@ -489,13 +500,13 @@ async function verifyPasswordLogin(config, fetchImpl, expectedUserId) {
 async function getResidue(config, fetchImpl) {
   const counts = {};
 
-  for (const [table, column] of RESIDUE_PROBES) {
+  for (const [table, column, markerPattern = "TEST WTOS REGRESSION*"] of RESIDUE_PROBES) {
     const key = `${table}.${column}`;
     counts[key] = await restCount(
       config,
       fetchImpl,
       table,
-      `select=id&${column}=like.${encodeURIComponent("TEST WTOS REGRESSION*")}`,
+      `select=id&${column}=like.${encodeURIComponent(markerPattern)}`,
     );
   }
 

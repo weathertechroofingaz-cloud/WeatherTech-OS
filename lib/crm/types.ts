@@ -694,6 +694,60 @@ export type IdentityReconciliationResult = {
   };
 };
 
+export type MightyApesYelpEvent = "lead.created" | "lead.test";
+
+export type MightyApesYelpIntakeRequest = {
+  version: 1;
+  event: MightyApesYelpEvent;
+  delivery_id: string;
+  payload_fingerprint: string;
+  header_timestamp: number;
+  received_at: string;
+  campaign: {
+    yelp_id: string;
+    name: string;
+  };
+  lead: {
+    id: string;
+    name: string;
+    phone: string;
+    zip_code: string;
+    job_category?: string;
+    message: string;
+    created_at: string;
+  };
+};
+
+export type MightyApesYelpIngestResult = {
+  status: "created" | "duplicate" | "test_accepted";
+  event_id: string;
+  lead_id: string | null;
+  intake_record_id: string | null;
+  sync_log_id: string | null;
+  notification_id: string | null;
+};
+
+export type MightyApesYelpWebhookEventRecord = {
+  id: string;
+  company_id: string;
+  delivery_id: string;
+  payload_fingerprint: string;
+  header_timestamp: number;
+  payload_version: 1;
+  event_type: MightyApesYelpEvent;
+  provider_lead_id: string;
+  campaign_yelp_id: string;
+  campaign_name: string;
+  provider_created_at: string;
+  outcome: MightyApesYelpIngestResult["status"];
+  linked_lead_id: string | null;
+  lead_intake_record_id: string | null;
+  integration_sync_log_id: string | null;
+  notification_id: string | null;
+  received_at: string;
+  processed_at: string;
+};
+
 export type IdentityReconciliationEventRecord = {
   id: string;
   company_id: string;
@@ -3957,6 +4011,12 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      mighty_apes_yelp_webhook_events: {
+        Row: MightyApesYelpWebhookEventRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       properties: {
         Row: PropertyRecord;
         Insert: PropertyInsert;
@@ -4436,6 +4496,12 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_ingest_mighty_apes_yelp: {
+        Args: {
+          intake_request: MightyApesYelpIntakeRequest;
+        };
+        Returns: MightyApesYelpIngestResult;
+      };
       wtos_reconcile_customer_property: {
         Args: {
           reconciliation_request: IdentityReconciliationRequest;

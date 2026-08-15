@@ -160,6 +160,14 @@ const expectedMigrations = [
     "20260814063407_crm_identity_reconciliation_release_hardening.sql",
     "38c16883b9f9be5976f09ceca0989f3d902e9e8e5e8abd77300c9fac45448afd",
   ],
+  [
+    "20260815033229_mighty_apes_yelp_lead_intake.sql",
+    "b1c95ee1ed92d76bdb71cea8e339b797282b2e07ca7dc6eb8153de58f1eb1ece",
+  ],
+  [
+    "20260815040010_mighty_apes_yelp_audit_lock_privilege.sql",
+    "b4fdd7850e78bd8a31118a65ff84a67db07dc569ca74912dc01a3ff4c0955ead",
+  ],
 ];
 
 const files = fs
@@ -263,6 +271,12 @@ const crmIdentityReconciliationStaleVersionHardeningIndex = files.indexOf(
 const crmIdentityReconciliationReleaseHardeningIndex = files.indexOf(
   "20260814063407_crm_identity_reconciliation_release_hardening.sql",
 );
+const mightyApesYelpLeadIntakeIndex = files.indexOf(
+  "20260815033229_mighty_apes_yelp_lead_intake.sql",
+);
+const mightyApesYelpAuditLockPrivilegeIndex = files.indexOf(
+  "20260815040010_mighty_apes_yelp_audit_lock_privilege.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -361,6 +375,8 @@ if (
   crmIdentityReconciliationInvariantHardeningIndex === -1 ||
   crmIdentityReconciliationStaleVersionHardeningIndex === -1 ||
   crmIdentityReconciliationReleaseHardeningIndex === -1 ||
+  mightyApesYelpLeadIntakeIndex === -1 ||
+  mightyApesYelpAuditLockPrivilegeIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -374,12 +390,14 @@ if (
     crmIdentityReconciliationInvariantHardeningIndex <
       crmIdentityReconciliationStaleVersionHardeningIndex &&
     crmIdentityReconciliationStaleVersionHardeningIndex <
-      crmIdentityReconciliationReleaseHardeningIndex
+      crmIdentityReconciliationReleaseHardeningIndex &&
+    crmIdentityReconciliationReleaseHardeningIndex < mightyApesYelpLeadIntakeIndex &&
+    mightyApesYelpLeadIntakeIndex < mightyApesYelpAuditLockPrivilegeIndex
   ) ||
-  crmIdentityReconciliationReleaseHardeningIndex !== files.length - 1
+  mightyApesYelpAuditLockPrivilegeIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation and its additive hardening migrations must order after Stripe refund reconciliation and remain last.",
+    "CRM identity reconciliation hardening must precede Mighty Apes Yelp lead intake and its audit-lock privilege hardening, which must remain last.",
   );
 }
 
@@ -1271,6 +1289,20 @@ const crmIdentityReconciliationReleaseHardeningMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const mightyApesYelpLeadIntakeMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260815033229_mighty_apes_yelp_lead_intake.sql",
+  ),
+  "utf8",
+);
+const mightyApesYelpAuditLockPrivilegeMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260815040010_mighty_apes_yelp_audit_lock_privilege.sql",
+  ),
+  "utf8",
+);
 
 for (const requiredContract of [
   "begin;",
@@ -1656,6 +1688,129 @@ if (/\bset\s+(?:status|pipeline_stage)\s*=/i.test(
   failures.push("CRM identity release hardening must not mutate lead status or pipeline stage.");
 }
 
+for (const requiredMightyApesContract of [
+  "begin;",
+  "commit;",
+  "create table public.mighty_apes_yelp_webhook_events",
+  "delivery_id text not null unique",
+  "event_type in ('lead.created', 'lead.test')",
+  "outcome in ('created', 'duplicate', 'test_accepted')",
+  "alter table public.mighty_apes_yelp_webhook_events enable row level security",
+  "using (public.wtos_can_read_company(company_id))",
+  "revoke all on table public.mighty_apes_yelp_webhook_events from public",
+  "revoke all on table public.mighty_apes_yelp_webhook_events from anon",
+  "revoke all on table public.mighty_apes_yelp_webhook_events from authenticated",
+  "revoke all on table public.mighty_apes_yelp_webhook_events from service_role",
+  "grant select on table public.mighty_apes_yelp_webhook_events to authenticated",
+  "grant select, insert, delete on table public.mighty_apes_yelp_webhook_events to service_role",
+  "create trigger mighty_apes_yelp_webhook_events_immutable",
+  "Mighty Apes Yelp webhook audit events are immutable.",
+  "old.delivery_id like 'TEST WTOS MIGHTY APES REGRESSION:%'",
+  "old.provider_lead_id like 'TEST WTOS MIGHTY APES REGRESSION:%'",
+  "create or replace function public.wtos_ingest_mighty_apes_yelp(intake_request jsonb)",
+  "security invoker",
+  "set search_path = ''",
+  "'mighty-apes:yelp:delivery:' || request_delivery_id",
+  "'mighty-apes:yelp:lead:' || request_lead_id",
+  "MIGHTY_APES_YELP_DELIVERY_CONFLICT",
+  "MIGHTY_APES_YELP_LEAD_PAYLOAD_CONFLICT",
+  "request_campaign_id <> '00LZA1SuPKX0yUnsdthgLg'",
+  "company.name = 'WeatherTech Roofing LLC'",
+  "company.trade = 'roofing'",
+  "request_event = 'lead.test'",
+  "'status', 'test_accepted'",
+  "where intake.provider = 'yelp'",
+  "and intake.provider_event_id = request_lead_id",
+  "existing_intake.company_id is distinct from target_company.id",
+  "existing_sync_provider is distinct from 'yelp'",
+  "column_name = 'customer_name'",
+  "column_name = 'contact_name'",
+  "source,\n    source_detail,",
+  "'Yelp',\n    'Mighty Apes',",
+  "'weathertech_roofing'",
+  "'weathertech_phoenix'",
+  "request_message",
+  "request_received_at",
+  "request_created_at",
+  "revoke all on function public.wtos_ingest_mighty_apes_yelp(jsonb)",
+  "from public, anon, authenticated",
+  "grant execute on function public.wtos_ingest_mighty_apes_yelp(jsonb)",
+  "to service_role",
+]) {
+  if (!mightyApesYelpLeadIntakeMigration.includes(requiredMightyApesContract)) {
+    failures.push(
+      `Mighty Apes Yelp lead intake is missing required contract: ${requiredMightyApesContract}.`,
+    );
+  }
+}
+
+if (!mightyApesYelpLeadIntakeMigration.trimStart().startsWith("begin;") ||
+    !mightyApesYelpLeadIntakeMigration.trimEnd().endsWith("commit;")) {
+  failures.push("Mighty Apes Yelp lead intake must use one explicit transaction wrapper.");
+}
+
+const mightyApesDeliveryLockIndex = mightyApesYelpLeadIntakeMigration.indexOf(
+  "'mighty-apes:yelp:delivery:' || request_delivery_id",
+);
+const mightyApesLeadLockIndex = mightyApesYelpLeadIntakeMigration.indexOf(
+  "'mighty-apes:yelp:lead:' || request_lead_id",
+);
+
+if (mightyApesDeliveryLockIndex === -1 ||
+    mightyApesLeadLockIndex === -1 ||
+    mightyApesDeliveryLockIndex >= mightyApesLeadLockIndex) {
+  failures.push("Mighty Apes Yelp intake must lock the delivery ID before the provider lead ID.");
+}
+
+if (/using\s*\(\s*true\s*\)|with\s+check\s*\(\s*true\s*\)/i.test(
+  mightyApesYelpLeadIntakeMigration,
+)) {
+  failures.push("Mighty Apes Yelp lead intake must not add broad true RLS policies.");
+}
+
+if (/\b(?:insert\s+into|update|delete\s+from)\s+public\.(?:customers|properties|estimates|inspections|jobs|schedule_events|invoices|payments|sms_messages|email_messages)\b/i.test(
+  mightyApesYelpLeadIntakeMigration,
+)) {
+  failures.push("Mighty Apes Yelp intake must not mutate customer, job, financial, or communication records.");
+}
+
+if (/\b(?:raw_body|signature|webhook_secret)\b/i.test(
+  mightyApesYelpLeadIntakeMigration.slice(
+    0,
+    mightyApesYelpLeadIntakeMigration.indexOf("create index mighty_apes_yelp_webhook_events_company_received_idx"),
+  ),
+)) {
+  failures.push("Mighty Apes Yelp audit schema must not persist raw bodies, signatures, or secrets.");
+}
+
+for (const requiredAuditLockPrivilegeContract of [
+  "begin;",
+  "grant update (id)",
+  "on table public.mighty_apes_yelp_webhook_events",
+  "to service_role",
+  "commit;",
+]) {
+  if (!mightyApesYelpAuditLockPrivilegeMigration.includes(
+    requiredAuditLockPrivilegeContract,
+  )) {
+    failures.push(
+      `Mighty Apes Yelp audit-lock privilege hardening is missing required contract: ${requiredAuditLockPrivilegeContract}.`,
+    );
+  }
+}
+
+if (!mightyApesYelpAuditLockPrivilegeMigration.trimStart().startsWith("begin;") ||
+    !mightyApesYelpAuditLockPrivilegeMigration.trimEnd().endsWith("commit;")) {
+  failures.push("Mighty Apes Yelp audit-lock privilege hardening must use one explicit transaction wrapper.");
+}
+
+if (/grant\s+update\s+on\s+table/i.test(mightyApesYelpAuditLockPrivilegeMigration) ||
+    /grant\s+(?:all|insert|delete|truncate|references|trigger)/i.test(
+      mightyApesYelpAuditLockPrivilegeMigration,
+    )) {
+  failures.push("Mighty Apes Yelp audit-lock hardening must grant only column-level UPDATE(id).");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -1729,6 +1884,9 @@ console.log(
 console.log(
   "Verified 20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql precedes 20260814063407_crm_identity_reconciliation_release_hardening.sql.",
 );
+console.log(
+  "Verified 20260814063407_crm_identity_reconciliation_release_hardening.sql precedes Mighty Apes Yelp lead intake and its final audit-lock privilege hardening.",
+);
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
   "Verified 0014 accepts yelp, website, twilio, and twilio_sms while rejecting unknown providers.",
@@ -1756,6 +1914,9 @@ console.log(
 );
 console.log(
   "Verified CRM identity reconciliation transaction, immutable audit, owner/admin authorization, exact-version locks, same-company guards, and provider/financial isolation.",
+);
+console.log(
+  "Verified Mighty Apes Yelp delivery and lead idempotency locks, immutable non-PII audit, exact WeatherTech campaign routing, test-only isolation, service-role-only transactional intake, and narrow audit row-lock privilege.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

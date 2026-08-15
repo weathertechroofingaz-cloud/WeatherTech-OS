@@ -442,6 +442,43 @@ assert(
   "Cleanup discovers UUID-correlation lead-intake rows through exact run-marked fields",
 );
 assert(
+  harness.includes('"mighty_apes_yelp_webhook_events",\n      "delivery_id",\n      marker') &&
+    harness.includes('"mighty_apes_yelp_webhook_events",\n      "provider_lead_id",\n      marker') &&
+    harness.includes('"mighty_apes_yelp_webhook_events",\n    "id",\n    mightyApesEvents.map((event) => event.id)'),
+  "Cleanup discovers Mighty Apes evidence through both exact run-marked provider identifiers",
+);
+assert(
+  harness.includes('"integration_sync_logs",\n    "id",\n    mightyApesSyncLogs.map((log) => log.id)') &&
+    harness.indexOf('"mighty_apes_yelp_webhook_events",\n    "id",\n    mightyApesEvents.map((event) => event.id)') <
+      harness.indexOf('"integration_sync_logs",\n    "id",\n    mightyApesSyncLogs.map((log) => log.id)'),
+  "Cleanup removes the immutable Mighty Apes audit rows before their exact linked sync logs",
+);
+assert(
+  harness.includes('"/api/integrations/mighty-apes/yelp/webhook"') &&
+    harness.includes("MIGHTY_APES_YELP_WEBHOOK_SECRET") &&
+    harness.includes('"User-Agent": "MightyApes-Webhook/1"') &&
+    harness.includes("createMightyApesHmacSignature(yelpRawBody, yelpSigningSecret)") &&
+    harness.includes('yelpTest.body?.status !== "test_accepted"') &&
+    harness.includes("Authenticated Mighty Apes lead.test did not remain audit-only") &&
+    harness.includes('yelpExactRetry.body?.status !== "duplicate"') &&
+    harness.includes("Mighty Apes unified intake did not preserve multiline/no-email/provider timestamp evidence") &&
+    harness.includes("Mighty Apes Yelp intake did not create exactly one normal WeatherTech new-lead office task") &&
+    harness.includes('yelpOfficeTasks[0].automation_key !== `new_lead:${yelpLead.id}`') &&
+    harness.includes('yelpLead.company_id !== companies.weatherTech.id') &&
+    harness.includes('yelpLead.company_id === companies.ihc.id') &&
+    harness.includes("Mighty Apes Yelp lead excluded from IHC Leads"),
+  "Browser coverage signs the raw Mighty Apes body and proves test isolation, exact retry, field preservation, and WeatherTech-only visibility",
+);
+assert(
+  harness.includes('"none",\n      `estimate missing-customer precondition attempt ${attempt}`') &&
+    harness.includes('document.querySelector(\'#estimate-builder select[name="customer_id"]\')?.value === "none"') &&
+    harness.includes('for (let attempt = 1; attempt <= 3; attempt += 1)') &&
+    harness.includes("estimate requires customer validation") &&
+    harness.includes('countEstimatesByTitle(env, estimateTitle)') &&
+    harness.includes('[role="alert"][aria-label="Error notification"]'),
+  "Estimate validation establishes an explicit no-customer precondition, retries the exact UI submit, and proves zero persistence",
+);
+assert(
   harness.includes("`Follow up: ${runMarker}`") &&
     harness.includes('"notifications",\n    "id"'),
   "Cleanup discovers and deletes run-specific follow-up notifications",

@@ -182,6 +182,28 @@ try {
   });
   assertEqual(invalidFlagReport.status, "blocked", "Invalid boolean flags block readiness");
 
+  const mightyApesInboundReport = await readinessModule.buildPrivateStagingReadinessReport({
+    env: {
+      ...baseEnv,
+      MIGHTY_APES_YELP_WEBHOOK_SECRET: "synthetic-mighty-apes-secret",
+    },
+    now,
+    fetchImpl: successfulFetch,
+  });
+  assertEqual(
+    mightyApesInboundReport.status,
+    "blocked",
+    "A configured Mighty Apes inbound secret is treated as an active provider write path",
+  );
+  assert(
+    mightyApesInboundReport.checks
+      .find((check) => check.id === "provider-safety-flags")
+      ?.evidence.includes(
+        "MIGHTY_APES_YELP_WEBHOOK_SECRET: present, secret redacted",
+      ),
+    "Mighty Apes secret presence is reported without exposing its value",
+  );
+
   assert(
     readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes("QUICKBOOKS_ACCOUNTING_WRITES_ENABLED"),
     "QuickBooks accounting writes are part of staging safety checks",
@@ -193,6 +215,12 @@ try {
   assert(
     readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes("WTOS_CUSTOMER_PORTAL_ENABLED"),
     "Customer portal activation is part of staging safety checks",
+  );
+  assert(
+    readinessModule.STAGING_PROVIDER_SECRET_ACTIVATORS.includes(
+      "MIGHTY_APES_YELP_WEBHOOK_SECRET",
+    ),
+    "Mighty Apes inbound activation is part of staging safety checks",
   );
 
   console.log("Private staging deployment readiness tests passed.");

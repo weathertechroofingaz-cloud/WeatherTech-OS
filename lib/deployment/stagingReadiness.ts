@@ -110,6 +110,10 @@ export const STAGING_PROVIDER_SAFETY_FLAGS = [
   "WTOS_PRODUCTION_APPROVED",
 ] as const;
 
+export const STAGING_PROVIDER_SECRET_ACTIVATORS = [
+  "MIGHTY_APES_YELP_WEBHOOK_SECRET",
+] as const;
+
 const SECRET_NAME_PATTERN = /SECRET|TOKEN|KEY|PASSWORD|PRIVATE|SERVICE_ROLE|WEBHOOK|HMAC|VERIFIER/i;
 
 function readEnv(env: EnvRecord | undefined, name: string) {
@@ -191,9 +195,9 @@ function buildDeploymentMetadata(env?: EnvRecord, now = new Date()): DeploymentE
     (readEnv(env, "VERCEL") === "1" ? "vercel" : "not configured");
   const deploymentUrl = safeUrlFromEnv(env);
   const productionApproved = readEnv(env, "WTOS_PRODUCTION_APPROVED") === "true";
-  const liveProviderWritesEnabled = STAGING_PROVIDER_SAFETY_FLAGS.some(
-    (flag) => readEnv(env, flag) === "true",
-  );
+  const liveProviderWritesEnabled =
+    STAGING_PROVIDER_SAFETY_FLAGS.some((flag) => readEnv(env, flag) === "true") ||
+    STAGING_PROVIDER_SECRET_ACTIVATORS.some((name) => Boolean(readEnv(env, name)));
 
   return {
     environmentName,
@@ -258,6 +262,9 @@ function buildEnvironmentChecks(env?: EnvRecord): DeploymentCheck[] {
     const value = readEnv(env, name);
     return Boolean(value) && !isBooleanString(value);
   });
+  const liveProviderWritesEnabled =
+    STAGING_PROVIDER_SAFETY_FLAGS.some((name) => readEnv(env, name) === "true") ||
+    STAGING_PROVIDER_SECRET_ACTIVATORS.some((name) => Boolean(readEnv(env, name)));
 
   return [
     {
@@ -277,19 +284,23 @@ function buildEnvironmentChecks(env?: EnvRecord): DeploymentCheck[] {
       label: "Live provider write safety flags",
       status: invalidBooleanFlags.length
         ? "blocked"
-        : STAGING_PROVIDER_SAFETY_FLAGS.some((name) => readEnv(env, name) === "true")
+        : liveProviderWritesEnabled
           ? "blocked"
           : "pass",
       summary: invalidBooleanFlags.length
         ? "One or more provider safety flags has an invalid boolean value."
-        : STAGING_PROVIDER_SAFETY_FLAGS.some((name) => readEnv(env, name) === "true")
-          ? "One or more live provider write gates is enabled and requires owner approval."
+        : liveProviderWritesEnabled
+          ? "At least one live provider write path is enabled and requires owner approval."
           : "Live provider writes, public intake, portal access, and automated customer notifications are disabled.",
-      evidence: STAGING_PROVIDER_SAFETY_FLAGS.map((name) => {
-        const value = readEnv(env, name);
-        return `${name}: ${value || "false/unset"}`;
-      }),
-      nextAction: "Keep every live-write flag false or unset during private staging.",
+      evidence: [
+        ...STAGING_PROVIDER_SAFETY_FLAGS.map((name) => {
+          const value = readEnv(env, name);
+          return `${name}: ${value || "false/unset"}`;
+        }),
+        ...STAGING_PROVIDER_SECRET_ACTIVATORS.map((name) => formatPresence(name, env)),
+      ],
+      nextAction:
+        "Keep every live-write flag false and every provider secret activator unset during private staging.",
     },
     {
       id: "verified-staging-gates",

@@ -126,6 +126,21 @@ assert.match(
   /\["crm_identity_reconciliation_events", "actor_user_id"\]/,
   "The synthetic owner cannot be removed while reconciliation audit events reference it",
 );
+assert.match(
+  source,
+  /"mighty_apes_yelp_webhook_events"/,
+  "Mighty Apes delivery evidence must be empty before isolated provider regression",
+);
+assert.match(
+  source,
+  /"delivery_id",\s+"TEST WTOS MIGHTY APES REGRESSION:\*"/,
+  "Mighty Apes delivery markers participate in zero-residue verification",
+);
+assert.match(
+  source,
+  /"provider_lead_id",\s+"TEST WTOS MIGHTY APES REGRESSION:\*"/,
+  "Mighty Apes provider-lead markers participate in zero-residue verification",
+);
 assert.doesNotMatch(source, /readFile(?:Sync)?\s*\(/);
 const cleanupSource = source.slice(source.indexOf("async function cleanupOwner"));
 assert.ok(
