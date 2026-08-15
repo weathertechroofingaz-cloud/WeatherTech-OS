@@ -10,11 +10,11 @@ Owner approval is required before any contents of this file may be copied into [
 
 ## Sprint Name
 
-Yelp Lead Intake — candidate pending owner approval.
+Not selected — awaiting owner direction.
 
 ## Objective
 
-Prepare an exact, reviewable Yelp Lead Intake sprint from the received Mighty Apes/Yelp webhook specification. This planning note does not authorize implementation, provider configuration, activation, or production data changes.
+No next production sprint has been selected. This planning file preserves completed-work and external-dependency boundaries until the owner names and approves one exact sprint.
 
 ## Owner-Approved Scope
 
@@ -22,7 +22,7 @@ Prepare an exact, reviewable Yelp Lead Intake sprint from the received Mighty Ap
 
 ## Explicit Exclusions
 
-- No Yelp code, schema, provider, OAuth, webhook, routing, production data, or environment change before explicit owner approval.
+- No new product, provider, schema, routing, production-data, or environment change before explicit owner approval.
 - Default exclusions remain in force unless explicitly approved:
   - No destructive database changes.
   - No RLS changes.
@@ -70,11 +70,12 @@ Codex must never automatically promote this file. Promotion requires an explicit
 - AI Command Center 3.0 is implemented and must not be proposed as a rebuild without an owner-approved rework sprint.
 - The WeatherTech Roofing Stripe payment/webhook/refund foundation is implemented and production-validated; only separately approved activation or hardening work may extend it.
 - IHC Stripe requires its own separately authorized account/configuration.
-- The Mighty Apes/Yelp webhook specification has been received. Yelp Lead Intake is the owner's intended next sprint, but it is not actionable until the owner explicitly approves its exact scope and promotion.
+- Live Yelp Lead Intake via Mighty Apes is implemented, schema-applied, pushed, and deployed at commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; do not rebuild it as a new sprint.
+- The official Mighty Apes test remains an external operational action blocked by the missing Production signing secret. That action does not authorize new implementation or a different provider integration.
 - CRM Identity Integrity Phase 1 is complete. Its deployed reconciliation capability must not be treated as permission for automatic backfill or an unreviewed production-record operation.
 - The inbound-only Twilio implementation is complete and must not be rebuilt. WeatherTech Tucson is live-validated; IHC live validation and WeatherTech Phoenix number acquisition remain external follow-up and do not authorize outbound SMS.
 - These guardrails do not select or recommend a next sprint.
 
 ## Last Review
 
-CRM Identity Integrity Phase 1 — Customer & Property Reconciliation is complete, deployed, and production-schema validated without changing a production business graph. Yelp Lead Intake is recorded only as the owner's intended next sprint candidate now that the Mighty Apes/Yelp webhook specification is available. Status remains `Awaiting owner direction`; Yelp has not been approved, promoted, or started.
+Live Yelp Lead Intake via Mighty Apes is closed at: `IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.` CRM Identity Integrity Phase 1 remains complete without a production graph change. Status remains `Awaiting owner direction`; no next sprint is selected, approved, promoted, or started.

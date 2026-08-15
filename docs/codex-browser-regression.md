@@ -37,7 +37,7 @@ The known WeatherTech production reference and the repository's currently linked
 
 Regression credentials must come from a permission-restricted file outside the checkout or protected secret storage. The harness selects the local file through the absolute-path `WTOS_BROWSER_REGRESSION_ENV_FILE` variable and rejects a group/other-readable file or one inside the repository. The verified workstation path is `/Users/spotty/.config/weathertech-os/regression.env` with mode `0600`. Export the two hosted authorization variables separately; do not also export target URL/key values or the harness will reject the ambiguous dual source. Do not modify or load production values from `.env.local` for a hosted regression run.
 
-The local application process must also receive `NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true` and every provider/live-write gate must be false or unset. Before opening the browser app, the harness verifies the raw server HTML reports the exact approved public Supabase origin, disabled demo fallback, and an aggregate disabled provider-side-effect state. It then requires the rendered page to match those same non-secret markers before authentication or database/API work.
+The local application process must also receive `NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK=true` and every provider/live-write gate must be false or unset. Mighty Apes endpoint coverage additionally requires a synthetic `MIGHTY_APES_YELP_WEBHOOK_SECRET` loaded only from the permission-restricted external regression environment. That value signs local requests; it is not a live-write gate, must not match the Production secret, and must never be committed or printed. Before opening the browser app, the harness verifies the raw server HTML reports the exact approved public Supabase origin, disabled demo fallback, and an aggregate disabled provider-side-effect state. It then requires the rendered page to match those same non-secret markers before authentication or database/API work.
 
 If the approved target is unavailable, run non-writing browser smoke coverage and the automated fail-closed isolation tests. Report the write-capable browser groups as not run and state the residual coverage gap; do not point them at production.
 
@@ -57,6 +57,8 @@ nodeRepl.write(weatherTechRegression.formatRegressionReport(smokeResult));
 ```
 
 Write-capable CRM, job, dispatch, intake, financial, or cleanup shards remain subject to the same verified-target preflight. Run-specific disposable IDs must be retained for bounded cleanup on that same target.
+
+Mighty Apes test deliveries use the distinct exact marker `TEST WTOS MIGHTY APES REGRESSION:`. The lead-intake group must verify audit-only `lead.test`, atomic `lead.created`, exact retry, normal Leads/Inbox visibility, and IHC exclusion. Cleanup must remove captured immutable audit IDs before their linked intake, sync-log, office-task, and lead IDs, then prove zero generic and Mighty Apes residue.
 
 A shard is diagnostic evidence only. It must never be reported as a complete browser-regression pass. Full-run logic must reject an empty, unknown, duplicate, or incomplete group list and must report the expected group count and nonzero assertion count.
 

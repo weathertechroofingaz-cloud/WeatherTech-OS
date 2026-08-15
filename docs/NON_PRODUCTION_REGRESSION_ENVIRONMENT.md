@@ -59,6 +59,7 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 NEXT_PUBLIC_DISABLE_CRM_DEMO_FALLBACK
 SUPABASE_SERVICE_ROLE_KEY
+MIGHTY_APES_YELP_WEBHOOK_SECRET
 WTOS_BROWSER_REGRESSION_REMOTE_WRITES_ENABLED
 WTOS_BROWSER_REGRESSION_EXPECTED_PROJECT_REF
 ```
@@ -98,6 +99,8 @@ The harness fetches the local server's raw HTML before opening the application a
 
 Source-specific provider flags are also false. Ordinary regression must not contain live provider credentials merely because a corresponding gate is false.
 
+The Mighty Apes coverage has one narrow exception: `MIGHTY_APES_YELP_WEBHOOK_SECRET` must be a synthetic server-only value of at least 32 characters in the permission-restricted external regression environment. It is used only to sign requests to the locally served WeatherTech OS receiver while all live-provider flags remain false. It must not equal the Production provider secret, appear in source control, or authorize a request to any external provider. The dedicated Mighty Apes hosted runner additionally blocks every network origin except the approved regression Supabase project.
+
 ## Local Browser Workflow
 
 1. Confirm the repository, branch, commit, and protected-file hashes.
@@ -123,7 +126,7 @@ The executable entrypoint and group-selection examples live in [Codex Browser Re
 
 Each run owns exactly one millisecond-resolution run ID and marker. The harness must capture every created row ID as soon as it is returned. Related/generated rows may be discovered only through current-run foreign keys or fields containing the exact current-run marker; unrelated historical pattern matches are not owned by the run.
 
-Cleanup runs in dependency-safe order and remains bounded to the captured run graph. It covers every synthetic object the enabled groups create, including leads, customers, jobs, estimates and lines, inspections, documents/signatures, schedules, job child records, invoices and lines, offline payments, change orders, intake/provider logs, messages, notifications, and generated office tasks.
+Cleanup runs in dependency-safe order and remains bounded to the captured run graph. It covers every synthetic object the enabled groups create, including leads, customers, jobs, estimates and lines, inspections, documents/signatures, schedules, job child records, invoices and lines, offline payments, change orders, intake/provider logs, messages, notifications, and generated office tasks. Mighty Apes evidence uses the distinct exact prefix `TEST WTOS MIGHTY APES REGRESSION:` in both delivery and provider-lead identifiers. Cleanup discovers those rows through exact current-run identifiers, deletes the immutable audit rows before their linked intake/sync/lead rows, and then proves both generic and Mighty Apes residue counts are zero.
 
 Before deleting financial records, cleanup must inspect payment methods, provider references, and Stripe mappings. Any Stripe-linked record aborts cleanup. Missing fixture ownership, a marker collision, a changed target, or nonzero final residue is a failed run and requires diagnostics; it is never repaired with a broad prefix sweep.
 
@@ -170,6 +173,13 @@ Do not add a conditional job that reports success when secrets or browser capabi
 - Repository validation: all 25 top-level tests, type-check, lint, production build, full dependency audit, workflow checks, patch checks, and credential scan passed.
 - CI: GitHub Actions run `31570826433` completed successfully; both the repository-only validation job and protected isolated-Supabase lifecycle job succeeded.
 - Initial deployment: Vercel production deployment `dpl_9JKf41MdzW1uHV7s2MVs5nJtPDgo` was READY and `/api/health` reported the exact implementation commit. Production remained read-only and retained its clean baseline; `/api/readiness` truthfully remained blocked by the existing provider-approval policy.
+
+### Mighty Apes Yelp Extension
+
+- Implementation commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c` extended the approved target to all `45/45` migrations and added the empty immutable Mighty Apes audit table to provider-isolation checks.
+- The dedicated hosted Mighty Apes lifecycle passed authentication/ACL, audit-only test delivery, atomic lead creation, exact retry, conflicting delivery/payload refusal, concurrency convergence, WeatherTech/IHC isolation, normal office-task creation, provider/financial side-effect absence, and exact cleanup with zero residue.
+- The complete isolated browser suite signed the raw request body with only the synthetic external-file secret, verified CRM/Inbox visibility and IHC exclusion, removed exact synthetic evidence in dependency-safe order, and finished with zero residue.
+- GitHub Actions run `31865652902` completed successfully; both the repository-validation and protected isolated-Supabase lifecycle jobs passed. CI did not claim to execute the proprietary in-app Browser suite.
 
 ## Emergency Troubleshooting
 

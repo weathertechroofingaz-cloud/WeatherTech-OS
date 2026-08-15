@@ -1,16 +1,32 @@
 # Yelp Integration Phase 1 Setup
 
-This document records the verified Yelp capability boundary and the WeatherTech OS application-side foundation for future Yelp lead intake.
+This document records both the earlier direct-Yelp application foundation and the deployed, inbound-only Mighty Apes Yelp lead receiver. The two paths have different contracts and activation boundaries and must not be represented as interchangeable.
 
 ## Status
 
-- Sprint: Yelp Integration Phase 1 - Multi-Account Lead Intake Foundation
-- Application functionality: implemented for provider registry routing, controlled dry-run/manual payloads, duplicate checks, Customer 360 intake activity, follow-up creation, and sanitized integration logging.
-- Live Yelp lead sync: disabled by default.
-- Outbound Yelp messaging: disabled by default.
-- Production activation: requires owner-controlled Yelp approval, OAuth credentials, webhook setup, business account authorization, and signed end-to-end testing.
+- Current sprint: Live Yelp Lead Intake via Mighty Apes.
+- Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+- Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; deployed READY at `https://weathertech-os.vercel.app`.
+- Receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
+- Schema: local and Production Supabase ledgers match all `45/45` committed migrations.
+- Production evidence: `GET` safely returns HTTP 405 with `Allow: POST` and no-store caching. No production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row exists.
+- Required secret: `MIGHTY_APES_YELP_WEBHOOK_SECRET` is absent from Vercel Production and must remain server-only.
+- Outbound Yelp messaging: not implemented and disabled.
+- Separate legacy foundation: `/api/leads/yelp` and its direct Yelp API/OAuth gates remain disabled and are not activated by the Mighty Apes receiver.
 
-## Verified Official Yelp Capabilities
+## Verified Mighty Apes Contract
+
+- Method and content type: `POST` with `Content-Type: application/json`.
+- User agent: `MightyApes-Webhook/1`.
+- Signature: `X-MightyApes-Signature: sha256=<HMAC-SHA256 of the raw body>`.
+- Replay controls: `X-MightyApes-Timestamp` is a Unix timestamp within the accepted five-minute window; `X-MightyApes-Delivery` is tracked as immutable delivery evidence.
+- Payload: version `1`, event `lead.test` or `lead.created`, exact approved campaign Yelp ID, campaign name, and a lead object containing stable `lead.id`, name, E.164 phone, ZIP, optional job category, multiline message, and provider `created_at`. Yelp supplies no email.
+- Routing: the approved campaign routes only to WeatherTech Roofing LLC/WeatherTech Phoenix. Request fields cannot select IHC or another company.
+- `lead.test`: authenticated tests record non-sensitive immutable audit evidence only. They create no CRM lead, salesperson task, customer, notification, communication, or sync-log row.
+- `lead.created`: one transaction creates the WeatherTech CRM lead, unified intake record, integration sync log, in-app notification, immutable delivery evidence, and normal new-lead office task. Stable provider lead ID and delivery locks prevent duplicate or concurrent creation.
+- Audit boundary: raw bodies, HMAC signatures, secrets, customer name, phone, ZIP, and questionnaire text are not stored in the webhook audit ledger or request-summary logs.
+
+## Separate Direct Yelp API Capability Boundary
 
 Official Yelp documentation separates public business/profile capabilities from restricted lead and conversation capabilities:
 
@@ -49,6 +65,12 @@ Routing must use trusted provider account or business identifiers. Customer-ente
 
 Placeholders are documented in `.env.example`. They must be configured only in server-side hosting settings or a secure secrets manager.
 
+Mighty Apes receiver placeholder:
+
+- `MIGHTY_APES_YELP_WEBHOOK_SECRET`
+
+This value alone authenticates the approved inbound Mighty Apes path. It does not activate direct Yelp API/OAuth features or outbound messaging.
+
 Global placeholders:
 
 - `YELP_API_KEY`
@@ -86,6 +108,12 @@ Do not add Yelp usernames or passwords. Do not expose these values with `NEXT_PU
 
 The foundation intentionally uses the existing Unified Lead Intake Hub:
 
+- Dedicated Mighty Apes raw-body HMAC receiver and strict version/event/payload validator.
+- WeatherTech-only campaign routing that refuses request-selected or cross-company assignment.
+- Immutable, company-scoped, non-PII webhook delivery evidence.
+- Atomic and concurrency-safe provider lead deduplication through the existing `lead_intake_records` provider identity.
+- Audit-only authenticated `lead.test` behavior.
+- Normal Leads and Unified Inbox visibility for a valid `lead.created`, with no fabricated email.
 - Yelp account registry and account-to-company routing.
 - Controlled payload normalization into the canonical lead intake format.
 - Phone and email normalization through existing duplicate-detection logic.
@@ -97,7 +125,21 @@ The foundation intentionally uses the existing Unified Lead Intake Hub:
 - Integration Center provider readiness copy that does not claim live connectivity.
 - Website & Marketing/Lead Intake surfaces that describe Yelp as manual/dry-run or partner-required.
 
-## Disabled Live Boundary
+## Mighty Apes Production Receiver Boundary
+
+The receiver code, database schema, and deployment are complete. Production is not yet provider-validated because the signing secret is absent. Do not issue a synthetic production `lead.created` to work around that blocker.
+
+The single owner action is:
+
+1. Add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a **Sensitive** environment variable for **Vercel Production**.
+2. Redeploy the Production application so the server-only variable is loaded.
+3. Use Mighty Apes' **Send Test Delivery** action.
+
+The signed `lead.test` must return success and create exactly one immutable audit-only event with no lead, intake record, sync log, notification, office task, customer, or communication. After that external test succeeds, monitor the first real `lead.created` and prove that it persists exactly once before describing the integration as live or connected.
+
+Rollback for inbound Mighty Apes processing is to remove or rotate the Production secret and redeploy. Do not alter the migration ledger or delete durable business evidence as a rollback shortcut.
+
+## Separate Direct Yelp Live Boundary
 
 The `/api/leads/yelp` route supports dry-run previews and signed test payloads, but non-dry-run production posts are rejected with `production_disabled` unless all live gates are enabled:
 
@@ -138,9 +180,20 @@ Outbound replies require official Leads API write access, OAuth business authori
 - no functional Yelp Send action is exposed
 - follow-up actions should direct staff to review or respond in Yelp Business when required
 
-## Production Activation Checklist
+## Production Evidence Checklist
 
-Before live Yelp lead ingestion can be enabled:
+For the approved Mighty Apes receiver:
+
+- [x] Exact raw-body signing, timestamp, delivery, version, event, and payload contract implemented.
+- [x] Atomic, idempotent, WeatherTech-only persistence and immutable non-PII audit schema deployed.
+- [x] Isolated signed `lead.test`, `lead.created`, retry, duplicate, concurrency, ACL/RLS, CRM visibility, and zero-residue regression passed.
+- [x] Production migrations match `45/45`; exact implementation commit is deployed READY; health is HTTP 200.
+- [x] Safe production `GET` proves the route is deployed without sending a webhook or creating CRM data.
+- [ ] Add the Sensitive Production signing secret, redeploy, and run Mighty Apes' official Send Test Delivery.
+- [ ] Verify that official `lead.test` remains audit-only.
+- [ ] Observe the first real `lead.created` and prove exactly-once CRM persistence.
+
+For the separate direct Yelp API/OAuth foundation, the earlier prerequisites remain separately deferred:
 
 - Confirm Yelp partner approval and Leads API access.
 - Confirm Request-a-Quote eligibility and business subscription state for all three accounts.
@@ -148,11 +201,11 @@ Before live Yelp lead ingestion can be enabled:
 - Confirm OAuth client ID, client secret, redirect URI, and approved scopes.
 - Authorize each Yelp business account.
 - Subscribe each approved business to lead webhooks.
-- Configure server-side environment variables in hosting.
+- Configure its separate server-side environment variables in hosting.
 - Run dry-run previews for Phoenix, Tucson, and IHC.
 - Run one signed non-production endpoint test per account.
 - Confirm dedupe, Customer 360 activity, follow-up creation, and integration logs.
-- Enable live flags only after owner approval.
+- Enable direct Yelp live flags only after separate owner approval.
 - Monitor integration logs after activation.
 
 ## Security Rules
@@ -179,6 +232,9 @@ git diff --check
 node tests/yelp-integration-foundation.test.mjs
 node tests/lead-intake-routing.test.mjs
 node tests/unified-lead-intake-service.test.mjs
+node tests/mighty-apes-yelp-webhook.test.mjs
+node tests/mighty-apes-yelp-regression.test.mjs
+node tests/supabase-migration-integrity.test.mjs
 ```
 
 Browser validation should cover:
@@ -190,14 +246,20 @@ Browser validation should cover:
 - duplicate Yelp lead handling.
 - Customer 360 intake visibility.
 - existing Twilio, Gmail, Google Calendar, Website, CRM, and Lead Intake workflows.
+- authenticated Mighty Apes `lead.test` audit isolation.
+- authenticated `lead.created` persistence, exact retry, CRM visibility, and IHC exclusion on the isolated regression target.
+- exact synthetic Mighty Apes evidence cleanup before linked intake/log/lead rows and final zero-residue proof.
 
-## Intentionally Deferred
+## Externally Pending Or Intentionally Deferred
 
+- Production configuration of `MIGHTY_APES_YELP_WEBHOOK_SECRET`.
+- Official Mighty Apes Send Test Delivery and its audit-only Production evidence.
+- The first real production `lead.created` and exactly-once persistence evidence.
 - Live Yelp OAuth flow.
 - Live Yelp webhook subscription.
 - Polling live Yelp lead/conversation endpoints.
 - Outbound Yelp replies.
 - Yelp Business Profile management.
 - Yelp review-response automation.
-- Live Yelp credential storage.
-- Production activation of any Yelp account.
+- Direct Yelp API credential storage.
+- Production activation of any separate direct Yelp account path.

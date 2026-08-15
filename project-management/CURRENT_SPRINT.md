@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved.
+Closed at the verified external-provider boundary.
 
 The owner explicitly approved this sprint in the Codex task and supplied the verified Mighty Apes webhook contract. That contract is authoritative; payload fields must not be guessed or replaced with a different Yelp API model.
 
@@ -102,8 +102,21 @@ Joe Harris
 
 ## Final Status
 
-In progress.
+IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+
+## Verified Closeout Evidence
+
+- Implementation commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c` is pushed to `main`, deployed READY on Vercel, and reported by Production `/api/health` with HTTP 200.
+- GitHub Actions run `31865652902` completed successfully; both repository validation and the protected isolated-Supabase lifecycle job passed.
+- The two additive Mighty Apes migrations were applied through the normal linked Supabase workflow. Local and Production migration ledgers match all `45/45` committed migrations.
+- Production schema inspection verified the exact 18-column audit table, 17 constraints, 8 indexes, one company-scoped RLS policy, immutable trigger, and service-role-only `SECURITY INVOKER` transaction RPC. `anon` and `authenticated` cannot execute the RPC; audit ACLs remain limited to company-scoped authenticated reads and the narrow service-role transaction/cleanup privileges.
+- Deterministic webhook tests, the hosted isolated Mighty Apes lifecycle, targeted browser coverage, and the complete isolated browser regression passed with bounded cleanup and zero residue.
+- Production `GET /api/integrations/mighty-apes/yelp/webhook` safely returns HTTP 405 with `Allow: POST`, `Cache-Control: no-store`, and no CRM mutation. No production `POST` was attempted because the signing secret is absent.
+- Production contains zero Mighty Apes/Yelp webhook audit events and zero related Yelp intake, sync-log, or CRM lead rows. No official `lead.test` and no real `lead.created` have reached Production.
+- Supabase advisors reported only expected unused-index notices for the empty new audit table and no new Yelp security finding. Captured business/provider fingerprints remained unchanged.
+- `/api/readiness` remains truthfully blocked with HTTP 503. No unrelated provider gate, outbound messaging capability, broad production approval, or production business record changed.
+- `supabase/migrations/0026_property_intelligence_foundation.sql` retained SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e`. `.env.local` retained SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
 
 ## Notes
 
-Mighty Apes' official test-delivery action and the first real Yelp lead are external evidence steps. If the signing secret is not already configured, the single owner action is to add the exact server-only production variable reported by this sprint and then run Mighty Apes' Send Test Delivery.
+The single owner action is: add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a Sensitive Vercel Production environment variable, redeploy, then run Mighty Apes' Send Test Delivery. A successful authenticated `lead.test` must remain audit-only. The first real `lead.created` remains a later production evidence step and must persist exactly once before this integration may be described as live or connected.

@@ -4,6 +4,20 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### Live Yelp Lead Intake via Mighty Apes
+
+- Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+- Capability: added the public server-side Mighty Apes endpoint at `/api/integrations/mighty-apes/yelp/webhook`, exact raw-body HMAC and replay validation, audit-only `lead.test`, and atomic WeatherTech-only `lead.created` intake with stable provider-ID idempotency, immutable non-PII delivery evidence, normal CRM visibility, and no fabricated email.
+- Database: the two additive migrations are applied in Production, bringing local and Production migration ledgers to `45/45`. Exact inspection found the 18-column audit table, 17 constraints, 8 indexes, company-scoped RLS, immutable trigger, and service-role-only `SECURITY INVOKER` RPC. Production contains zero Mighty Apes/Yelp audit, intake, sync-log, CRM lead, or connection rows; captured business/provider fingerprints were unchanged.
+- Validation: GitHub Actions run `31865652902` passed both jobs; hosted isolated and complete browser regression gates passed with zero residue; the exact implementation commit is deployed READY; `/api/health` is HTTP 200 with the exact SHA; and the production endpoint safely returns HTTP 405 to `GET` with `Allow: POST` and no-store caching.
+- External boundary: `MIGHTY_APES_YELP_WEBHOOK_SECRET` is absent from Vercel Production, so no production `POST`, official provider `lead.test`, or real `lead.created` was attempted. The integration must not be called connected, live, or fully production-validated.
+- Owner action: add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a Sensitive Vercel Production variable, redeploy, then run Mighty Apes' Send Test Delivery. The first real `lead.created` remains a future evidence step.
+- Safety: `/api/readiness` remains truthfully blocked with HTTP 503; no outbound Yelp communication, unrelated provider activation, broad production approval, synthetic production CRM data, protected migration change, or `.env.local` change occurred.
+
+## Recent Verified Milestones
+
 ### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
 
 - Implementation commit: `8ab9f55af5e15ba1706ab71f06ade8312c0f6639`
@@ -13,8 +27,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Database: the exact five-migration chain is applied through the normal linked Supabase path, with isolated regression and Production ledgers at `43/43` committed migrations. All `41` company-link/reverse-property checks were zero, Production remained at zero customers and zero reconciliation audit entries, and all `70/70` pre-existing public-table row counts and canonical full-row SHA-256 fingerprints were unchanged.
 - Validation: `28/28` top-level test files, `80/80` isolated hosted assertions, targeted browser checks, the complete `24/24`-group and `29/29`-assertion isolated browser suite, type-check, lint, production build, dependency audit, migration integrity, GitHub Actions run `31779710356`, and deployment/health checks passed. An authenticated read-only production UI check found the reconciliation surface schema-ready and company-isolated with unsafe IHC approval disabled, no mutations, and zero console errors or warnings.
 - Safety: no automatic backfill, bulk merge, destructive migration, provider write, or production graph mutation occurred. A future production reconciliation requires one exact owner-selected company-scoped graph.
-
-## Recent Verified Milestones
 
 ### Production Connections Phase 1: Twilio/SMS — Owner-Accepted Closeout
 

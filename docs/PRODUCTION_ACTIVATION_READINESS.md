@@ -11,6 +11,7 @@ This document records the WeatherTech OS production deployment and activation co
 - Production database: verified WeatherTech OS Supabase project; migration state must be rechecked before every remote schema action
 - Live integrations: individually gated; connection and health status must be reported truthfully
 - Stripe: WeatherTech-only payment/webhook/refund foundation exists; IHC remains unmapped and disabled
+- Mighty Apes Yelp: implementation, schema, and deployment are complete; official provider testing is blocked by absent Production signing-secret configuration
 - Credentials: owner-controlled and never committed
 
 ## Production Readiness Center
@@ -53,6 +54,7 @@ Prepared staging readiness artifacts:
 - Readiness checks distinguish runtime health, dependency readiness, and final production approval.
 - Readiness checks never return customer records, database credentials, provider tokens, stack traces, or secret values.
 - Provider write flags are reported individually. The current readiness result is blocked because Gmail send, Google Calendar write, and the Twilio inbound gate are enabled while broad `WTOS_PRODUCTION_APPROVED` remains false; only the exact WeatherTech Tucson route has live inbound evidence. Listed public intake, portal, registration, automated-notification, accounting, signature, Twilio outbound, and unrelated provider gates remain disabled or unset.
+- The Mighty Apes signing secret is absent. Its receiver is deployed but has not accepted a Production `POST`; this missing secret is an external provider-test blocker, not a reason to weaken readiness or simulate a production lead.
 - Staging deployment status is not marked successful unless a real HTTPS staging URL, deployed commit, health check, readiness check, auth configuration, and browser regression evidence exist.
 
 Vercel project credentials and production environment values remain outside the repository. Repository documentation must record only non-secret deployment identity and observed health/readiness results.
@@ -108,7 +110,7 @@ The launch gates remain blocked until evidence exists.
 
 ### Production Migration Inventory
 
-Git presence is not production proof. CRM Identity Integrity Phase 1 positively reverified the WeatherTech OS Production project, completed a read-only zero-mismatch preflight, and applied the exact five-file reconciliation chain through `20260814063407_crm_identity_reconciliation_release_hardening.sql` using the normal linked Supabase migration path. The local and Production ledgers then matched all `43/43` committed migrations. This is release evidence, not blanket authorization for a later remote migration; target identity and ledger parity must be rechecked before every future schema action.
+Git presence is not production proof. CRM Identity Integrity Phase 1 positively reverified the WeatherTech OS Production project and applied its exact five-file reconciliation chain through `20260814063407_crm_identity_reconciliation_release_hardening.sql`. Live Yelp Lead Intake via Mighty Apes then applied its two additive migrations through `20260815040010_mighty_apes_yelp_audit_lock_privilege.sql` using the same normal linked Supabase path after zero-mismatch preflight. The local and Production ledgers now match all `45/45` committed migrations. This is release evidence, not blanket authorization for a later remote migration; target identity and ledger parity must be rechecked before every future schema action.
 
 Remote verification must positively identify the WeatherTech OS production project, compare the authoritative ledger with the intended local migration set, and stop on any unexpected missing, duplicate, or additional migration.
 
@@ -120,6 +122,16 @@ Remote verification must positively identify the WeatherTech OS production proje
 - Production validation was non-destructive: the exact audit table, `12/12` functions, and `39/39` triggers were present; all `41` company-link/reverse-property checks were zero; zero customer rows and zero reconciliation audit entries remained; and all `70/70` pre-existing public-table row counts and canonical full-row SHA-256 fingerprints were unchanged.
 - Authenticated read-only production UI validation found the reconciliation surface schema-ready and the WeatherTech/IHC queues company-isolated, with unsafe IHC approval disabled. No production mutation was clicked, and the browser console had zero errors or warnings.
 - A real production reconciliation remains an individually reviewed operational action. The owner must identify one exact company-scoped graph; no automatic reconciliation, bulk backfill, or inferred linkage is authorized.
+
+### Mighty Apes Yelp Intake Release
+
+- Implementation commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c` is pushed, deployed READY, and covered by successful GitHub Actions run `31865652902`; both jobs passed.
+- Production has the exact Mighty Apes schema: one 18-column webhook audit table with 17 constraints, 8 indexes, RLS, one company-scoped read policy, and the immutable-event trigger.
+- The transaction RPC remains `SECURITY INVOKER` with an empty fixed search path and service-role-only execution. `anon` and `authenticated` cannot execute it. Authenticated users receive only company-scoped audit reads; service role has only the required select/insert/delete plus column-level `UPDATE(id)` used for row locking, while the immutable trigger rejects actual updates.
+- Production contains zero Mighty Apes audit rows, Yelp intake records, Yelp sync logs, Yelp leads, and Yelp integration connections. Captured business/provider fingerprints were unchanged after schema application and read-only verification.
+- Production `GET /api/integrations/mighty-apes/yelp/webhook` returns HTTP 405 with `Allow: POST` and no-store caching. No production `POST` was attempted because `MIGHTY_APES_YELP_WEBHOOK_SECRET` is absent.
+- Supabase advisors reported only expected unused-index notices on the empty new audit table and no new Yelp security finding.
+- This release is not provider-validated. The exact status is: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
 
 ### Environment Readiness
 
@@ -209,7 +221,7 @@ Before production activation, the owner must verify:
 - OAuth redirect URIs match the production domain for Google Workspace, Google Business Profile, QuickBooks Online, DocuSign, Dropbox Sign, and any future OAuth providers.
 - Twilio numbers, webhook URLs, messaging compliance, and outbound send gates are explicitly approved.
 - Website forms use signed server-to-server delivery from approved domains.
-- Yelp partner or approved business API access is confirmed before any live Yelp sync.
+- The Mighty Apes Production signing secret is configured server-side and its official audit-only test succeeds before any claim of provider validation; direct Yelp API/OAuth access remains a separate approval path.
 - QuickBooks Online accounting writes and payment behavior remain disabled until an accounting activation sprint.
 - Electronic signature providers remain disabled until sandbox signature tests and callback validation are approved.
 - Monitoring, alert ownership, backup expectations, and rollback ownership are documented.
@@ -261,11 +273,12 @@ Before production activation, the owner must verify:
 
 ### Yelp
 
-- Required credentials: Yelp approved API/partner access, OAuth/client credentials where available, business/account IDs, webhook secret, and shared intake secret.
-- OAuth: depends on approved Yelp partner access path.
-- External approvals: Yelp partner or approved business lead access is required for live lead conversations.
-- Testing sequence: dry-run intake, validate routing and duplicate prevention, run signed endpoint tests, and keep live sync disabled until access and owner approval are complete.
-- Rollback: disable live sync and outbound messaging gates, pause connection records, and remove webhook subscriptions if configured later.
+- Mighty Apes inbound credential: `MIGHTY_APES_YELP_WEBHOOK_SECRET`, configured only as a Sensitive Vercel Production environment variable. It is currently absent.
+- Production receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
+- OAuth: not used by the approved Mighty Apes inbound receiver. Direct Yelp API/OAuth remains a separate disabled foundation.
+- Current boundary: implementation/schema/deployment are complete, but no official provider `lead.test` or real `lead.created` has reached Production. Do not describe the integration as connected, live, or fully production-validated.
+- Testing sequence: add the secret, redeploy, run Mighty Apes' Send Test Delivery, prove `lead.test` created audit evidence only, then monitor the first real `lead.created` for exactly-once WeatherTech CRM persistence.
+- Rollback: remove or rotate the Mighty Apes Production secret and redeploy. Keep all outbound Yelp messaging disabled; do not delete durable CRM/audit evidence or alter the migration ledger as rollback.
 
 ### Website
 
@@ -321,4 +334,4 @@ Before production activation, the owner must verify:
 
 ## Readiness Verdict
 
-WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression fails closed against Production Supabase. CRM Identity Integrity Phase 1 is complete: its five-file schema chain is applied at `43/43` migration parity, and the reviewed Customer & Property Reconciliation capability is deployed without changing any production business graph. Production remained at zero customers and zero reconciliation audit entries; an owner-selected graph is still required before any production reconciliation. The inbound-only Twilio implementation is deployed: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test` without a live message, and WeatherTech Phoenix remains externally blocked on eligible number availability. Provider activation remains partial. `/api/health` returns HTTP 200, while `/api/readiness` truthfully returns HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false. Twilio outbound remains disabled with zero sends; truthful provider health, monitoring, backup evidence, and an explicit owner activation decision remain required.
+WeatherTech OS is deployed, its production runtime is healthy, its evidence-proven regression contamination has been removed, and ordinary write-capable browser regression fails closed against Production Supabase. Production matches all `45/45` committed migrations. CRM Identity Integrity Phase 1 remains complete without a production business-graph change. Live Yelp Lead Intake via Mighty Apes is implementation/schema/deployment complete, but official provider testing is externally blocked by absent signing-secret configuration; Production has zero related audit, intake, sync-log, lead, and connection rows. The inbound-only Twilio implementation remains deployed: WeatherTech Tucson is live-validated, IHC is mapped at `ready_for_live_test` without a live message, and WeatherTech Phoenix remains externally blocked on eligible number availability. Provider activation remains partial. `/api/health` returns HTTP 200 at the exact Mighty Apes implementation SHA, while `/api/readiness` truthfully returns HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false. Twilio and Yelp outbound messaging remain disabled; truthful provider health, monitoring, backup evidence, and explicit owner activation decisions remain required.

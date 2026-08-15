@@ -4,6 +4,29 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Live Yelp Lead Intake via Mighty Apes — External-Test-Blocked Closeout
+
+- Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+- Validation:
+  - GitHub Actions run `31865652902`: repository validation and protected isolated-Supabase lifecycle jobs both `success`
+  - Hosted isolated Mighty Apes lifecycle and complete isolated browser regression: `pass`, with bounded cleanup and zero residue
+  - Production migration ledger: `45/45` committed migrations
+  - Production schema: exact 18-column audit table, 17 constraints, 8 indexes, one company-scoped RLS policy, immutable trigger, and service-role-only `SECURITY INVOKER` transaction RPC
+  - Production deployment: READY at the exact implementation commit; `/api/health` HTTP 200 with the exact SHA
+  - Production webhook safe check: `GET` HTTP 405 with `Allow: POST` and `Cache-Control: no-store`; no production `POST` was attempted
+- Notes:
+  - The deployed endpoint is `https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook` and implements the verified Mighty Apes raw-body HMAC, timestamp, delivery, version, event, and payload contract.
+  - Authenticated `lead.test` is audit-only. Valid `lead.created` processing is atomic, concurrency-safe, idempotent on Yelp `lead.id`, WeatherTech-only, visible through the existing CRM workflow, and creates no fabricated email.
+  - Production does not yet contain the signing secret, a provider test delivery, a real Yelp lead delivery, or any Mighty Apes/Yelp webhook audit, intake, sync-log, or CRM lead row. This closeout does not claim the integration is connected, live, or fully production-validated.
+  - Production Yelp connection rows also remained zero; captured business/provider fingerprints were unchanged. Supabase advisors found no new Yelp security issue, only expected unused-index notices on the empty audit table.
+  - The single owner action is to add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a Sensitive Vercel Production environment variable, redeploy, then run Mighty Apes' Send Test Delivery. The first real `lead.created` remains a separate future evidence step.
+  - `/api/readiness` remains truthfully blocked with HTTP 503. No outbound Yelp messaging, unrelated provider activation, broad production approval, synthetic production CRM data, or `.env.local` change occurred.
+  - Preserved `supabase/migrations/0026_property_intelligence_foundation.sql` at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and `.env.local` at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+
 ### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
 
 - Implementation commit: `8ab9f55af5e15ba1706ab71f06ade8312c0f6639`
