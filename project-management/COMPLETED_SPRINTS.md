@@ -67,9 +67,16 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 - Notes:
   - WeatherTech Tucson ending `3145` is the only live-validated route, with exactly one received SMS record and one completed provider event.
   - IHC ending `6930` is exactly mapped and active at `ready_for_live_test` with zero messages and zero validation events; no IHC live-ingress claim is made.
-  - WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. Signed simulations do not prove carrier ingress for an unowned route.
+  - At the owner-accepted closeout checkpoint, WeatherTech Phoenix remained unconfigured because no owner-approved eligible number was available. Signed simulations did not prove carrier ingress for an unowned route; the later owner-authorized activation follow-up below supersedes this operational state.
   - Outbound SMS remains hard-locked and disabled with zero outbound messages. Voice, MMS, campaigns, reminders, auto-replies, and broader provider activation remain outside this closeout.
   - No scheduled Twilio inventory automation remains. `.env.local` and both owner-designated Property Intelligence changes remained byte-for-byte unchanged, unstaged, and uncommitted.
+
+#### Owner-Authorized Phoenix Activation Follow-Up — 2026-08-15
+
+- WeatherTech Phoenix, documented only by masked ending `1326`, is now owner-controlled, assigned to the same directly inspected shared Messaging Service as Tucson and IHC, configured in Vercel Production, and mapped as an exact active WeatherTech route at `ready_for_live_test`.
+- Tucson remains live-validated with two received messages and two completed inbound events. IHC and Phoenix each remain unvalidated with zero messages/events; no live-ingress claim is made for either route.
+- Twilio shows no A2P Brand or Campaign, so the US long-code senders are not registered for outbound A2P traffic. Outbound SMS remains hard-locked and disabled, and voice/status/recording configuration remains unset.
+- This was an operational activation follow-up to the closed sprint, not a new implementation sprint. It required no application code or schema migration and did not start another sprint.
 
 ### Non-Production Regression Environment & CI Test-Data Lifecycle
 

@@ -18,6 +18,15 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
+### WeatherTech Phoenix Twilio Inbound Activation Follow-Up
+
+- Status: configuration complete and `ready_for_live_test`; no Phoenix live-ingress claim is made.
+- WeatherTech Phoenix, documented only by masked ending `1326`, was assigned to the same directly inspected shared Messaging Service as the existing Tucson and IHC senders, added to the exact WeatherTech Production environment mapping, and activated as a company-scoped inbound-only route.
+- Existing Tucson and IHC sender-pool membership, exact company routes, and the canonical production webhook were preserved. The unused second Messaging Service remains empty.
+- Tucson retains two received inbound messages and two completed provider events. IHC and Phoenix each have zero messages/events; all routes have zero outbound SMS and zero voice/call activity.
+- Twilio shows no A2P Brand or Campaign. The senders are therefore not registered for outbound US A2P traffic; no compliance approval or outbound capability is claimed.
+- No application code or schema migration was required. Vercel Production was redeployed with the Phoenix number binding, `/api/health` remained HTTP 200, `/api/readiness` remained truthfully HTTP 503, `.env.local` was untouched, and no scheduled inventory search was created.
+
 ### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
 
 - Implementation commit: `8ab9f55af5e15ba1706ab71f06ade8312c0f6639`
@@ -35,7 +44,7 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Inventory-blocker checkpoint: `5c1bb7538a023b11606532a1b555b91905b6df42`
 - Status: completed by explicit owner acceptance with documented external follow-up; provider activation remains partial.
 - Verified state: WeatherTech Tucson, documented only by masked ending `3145`, is mapped and live-validated with exactly one received SMS record and one completed provider event. IHC, documented only by masked ending `6930`, is mapped and active with readiness `ready_for_live_test`, but has zero received messages and zero validation events.
-- External blocker: WeatherTech Phoenix remains unconfigured because no owner-approved eligible number is available. No number purchase, number assignment, or provider/database configuration changed during the latest inventory check, and no scheduled inventory automation remains.
+- Historical closeout boundary: at this checkpoint WeatherTech Phoenix was unconfigured because no owner-approved eligible number was available. No number purchase, number assignment, or provider/database configuration changed during that inventory check, and no scheduled inventory automation remained. The later owner-authorized activation follow-up above supersedes this operational state without changing the historical closeout evidence.
 - Validation boundary: official signed simulations verify application behavior but cannot prove carrier ingress, Twilio number ownership, sender-pool attachment, or public webhook delivery for an unowned number. Governance closeout does not constitute WeatherTech Phoenix or IHC live validation or broad provider activation.
 - Safety: outbound remains hard-locked and disabled with zero outbound SMS, and global readiness truthfully remains HTTP 503 because Gmail send, Google Calendar write, and Twilio inbound are enabled while broad production-write approval remains false.
 - Runbook: [Twilio Phase 1 Setup](./docs/TWILIO_PHASE_1_SETUP.md).

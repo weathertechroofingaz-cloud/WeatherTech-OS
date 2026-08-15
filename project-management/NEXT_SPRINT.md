@@ -73,7 +73,7 @@ Codex must never automatically promote this file. Promotion requires an explicit
 - Live Yelp Lead Intake via Mighty Apes is implemented, schema-applied, pushed, and deployed at commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; do not rebuild it as a new sprint.
 - The official Mighty Apes test remains an external operational action blocked by the missing Production signing secret. That action does not authorize new implementation or a different provider integration.
 - CRM Identity Integrity Phase 1 is complete. Its deployed reconciliation capability must not be treated as permission for automatic backfill or an unreviewed production-record operation.
-- The inbound-only Twilio implementation is complete and must not be rebuilt. WeatherTech Tucson is live-validated; IHC live validation and WeatherTech Phoenix number acquisition remain external follow-up and do not authorize outbound SMS.
+- The inbound-only Twilio implementation is complete and must not be rebuilt. WeatherTech Tucson is live-validated; IHC and WeatherTech Phoenix ending `1326` are exact active routes at `ready_for_live_test`. Their separate live validation and any A2P/outbound work remain external follow-up and do not authorize outbound SMS.
 - These guardrails do not select or recommend a next sprint.
 
 ## Last Review
