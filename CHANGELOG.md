@@ -18,14 +18,14 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Recent Verified Milestones
 
-### WeatherTech Phoenix Twilio Inbound Activation Follow-Up
+### WeatherTech Phoenix Twilio Inbound Activation And Live Validation Follow-Up
 
-- Status: configuration complete and `ready_for_live_test`; no Phoenix live-ingress claim is made.
-- WeatherTech Phoenix, documented only by masked ending `1326`, was assigned to the same directly inspected shared Messaging Service as the existing Tucson and IHC senders, added to the exact WeatherTech Production environment mapping, and activated as a company-scoped inbound-only route.
+- Status: configuration and carrier-ingress validation complete for the Phoenix inbound-only route.
+- WeatherTech Phoenix, documented only by masked ending `1326`, was assigned to the same directly inspected shared Messaging Service as the existing Tucson and IHC senders, added to the exact WeatherTech Production environment mapping, activated as a company-scoped inbound-only route, and validated through the signature-authenticated canonical production webhook.
 - Existing Tucson and IHC sender-pool membership, exact company routes, and the canonical production webhook were preserved. The unused second Messaging Service remains empty.
-- Tucson retains two received inbound messages and two completed provider events. IHC and Phoenix each have zero messages/events; all routes have zero outbound SMS and zero voice/call activity.
+- Tucson retains two received inbound messages and two completed provider events. Phoenix has exactly one received inbound message and one completed provider event, with exact-once persistence and no customer, lead, or job mutation. IHC remains at zero messages/events; all routes have zero outbound SMS and zero voice/call activity.
 - Twilio shows no A2P Brand or Campaign. The senders are therefore not registered for outbound US A2P traffic; no compliance approval or outbound capability is claimed.
-- No application code or schema migration was required. Vercel Production was redeployed with the Phoenix number binding, `/api/health` remained HTTP 200, `/api/readiness` remained truthfully HTTP 503, `.env.local` was untouched, and no scheduled inventory search was created.
+- No application code, schema migration, environment, or provider configuration change was required for the live verification. `/api/health` remained HTTP 200, aggregate Twilio readiness remained `ready_for_live_test` solely because IHC lacks evidence, `/api/readiness` remained truthfully HTTP 503, `.env.local` was untouched, and no scheduled inventory search was created.
 
 ### CRM Identity Integrity Phase 1 — Customer & Property Reconciliation
 

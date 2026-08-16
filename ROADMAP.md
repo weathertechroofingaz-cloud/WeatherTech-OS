@@ -10,7 +10,7 @@ This roadmap records verified product boundaries and candidate future work. It d
 
 - AI Command Center 3.0 is implemented on the existing AI Tools 2.1 foundation with company-scoped, approval-gated behavior.
 - WeatherTech Roofing's company-isolated Stripe Payment Element, webhook accounting, and full-refund foundation are implemented and production-validated. IHC remains blocked until it receives a separate authorized account/configuration.
-- The inbound-only Twilio implementation is deployed. WeatherTech Tucson ending `3145` is live-validated; IHC ending `6930` and WeatherTech Phoenix ending `1326` are exactly mapped and active at `ready_for_live_test` but have no live validation evidence. Phoenix is assigned to the directly inspected shared Messaging Service; outbound SMS remains disabled and A2P Brand/Campaign registration is not complete.
+- The inbound-only Twilio implementation is deployed. WeatherTech Tucson ending `3145` and WeatherTech Phoenix ending `1326` are exactly mapped and live-validated; IHC ending `6930` remains exactly mapped and active at `ready_for_live_test`. Phoenix is assigned to the directly inspected shared Messaging Service; outbound SMS remains disabled and A2P Brand/Campaign registration is not complete.
 - WeatherTech OS is deployed to Vercel with Production Supabase, document storage, Gmail, Google Calendar, and GoHighLevel production connection checkpoints completed.
 - Customer 360 includes an owner/admin-only, evidence-based customer/property reconciliation queue with transactional idempotency, immutable audit history, and database-enforced same-company relationships. A production operation still requires one exact owner-selected graph.
 - The Mighty Apes Yelp receiver, immutable delivery ledger, and atomic WeatherTech-only CRM intake are deployed. Authenticated `lead.test` is audit-only, and `lead.created` is idempotent on the stable provider lead ID. Official Production evidence remains external follow-up, not rebuild backlog.
@@ -20,7 +20,7 @@ These capabilities may be changed only through an owner-approved rework, hardeni
 ## External Or Separately Approved Work
 
 - Mighty Apes Production validation remains external: add the server-only signing secret, redeploy, and run the official Send Test Delivery. A first real `lead.created` must later persist exactly once before the integration may be described as live.
-- WeatherTech Phoenix and IHC carrier-ingress validation, Twilio A2P registration, outbound messaging, voice, MMS, and automation; QuickBooks; CompanyCam; IHC Stripe; external electronic signatures; Google Business Profile activation; customer-portal launch; employee-portal launch; and live AI-provider activation remain external or separate owner decisions. No scheduled Twilio inventory automation remains.
+- IHC carrier-ingress validation, company/service-separated Twilio A2P registration, outbound messaging, voice, MMS, and automation; QuickBooks; CompanyCam; IHC Stripe; external electronic signatures; Google Business Profile activation; customer-portal launch; employee-portal launch; and live AI-provider activation remain external or separate owner decisions. No scheduled Twilio inventory automation remains.
 
 ## Next Sprint
 

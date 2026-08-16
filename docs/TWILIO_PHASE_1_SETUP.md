@@ -24,9 +24,9 @@ Production has three deliberately distinct route states:
 - WeatherTech Tucson, identified only by masked ending `3145`, is exactly mapped and live-validated;
 - the canonical webhook below receives text-only inbound SMS and authenticates the exact Twilio request before routing or persistence;
 - owner-authorized Tucson validation has produced exactly two received messages and two completed provider events;
-- the validation sender remained safely unmatched, and no customer or lead was created or modified;
+- the WeatherTech validation senders remained safely unlinked, and no customer, lead, or job was created or modified;
 - IHC, identified only by masked ending `6930`, is exactly mapped and active at `ready_for_live_test`, with zero inbound messages and zero validation events;
-- WeatherTech Phoenix, identified only by masked ending `1326`, is owner-controlled, assigned to the same directly inspected shared Messaging Service as Tucson and IHC, exactly mapped and active at `ready_for_live_test`, with zero inbound messages and zero validation events;
+- WeatherTech Phoenix, identified only by masked ending `1326`, is owner-controlled, assigned to the same directly inspected shared Messaging Service as Tucson and IHC, exactly mapped, active, and live-validated with one received message and one completed provider event;
 - the Phoenix company-number environment value is deployed, the shared Messaging Service still invokes the canonical webhook, and voice/status/recording configuration remains unset;
 - Twilio shows no A2P Brand or Campaign on the account. The three US long-code senders therefore remain unregistered for outbound A2P traffic; sender-pool membership is not A2P approval and does not authorize outbound messaging;
 - no scheduled inventory automation remains;
@@ -53,7 +53,7 @@ Required for every independently verified connected inbound number:
 - `TWILIO_INBOUND_SMS_ENABLED=false` during configuration; after every enabled route is exact and healthy, it may be set `true` for controlled live validation. Readiness remains `ready_for_live_test` while any configured route lacks durable signed inbound evidence
 - `TWILIO_OUTBOUND_SMS_ENABLED=false` at all times in this phase
 
-`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, and `TWILIO_FROM_NUMBER` are not required for inbound processing and must not be treated as permission to send. Configure only independently verified company-controlled numbers. The current IHC and WeatherTech Phoenix routes are verified, mapped, and active but each still needs its own controlled live inbound test.
+`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, and `TWILIO_FROM_NUMBER` are not required for inbound processing and must not be treated as permission to send. Configure only independently verified company-controlled numbers. The current IHC route is verified, mapped, and active but still needs its own controlled live inbound test; WeatherTech Phoenix has satisfied that boundary.
 
 ## Database Mapping Contract
 
@@ -103,7 +103,7 @@ Credentials alone are not a successful connection. A route becomes validated onl
 - Twilio test credentials and magic numbers validate supported REST request shapes without charging the account or connecting to real phone numbers. They cannot exercise the production inbound webhook or establish carrier delivery.
 - Twilio Virtual Phone can exercise inbound handling for an SMS-capable sender already in the Messaging Service sender pool, but Twilio documents that this path does not traverse a carrier network. Treat it as a pre-live webhook check, not production carrier validation.
 - Locally generated requests signed with the official Twilio SDK validate signature handling, exact routing, idempotency, failure recovery, and cleanup in the isolated regression environment. They do not prove ownership, sender-pool attachment, public callback delivery, or carrier ingress.
-- Final production validation for a route therefore requires an account-controlled SMS-capable number—provisioned, ported, or hosted—and one owner-authorized real inbound SMS to that exact number. The configured WeatherTech Phoenix route remains `ready_for_live_test` until that exact carrier-originated message is durably recorded.
+- Final production validation for a route therefore requires an account-controlled SMS-capable number—provisioned, ported, or hosted—and one owner-authorized real inbound SMS to that exact number. WeatherTech Phoenix has satisfied this boundary; IHC remains `ready_for_live_test` until its own carrier-originated message is durably recorded.
 
 Controlled live sequence:
 
