@@ -4,13 +4,13 @@ This document records both the earlier direct-Yelp application foundation and th
 
 ## Status
 
-- Current sprint: Live Yelp Lead Intake via Mighty Apes.
-- Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+- Completed sprint: Live Yelp Lead Intake via Mighty Apes.
+- Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST AND REAL-LEAD EVIDENCE NOT YET RECORDED.
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; deployed READY at `https://weathertech-os.vercel.app`.
 - Receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
-- Schema: local and Production Supabase ledgers match all `45/45` committed migrations.
+- Schema: local and Production Supabase ledgers match all `48/48` committed migrations.
 - Production evidence: `GET` safely returns HTTP 405 with `Allow: POST` and no-store caching. No production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row exists.
-- Required secret: `MIGHTY_APES_YELP_WEBHOOK_SECRET` is absent from Vercel Production and must remain server-only.
+- Required secret: current server-side readiness redacts `MIGHTY_APES_YELP_WEBHOOK_SECRET` as present. Its value was not read; it must remain server-only and must be reverified with the exact deployed revision before an official provider test.
 - Outbound Yelp messaging: not implemented and disabled.
 - Separate legacy foundation: `/api/leads/yelp` and its direct Yelp API/OAuth gates remain disabled and are not activated by the Mighty Apes receiver.
 
@@ -127,12 +127,12 @@ The foundation intentionally uses the existing Unified Lead Intake Hub:
 
 ## Mighty Apes Production Receiver Boundary
 
-The receiver code, database schema, and deployment are complete. Production is not yet provider-validated because the signing secret is absent. Do not issue a synthetic production `lead.created` to work around that blocker.
+The receiver code, database schema, and deployment are complete. Production is not yet provider-validated because no official provider `lead.test` or real `lead.created` evidence has been recorded. Do not issue a synthetic production `lead.created` to work around that evidence boundary.
 
-The single owner action is:
+Under a separately authorized provider-test operation, the exact sequence is:
 
-1. Add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a **Sensitive** environment variable for **Vercel Production**.
-2. Redeploy the Production application so the server-only variable is loaded.
+1. Reverify that `MIGHTY_APES_YELP_WEBHOOK_SECRET` is a **Sensitive**, server-only Vercel Production variable without reading or exposing its value.
+2. Verify the exact intended Production deployment; redeploy only if the credential or intended revision changed.
 3. Use Mighty Apes' **Send Test Delivery** action.
 
 The signed `lead.test` must return success and create exactly one immutable audit-only event with no lead, intake record, sync log, notification, office task, customer, or communication. After that external test succeeds, monitor the first real `lead.created` and prove that it persists exactly once before describing the integration as live or connected.
@@ -187,9 +187,9 @@ For the approved Mighty Apes receiver:
 - [x] Exact raw-body signing, timestamp, delivery, version, event, and payload contract implemented.
 - [x] Atomic, idempotent, WeatherTech-only persistence and immutable non-PII audit schema deployed.
 - [x] Isolated signed `lead.test`, `lead.created`, retry, duplicate, concurrency, ACL/RLS, CRM visibility, and zero-residue regression passed.
-- [x] Production migrations match `45/45`; exact implementation commit is deployed READY; health is HTTP 200.
+- [x] Production migrations match `48/48`; the receiver implementation is deployed and health is HTTP 200.
 - [x] Safe production `GET` proves the route is deployed without sending a webhook or creating CRM data.
-- [ ] Add the Sensitive Production signing secret, redeploy, and run Mighty Apes' official Send Test Delivery.
+- [ ] Under separate authorization, reverify the Sensitive Production credential and exact deployment, then run Mighty Apes' official Send Test Delivery.
 - [ ] Verify that official `lead.test` remains audit-only.
 - [ ] Observe the first real `lead.created` and prove exactly-once CRM persistence.
 
@@ -252,7 +252,7 @@ Browser validation should cover:
 
 ## Externally Pending Or Intentionally Deferred
 
-- Production configuration of `MIGHTY_APES_YELP_WEBHOOK_SECRET`.
+- Server-side credential and exact deployed-revision re-verification before the official provider test.
 - Official Mighty Apes Send Test Delivery and its audit-only Production evidence.
 - The first real production `lead.created` and exactly-once persistence evidence.
 - Live Yelp OAuth flow.

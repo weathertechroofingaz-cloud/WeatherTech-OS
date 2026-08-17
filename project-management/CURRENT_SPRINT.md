@@ -4,9 +4,9 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved, including the exact three-migration immutable release chain.
+Completed
 
-The owner explicitly approved this exact sprint in the Codex task on 2026-08-16. On 2026-08-17, the owner explicitly replaced the originally singular migration constraint only as needed to retain and release the already-created, already-validated migrations `20260816122114`, `20260816143152`, and `20260816164202`. The supplied attribution model, formulas, security boundaries, test-data correction, validation gates, migration authority, and provider exclusions are authoritative; no additional schema, provider, environment, integration, or unrelated application change is authorized.
+The owner explicitly approved this exact sprint in the Codex task on 2026-08-16. On 2026-08-17, the owner explicitly replaced the originally singular migration constraint only as needed to retain and release the already-created, already-validated migrations `20260816122114`, `20260816143152`, and `20260816164202`. The implementation, validation, release, Production migration application, read-only Production verification, and governance closeout are complete. This completed record does not authorize additional schema, provider, environment, integration, application, or next-sprint work.
 
 ## Sprint Name
 
@@ -35,7 +35,7 @@ Joe Harris
 - No `marketing_campaigns`, `lead_accountability`, `lead_accountability_events`, or `marketing_spend_months` table exists at the starting checkpoint.
 - The preceding inbound-only Twilio sprint is closed. Phoenix is live-validated `1/1`, Tucson `2/2`, IHC remains `ready_for_live_test` at `0/0`, and outbound SMS and voice remain disabled.
 - `supabase/migrations/0026_property_intelligence_foundation.sql` starts at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and must remain unchanged.
-- `tests/supabase-migration-integrity.test.mjs` starts at SHA-256 `2d209622bf3afeeb69ea342beb4d6ef731a5ff2f6214bbec7295273bab85308e`; it may receive only the strictly additive registration and contract assertions required for the new legitimate migration.
+- `tests/supabase-migration-integrity.test.mjs` starts at SHA-256 `2d209622bf3afeeb69ea342beb4d6ef731a5ff2f6214bbec7295273bab85308e`; it may receive only the strictly additive registration and contract assertions required for the legitimate migration release.
 - `.env.local` starts at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0` and must remain unchanged.
 
 ## Canonical Attribution Contract
@@ -49,7 +49,7 @@ Joe Harris
 
 ## Owner-Approved Scope
 
-- Add the smallest additive, non-destructive migration required for company-scoped campaigns, one accountability record per lead, immutable non-PII accountability events, monthly manual marketing spend, and transactional/idempotent mutation functions.
+- Add the smallest additive, non-destructive migration release required for company-scoped campaigns, one accountability record per lead, immutable non-PII accountability events, monthly manual marketing spend, and transactional/idempotent mutation functions.
 - Add strict RLS, least-privilege grants, cross-company reference checks, stale-version rejection, immutable-event enforcement, deterministic operation keys, and atomic current-state/event writes consistent with existing owner/admin roles.
 - Preserve `leads.created_by` as creator audit data and add explicit assigned lead ownership.
 - Integrate supported new lead-creation and provider-intake paths so each new lead gets defensible first-touch attribution or explicit unknown/review state without breaking existing intake.
@@ -110,13 +110,22 @@ Joe Harris
 
 ## Final Status
 
-Implementation and isolated validation are complete. The exact owner-approved three-migration release is proceeding through final scope audit, commit, push, CI/deployment verification, Production application, read-only verification, and governance closeout.
+Completed on 2026-08-17.
+
+- Immutable implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6` (`feat: add lead attribution accountability`) on `main`, pushed to `origin/main`.
+- GitHub Actions run `32073345029` completed successfully: repository-only checks job `95521143325` and protected isolated-Supabase lifecycle job `95521700791` both passed.
+- Vercel completed the exact implementation deployment. At the implementation release checkpoint, canonical `/api/health` returned HTTP 200 with commit `ba816c2bad315f7ef85051bb3e247f2f965f50b6`; `/api/readiness` truthfully remained HTTP 503 under the existing owner/provider approval gates.
+- Production Supabase now matches the committed `48/48` migration ledger. The exact three owner-approved migrations were applied in order through the normal linked workflow.
+- All five new Phase 1 tables contain zero Production rows. The pre-existing 72-table, 277-row baseline fingerprint remains `9750d6d890554fb766f3e5379d6ca49f`; all ten owner-identified test leads and ten linked intake records remain unchanged, received no automatic accountability backfill, and are not historical KPI truth.
+- Provider mappings, events, data fingerprints, and write gates remain unchanged. No synthetic Production business data, provider activation, environment change, protected-migration change, or `.env.local` change occurred.
+- The full isolated Browser run `20260816171236859` passed all `24/24` groups and `30/30` assertions with zero console errors, zero console warnings, and zero residue. Targeted accountability run `20260816165039517` passed `3/3`; post-hardening Sales run `20260816171149423` passed `1/1`, each with zero console findings and zero residue.
+- No subsequent sprint is selected, approved, promoted, or started.
 
 ## Notes
 
 This approval resolves routine product and architecture decisions within the stated contract. Codex must stop only for a genuine credential, external-account, destructive-operation, or unresolved business-decision blocker. No next sprint may begin after closeout.
 
-### Migration-authority checkpoint
+### Migration release record
 
 Isolated validation exposed release-blocking defects only after the base migration had been applied to the approved non-Production regression project. Preserving immutable migration history required two additive, non-destructive hardening migrations rather than rewriting the applied base:
 
@@ -124,4 +133,4 @@ Isolated validation exposed release-blocking defects only after the base migrati
 - `20260816143152_lead_accountability_nonretryable_stale_errors.sql` — SHA-256 `618cf2b2d7976758edd24a07f531221ea56686fb3d53dbd6c2598851ed02af6a`.
 - `20260816164202_lead_accountability_idempotency_integrity_hardening.sql` — SHA-256 `8c976c8cd21f123e5abca4e5987e4a67301091a108044698ed610e99faea2250`.
 
-Together they create the four approved business tables plus the internal, non-PII `marketing_accountability_operation_receipts` table required for durable campaign/spend retry convergence. The regression ledger is `48/48`; the Production ledger remains `45/45`, and none of these migrations has been applied to Production at this checkpoint. The owner granted the required three-migration release approval on 2026-08-17; the exact validated chain may now proceed through the established release workflow, but no fourth or replacement migration is authorized.
+Together they create the four approved business tables plus the internal, non-PII `marketing_accountability_operation_receipts` table required for durable campaign/spend retry convergence. The owner granted the required three-migration release approval on 2026-08-17. The exact immutable chain is now present in both the regression and Production `48/48` ledgers; no fourth or replacement migration was created or applied. All five new Production tables are empty, and the migrations performed no business-data insert, update, delete, or backfill.

@@ -4,6 +4,20 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### Lead Attribution & Marketing Accountability Phase 1
+
+- Implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Status: COMPLETED — IMPLEMENTED, PUSHED, DEPLOYED, PRODUCTION MIGRATIONS APPLIED, AND READ-ONLY PRODUCTION VALIDATED.
+- Capability: added locked first-touch acquisition attribution with source/provider separation, explicit lead ownership, transactional funnel events, structured won/lost outcomes, same-company repeat opportunities, owner/admin monthly spend entry, and a Phoenix-month Marketing Accountability dashboard with truthful unavailable denominators and visible data-quality gaps.
+- Database: the exact owner-approved three-migration additive chain is applied in Production, bringing local, regression, and Production ledgers to `48/48`. The four business tables plus internal non-PII operation-receipt table contain zero Production rows; the ten owner-identified test leads and ten intake rows remain unchanged and unbackfilled.
+- Validation: all `33/33` top-level tests, `307/307` Phase 1 foundation assertions, `183/183` hosted lifecycle assertions, type-check, lint, build, dependency audit, migration integrity, secret and scope checks passed. Browser runs `20260816165039517`, `20260816171149423`, and `20260816171236859` passed; the complete run covered `24/24` groups and `30/30` assertions with zero console errors, zero warnings, and zero residue. GitHub Actions run `32073345029` passed both jobs.
+- Production evidence: Vercel deployed the exact implementation SHA and canonical `/api/health` returned HTTP 200 with it. The original 72-table, 277-row fingerprint remains `9750d6d890554fb766f3e5379d6ca49f`; all new tables are empty and existing provider mappings, events, fingerprints, and gates are unchanged.
+- Safety: `/api/readiness` remains truthfully HTTP 503 under existing broad owner/provider approval controls. No synthetic Production data, attribution backfill, fake spend, provider activation, outbound message, environment change, protected migration change, or `.env.local` change occurred.
+- Operational boundary: Production has no real Phase 1 accountability or spend evidence yet. The dashboard must not be used as historical marketing truth until real intake and owner-entered spend generate defensible data.
+
+## Recent Verified Milestones
+
 ### Live Yelp Lead Intake via Mighty Apes
 
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`
@@ -15,8 +29,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - External boundary: `MIGHTY_APES_YELP_WEBHOOK_SECRET` is absent from Vercel Production, so no production `POST`, official provider `lead.test`, or real `lead.created` was attempted. The integration must not be called connected, live, or fully production-validated.
 - Owner action: add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a Sensitive Vercel Production variable, redeploy, then run Mighty Apes' Send Test Delivery. The first real `lead.created` remains a future evidence step.
 - Safety: `/api/readiness` remains truthfully blocked with HTTP 503; no outbound Yelp communication, unrelated provider activation, broad production approval, synthetic production CRM data, protected migration change, or `.env.local` change occurred.
-
-## Recent Verified Milestones
 
 ### WeatherTech Phoenix Twilio Inbound Activation And Live Validation Follow-Up
 

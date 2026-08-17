@@ -60,6 +60,8 @@ Write-capable CRM, job, dispatch, intake, financial, or cleanup shards remain su
 
 Mighty Apes test deliveries use the distinct exact marker `TEST WTOS MIGHTY APES REGRESSION:`. The lead-intake group must verify audit-only `lead.test`, atomic `lead.created`, exact retry, normal Leads/Inbox visibility, and IHC exclusion. Cleanup must remove captured immutable audit IDs before their linked intake, sync-log, office-task, and lead IDs, then prove zero generic and Mighty Apes residue.
 
+Lead Attribution & Marketing Accountability uses the targeted `crm-accountability` group for attribution review, explicit owner assignment, successful-human-contact evidence, linked appointment/inspection/estimate milestones, won/lost enforcement, repeat opportunity, spend entry, dashboard formulas, and company switching. The complete default run continues to use the 24-group set; its `sales-pipeline`, `lead-intake-workspace`, `lead-intake`, and `marketing` groups exercise the integrated accountability surfaces. Cleanup removes only captured/current-run accountability events, accountability rows, operation receipts, spend, campaigns, repeat opportunities, and their exact linked fixtures, then proves zero residue.
+
 A shard is diagnostic evidence only. It must never be reported as a complete browser-regression pass. Full-run logic must reject an empty, unknown, duplicate, or incomplete group list and must report the expected group count and nonzero assertion count.
 
 ## CI Boundary
@@ -71,3 +73,12 @@ Do not create a conditional browser job that turns green after skipping for miss
 ## Production Validation Boundary
 
 A narrowly authorized production validation, such as a single owner-approved Stripe transaction, is a separate workflow. It must name the exact purpose and allowed mutation, enforce its own approval and company-isolation controls, and must not enable the ordinary regression harness to seed or clean production data.
+
+## Latest Verified Accountability Run
+
+- Implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6`.
+- Targeted accountability run `20260816165039517`: `3/3` assertions passed.
+- Post-hardening Sales run `20260816171149423`: `1/1` assertion passed.
+- Complete run `20260816171236859`: `24/24` expected groups and `30/30` assertions passed.
+- All three runs reported zero browser-console errors, zero warnings, bounded cleanup, and zero residue on the approved regression project.
+- Production was limited to read-only release verification. The ordinary harness did not seed, mutate, or clean Production.

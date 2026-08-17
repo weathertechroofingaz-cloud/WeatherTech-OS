@@ -4,9 +4,9 @@ This file is planning-only. It cannot authorize development, cannot approve a sp
 
 ## Approval Status
 
-Current sprint approved; no subsequent sprint selected.
+No subsequent sprint selected; awaiting owner direction.
 
-The owner approved Lead Attribution & Marketing Accountability Phase 1 directly in the Codex task and it is recorded in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). This file does not approve any work after that sprint.
+Lead Attribution & Marketing Accountability Phase 1 is completed and recorded in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) and [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md). This file does not approve any later work.
 
 ## Sprint Name
 
@@ -14,7 +14,7 @@ No subsequent sprint selected.
 
 ## Objective
 
-Lead Attribution & Marketing Accountability Phase 1 is the active owner-approved sprint in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No later sprint has been selected; this planning file preserves completed-work and external-dependency boundaries for the post-closeout waiting state.
+No later sprint has been selected. This planning file preserves completed-work and external-dependency boundaries for the post-closeout waiting state.
 
 ## Owner-Approved Scope
 
@@ -71,11 +71,12 @@ Codex must never automatically promote this file. Promotion requires an explicit
 - The WeatherTech Roofing Stripe payment/webhook/refund foundation is implemented and production-validated; only separately approved activation or hardening work may extend it.
 - IHC Stripe requires its own separately authorized account/configuration.
 - Live Yelp Lead Intake via Mighty Apes is implemented, schema-applied, pushed, and deployed at commit `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; do not rebuild it as a new sprint.
-- The official Mighty Apes test remains an external operational action blocked by the missing Production signing secret. That action does not authorize new implementation or a different provider integration.
+- The official Mighty Apes test remains a separate external operational action without provider-test evidence. Its server-side credential and deployment must be reverified under separate authorization before that action; it does not authorize new implementation or a different provider integration.
 - CRM Identity Integrity Phase 1 is complete. Its deployed reconciliation capability must not be treated as permission for automatic backfill or an unreviewed production-record operation.
+- Lead Attribution & Marketing Accountability Phase 1 is implemented, schema-applied, pushed, deployed, and read-only Production validated at implementation commit `ba816c2bad315f7ef85051bb3e247f2f965f50b6`. Do not rebuild it or treat the ten preserved Production test leads as real historical marketing KPIs; no provider activation or automatic attribution backfill is authorized.
 - The inbound-only Twilio implementation is complete and must not be rebuilt. WeatherTech Tucson and WeatherTech Phoenix ending `1326` are live-validated; IHC remains an exact active route at `ready_for_live_test`. Only IHC live validation and separately approved A2P/outbound work remain external follow-up, and neither authorizes outbound SMS.
 - These guardrails do not select or recommend a next sprint.
 
 ## Last Review
 
-Lead Attribution & Marketing Accountability Phase 1 is active and owner-approved in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). Live Yelp Lead Intake via Mighty Apes remains closed at its external signing-secret boundary, CRM Identity Integrity Phase 1 remains complete without a production graph change, and the inbound-only Twilio sprint remains closed. No subsequent sprint is selected, approved, promoted, or started.
+Lead Attribution & Marketing Accountability Phase 1 is completed. Live Yelp Lead Intake via Mighty Apes remains without official provider-test evidence, CRM Identity Integrity Phase 1 remains complete without a production graph change, and the inbound-only Twilio sprint remains closed. No subsequent sprint is selected, approved, promoted, or started.

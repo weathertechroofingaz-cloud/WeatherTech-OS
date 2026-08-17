@@ -4,6 +4,35 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Lead Attribution & Marketing Accountability Phase 1 — Verified Origin, Funnel & Manual Spend
+
+- Implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, pushed, deployed, Production migrations applied, and read-only Production validated without creating or backfilling a Production business record.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `33/33 pass`
+  - Phase 1 foundation: `307/307 assertions pass`; hosted isolated lifecycle: `183/183 assertions pass`, with zero residue
+  - Existing CRM compatibility: `98/98`; Mighty Apes regression: `80/80`; Twilio regression: `57/57`
+  - Targeted Browser run `20260816165039517`: `3/3`; post-hardening Sales run `20260816171149423`: `1/1`; complete isolated Browser run `20260816171236859`: `24/24 groups`, `30/30 assertions`, zero console errors, zero console warnings, and zero residue
+  - Type-check, lint, production build, dependency audit with zero vulnerabilities, migration integrity, secret scan, `git diff --check`, protected-file checks, and final scope audit: `pass`
+  - GitHub Actions run `32073345029`: repository-only job `95521143325` and protected isolated-Supabase lifecycle job `95521700791` both `success`
+  - Vercel deployment completed for the exact implementation commit; canonical `/api/health` returned HTTP 200 with that SHA, while `/api/readiness` truthfully remained HTTP 503 under unchanged broad owner/provider approval controls
+- Database:
+  - `20260816122114_lead_attribution_marketing_accountability_phase_1.sql` — SHA-256 `1cd4051f320fdb82253a92d3b440dbc307a72b8dba78d170f6592ca4545b8622`
+  - `20260816143152_lead_accountability_nonretryable_stale_errors.sql` — SHA-256 `618cf2b2d7976758edd24a07f531221ea56686fb3d53dbd6c2598851ed02af6a`
+  - `20260816164202_lead_accountability_idempotency_integrity_hardening.sql` — SHA-256 `8c976c8cd21f123e5abca4e5987e4a67301091a108044698ed610e99faea2250`
+  - The exact additive chain was applied through the normal linked workflow. Regression and Production ledgers match all `48/48` committed migrations.
+  - Added company-scoped `marketing_campaigns`, `lead_accountability`, immutable non-PII `lead_accountability_events`, `marketing_spend_months`, and the internal non-PII operation-receipt table. All five contain zero Production rows.
+- Notes:
+  - Implemented locked first-touch acquisition evidence, source/provider separation, explicit creator versus assigned owner, transactional funnel actions, structured won/lost requirements, same-company repeat opportunities, owner/admin monthly spend, and Phoenix-month accountability formulas with unavailable zero denominators and visible data-quality gaps.
+  - Production's ten owner-identified test leads and ten intake records remain unchanged, received no automatic accountability backfill, and are excluded from truthful historical KPI claims. The original 72-table, 277-row baseline fingerprint remains `9750d6d890554fb766f3e5379d6ca49f`.
+  - Production contains no real Phase 1 attribution, spend, funnel, or won-value evidence yet. The owner must enter real spend and real operations must create/review accountability records before the dashboard can report defensible business performance.
+  - Estimates without an explicit follow-up date remain visible as a data-quality gap; no follow-up SLA was invented. Provider campaigns are not auto-registered, and campaign/spend deletion is not part of Phase 1.
+  - Provider mappings, event data, and activation gates remain unchanged. No synthetic Production business data, provider activation, outbound message, environment change, broad production approval, protected migration change, or `.env.local` change occurred.
+  - Preserved `supabase/migrations/0026_property_intelligence_foundation.sql` at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and `.env.local` at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+
 ### Live Yelp Lead Intake via Mighty Apes — External-Test-Blocked Closeout
 
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`
