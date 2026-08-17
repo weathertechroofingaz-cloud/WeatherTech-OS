@@ -168,6 +168,18 @@ const expectedMigrations = [
     "20260815040010_mighty_apes_yelp_audit_lock_privilege.sql",
     "b4fdd7850e78bd8a31118a65ff84a67db07dc569ca74912dc01a3ff4c0955ead",
   ],
+  [
+    "20260816122114_lead_attribution_marketing_accountability_phase_1.sql",
+    "1cd4051f320fdb82253a92d3b440dbc307a72b8dba78d170f6592ca4545b8622",
+  ],
+  [
+    "20260816143152_lead_accountability_nonretryable_stale_errors.sql",
+    "618cf2b2d7976758edd24a07f531221ea56686fb3d53dbd6c2598851ed02af6a",
+  ],
+  [
+    "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
+    "8c976c8cd21f123e5abca4e5987e4a67301091a108044698ed610e99faea2250",
+  ],
 ];
 
 const files = fs
@@ -277,6 +289,15 @@ const mightyApesYelpLeadIntakeIndex = files.indexOf(
 const mightyApesYelpAuditLockPrivilegeIndex = files.indexOf(
   "20260815040010_mighty_apes_yelp_audit_lock_privilege.sql",
 );
+const leadAttributionAccountabilityIndex = files.indexOf(
+  "20260816122114_lead_attribution_marketing_accountability_phase_1.sql",
+);
+const leadAccountabilityStaleErrorHardeningIndex = files.indexOf(
+  "20260816143152_lead_accountability_nonretryable_stale_errors.sql",
+);
+const leadAccountabilityIdempotencyIntegrityHardeningIndex = files.indexOf(
+  "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -377,6 +398,9 @@ if (
   crmIdentityReconciliationReleaseHardeningIndex === -1 ||
   mightyApesYelpLeadIntakeIndex === -1 ||
   mightyApesYelpAuditLockPrivilegeIndex === -1 ||
+  leadAttributionAccountabilityIndex === -1 ||
+  leadAccountabilityStaleErrorHardeningIndex === -1 ||
+  leadAccountabilityIdempotencyIntegrityHardeningIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -392,12 +416,16 @@ if (
     crmIdentityReconciliationStaleVersionHardeningIndex <
       crmIdentityReconciliationReleaseHardeningIndex &&
     crmIdentityReconciliationReleaseHardeningIndex < mightyApesYelpLeadIntakeIndex &&
-    mightyApesYelpLeadIntakeIndex < mightyApesYelpAuditLockPrivilegeIndex
+    mightyApesYelpLeadIntakeIndex < mightyApesYelpAuditLockPrivilegeIndex &&
+    mightyApesYelpAuditLockPrivilegeIndex < leadAttributionAccountabilityIndex &&
+    leadAttributionAccountabilityIndex < leadAccountabilityStaleErrorHardeningIndex &&
+    leadAccountabilityStaleErrorHardeningIndex <
+      leadAccountabilityIdempotencyIntegrityHardeningIndex
   ) ||
-  mightyApesYelpAuditLockPrivilegeIndex !== files.length - 1
+  leadAccountabilityIdempotencyIntegrityHardeningIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation hardening must precede Mighty Apes Yelp lead intake and its audit-lock privilege hardening, which must remain last.",
+    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, with stale-error then idempotency/integrity hardening last.",
   );
 }
 
@@ -1303,6 +1331,27 @@ const mightyApesYelpAuditLockPrivilegeMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const leadAttributionAccountabilityMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260816122114_lead_attribution_marketing_accountability_phase_1.sql",
+  ),
+  "utf8",
+);
+const leadAccountabilityStaleErrorHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260816143152_lead_accountability_nonretryable_stale_errors.sql",
+  ),
+  "utf8",
+);
+const leadAccountabilityIdempotencyIntegrityHardeningMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
+  ),
+  "utf8",
+);
 
 for (const requiredContract of [
   "begin;",
@@ -1811,6 +1860,844 @@ if (/grant\s+update\s+on\s+table/i.test(mightyApesYelpAuditLockPrivilegeMigratio
   failures.push("Mighty Apes Yelp audit-lock hardening must grant only column-level UPDATE(id).");
 }
 
+for (const requiredLeadAttributionContract of [
+  "begin;",
+  "commit;",
+  "create table public.marketing_campaigns",
+  "create table public.lead_accountability",
+  "create table public.lead_accountability_events",
+  "create table public.marketing_spend_months",
+  "attribution_model text not null default 'first_touch'",
+  "unique (lead_id)",
+  "lead_accountability_events_workflow_evidence_uidx",
+  "on delete restrict",
+  "lead_accountability_owner_user_id_idx",
+  "source_key <> 'other' or source_detail is not null",
+  "source_key = 'unknown'",
+  "review_status in ('needs_review', 'unattributed')",
+  "review_status = 'verified'",
+  "attribution_locked_at is not null",
+  "and won_contract_value is not null",
+  "lead_accountability_events_outcome_consistency_check",
+  "outcome is not distinct from 'won'",
+  "outcome is not distinct from 'lost'",
+  "current_accountability.reviewed_at is not null",
+  "current_accountability.intake_record_id is not null",
+  "current_accountability.record_version <> 1",
+  "public.wtos_is_service_role_request()",
+  "Provider attribution evidence may only be recorded by a trusted provider pathway.",
+  "Provider evidence may only be asserted by a trusted provider pathway.",
+  "public.wtos_is_deterministic_attribution_evidence",
+  "create or replace function public.wtos_create_accountable_lead_core",
+  "create or replace function public.wtos_create_accountable_lead",
+  "create or replace function public.wtos_apply_lead_accountability_action",
+  "create or replace function public.wtos_upsert_marketing_campaign",
+  "create or replace function public.wtos_upsert_marketing_spend",
+  "create or replace function public.wtos_create_repeat_opportunity",
+  "create or replace function public.wtos_get_marketing_accountability_dashboard",
+  "customer_expected_updated_at",
+  "property_expected_updated_at",
+  "'contract', 'repeat_opportunity_v1'",
+  "'customer_id', request_customer_id",
+  "'customer_expected_updated_at', request_customer_expected_updated_at",
+  "'property_id', request_property_id",
+  "'property_expected_updated_at', request_property_expected_updated_at",
+  "'repeat_request_fingerprint', request_fingerprint",
+  "Operation key was already used with different repeat-opportunity review input.",
+  "'source_key', 'repeat_customer'",
+  "'source_detail', null",
+  "'intake_provider', 'manual'",
+  "perform public.wtos_acquire_crm_identity_invariant_lock()",
+  "schedule_events_serialize_accountability_milestone_update",
+  "inspections_serialize_accountability_milestone_update",
+  "estimates_serialize_accountability_milestone_update",
+  "proposal_acceptances_serialize_accountability_milestone_insert",
+  "proposal_acceptances_serialize_accountability_scope_update",
+  "create or replace function public.wtos_validate_proposal_acceptance_scope",
+  "estimate_proposal_acceptances_validate_scope_insert",
+  "estimate_proposal_acceptances_validate_scope_update",
+  "Proposal acceptance revision, estimate, customer, and company scope must match exactly.",
+  "revoke all on function public.wtos_validate_proposal_acceptance_scope()",
+  "revision.customer_id is not distinct from acceptance.customer_id",
+  "estimate.customer_id is not distinct from acceptance.customer_id",
+  "perform public.wtos_lock_accountability_operation",
+  "perform public.wtos_lock_marketing_identity",
+  "current_campaign.record_version <> request_expected_version",
+  "current_spend.record_version <> request_expected_version",
+  "Referenced campaign attribution identity is immutable",
+  "Marketing campaign semantics do not exactly match lead attribution.",
+  "Marketing campaign semantics do not exactly match marketing spend.",
+  "for share;",
+  "request_owner_key_present := action_request ? 'owner_user_id'",
+  "Accountability event time must be between lead receipt and the current time.",
+  "pg_catalog.max(event.occurred_at)",
+  "inspection.status in ('completed', 'passed', 'failed', 'no_work_needed')",
+  "new.acceptance_method = 'signature_provider'",
+  "new.signature_status <> 'signed'",
+  "pipeline_stage not in ('approved', 'job_scheduled', 'completed', 'paid')",
+  "create constraint trigger leads_enforce_accountable_funnel_linkage",
+  "workflow_linkage_gap_count",
+  "'untracked_legacy_lead_scope', 'company_month_unallocatable'",
+  "'untracked_legacy_lead_source_allocatable', false",
+  "America/Phoenix",
+  "when lead_count_value = 0 then null",
+  "when booked_count = 0 then null",
+  "when inspection_count = 0 then null",
+  "when won_count = 0 then null",
+  "when spend_value = 0 then null",
+  "alter table public.marketing_campaigns enable row level security",
+  "alter table public.lead_accountability enable row level security",
+  "alter table public.lead_accountability_events enable row level security",
+  "alter table public.marketing_spend_months enable row level security",
+  "using (public.wtos_can_read_company(company_id))",
+  "revoke all on table public.marketing_campaigns from public, anon, authenticated, service_role",
+  "revoke all on table public.lead_accountability from public, anon, authenticated, service_role",
+  "revoke all on table public.lead_accountability_events from public, anon, authenticated, service_role",
+  "revoke all on table public.marketing_spend_months from public, anon, authenticated, service_role",
+  "grant delete on table public.lead_accountability_events to service_role",
+  "Only exact isolated-test accountability records may be removed.",
+  "TEST WTOS REGRESSION %",
+  "TEST WTOS LEAD ACCOUNTABILITY REGRESSION:%",
+  "event_operation_key := requested_operation_key || ':lead_created'",
+  "Repeat-customer attribution requires the reviewed Customer 360 workflow.",
+  "revoke all on function public.wtos_create_accountable_lead_core(jsonb, boolean)",
+  "leads_estimated_value_not_nan_check",
+  "estimate_proposal_acceptances_accepted_total_not_nan_check",
+  "spend_amount <> 'NaN'::numeric",
+  "request_spend_amount = 'NaN'::numeric",
+  "request_estimated_value = 'NaN'::numeric",
+  "acceptance_value = 'NaN'::numeric",
+  "request_won_value = 'NaN'::numeric",
+]) {
+  if (!leadAttributionAccountabilityMigration.includes(requiredLeadAttributionContract)) {
+    failures.push(
+      `Lead attribution and marketing accountability migration is missing required contract: ${requiredLeadAttributionContract}.`,
+    );
+  }
+}
+
+const leadAttributionFunctionSource = (functionName) => {
+  const start = leadAttributionAccountabilityMigration.indexOf(
+    `create or replace function public.${functionName}`,
+  );
+  if (start === -1) return "";
+  const next = leadAttributionAccountabilityMigration.indexOf(
+    "\ncreate or replace function public.",
+    start + 1,
+  );
+  return leadAttributionAccountabilityMigration.slice(
+    start,
+    next === -1 ? undefined : next,
+  );
+};
+
+for (const campaignReferenceFunction of [
+  "wtos_upsert_marketing_spend",
+  "wtos_validate_lead_accountability_scope",
+  "wtos_validate_marketing_spend_scope",
+  "wtos_validate_accountability_event_scope",
+  "wtos_apply_verified_intake_attribution",
+  "wtos_create_accountable_lead_core",
+  "wtos_apply_lead_accountability_action",
+]) {
+  const functionSource = leadAttributionFunctionSource(campaignReferenceFunction);
+  if (!/from public\.marketing_campaigns as campaign[\s\S]*?for share;/i.test(
+    functionSource,
+  )) {
+    failures.push(
+      `Lead attribution campaign reference path ${campaignReferenceFunction} must lock the exact campaign row FOR SHARE.`,
+    );
+  }
+}
+
+const campaignMutationSource = leadAttributionFunctionSource(
+  "wtos_upsert_marketing_campaign",
+);
+if (!/where campaign\.id = request_campaign_id[\s\S]*?for update;/i.test(
+  campaignMutationSource,
+)) {
+  failures.push(
+    "Marketing campaign updates must retain an exact campaign-row FOR UPDATE lock.",
+  );
+}
+
+for (const exactCampaignSemanticContract of [
+  "campaign_detail is distinct from new.source_detail",
+  "campaign_provider is distinct from new.intake_provider",
+  "campaign_vendor_key is distinct from new.vendor_key",
+  "campaign_vendor_name is distinct from new.vendor_name",
+  "selected_campaign.source_detail is distinct from request_source_detail",
+  "selected_campaign.intake_provider is distinct from request_intake_provider",
+  "selected_campaign.vendor_key is distinct from request_vendor_key",
+  "selected_campaign.vendor_name is distinct from request_vendor_name",
+]) {
+  if (!leadAttributionAccountabilityMigration.includes(
+    exactCampaignSemanticContract,
+  )) {
+    failures.push(
+      `Campaign references must preserve exact null-safe semantic equality: ${exactCampaignSemanticContract}.`,
+    );
+  }
+}
+
+const publicOperationKeyValidator =
+  "request_operation_key !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'";
+for (const publicMutationFunction of [
+  "wtos_upsert_marketing_campaign",
+  "wtos_upsert_marketing_spend",
+  "wtos_create_accountable_lead_core",
+  "wtos_apply_lead_accountability_action",
+  "wtos_create_repeat_opportunity",
+]) {
+  if (!leadAttributionFunctionSource(publicMutationFunction).includes(
+    publicOperationKeyValidator,
+  )) {
+    failures.push(
+      `Public mutation boundary ${publicMutationFunction} must require an opaque UUID operation key.`,
+    );
+  }
+
+  const functionSource = leadAttributionFunctionSource(publicMutationFunction);
+  const canonicalizationContract =
+    "request_operation_key := request_operation_key::uuid::text;";
+  const canonicalizationMatches = functionSource.match(
+    /request_operation_key := request_operation_key::uuid::text;/g,
+  ) ?? [];
+  const canonicalizationIndex = functionSource.indexOf(canonicalizationContract);
+  const fingerprintIndex = functionSource.indexOf("request_fingerprint :=");
+  const operationLockIndex = functionSource.indexOf(
+    "perform public.wtos_lock_accountability_operation(",
+  );
+  if (canonicalizationMatches.length !== 1 || fingerprintIndex === -1 ||
+      operationLockIndex === -1 || canonicalizationIndex > fingerprintIndex ||
+      canonicalizationIndex > operationLockIndex) {
+    failures.push(
+      `Public mutation boundary ${publicMutationFunction} must canonicalize its UUID operation key exactly once before fingerprinting, locking, lookup, and persistence.`,
+    );
+  }
+}
+
+const proposalAcceptanceScopeSource = leadAttributionFunctionSource(
+  "wtos_validate_proposal_acceptance_scope",
+);
+for (const proposalAcceptanceScopeContract of [
+  "from public.estimate_proposal_revisions as revision",
+  "where revision.id = new.proposal_revision_id",
+  "from public.estimates as estimate",
+  "where estimate.id = new.estimate_id",
+  "selected_revision.company_id is distinct from new.company_id",
+  "selected_revision.estimate_id is distinct from new.estimate_id",
+  "selected_estimate.company_id is distinct from new.company_id",
+  "selected_revision.customer_id is distinct from new.customer_id",
+  "selected_estimate.customer_id is distinct from new.customer_id",
+  "selected_customer.company_id is distinct from new.company_id",
+  "for share;",
+]) {
+  if (!proposalAcceptanceScopeSource.includes(proposalAcceptanceScopeContract)) {
+    failures.push(
+      `Proposal acceptance scope validation must fail closed on its linked company graph: ${proposalAcceptanceScopeContract}.`,
+    );
+  }
+}
+
+for (const proposalEvidenceReader of [
+  "wtos_apply_lead_accountability_action",
+  "wtos_marketing_metrics_for_scope",
+]) {
+  const functionSource = leadAttributionFunctionSource(proposalEvidenceReader);
+  for (const proposalEvidenceContract of [
+    "join public.estimate_proposal_revisions as revision",
+    "revision.estimate_id = acceptance.estimate_id",
+    "revision.customer_id is not distinct from acceptance.customer_id",
+    "estimate.customer_id is not distinct from acceptance.customer_id",
+    "customer.company_id = acceptance.company_id",
+  ]) {
+    if (!functionSource.includes(proposalEvidenceContract)) {
+      failures.push(
+        `Proposal acceptance evidence reader ${proposalEvidenceReader} must reject legacy cross-scope proposal graphs: ${proposalEvidenceContract}.`,
+      );
+    }
+  }
+}
+
+if (/\^\[A-Za-z0-9\]\[A-Za-z0-9:_-\]/.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push(
+    "Lead accountability operation keys must not accept arbitrary alphanumeric PII-like tokens.",
+  );
+}
+
+if (/operation_key[^\n]*TEST|TEST[^\n]*operation_key/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push(
+    "Lead accountability operation keys must not embed synthetic lead labels or other display text.",
+  );
+}
+
+if (/grant\s+execute\s+on\s+function\s+public\.wtos_create_accountable_lead_core/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push(
+    "The repeat-capable accountable-lead core must remain private and non-executable by API roles.",
+  );
+}
+
+if ((leadAttributionAccountabilityMigration.match(/\bnot valid;/gi) ?? []).length < 2) {
+  failures.push(
+    "NaN hardening on existing lead and proposal tables must remain additive and unvalidated at migration time.",
+  );
+}
+
+for (const [leadMutator, laterLockContract] of [
+  ["wtos_create_accountable_lead_core", "perform public.wtos_lock_accountability_operation("],
+  ["wtos_apply_lead_accountability_action", "perform public.wtos_lock_accountability_operation("],
+  ["wtos_create_repeat_opportunity", "perform public.wtos_lock_accountability_operation("],
+  ["wtos_record_automatic_lead_milestone", "select accountability.*"],
+]) {
+  const functionSource = leadAttributionFunctionSource(leadMutator);
+  const coordinatorIndex = functionSource.indexOf(
+    "perform public.wtos_acquire_crm_identity_invariant_lock();",
+  );
+  const laterLockIndex = functionSource.indexOf(laterLockContract);
+  if (coordinatorIndex === -1 || laterLockIndex === -1 || coordinatorIndex > laterLockIndex) {
+    failures.push(
+      `Lead-mutating boundary ${leadMutator} must acquire the CRM identity coordinator before operation or tuple locks.`,
+    );
+  }
+}
+
+for (const workflowCoordinatorContract of [
+  "before update of status, start_at on public.schedule_events\nfor each statement execute function public.wtos_serialize_crm_identity_link_statement();",
+  "before update of status, completed_at on public.inspections\nfor each statement execute function public.wtos_serialize_crm_identity_link_statement();",
+  "before update of status on public.estimates\nfor each statement execute function public.wtos_serialize_crm_identity_link_statement();",
+  "before insert on public.estimate_proposal_acceptances\nfor each statement execute function public.wtos_serialize_crm_identity_link_statement();",
+  "before update of company_id, proposal_revision_id, estimate_id, customer_id\non public.estimate_proposal_acceptances\nfor each statement execute function public.wtos_serialize_crm_identity_link_statement();",
+]) {
+  if (!leadAttributionAccountabilityMigration.includes(workflowCoordinatorContract)) {
+    failures.push(
+      `Milestone-driving workflow statements must acquire the CRM identity coordinator before tuple locks: ${workflowCoordinatorContract}.`,
+    );
+  }
+}
+
+for (const existingInsertCoordinator of [
+  "before insert on public.schedule_events",
+  "before insert on public.inspections",
+  "before insert on public.estimates",
+]) {
+  if (!crmIdentityReconciliationInvariantHardeningMigration.includes(
+    existingInsertCoordinator,
+  )) {
+    failures.push(
+      `CRM identity hardening must retain its existing workflow INSERT serializer: ${existingInsertCoordinator}.`,
+    );
+  }
+}
+
+const repeatOpportunitySource = leadAttributionFunctionSource(
+  "wtos_create_repeat_opportunity",
+);
+const repeatIdempotencyLookupIndex = repeatOpportunitySource.indexOf(
+  "select event.*",
+);
+const repeatCustomerLockIndex = repeatOpportunitySource.indexOf(
+  "select customer.*",
+);
+if (repeatIdempotencyLookupIndex === -1 || repeatCustomerLockIndex === -1 ||
+    repeatIdempotencyLookupIndex > repeatCustomerLockIndex) {
+  failures.push(
+    "Repeat-opportunity exact idempotency must resolve or conflict before customer/property row locks and any lead update.",
+  );
+}
+
+for (const repeatGraphFingerprintField of [
+  "'customer_id', request_customer_id",
+  "'customer_expected_updated_at', request_customer_expected_updated_at",
+  "'property_id', request_property_id",
+  "'property_expected_updated_at', request_property_expected_updated_at",
+]) {
+  if (!repeatOpportunitySource.includes(repeatGraphFingerprintField)) {
+    failures.push(
+      `Repeat-opportunity idempotency fingerprint must bind reviewed graph input: ${repeatGraphFingerprintField}.`,
+    );
+  }
+}
+
+const repeatCoreSource = leadAttributionFunctionSource(
+  "wtos_create_accountable_lead_core",
+);
+if (!repeatCoreSource.includes("or request_source_detail is not null") ||
+    !repeatCoreSource.includes("or request_intake_provider is distinct from 'manual'")) {
+  failures.push(
+    "The private repeat core must require canonical repeat_customer/null/manual attribution.",
+  );
+}
+
+const metricsScopeSource = leadAttributionFunctionSource(
+  "wtos_marketing_metrics_for_scope",
+);
+const untrackedLegacyBlockStart = metricsScopeSource.indexOf(
+  "-- Legacy rows have no defensible source allocation.",
+);
+const untrackedLegacyBlockEnd = metricsScopeSource.indexOf(
+  "select pg_catalog.count(*)\n  into workflow_linkage_gap_count",
+  untrackedLegacyBlockStart,
+);
+const untrackedLegacyBlock = metricsScopeSource.slice(
+  untrackedLegacyBlockStart,
+  untrackedLegacyBlockEnd,
+);
+if (untrackedLegacyBlockStart === -1 || untrackedLegacyBlockEnd === -1 ||
+    untrackedLegacyBlock.includes("target_source_key") ||
+    metricsScopeSource.includes("untracked_legacy_count := 0")) {
+  failures.push(
+    "Untracked legacy leads must remain the company/month total and explicitly non-source-allocatable under source filters.",
+  );
+}
+
+if (!leadAttributionAccountabilityMigration.trimStart().startsWith("begin;") ||
+    !leadAttributionAccountabilityMigration.trimEnd().endsWith("commit;")) {
+  failures.push(
+    "Lead attribution and marketing accountability migration must use one explicit transaction wrapper.",
+  );
+}
+
+if (/\b[a-z_][a-z0-9_$]*\.(?:coalesce|nullif|greatest|least)\s*\(/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push(
+    "Lead attribution migration must not schema-qualify SQL conditional expressions such as COALESCE, NULLIF, GREATEST, or LEAST.",
+  );
+}
+
+if ((leadAttributionAccountabilityMigration.match(
+  /errcode\s*=\s*'40001'/gi,
+) ?? []).length !== 8) {
+  failures.push(
+    "The applied lead-attribution base migration must retain its eight original semantic SQLSTATE 40001 sites byte-for-byte.",
+  );
+}
+
+if (!leadAccountabilityStaleErrorHardeningMigration.trimStart().startsWith("begin;") ||
+    !leadAccountabilityStaleErrorHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push(
+    "Lead-accountability stale-error hardening must use one explicit transaction wrapper.",
+  );
+}
+
+if (/errcode\s*=\s*'40001'/i.test(
+  leadAccountabilityStaleErrorHardeningMigration,
+)) {
+  failures.push(
+    "Lead-accountability stale-error hardening must not explicitly raise retryable SQLSTATE 40001.",
+  );
+}
+
+if (/\bwhen\s+others\b/i.test(leadAccountabilityStaleErrorHardeningMigration)) {
+  failures.push(
+    "Lead-accountability stale-error hardening must not catch unrelated errors.",
+  );
+}
+
+if (/\b(?:insert\s+into|update|delete\s+from)\s+public\./i.test(
+  leadAccountabilityStaleErrorHardeningMigration,
+)) {
+  failures.push(
+    "Lead-accountability stale-error hardening must not mutate or backfill business data.",
+  );
+}
+
+if (/\b[a-z_][a-z0-9_$]*\.(?:coalesce|nullif|greatest|least)\s*\(/i.test(
+  leadAccountabilityStaleErrorHardeningMigration,
+)) {
+  failures.push(
+    "Lead-accountability stale-error hardening must not schema-qualify SQL conditional expressions.",
+  );
+}
+
+const staleErrorWrapperSource = (functionName) => {
+  const start = leadAccountabilityStaleErrorHardeningMigration.indexOf(
+    `create function public.${functionName}`,
+  );
+  if (start === -1) return "";
+  const next = leadAccountabilityStaleErrorHardeningMigration.indexOf(
+    "\ncreate function public.",
+    start + 1,
+  );
+  return leadAccountabilityStaleErrorHardeningMigration.slice(
+    start,
+    next === -1 ? undefined : next,
+  );
+};
+
+for (const [wrapperName, baseName, semanticMessages] of [
+  [
+    "wtos_upsert_marketing_campaign",
+    "wtos_upsert_marketing_campaign_phase1_base",
+    [
+      "New marketing campaign requires expected_version 0.",
+      "Marketing campaign changed after review.",
+    ],
+  ],
+  [
+    "wtos_upsert_marketing_spend",
+    "wtos_upsert_marketing_spend_phase1_base",
+    [
+      "New marketing spend requires expected_version 0.",
+      "Marketing spend changed after review.",
+    ],
+  ],
+  [
+    "wtos_apply_lead_accountability_action",
+    "wtos_apply_lead_accountability_action_phase1_base",
+    [
+      "Lead accountability record changed during the action.",
+      "Lead accountability record changed after review.",
+    ],
+  ],
+  [
+    "wtos_create_repeat_opportunity",
+    "wtos_create_repeat_opportunity_phase1_base",
+    [
+      "Repeat-opportunity customer changed after review.",
+      "Repeat-opportunity property changed after review.",
+    ],
+  ],
+]) {
+  const wrapperSource = staleErrorWrapperSource(wrapperName);
+  for (const wrapperContract of [
+    `return public.${baseName}`,
+    "when serialization_failure then",
+    "errcode = 'P0001'",
+    "message = sqlerrm",
+    "raise;",
+    ...semanticMessages,
+  ]) {
+    if (!wrapperSource.includes(wrapperContract)) {
+      failures.push(
+        `Non-retryable stale-error wrapper ${wrapperName} is missing contract: ${wrapperContract}.`,
+      );
+    }
+  }
+
+  for (const basePrivilegeContract of [
+    `alter function public.${wrapperName}(jsonb)\nrename to ${baseName};`,
+    `revoke all on function public.${baseName}(jsonb)\nfrom public, anon, authenticated, service_role;`,
+    `revoke all on function public.${wrapperName}(jsonb)\nfrom public, anon, authenticated, service_role;`,
+    `grant execute on function public.${wrapperName}(jsonb)\nto authenticated, service_role;`,
+  ]) {
+    if (!leadAccountabilityStaleErrorHardeningMigration.includes(
+      basePrivilegeContract,
+    )) {
+      failures.push(
+        `Applied Phase 1 RPC base must remain private behind its stale-error wrapper: ${basePrivilegeContract}.`,
+      );
+    }
+  }
+}
+
+const staleErrorWrapperCount = (
+  leadAccountabilityStaleErrorHardeningMigration.match(
+    /create function public\./gi,
+  ) ?? []
+).length;
+const staleErrorFixedSearchPathCount = (
+  leadAccountabilityStaleErrorHardeningMigration.match(
+    /set search_path = ''/gi,
+  ) ?? []
+).length;
+if (staleErrorWrapperCount !== 4 ||
+    staleErrorFixedSearchPathCount !== staleErrorWrapperCount) {
+  failures.push(
+    "Every stale-error compatibility wrapper must use a fixed empty search_path.",
+  );
+}
+
+if ((leadAccountabilityStaleErrorHardeningMigration.match(
+  /\bwhen\s+serialization_failure\b/gi,
+) ?? []).length !== 4 ||
+    (leadAccountabilityStaleErrorHardeningMigration.match(
+      /errcode\s*=\s*'P0001'/gi,
+    ) ?? []).length !== 4 ||
+    (leadAccountabilityStaleErrorHardeningMigration.match(
+      /^\s*raise;\s*$/gim,
+    ) ?? []).length !== 4) {
+  failures.push(
+    "Each stale-error wrapper must translate its exact semantic allowlist once and bare-rethrow every other serialization failure.",
+  );
+}
+
+if (!leadAccountabilityIdempotencyIntegrityHardeningMigration.trimStart().startsWith("begin;") ||
+    !leadAccountabilityIdempotencyIntegrityHardeningMigration.trimEnd().endsWith("commit;")) {
+  failures.push(
+    "Lead-accountability idempotency/integrity hardening must use one explicit transaction wrapper.",
+  );
+}
+
+for (const hardeningContract of [
+  "create table public.marketing_accountability_operation_receipts",
+  "operation_kind in ('campaign_upsert', 'spend_upsert')",
+  "unique (company_id, operation_key)",
+  "foreign key (campaign_id, company_id)",
+  "references public.marketing_campaigns(id, company_id)",
+  "foreign key (spend_id, company_id)",
+  "references public.marketing_spend_months(id, company_id)",
+  "marketing_operation_receipts_target_check",
+  "marketing_operation_receipts_immutable",
+  "Marketing operation receipts are immutable.",
+  "alter table public.marketing_accountability_operation_receipts\nenable row level security;",
+  "revoke all on table public.marketing_accountability_operation_receipts\nfrom public, anon, authenticated, service_role;",
+  "grant select on table public.marketing_accountability_operation_receipts\nto authenticated, service_role;",
+  "grant delete on table public.marketing_accountability_operation_receipts\nto service_role;",
+  "using (public.wtos_can_read_company(company_id))",
+  "alter function public.wtos_upsert_marketing_campaign(jsonb)\nrename to wtos_upsert_marketing_campaign_phase1_nonretryable;",
+  "alter function public.wtos_upsert_marketing_spend(jsonb)\nrename to wtos_upsert_marketing_spend_phase1_nonretryable;",
+  "existing_receipt.request_fingerprint is distinct from request_fingerprint",
+  "insert into public.marketing_accountability_operation_receipts",
+  "when tg_op = 'UPDATE' then coalesce(new.updated_at, pg_catalog.now())",
+  "else coalesce(new.created_at, pg_catalog.now())",
+  "create constraint trigger leads_enforce_accountable_outcome_insert\nafter insert on public.leads\ndeferrable initially deferred",
+  "alter function public.wtos_enforce_accountable_lead_outcome()\nsecurity definer;",
+]) {
+  if (!leadAccountabilityIdempotencyIntegrityHardeningMigration.includes(
+    hardeningContract,
+  )) {
+    failures.push(
+      `Lead-accountability idempotency/integrity hardening is missing required contract: ${hardeningContract}.`,
+    );
+  }
+}
+
+if (/\b(?:drop\s+table|drop\s+column|truncate)\b/i.test(
+  leadAccountabilityIdempotencyIntegrityHardeningMigration,
+)) {
+  failures.push(
+    "Lead-accountability idempotency/integrity hardening must remain additive and non-destructive.",
+  );
+}
+
+const idempotencyHardeningOutsideFunctionBodies = [];
+let insideIdempotencyHardeningFunction = false;
+for (const line of leadAccountabilityIdempotencyIntegrityHardeningMigration.split("\n")) {
+  if (!insideIdempotencyHardeningFunction && /\bas \$\$\s*$/i.test(line)) {
+    insideIdempotencyHardeningFunction = true;
+    continue;
+  }
+  if (insideIdempotencyHardeningFunction && line.trim() === "$$;") {
+    insideIdempotencyHardeningFunction = false;
+    continue;
+  }
+  if (!insideIdempotencyHardeningFunction) {
+    idempotencyHardeningOutsideFunctionBodies.push(line);
+  }
+}
+
+if (/\b(?:insert\s+into|update\s+public\.|delete\s+from)\b/i.test(
+  idempotencyHardeningOutsideFunctionBodies.join("\n"),
+)) {
+  failures.push(
+    "Lead-accountability idempotency/integrity hardening must not mutate or backfill business data at migration time.",
+  );
+}
+
+if (/using\s*\(\s*true\s*\)|with\s+check\s*\(\s*true\s*\)/i.test(
+  leadAccountabilityIdempotencyIntegrityHardeningMigration,
+)) {
+  failures.push(
+    "Marketing operation receipts must not use broad true RLS policies.",
+  );
+}
+
+if (/grant\s+(?:all|insert|update|truncate)[^;]*on\s+table\s+public\.marketing_accountability_operation_receipts\s+to\s+(?:anon|authenticated|service_role)/i.test(
+  leadAccountabilityIdempotencyIntegrityHardeningMigration,
+)) {
+  failures.push(
+    "Marketing operation receipts must remain RPC-only for writes with narrow service-role test deletion.",
+  );
+}
+
+const marketingOperationReceiptSchema =
+  leadAccountabilityIdempotencyIntegrityHardeningMigration.slice(
+    leadAccountabilityIdempotencyIntegrityHardeningMigration.indexOf(
+      "create table public.marketing_accountability_operation_receipts",
+    ),
+    leadAccountabilityIdempotencyIntegrityHardeningMigration.indexOf(
+      "create index marketing_operation_receipts_company_created_idx",
+    ),
+  );
+if (/\b(?:phone|email|property_address|message_body|raw_payload|provider_payload|notes)\s+(?:text|jsonb)/i.test(
+  marketingOperationReceiptSchema,
+)) {
+  failures.push(
+    "Marketing operation receipt history must not persist PII, notes, or raw provider payloads.",
+  );
+}
+
+const idempotencyHardeningFunctionSource = (functionName) => {
+  const createMarkers = [
+    `create function public.${functionName}`,
+    `create or replace function public.${functionName}`,
+  ];
+  const start = createMarkers
+    .map((marker) => leadAccountabilityIdempotencyIntegrityHardeningMigration.indexOf(marker))
+    .filter((index) => index !== -1)
+    .sort((left, right) => left - right)[0] ?? -1;
+  if (start === -1) return "";
+  const remainder = leadAccountabilityIdempotencyIntegrityHardeningMigration.slice(start + 1);
+  const nextMatch = remainder.match(/\ncreate (?:or replace )?function public\./i);
+  const end = nextMatch
+    ? start + 1 + nextMatch.index
+    : leadAccountabilityIdempotencyIntegrityHardeningMigration.length;
+  return leadAccountabilityIdempotencyIntegrityHardeningMigration.slice(start, end);
+};
+
+for (const [wrapperName, privateName, operationKind, targetField] of [
+  [
+    "wtos_upsert_marketing_campaign",
+    "wtos_upsert_marketing_campaign_phase1_nonretryable",
+    "campaign_upsert",
+    "campaign_id",
+  ],
+  [
+    "wtos_upsert_marketing_spend",
+    "wtos_upsert_marketing_spend_phase1_nonretryable",
+    "spend_upsert",
+    "spend_id",
+  ],
+]) {
+  const wrapperSource = idempotencyHardeningFunctionSource(wrapperName);
+  const operationLockIndex = wrapperSource.indexOf(
+    "perform public.wtos_lock_accountability_operation(",
+  );
+  const receiptLookupIndex = wrapperSource.indexOf(
+    "from public.marketing_accountability_operation_receipts as receipt",
+  );
+  const privateMutationIndex = wrapperSource.indexOf(
+    `mutation_result := public.${privateName}`,
+  );
+  const receiptInsertIndex = wrapperSource.indexOf(
+    "insert into public.marketing_accountability_operation_receipts",
+  );
+  if (operationLockIndex === -1 || receiptLookupIndex === -1 ||
+      privateMutationIndex === -1 || receiptInsertIndex === -1 ||
+      !(operationLockIndex < receiptLookupIndex &&
+        receiptLookupIndex < privateMutationIndex &&
+        privateMutationIndex < receiptInsertIndex)) {
+    failures.push(
+      `${wrapperName} must lock, resolve immutable receipt, mutate privately, then atomically persist the receipt in that order.`,
+    );
+  }
+  for (const wrapperContract of [
+    `existing_receipt.operation_kind is distinct from '${operationKind}'`,
+    `existing_receipt.${targetField} is distinct from request_${targetField}`,
+    `existing_receipt.${targetField}`,
+    "existing_receipt.resulting_record_version",
+    `revoke all on function public.${privateName}(jsonb)`,
+    `revoke all on function public.${wrapperName}(jsonb)`,
+    `grant execute on function public.${wrapperName}(jsonb)`,
+  ]) {
+    if (!leadAccountabilityIdempotencyIntegrityHardeningMigration.includes(
+      wrapperContract,
+    )) {
+      failures.push(
+        `Durable operation wrapper ${wrapperName} is missing contract: ${wrapperContract}.`,
+      );
+    }
+  }
+}
+
+const idempotencyHardeningFunctionCount = (
+  leadAccountabilityIdempotencyIntegrityHardeningMigration.match(
+    /create (?:or replace )?function/gi,
+  ) ?? []
+).length;
+const idempotencyHardeningFixedSearchPathCount = (
+  leadAccountabilityIdempotencyIntegrityHardeningMigration.match(
+    /set search_path = ''/gi,
+  ) ?? []
+).length;
+if (idempotencyHardeningFunctionCount === 0 ||
+    idempotencyHardeningFixedSearchPathCount !== idempotencyHardeningFunctionCount) {
+  failures.push(
+    "Every idempotency/integrity hardening function must use a fixed empty search_path.",
+  );
+}
+
+const leadAttributionFunctionCount = (
+  leadAttributionAccountabilityMigration.match(/create or replace function/gi) ?? []
+).length;
+const leadAttributionFixedSearchPathCount = (
+  leadAttributionAccountabilityMigration.match(/set search_path = ''/gi) ?? []
+).length;
+
+if (leadAttributionFunctionCount === 0 ||
+    leadAttributionFixedSearchPathCount !== leadAttributionFunctionCount) {
+  failures.push(
+    "Every lead attribution and marketing accountability function must use a fixed empty search_path.",
+  );
+}
+
+const leadAttributionOutsideFunctionBodies = [];
+let insideLeadAttributionFunction = false;
+for (const line of leadAttributionAccountabilityMigration.split("\n")) {
+  if (!insideLeadAttributionFunction && /\bas \$\$\s*$/i.test(line)) {
+    insideLeadAttributionFunction = true;
+    continue;
+  }
+  if (insideLeadAttributionFunction && line.trim() === "$$;") {
+    insideLeadAttributionFunction = false;
+    continue;
+  }
+  if (!insideLeadAttributionFunction) {
+    leadAttributionOutsideFunctionBodies.push(line);
+  }
+}
+
+const leadAttributionMigrationTimeSql = leadAttributionOutsideFunctionBodies.join("\n");
+if (/\b(?:insert\s+into|update|delete\s+from)\s+public\./i.test(
+  leadAttributionMigrationTimeSql,
+)) {
+  failures.push(
+    "Lead attribution migration must not insert, update, backfill, or delete business data at migration time.",
+  );
+}
+
+if (/\b(?:drop\s+table|drop\s+column|truncate)\b/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push("Lead attribution migration must remain additive and non-destructive.");
+}
+
+if (/using\s*\(\s*true\s*\)|with\s+check\s*\(\s*true\s*\)/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push("Lead attribution migration must not add broad true RLS policies.");
+}
+
+if (/grant\s+(?:all|insert|update|truncate)\s+on\s+table\s+public\.(?:marketing_campaigns|lead_accountability|lead_accountability_events|marketing_spend_months)\s+to\s+(?:anon|authenticated|service_role)/i.test(
+  leadAttributionAccountabilityMigration,
+)) {
+  failures.push(
+    "Lead attribution tables must remain RPC-only for writes with narrow service-role test deletion.",
+  );
+}
+
+const leadAccountabilityEventSchema = leadAttributionAccountabilityMigration.slice(
+  leadAttributionAccountabilityMigration.indexOf(
+    "create table public.lead_accountability_events",
+  ),
+  leadAttributionAccountabilityMigration.indexOf(
+    "create table public.marketing_spend_months",
+  ),
+);
+if (/\b(?:phone|email|property_address|message_body|raw_payload|provider_payload|notes)\s+(?:text|jsonb)/i.test(
+  leadAccountabilityEventSchema,
+)) {
+  failures.push("Lead accountability event ledger must not persist PII or raw provider payloads.");
+}
+
 if (failures.length > 0) {
   console.error("Supabase migration integrity check failed:");
   for (const failure of failures) {
@@ -1885,7 +2772,7 @@ console.log(
   "Verified 20260814061253_crm_identity_reconciliation_stale_version_error_hardening.sql precedes 20260814063407_crm_identity_reconciliation_release_hardening.sql.",
 );
 console.log(
-  "Verified 20260814063407_crm_identity_reconciliation_release_hardening.sql precedes Mighty Apes Yelp lead intake and its final audit-lock privilege hardening.",
+  "Verified CRM identity release hardening and Mighty Apes Yelp intake precede Lead Attribution & Marketing Accountability Phase 1.",
 );
 console.log("Verified all migration SQL SHA-256 hashes match expected values.");
 console.log(
@@ -1917,6 +2804,9 @@ console.log(
 );
 console.log(
   "Verified Mighty Apes Yelp delivery and lead idempotency locks, immutable non-PII audit, exact WeatherTech campaign routing, test-only isolation, service-role-only transactional intake, and narrow audit row-lock privilege.",
+);
+console.log(
+  "Verified Lead Attribution & Marketing Accountability Phase 1 additive schema, immutable non-PII ledger, fixed-search-path RPCs, strict company isolation, first-touch locks, lifecycle chronology, optimistic concurrency, Phoenix reporting, no-backfill contract, and narrow synthetic cleanup privileges.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

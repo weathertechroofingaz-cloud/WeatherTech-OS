@@ -148,6 +148,51 @@ async function deleteExactIds(client, table, ids) {
   if (error) throw new Error(`Exact-ID cleanup failed for ${table}: ${error.message}`);
 }
 
+function isMissingOptionalRelation(error, table) {
+  const evidence = [error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    new RegExp(`(?:relation|table).*${table}.*(?:does not exist|schema cache)`, "i").test(evidence)
+  );
+}
+
+async function deleteLeadAccountabilityForExactLeadIds(client, leadIds) {
+  const exactLeadIds = [...new Set(leadIds.filter(Boolean))];
+  if (!exactLeadIds.length) {
+    return { available: true, accountabilityIds: [], eventIds: [] };
+  }
+
+  const { data: accountabilities, error: accountabilityError } = await client
+    .from("lead_accountability")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (accountabilityError) {
+    if (isMissingOptionalRelation(accountabilityError, "lead_accountability")) {
+      return { available: false, accountabilityIds: [], eventIds: [] };
+    }
+    throw new Error(
+      `Discover exact-lead accountability cleanup rows failed: ${accountabilityError.message}`,
+    );
+  }
+
+  const accountabilityIds = (accountabilities ?? []).map((row) => row.id);
+  const { data: events, error: eventError } = await client
+    .from("lead_accountability_events")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (eventError) {
+    throw new Error(`Discover exact-lead accountability events failed: ${eventError.message}`);
+  }
+
+  const eventIds = (events ?? []).map((row) => row.id);
+  await deleteExactIds(client, "lead_accountability_events", eventIds);
+  await deleteExactIds(client, "lead_accountability", accountabilityIds);
+  return { available: true, accountabilityIds, eventIds };
+}
+
 async function assertExactIdsAbsent(client, table, ids) {
   if (!ids.length) return;
   await assertNoRows(
@@ -178,6 +223,28 @@ async function callReconciliation(client, request) {
   });
   if (error) throw error;
   requireCondition(data && typeof data === "object", "Reconciliation RPC returned no result.");
+  return data;
+}
+
+async function recordFixtureContact(client, leadId) {
+  const { data, error } = await client.rpc("wtos_apply_lead_accountability_action", {
+    action_request: {
+      operation_key: randomUUID(),
+      lead_id: leadId,
+      expected_version: 1,
+      action: "contacted",
+      human_contact: true,
+      first_response_channel: "phone",
+    },
+  });
+  if (error) throw error;
+  requireCondition(
+    data?.status === "applied" &&
+      data?.action === "contacted" &&
+      data?.lead_id === leadId &&
+      data?.record_version === 2,
+    `Accountable contact did not apply exactly once for fixture lead ${leadId}.`,
+  );
   return data;
 }
 
@@ -395,7 +462,7 @@ export async function runCrmIdentityReconciliationRegression({
       { id: ids.properties[1], company_id: weatherTech.id, customer_id: null, display_name: `${marker} PROPERTY ROLLBACK`, address: addresses[6], city: "Scottsdale", state: "AZ", postal_code: "85251", notes: marker },
       { id: ids.properties[2], company_id: weatherTech.id, customer_id: null, display_name: `${marker} PROPERTY OMITTED`, address: addresses[8], city: "Scottsdale", state: "AZ", postal_code: "85251", notes: marker },
     ]);
-    const leadRows = await insertRows(service, "leads", ids.leads.map((id, index) => ({
+    const insertedLeadRows = await insertRows(service, "leads", ids.leads.map((id, index) => ({
       id,
       company_id: weatherTech.id,
       customer_id: null,
@@ -423,12 +490,29 @@ export async function runCrmIdentityReconciliationRegression({
       postal_code: "85251",
       service_type: "roofing",
       source: marker,
-      status: "contacted",
-      pipeline_stage: "contacted",
+      status: "new",
+      pipeline_stage: "new_lead",
       priority: "normal",
       estimated_value: 0,
       notes: marker,
     })));
+    for (const lead of insertedLeadRows) {
+      await recordFixtureContact(service, lead.id);
+    }
+    const leadRows = await requireRows(
+      service.from("leads").select("*").in("id", ids.leads),
+      "Refetch exact contacted lead fixtures",
+    );
+    requireCondition(
+      leadRows.length === ids.leads.length &&
+        leadRows.every(
+          (lead) =>
+            ids.leads.includes(lead.id) &&
+            lead.status === "contacted" &&
+            lead.pipeline_stage === "contacted",
+        ),
+      "Audited fixture contact did not advance every exact lead to contacted state.",
+    );
     const byLeadId = new Map(leadRows.map((row) => [row.id, row]));
     const byCustomerId = new Map(customerRows.map((row) => [row.id, row]));
     const byPropertyId = new Map(propertyRows.map((row) => [row.id, row]));
@@ -724,13 +808,49 @@ export async function runCrmIdentityReconciliationRegression({
       /permission denied for (?:table|relation) properties/i,
     );
 
+    const funnelShortcutBefore = await requireRows(
+      service
+        .from("leads")
+        .select("id,status,pipeline_stage,priority")
+        .eq("id", ids.leads[2]),
+      "Read lead before unaudited qualified shortcut",
+    );
+    await expectRejected(
+      () => requireRows(
+        restrictedClient
+          .from("leads")
+          .update({ status: "qualified" })
+          .eq("id", ids.leads[2])
+          .select("id,status,pipeline_stage"),
+        "Unaudited qualified lead shortcut",
+      ),
+      "Unaudited qualified lead shortcut",
+      /qualified.*accountable appointment event|appointment.*accountability/i,
+    );
+    const funnelShortcutAfter = await requireRows(
+      service
+        .from("leads")
+        .select("id,status,pipeline_stage,priority")
+        .eq("id", ids.leads[2]),
+      "Verify unaudited qualified shortcut rollback",
+    );
+    requireCondition(
+      funnelShortcutBefore.length === 1 &&
+        funnelShortcutAfter.length === 1 &&
+        funnelShortcutAfter[0].status === funnelShortcutBefore[0].status &&
+        funnelShortcutAfter[0].pipeline_stage ===
+          funnelShortcutBefore[0].pipeline_stage &&
+        funnelShortcutAfter[0].priority === funnelShortcutBefore[0].priority,
+      "Rejected unaudited qualified shortcut changed lead state.",
+    );
+
     const ordinaryLeadUpdate = await requireRows(
       restrictedClient
         .from("leads")
-        .update({ status: "qualified" })
+        .update({ priority: "high" })
         .eq("id", ids.leads[2])
-        .select("id,status"),
-      "Ordinary authenticated lead status update",
+        .select("id,status,pipeline_stage,priority"),
+      "Ordinary authenticated lead priority update",
     );
     const ordinaryPropertyAddress = `${addresses[6]} REVIEWED`;
     const ordinaryPropertyUpdate = await requireRows(
@@ -743,10 +863,12 @@ export async function runCrmIdentityReconciliationRegression({
     );
     requireCondition(
       ordinaryLeadUpdate.length === 1 &&
-        ordinaryLeadUpdate[0].status === "qualified" &&
+        ordinaryLeadUpdate[0].status === "contacted" &&
+        ordinaryLeadUpdate[0].pipeline_stage === "contacted" &&
+        ordinaryLeadUpdate[0].priority === "high" &&
         ordinaryPropertyUpdate.length === 1 &&
         ordinaryPropertyUpdate[0].address === ordinaryPropertyAddress,
-      "Reconciliation column hardening blocked an ordinary same-company operational update.",
+      "Reconciliation or accountability hardening blocked an ordinary same-company operational update.",
     );
 
     const [
@@ -797,7 +919,7 @@ export async function runCrmIdentityReconciliationRegression({
       requireRows(service.from("leads").select("customer_id,property_id,status,pipeline_stage").eq("id", ids.leads[10]), "Verify exact link without address"),
       requireRows(service.from("leads").select("customer_id,property_id").eq("id", ids.leads[7]), "Verify direct lead reassignment refusal"),
       requireRows(service.from("properties").select("customer_id").eq("id", ids.properties[2]), "Verify direct property reassignment refusal"),
-      requireRows(service.from("leads").select("status").eq("id", ids.leads[2]), "Verify ordinary lead status update"),
+      requireRows(service.from("leads").select("status,pipeline_stage,priority").eq("id", ids.leads[2]), "Verify ordinary lead priority update"),
       requireRows(service.from("properties").select("address").eq("id", ids.properties[1]), "Verify ordinary property address update"),
     ]);
     requireCondition(
@@ -889,10 +1011,12 @@ export async function runCrmIdentityReconciliationRegression({
     );
     requireCondition(
       ordinaryLeadAfter.length === 1 &&
-        ordinaryLeadAfter[0].status === "qualified" &&
+        ordinaryLeadAfter[0].status === "contacted" &&
+        ordinaryLeadAfter[0].pipeline_stage === "contacted" &&
+        ordinaryLeadAfter[0].priority === "high" &&
         ordinaryPropertyAfter.length === 1 &&
         ordinaryPropertyAfter[0].address === ordinaryPropertyAddress,
-      "An ordinary same-company status or property-address update was not persisted.",
+      "An ordinary same-company priority or property-address update was not persisted.",
     );
 
     const auditRows = await requireRows(
@@ -947,6 +1071,7 @@ export async function runCrmIdentityReconciliationRegression({
       exactLinkWithoutAddressVerified: true,
       propertyOnlyOfficeTaskLinked: true,
       directIdentityMutationRejected: true,
+      unauditedFunnelShortcutRejected: true,
       ordinaryOperationalUpdatesPreserved: true,
       uuidOperationAuditRecorded: true,
       selectedGraphLinksVerified: true,
@@ -985,6 +1110,14 @@ export async function runCrmIdentityReconciliationRegression({
         await deleteExactIds(service, "schedule_events", ids.schedule_events);
         await deleteExactIds(service, "jobs", ids.jobs);
         await deleteExactIds(service, "estimates", ids.estimates);
+        const accountabilityCleanup = await deleteLeadAccountabilityForExactLeadIds(
+          service,
+          ids.leads,
+        );
+        if (accountabilityCleanup.available) {
+          ids.lead_accountability_events = accountabilityCleanup.eventIds;
+          ids.lead_accountability = accountabilityCleanup.accountabilityIds;
+        }
         await deleteExactIds(service, "leads", ids.leads);
         await deleteExactIds(service, "properties", ids.properties);
         await deleteExactIds(service, "customers", ids.customers);

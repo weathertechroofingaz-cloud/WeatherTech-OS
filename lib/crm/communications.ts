@@ -7,6 +7,7 @@ import {
   sanitizeIntegrationSyncLogText,
   smsMessageStatusLabel,
 } from "./integrations";
+import { getLeadOwnerUserId } from "./marketingAccountability";
 import type {
   BusinessPhoneNumberRecord,
   CalendarEventSyncRecord,
@@ -1799,6 +1800,11 @@ export function buildUnifiedInboxItems(
     const provider = getLeadInboxProvider(lead);
     const channel = getLeadCommunicationChannel(provider);
     const followUpAt = lead.next_follow_up;
+    const ownerUserId = getLeadOwnerUserId(
+      snapshot.leadAccountability,
+      lead.id,
+      lead.company_id,
+    );
 
     return {
       id: `lead-${lead.id}`,
@@ -1843,9 +1849,9 @@ export function buildUnifiedInboxItems(
       isArchived: false,
       isFailed: false,
       isMissedCall: false,
-      isUnassigned: !lead.created_by,
+      isUnassigned: !ownerUserId,
       followUpAt,
-      assignedTo: lead.created_by,
+      assignedTo: ownerUserId,
       failureDetail: null,
     };
   });

@@ -17,6 +17,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const harnessPath = path.join(__dirname, "codex-browser", "weathertech-os-regression.mjs");
 const harness = fs.readFileSync(harnessPath, "utf8");
+const crmAppPath = path.join(__dirname, "..", "components", "CrmApp.tsx");
+const crmApp = fs.readFileSync(crmAppPath, "utf8");
 
 function assert(condition, message) {
   if (!condition) {
@@ -488,12 +490,509 @@ assert(
     harness.includes('findByLikeIfPresent(env, "job_photos", "caption", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "properties", "display_name", runMarker)') &&
+    harness.includes('"lead_accountability_events",\n      "operation_key",\n      runMarker') &&
+    harness.includes('findByLikeIfPresent(env, "marketing_campaigns", "campaign_name", runMarker)') &&
+    harness.includes('findByLikeIfPresent(env, "marketing_spend_months", "notes", runMarker)') &&
     harness.includes('"crm_identity_reconciliation_events",\n      "operation_key"') &&
     harness.includes('"crm_identity_reconciliation_events",\n    "source_lead_id",\n    leadIds') &&
     harness.includes('findByForeignIdsIfPresent(env, "office_tasks", "job_id", jobIds)') &&
     harness.includes('"crm_identity_reconciliation_events",\n    "id",\n    reconciliationEventIds') &&
     harness.includes("residueVerified: true"),
-  "Cleanup verifies run residue across direct, child, reconciliation-audit, property, and generated office-task records",
+  "Cleanup verifies run residue across direct, child, reconciliation, accountability, marketing, property, and generated office-task records",
+);
+assert(
+  harness.includes('"lead_accountability_events",\n      "operation_key",\n      runMarker') &&
+    harness.includes('"lead_accountability_events",\n      "lead_id",\n      leadIds') &&
+    harness.includes('"lead_accountability_events",\n      "lead_accountability_id",\n      leadAccountabilityIds') &&
+    harness.indexOf('"lead_accountability_events",\n    "id",\n    accountabilityEvents.map') <
+      harness.indexOf('"lead_accountability",\n    "id",\n    leadAccountabilityIds') &&
+    harness.indexOf('"lead_accountability",\n    "id",\n    leadAccountabilityIds') <
+      harness.indexOf('"lead_intake_records",\n    "id"') &&
+    harness.includes('"marketing_accountability_operation_receipts",\n      "campaign_id",\n      marketingCampaignIds') &&
+    harness.includes('"marketing_accountability_operation_receipts",\n      "spend_id",\n      marketingSpendIds') &&
+    harness.indexOf('"marketing_accountability_operation_receipts",\n    "id",\n    marketingOperationReceipts.map') <
+      harness.indexOf('await deleteByIds(env, "marketing_spend_months", "id", marketingSpendIds)') &&
+    harness.indexOf('await deleteByIds(env, "marketing_spend_months", "id", marketingSpendIds)') <
+      harness.indexOf('await deleteByIds(env, "marketing_campaigns", "id", marketingCampaignIds)') &&
+    harness.indexOf('await deleteByIds(env, "marketing_campaigns", "id", marketingCampaignIds)') <
+      harness.indexOf('await deleteByIds(env, "leads", "id", leadIds)'),
+  "Accountability cleanup discovers exact lead-owned rows and linked marketing receipts, then deletes immutable events, current state, receipts, spend, and campaigns in dependency-safe order",
+);
+assert(
+  harness.includes('enabledGroups.has("crm-accountability")') &&
+    harness.includes("testMarketingAccountabilityWorkflow(") &&
+    harness.includes('data-testid="sales-pipeline-opportunity-row"') &&
+    harness.includes('[data-testid="lead-accountability-panel"]') &&
+    harness.includes('[data-testid="lead-attribution-review-submit"]') &&
+    harness.includes("browser attribution review persistence") &&
+    harness.includes('[data-testid="lead-owner-submit"]') &&
+    harness.includes("browser lead owner persistence") &&
+    harness.includes('[data-testid="lead-first-response-submit"]') &&
+    harness.includes("browser human response without first-touch overwrite") &&
+    harness.includes('[data-testid="lead-won-submit"]') &&
+    harness.includes("browser won outcome persistence") &&
+    harness.includes('[data-testid="lead-lost-submit"]') &&
+    harness.includes("browser structured lost outcome persistence"),
+  "Targeted accountability browser coverage reviews and locks first touch, assigns an explicit owner, records human contact, and verifies won/lost outcomes through signed-in UI actions",
+);
+assert(
+  harness.includes('[data-testid="marketing-accountability-workspace"]') &&
+    harness.includes('[data-testid="marketing-accountability-company-filter"]') &&
+    harness.includes('[data-testid="marketing-accountability-month-filter"]') &&
+    harness.includes('[data-testid="marketing-accountability-source-filter"]') &&
+    harness.includes('[data-testid="marketing-campaign-submit"]') &&
+    harness.includes("browser campaign persistence") &&
+    harness.includes('[data-testid="marketing-spend-submit"]') &&
+    harness.includes("browser spend persistence") &&
+    harness.includes('[data-testid="marketing-metric-spend"]') &&
+    harness.includes('[data-testid="marketing-metric-workflow-linkage-gaps"]') &&
+    harness.includes('[data-testid="marketing-metric-data-gaps"]') &&
+    harness.includes('row.getAttribute("data-company-id") === companyId'),
+  "Accountability browser coverage records owner-approved campaign/spend, renders filtered metrics and quality gaps, and proves WeatherTech/IHC dashboard row isolation",
+);
+const accountabilityWorkflowStart = harness.indexOf(
+  "async function testMarketingAccountabilityWorkflow",
+);
+const accountabilityWorkflowEnd = harness.indexOf(
+  "async function testCalendarScreen",
+  accountabilityWorkflowStart,
+);
+const accountabilityWorkflow = harness.slice(
+  accountabilityWorkflowStart,
+  accountabilityWorkflowEnd,
+);
+const salesPipelineStart = crmApp.indexOf("function SalesPipelineView");
+const salesPipelineEnd = crmApp.indexOf("function LeadIntakeView", salesPipelineStart);
+const salesPipelineSource = crmApp.slice(salesPipelineStart, salesPipelineEnd);
+const normalizedSalesPipelineSource = salesPipelineSource.replace(/\s+/g, " ");
+const ownerHandlerStart = salesPipelineSource.indexOf(
+  "const handleAssignOpportunityOwner = async (",
+);
+const genericActionHandlerStart = salesPipelineSource.indexOf(
+  "const executeAccountabilityAction = async (",
+);
+const genericActionHandlerEnd = salesPipelineSource.indexOf(
+  "const handleAttributionReview = async (",
+  genericActionHandlerStart,
+);
+const ownerHandlerSource = salesPipelineSource.slice(
+  ownerHandlerStart,
+  genericActionHandlerStart,
+);
+const genericActionHandlerSource = salesPipelineSource.slice(
+  genericActionHandlerStart,
+  genericActionHandlerEnd,
+);
+assert(
+  normalizedSalesPipelineSource.includes(
+    "const isWaitingForAccountabilityReload = Boolean( pendingAccountabilityReload && selectedOpportunity?.id === pendingAccountabilityReload.leadId && (!selectedOpportunityAccountability || selectedOpportunityAccountability.record_version < pendingAccountabilityReload.recordVersion), );",
+  ) &&
+    normalizedSalesPipelineSource.includes(
+      "const isAccountabilityActionBusy = isApplyingAccountabilityAction || isWaitingForAccountabilityReload;",
+    ) &&
+    normalizedSalesPipelineSource.includes(
+      "selectedOpportunityAccountability.record_version >= pendingAccountabilityReload.recordVersion ) { setPendingAccountabilityReload(null);",
+    ),
+  "Accountability actions remain busy on a stale selected snapshot and settle only when the matching lead reaches the pending RPC record version",
+);
+for (const [handlerLabel, handlerSource] of [
+  ["owner assignment", ownerHandlerSource],
+  ["lifecycle action", genericActionHandlerSource],
+]) {
+  const rpcResultIndex = handlerSource.indexOf(
+    "const result = await applyLeadAccountabilityAction(",
+  );
+  const pendingVersionIndex = handlerSource.indexOf(
+    "recordVersion: result.record_version",
+    rpcResultIndex,
+  );
+  const reloadIndex = handlerSource.indexOf("await onReload();", pendingVersionIndex);
+  const completionIndex = handlerSource.indexOf(
+    "stableOperationKeys.complete(operationScope, operationToken);",
+    reloadIndex,
+  );
+  const catchIndex = handlerSource.indexOf("} catch (currentError)", completionIndex);
+  const clearPendingIndex = handlerSource.indexOf(
+    "setPendingAccountabilityReload(null);",
+    catchIndex,
+  );
+  assert(
+    rpcResultIndex > -1 &&
+      rpcResultIndex < pendingVersionIndex &&
+      pendingVersionIndex < reloadIndex &&
+      reloadIndex < completionIndex &&
+      completionIndex < catchIndex &&
+      catchIndex < clearPendingIndex,
+    `Live ${handlerLabel} gates on the exact returned record version, completes its stable operation key only after reload, and clears the pending UI gate when reload fails`,
+  );
+}
+for (const testId of [
+  "lead-owner-submit",
+  "lead-attribution-review-submit",
+  "lead-first-response-submit",
+  "lead-won-submit",
+  "lead-lost-submit",
+]) {
+  const controlIndex = salesPipelineSource.indexOf(`data-testid="${testId}"`);
+  assert(
+    controlIndex > -1 &&
+      salesPipelineSource
+        .slice(controlIndex, controlIndex + 500)
+        .includes("isAccountabilityActionBusy"),
+    `${testId} remains disabled while an RPC result is waiting for snapshot version settlement`,
+  );
+}
+assert(
+  crmApp.includes("if (current?.fingerprint === fingerprint) {\n      return current;") &&
+    ownerHandlerSource.indexOf("await onReload();") <
+      ownerHandlerSource.indexOf(
+        "stableOperationKeys.complete(operationScope, operationToken);",
+      ) &&
+    genericActionHandlerSource.indexOf("await onReload();") <
+      genericActionHandlerSource.indexOf(
+        "stableOperationKeys.complete(operationScope, operationToken);",
+      ),
+  "A reload failure leaves the same payload's stable operation token cached so the idempotent RPC can be retried",
+);
+const persistenceHelperStart = harness.indexOf(
+  "async function clickEnabledUntilPersisted({",
+);
+const persistenceHelperEnd = harness.indexOf(
+  "async function withAcceptedConfirm(",
+  persistenceHelperStart,
+);
+const persistenceHelper = harness.slice(
+  persistenceHelperStart,
+  persistenceHelperEnd,
+);
+assert(
+  persistenceHelperStart > -1 &&
+    persistenceHelperEnd > persistenceHelperStart &&
+    accountabilityWorkflow.includes(
+      "lead_accountability?select=owner_user_id,record_version",
+    ) &&
+    accountabilityWorkflow.includes(
+      'errorPrefix: "Lead owner assignment was refused"',
+    ) &&
+    persistenceHelper.includes(
+      "[role=\"alert\"][aria-label=\"Error notification\"]",
+    ) &&
+    persistenceHelper.includes("visibleError?.trim()") &&
+    persistenceHelper.includes("`${errorPrefix}: ${visibleError.trim()}`"),
+  "Owner-assignment browser polling reports the live error notification immediately instead of hiding it behind a persistence timeout",
+);
+assert(
+  accountabilityWorkflow.indexOf(
+    'await clickCompanyScope(tab, "All companies");',
+  ) > accountabilityWorkflow.indexOf("browser structured lost outcome persistence") &&
+    accountabilityWorkflow.indexOf(
+      'await clickCompanyScope(tab, "All companies");',
+    ) < accountabilityWorkflow.indexOf(
+      'await clickNav(tab, "Marketing Accountability");',
+    ) &&
+    accountabilityWorkflow.indexOf(
+      'await clickCompanyScope(tab, "WeatherTech Roofing LLC");',
+      accountabilityWorkflow.indexOf(
+        '"marketing dashboard and company-keyed forms IHC isolation"',
+      ),
+    ) > accountabilityWorkflow.indexOf(
+      '"marketing dashboard and company-keyed forms IHC isolation"',
+    ) &&
+    accountabilityWorkflow.indexOf(
+      'await clickCompanyScope(tab, "WeatherTech Roofing LLC");',
+      accountabilityWorkflow.indexOf(
+        '"marketing dashboard and company-keyed forms IHC isolation"',
+      ),
+    ) < accountabilityWorkflow.indexOf('await clickNav(tab, "Customers");'),
+  "Accountability browser coverage loads All companies before Marketing so the IHC filter exists, then restores WeatherTech before Customer 360",
+);
+assert(
+  crmApp.includes(
+    'dashboardState?.requestKey === dashboardRequestKey\n      ? dashboardState.result\n      : null',
+  ) &&
+    crmApp.match(/setDashboardState\(null\);/g)?.length >= 4 &&
+    crmApp.includes(
+      "setDashboardState({ requestKey: dashboardRequestKey, result });",
+    ) &&
+    crmApp.includes("const metrics = dashboard?.metrics ?? null;"),
+  "Marketing filters clear prior dashboard state and gate rendered metrics on the exact current company/month/source request key",
+);
+assert(
+  crmApp.includes(
+    'key={`campaign-form-${companyId}-${campaignEditId || "new"}`}',
+  ) &&
+    crmApp.includes(
+      'key={`spend-form-${companyId}-${spendEditId || "new"}`}',
+    ) &&
+    crmApp.includes(
+      '<input type="hidden" name="campaign_company_id" value={companyId} />',
+    ) &&
+    crmApp.includes(
+      '<input type="hidden" name="spend_company_id" value={companyId} />',
+    ) &&
+    crmApp.includes(
+      'setCampaignEditId("");\n    setSpendEditId("");\n    setCampaignSourceKey("website");\n    setSpendSourceKey("website");\n  }, [companyId]);',
+    ),
+  "Campaign/spend forms are keyed, company-bound, and reset edit/source state when the selected company changes",
+);
+assert(
+  harness.includes('[data-testid="create-repeat-opportunity-button"]') &&
+    harness.includes('[data-testid="repeat-opportunity-form"] select[name="repeat_property_id"]') &&
+    harness.includes('[data-testid="repeat-opportunity-form"] select[name="repeat_service_type"]') &&
+    harness.includes('[data-testid="repeat-opportunity-submit"]') &&
+    harness.includes("browser repeat opportunity persistence") &&
+    harness.includes('row.source_key === "repeat_customer"') &&
+    harness.includes("row.company_id === companies.weatherTech.id"),
+  "Customer 360 browser coverage creates and reads back one explicit same-company repeat-customer opportunity",
+);
+const leadsWorkflowSource = harness.slice(
+  harness.indexOf("async function testLeadsWorkflow"),
+  harness.indexOf("function canonicalJson"),
+);
+assert(
+  leadsWorkflowSource.includes("const accountableStageState") &&
+    leadsWorkflowSource.includes("accountableStageState.disabled") &&
+    leadsWorkflowSource.includes('accountableStageState.value !== "new_lead"') &&
+    leadsWorkflowSource.includes('lead?.pipeline_stage === "new_lead"') &&
+    leadsWorkflowSource.includes('lead.status === "new"') &&
+    leadsWorkflowSource.includes('select[@name="priority"]') &&
+    leadsWorkflowSource.includes('textarea[@name="notes"]') &&
+    !leadsWorkflowSource.includes('"lead pipeline stage"'),
+  "CRM Leads browser coverage treats every future lead as accountable, preserves its audited stage, and updates only non-funnel operational fields",
+);
+const salesPipelineWorkflowSource = harness.slice(
+  harness.indexOf("async function testSalesPipelineWorkflow"),
+  harness.indexOf("async function testLeadIntakeWorkspace"),
+);
+assert(
+  salesPipelineWorkflowSource.includes("const initialAccountableStage") &&
+    salesPipelineWorkflowSource.includes("initialAccountableStage.disabled") &&
+    salesPipelineWorkflowSource.includes('[data-testid="lead-owner-submit"]') &&
+    salesPipelineWorkflowSource.includes(
+      'ownerSelect?.value === "me" && ownerSubmit?.disabled === false',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'persistenceLabel: "accountable opportunity owner assignment"',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'errorPrefix: "Opportunity owner assignment was refused"',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      '[data-testid="lead-first-response-submit"]',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'persistenceLabel: "accountable opportunity human contact"',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'errorPrefix: "Opportunity human contact was refused"',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'accountabilityRows[0]?.owner_user_id === assignedAccountability.owner_user_id',
+    ) &&
+    salesPipelineWorkflowSource.includes(
+      'accountabilityRows[0]?.first_response_channel === "phone"',
+    ) &&
+    salesPipelineWorkflowSource.includes('row?.pipeline_stage === "contacted"') &&
+    salesPipelineWorkflowSource.includes('finalAccountability?.outcome !== "open"') &&
+    salesPipelineWorkflowSource.includes("draftWorkflowDidNotFabricateSale: true") &&
+    !salesPipelineWorkflowSource.includes('"opportunity stage"'),
+  "Sales Pipeline browser coverage retries enabled audited owner/contact actions until exact persistence, surfaces visible errors, keeps direct stage editing disabled, and proves draft estimates/jobs do not fabricate a sale",
+);
+const estimatesWorkflowSource = harness.slice(
+  harness.indexOf("async function testEstimatesWorkflow"),
+  harness.indexOf("async function testQuickActionsDoNotOverlap"),
+);
+assert(
+  estimatesWorkflowSource.includes("await clickEnabledUntilPersisted({") &&
+    estimatesWorkflowSource.includes("locator: estimateSubmit") &&
+    estimatesWorkflowSource.includes('clickLabel: "Create estimate"') &&
+    estimatesWorkflowSource.includes(
+      'persistenceLabel: "created estimate persistence"',
+    ) &&
+    estimatesWorkflowSource.includes(
+      'readPersisted: () => findEstimateByTitle(env, estimateTitle)',
+    ) &&
+    estimatesWorkflowSource.includes(
+      'errorPrefix: "Estimate creation was refused"',
+    ),
+  "Estimate browser coverage retries only while the submit remains enabled, stops on exact persistence, and surfaces the live UI error",
+);
+const leadIntakeWorkspaceSource = harness.slice(
+  harness.indexOf("async function testLeadIntakeWorkspace"),
+  harness.indexOf("async function testIdentityReconciliationWorkflow"),
+);
+assert(
+  leadIntakeWorkspaceSource.includes('select[@name="source"]') &&
+    leadIntakeWorkspaceSource.includes('"manual"') &&
+    leadIntakeWorkspaceSource.includes('createdLead.pipeline_stage !== "new_lead"') &&
+    leadIntakeWorkspaceSource.includes('createdLead.status !== "new"') &&
+    !leadIntakeWorkspaceSource.includes('select[@name="pipeline_stage"]'),
+  "Lead Intake browser coverage selects a canonical acquisition source and leaves new funnel state untouched until audited human contact",
+);
+const reconciliationWorkflowSource = harness.slice(
+  harness.indexOf("async function testIdentityReconciliationWorkflow"),
+  harness.indexOf("async function testCustomersWorkflow"),
+);
+assert(
+  harness.includes("async function recordExactFixtureHumanContact") &&
+    harness.includes('"rpc/wtos_apply_lead_accountability_action"') &&
+    harness.includes("expected_version: 1") &&
+    reconciliationWorkflowSource.includes('status: "new"') &&
+    reconciliationWorkflowSource.includes('pipeline_stage: "new_lead"') &&
+    reconciliationWorkflowSource.includes(
+      "for (const lead of insertedReconciliationLeads)",
+    ) &&
+    reconciliationWorkflowSource.includes("recordExactFixtureHumanContact") &&
+    reconciliationWorkflowSource.includes("contactedReconciliationLeads") &&
+    reconciliationWorkflowSource.includes(
+      "Audited CRM identity fixtures did not refetch as exact contacted leads",
+    ),
+  "CRM identity browser fixtures insert invariant-safe new leads, record exact audited contact events, and refetch fresh contacted versions before review",
+);
+const websiteMarketingWorkflowSource = harness.slice(
+  harness.indexOf("async function testWebsiteMarketingFoundation"),
+  harness.indexOf("function phoenixYearMonth"),
+);
+assert(
+  websiteMarketingWorkflowSource.includes(
+    '[data-testid="marketing-accountability-workspace"]',
+  ) &&
+    websiteMarketingWorkflowSource.includes(
+      "verified origin, funnel & manual spend",
+    ) &&
+    websiteMarketingWorkflowSource.includes(
+      "kpi denominators include only leads with a phase 1 accountability record",
+    ) &&
+    websiteMarketingWorkflowSource.includes(
+      "provider-readiness view for accounted website and yelp acquisition",
+    ) &&
+    !websiteMarketingWorkflowSource.includes("read-only operating view"),
+  "Website & Marketing browser coverage waits on the current accountability-plus-provider foundation instead of retired pre-sprint copy",
+);
+const inspectionsWorkflowSource = harness.slice(
+  harness.indexOf("async function testInspectionsWorkflow"),
+  harness.indexOf("async function runUiMutationTests"),
+);
+assert(
+  inspectionsWorkflowSource.indexOf('[data-testid="inspections-search"]') <
+    inspectionsWorkflowSource.indexOf(
+      'getByRole("button", { name: "New inspection" })',
+    ) &&
+    inspectionsWorkflowSource.indexOf(
+      'getByRole("button", { name: "New inspection" })',
+    ) < inspectionsWorkflowSource.indexOf('"new inspection form"') &&
+    inspectionsWorkflowSource.includes("Create site inspection"),
+  "Inspections browser coverage first proves the workspace, then explicitly opens and waits for the new-inspection form regardless of existing records",
+);
+for (const testId of [
+  "marketing-accountability-workspace",
+  "marketing-accountability-company-filter",
+  "marketing-accountability-month-filter",
+  "marketing-accountability-source-filter",
+  "marketing-accountability-source-table",
+  "marketing-accountability-source-row",
+  "marketing-metric-lead-count",
+  "marketing-metric-spend",
+  "marketing-metric-cost-per-lead",
+  "marketing-metric-booking-rate",
+  "marketing-metric-inspection-rate",
+  "marketing-metric-closing-rate",
+  "marketing-metric-cost-per-sold-job",
+  "marketing-metric-revenue",
+  "marketing-metric-roas",
+  "marketing-metric-awaiting-contact",
+  "marketing-metric-unsold-follow-up",
+  "marketing-metric-unattributed",
+  "marketing-metric-coverage",
+  "marketing-metric-missing-won-value",
+  "marketing-metric-data-gaps",
+  "marketing-metric-workflow-linkage-gaps",
+  "marketing-campaign-form",
+  "marketing-campaign-edit-select",
+  "marketing-campaign-submit",
+  "marketing-spend-form",
+  "marketing-spend-edit-select",
+  "marketing-spend-submit",
+  "lead-accountability-panel",
+  "lead-attribution-review-form",
+  "lead-attribution-review-submit",
+  "lead-owner-select",
+  "lead-owner-submit",
+  "lead-first-response-channel",
+  "lead-first-response-submit",
+  "lead-won-form",
+  "lead-won-record-id",
+  "lead-won-value",
+  "lead-won-basis",
+  "lead-won-submit",
+  "lead-lost-form",
+  "lead-lost-reason",
+  "lead-lost-notes",
+  "lead-lost-submit",
+  "create-repeat-opportunity-button",
+  "repeat-opportunity-form",
+  "repeat-opportunity-submit",
+]) {
+  assert(
+    crmApp.includes(`\"${testId}\"`),
+    `CRM accountability UI preserves the stable ${testId} browser contract`,
+  );
+}
+for (const fieldName of [
+  "source",
+  "source_detail",
+  "campaign_id",
+  "estimated_value",
+  "attribution_source_key",
+  "attribution_source_detail",
+  "intake_provider",
+  "review_status",
+  "review_reason_code",
+  "first_response_channel",
+  "won_record_id",
+  "won_contract_value",
+  "won_value_basis",
+  "lost_reason_code",
+  "lost_reason_notes",
+  "campaign_company_id",
+  "campaign_source_key",
+  "campaign_source_detail",
+  "campaign_intake_provider",
+  "campaign_vendor_key",
+  "campaign_vendor_name",
+  "campaign_key",
+  "campaign_name",
+  "campaign_external_id",
+  "campaign_starts_on",
+  "campaign_ends_on",
+  "campaign_is_active",
+  "spend_company_id",
+  "spend_month",
+  "spend_source_key",
+  "spend_source_detail",
+  "spend_vendor_key",
+  "spend_vendor_name",
+  "spend_campaign_id",
+  "spend_amount",
+  "spend_notes",
+  "repeat_property_id",
+  "repeat_service_type",
+  "repeat_priority",
+  "repeat_next_follow_up",
+  "repeat_notes",
+]) {
+  assert(
+    crmApp.includes(`name=\"${fieldName}\"`) ||
+      crmApp.includes(`\"${fieldName}\"`),
+    `CRM accountability UI preserves the stable ${fieldName} field contract`,
+  );
+}
+assert(
+  crmApp.includes('requestedSource === "repeat_customer"') &&
+    crmApp.includes("Repeat-customer attribution is created only from Customer 360") &&
+    crmApp.includes('eventType: "appointment_scheduled"') &&
+    crmApp.includes("occurredAt: record.created_at"),
+  "UI/demo behavior reserves repeat attribution for Customer 360 and dates booked appointments from authoritative creation time",
 );
 assert(
   harness.includes('enabledGroups.has("crm-reconciliation")') &&

@@ -15,6 +15,9 @@ import type {
   CalendarEventSyncRecord,
   ChangeOrderInput,
   ChangeOrderRecord,
+  CreateAccountableLeadRequest,
+  CreateAccountableLeadResult,
+  CreateRepeatOpportunityRequest,
   CustomerInput,
   CustomerRecord,
   DailyLogInput,
@@ -55,8 +58,15 @@ import type {
   JobRecord,
   JobTaskInput,
   JobTaskRecord,
+  LeadAccountabilityEventRecord,
+  LeadAccountabilityActionRequest,
+  LeadAccountabilityActionResult,
+  LeadAccountabilityRecord,
   LeadInput,
   LeadRecord,
+  MarketingCampaignRecord,
+  MarketingAccountabilityDashboardResult,
+  MarketingSpendMonthRecord,
   PipelineStage,
   MaterialOrderInput,
   MaterialOrderItemInput,
@@ -84,6 +94,10 @@ import type {
   ScopeTemplateInput,
   TimeEntryInput,
   TimeEntryRecord,
+  UpsertMarketingCampaignRequest,
+  UpsertMarketingCampaignResult,
+  UpsertMarketingSpendRequest,
+  UpsertMarketingSpendResult,
 } from "./types";
 
 type CrmClient = SupabaseClient<Database>;
@@ -352,7 +366,7 @@ function normalizeLeadRows(leads: LeadRecord[]): LeadRecord[] {
       source:
         getLegacyLeadString(lead.source) ??
         getLegacyLeadString(lead.lead_source) ??
-        "Website",
+        "unknown",
       status,
       pipeline_stage: normalizePipelineStage(lead.pipeline_stage, status),
       priority: lead.priority ?? "normal",
@@ -490,6 +504,10 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
   return {
     ...core,
     properties: [],
+    marketingCampaigns: [],
+    leadAccountability: [],
+    leadAccountabilityEvents: [],
+    marketingSpendMonths: [],
     estimateLineItems: [],
     scopeTemplates: [],
     jobTasks: [],
@@ -580,6 +598,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     companies,
     properties,
     leads,
+    marketingCampaigns,
+    leadAccountability,
+    leadAccountabilityEvents,
+    marketingSpendMonths,
     customers,
     estimates,
     estimateLineItems,
@@ -637,6 +659,23 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     client.from("companies").select("*").order("name", { ascending: true }),
     client.from("properties").select("*").order("updated_at", { ascending: false }),
     client.from("leads").select("*").order("created_at", { ascending: false }),
+    client
+      .from("marketing_campaigns")
+      .select("*")
+      .order("updated_at", { ascending: false }),
+    client
+      .from("lead_accountability")
+      .select("*")
+      .order("received_at", { ascending: false }),
+    client
+      .from("lead_accountability_events")
+      .select("*")
+      .order("occurred_at", { ascending: false })
+      .limit(500),
+    client
+      .from("marketing_spend_months")
+      .select("*")
+      .order("spend_month", { ascending: false }),
     client.from("customers").select("*").order("updated_at", { ascending: false }),
     client.from("estimates").select("*").order("updated_at", { ascending: false }),
     client
@@ -801,6 +840,22 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       ? [["properties", properties] as [string, { error: unknown }]]
       : []),
     ["leads", leads],
+    ...(marketingCampaigns.error &&
+    !isOptionalTableMissingError(marketingCampaigns.error)
+      ? [["marketing_campaigns", marketingCampaigns] as [string, { error: unknown }]]
+      : []),
+    ...(leadAccountability.error &&
+    !isOptionalTableMissingError(leadAccountability.error)
+      ? [["lead_accountability", leadAccountability] as [string, { error: unknown }]]
+      : []),
+    ...(leadAccountabilityEvents.error &&
+    !isOptionalTableMissingError(leadAccountabilityEvents.error)
+      ? [["lead_accountability_events", leadAccountabilityEvents] as [string, { error: unknown }]]
+      : []),
+    ...(marketingSpendMonths.error &&
+    !isOptionalTableMissingError(marketingSpendMonths.error)
+      ? [["marketing_spend_months", marketingSpendMonths] as [string, { error: unknown }]]
+      : []),
     ["customers", customers],
     ["estimates", estimates],
     ["estimate_line_items", estimateLineItems],
@@ -913,6 +968,22 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     companies: requireRows("companies", companies),
     properties: normalizePropertyRows(optionalRows("properties", properties)),
     leads: normalizeLeadRows(requireRows("leads", leads)),
+    marketingCampaigns: optionalRows(
+      "marketing_campaigns",
+      marketingCampaigns as CrmListResult<MarketingCampaignRecord>,
+    ),
+    leadAccountability: optionalRows(
+      "lead_accountability",
+      leadAccountability as CrmListResult<LeadAccountabilityRecord>,
+    ),
+    leadAccountabilityEvents: optionalRows(
+      "lead_accountability_events",
+      leadAccountabilityEvents as CrmListResult<LeadAccountabilityEventRecord>,
+    ),
+    marketingSpendMonths: optionalRows(
+      "marketing_spend_months",
+      marketingSpendMonths as CrmListResult<MarketingSpendMonthRecord>,
+    ),
     customers: requireRows("customers", customers),
     estimates: requireRows("estimates", estimates),
     estimateLineItems: requireRows("estimate_line_items", estimateLineItems),
@@ -1024,7 +1095,7 @@ function buildLiveLeadInput(input: LeadInput) {
     phone: input.phone ?? null,
     email: input.email ?? null,
     property_address: formatLiveLeadPropertyAddress(input),
-    lead_source: input.source ?? "Website",
+    lead_source: input.source ?? "unknown",
     service_needed: input.service_type,
     status: pipelineStageToLeadStatus(pipelineStage),
     pipeline_stage: pipelineStage,
@@ -1062,7 +1133,7 @@ function buildCanonicalLeadInput(input: LeadInput) {
       ? { address_verified_at: input.address_verified_at ?? null }
       : {}),
     service_type: input.service_type,
-    source: input.source ?? "Website",
+    source: input.source ?? "unknown",
     status: pipelineStageToLeadStatus(pipelineStage),
     pipeline_stage: pipelineStage,
     priority: input.priority ?? "normal",
@@ -1150,6 +1221,223 @@ export async function createLead(client: CrmClient, input: LeadInput) {
   }
 
   return normalizeLeadRows([data])[0];
+}
+
+function requireRpcObject(name: string, value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} returned an invalid response.`);
+  }
+
+  return value as Record<string, unknown>;
+}
+
+export async function createAccountableLead(
+  client: CrmClient,
+  request: CreateAccountableLeadRequest,
+) {
+  const { data, error } = await client.rpc("wtos_create_accountable_lead", {
+    accountability_request: request,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Accountable lead creation", data);
+  if (
+    (result.status !== "created" && result.status !== "idempotent") ||
+    typeof result.lead_id !== "string" ||
+    typeof result.accountability_id !== "string" ||
+    !Number.isInteger(result.record_version)
+  ) {
+    throw new Error("Accountable lead creation returned an invalid response.");
+  }
+
+  return result as CreateAccountableLeadResult;
+}
+
+export async function applyLeadAccountabilityAction(
+  client: CrmClient,
+  request: LeadAccountabilityActionRequest,
+) {
+  const { data, error } = await client.rpc(
+    "wtos_apply_lead_accountability_action",
+    { action_request: request },
+  );
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Lead accountability action", data);
+  if (
+    (result.status !== "applied" && result.status !== "idempotent") ||
+    result.action !== request.action ||
+    typeof result.event_id !== "string" ||
+    result.lead_id !== request.lead_id ||
+    typeof result.accountability_id !== "string" ||
+    !Number.isInteger(result.record_version)
+  ) {
+    throw new Error("Lead accountability action returned a mismatched response.");
+  }
+
+  return result as LeadAccountabilityActionResult;
+}
+
+export async function getLeadAccountabilityEventsForRecord(
+  client: CrmClient,
+  input: {
+    accountabilityId: string;
+    companyId: string;
+    leadId: string;
+  },
+) {
+  const result = await client
+    .from("lead_accountability_events")
+    .select("*")
+    .eq("lead_accountability_id", input.accountabilityId)
+    .eq("company_id", input.companyId)
+    .eq("lead_id", input.leadId)
+    .order("occurred_at", { ascending: true });
+
+  return requireRows(
+    "lead_accountability_events",
+    result as CrmListResult<LeadAccountabilityEventRecord>,
+  );
+}
+
+export async function upsertMarketingCampaign(
+  client: CrmClient,
+  request: UpsertMarketingCampaignRequest,
+) {
+  const { data, error } = await client.rpc("wtos_upsert_marketing_campaign", {
+    campaign_request: request,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Marketing campaign mutation", data);
+  if (
+    !["created", "updated", "idempotent"].includes(String(result.status)) ||
+    typeof result.campaign_id !== "string" ||
+    !Number.isInteger(result.record_version)
+  ) {
+    throw new Error("Marketing campaign mutation returned an invalid response.");
+  }
+
+  return result as UpsertMarketingCampaignResult;
+}
+
+export async function upsertMarketingSpend(
+  client: CrmClient,
+  request: UpsertMarketingSpendRequest,
+) {
+  const { data, error } = await client.rpc("wtos_upsert_marketing_spend", {
+    spend_request: request,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Marketing spend mutation", data);
+  if (
+    !["created", "updated", "idempotent"].includes(String(result.status)) ||
+    typeof result.spend_id !== "string" ||
+    !Number.isInteger(result.record_version)
+  ) {
+    throw new Error("Marketing spend mutation returned an invalid response.");
+  }
+
+  return result as UpsertMarketingSpendResult;
+}
+
+export async function createRepeatOpportunity(
+  client: CrmClient,
+  request: CreateRepeatOpportunityRequest,
+) {
+  const { data, error } = await client.rpc("wtos_create_repeat_opportunity", {
+    opportunity_request: request,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Repeat opportunity creation", data);
+  if (
+    (result.status !== "created" && result.status !== "idempotent") ||
+    typeof result.lead_id !== "string" ||
+    typeof result.accountability_id !== "string" ||
+    !Number.isInteger(result.record_version)
+  ) {
+    throw new Error("Repeat opportunity creation returned an invalid response.");
+  }
+
+  return result as CreateAccountableLeadResult;
+}
+
+export async function getMarketingAccountabilityDashboard(
+  client: CrmClient,
+  request: {
+    company_id: string;
+    month: string;
+    source_key?: CreateAccountableLeadRequest["source_key"] | null;
+  },
+) {
+  const { data, error } = await client.rpc(
+    "wtos_get_marketing_accountability_dashboard",
+    { report_request: request },
+  );
+
+  if (error) {
+    throw error;
+  }
+
+  const result = requireRpcObject("Marketing accountability dashboard", data);
+  if (
+    result.company_id !== request.company_id ||
+    result.month !== request.month ||
+    result.source_key !== (request.source_key ?? null) ||
+    result.timezone !== "America/Phoenix" ||
+    !result.metrics ||
+    typeof result.metrics !== "object" ||
+    !Array.isArray(result.by_source)
+  ) {
+    throw new Error("Marketing accountability dashboard returned a mismatched response.");
+  }
+
+  return result as MarketingAccountabilityDashboardResult;
+}
+
+export async function assertLeadAccountabilityIntakeReady(
+  client: CrmClient,
+  companyId: string,
+) {
+  const accountability = await client
+    .from("lead_accountability")
+    .select("id")
+    .eq("company_id", companyId)
+    .limit(1);
+  if (accountability.error) {
+    throw new Error(
+      "Lead accountability schema is unavailable; provider lead creation is blocked.",
+    );
+  }
+
+  const monthParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Phoenix",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: "year" | "month") =>
+    monthParts.find((entry) => entry.type === type)?.value ?? "";
+  await getMarketingAccountabilityDashboard(client, {
+    company_id: companyId,
+    month: `${part("year")}-${part("month")}-01`,
+  });
 }
 
 export async function updateLead(

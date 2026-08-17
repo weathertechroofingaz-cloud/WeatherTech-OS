@@ -4,17 +4,17 @@ This file is planning-only. It cannot authorize development, cannot approve a sp
 
 ## Approval Status
 
-Awaiting owner direction.
+Current sprint approved; no subsequent sprint selected.
 
-Owner approval is required before any contents of this file may be copied into [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) or used to begin implementation.
+The owner approved Lead Attribution & Marketing Accountability Phase 1 directly in the Codex task and it is recorded in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). This file does not approve any work after that sprint.
 
 ## Sprint Name
 
-Not selected — awaiting owner direction.
+No subsequent sprint selected.
 
 ## Objective
 
-No next production sprint has been selected. This planning file preserves completed-work and external-dependency boundaries until the owner names and approves one exact sprint.
+Lead Attribution & Marketing Accountability Phase 1 is the active owner-approved sprint in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No later sprint has been selected; this planning file preserves completed-work and external-dependency boundaries for the post-closeout waiting state.
 
 ## Owner-Approved Scope
 
@@ -78,4 +78,4 @@ Codex must never automatically promote this file. Promotion requires an explicit
 
 ## Last Review
 
-Live Yelp Lead Intake via Mighty Apes is closed at: `IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.` CRM Identity Integrity Phase 1 remains complete without a production graph change. Status remains `Awaiting owner direction`; no next sprint is selected, approved, promoted, or started.
+Lead Attribution & Marketing Accountability Phase 1 is active and owner-approved in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). Live Yelp Lead Intake via Mighty Apes remains closed at its external signing-secret boundary, CRM Identity Integrity Phase 1 remains complete without a production graph change, and the inbound-only Twilio sprint remains closed. No subsequent sprint is selected, approved, promoted, or started.

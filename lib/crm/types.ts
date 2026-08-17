@@ -30,6 +30,67 @@ export type PipelineStage =
   | "paid"
   | "lost";
 export type LeadPriority = "low" | "normal" | "high" | "urgent";
+export type AttributionSourceKey =
+  | "website"
+  | "google"
+  | "yelp"
+  | "phone"
+  | "email"
+  | "referral"
+  | "repeat_customer"
+  | "manual"
+  | "other"
+  | "unknown";
+export type AttributionEvidenceKind =
+  | "provider_verified"
+  | "provider_metadata"
+  | "staff_selected"
+  | "customer_stated"
+  | "repeat_customer"
+  | "insufficient";
+export type AttributionReviewStatus =
+  | "verified"
+  | "needs_review"
+  | "unattributed";
+export type LeadAttributionReviewReasonCode =
+  | "initial_review"
+  | "provider_evidence"
+  | "staff_correction"
+  | "campaign_correction"
+  | "unknown_confirmed";
+export type LeadAccountabilityEventType =
+  | "lead_created"
+  | "attribution_reviewed"
+  | "owner_assigned"
+  | "contacted"
+  | "appointment_scheduled"
+  | "inspection_completed"
+  | "estimate_sent"
+  | "won"
+  | "lost";
+export type LeadFirstResponseChannel =
+  | "phone"
+  | "sms"
+  | "email"
+  | "in_person"
+  | "other";
+export type LeadAccountabilityOutcome = "open" | "won" | "lost";
+export type LeadAccountabilityActorKind = "user" | "provider" | "system";
+export type LeadLostReasonCode =
+  | "price"
+  | "no_response"
+  | "chose_competitor"
+  | "postponed"
+  | "not_qualified"
+  | "outside_service_area"
+  | "insurance_denied"
+  | "scope_mismatch"
+  | "duplicate"
+  | "other";
+export type LeadWonValueBasis =
+  | "accepted_proposal"
+  | "signed_proposal"
+  | "approved_contract_total";
 export type CustomerType = "homeowner" | "commercial" | "hoa" | "property_manager";
 export type CustomerStatus = "active" | "inactive" | "prospect";
 export type PropertyType =
@@ -842,6 +903,111 @@ export type LeadRecord = {
   next_follow_up: string | null;
   notes: string | null;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketingCampaignRecord = {
+  id: string;
+  company_id: string;
+  source_key: AttributionSourceKey;
+  source_detail: string | null;
+  intake_provider: string | null;
+  vendor_key: string | null;
+  vendor_name: string | null;
+  campaign_key: string;
+  campaign_name: string;
+  external_campaign_id: string | null;
+  starts_on: string | null;
+  ends_on: string | null;
+  is_active: boolean;
+  record_version: number;
+  last_operation_key: string | null;
+  last_request_fingerprint: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LeadAccountabilityRecord = {
+  id: string;
+  company_id: string;
+  lead_id: string;
+  source_key: AttributionSourceKey;
+  source_detail: string | null;
+  intake_provider: string | null;
+  campaign_id: string | null;
+  intake_record_id: string | null;
+  attribution_model: "first_touch";
+  received_at: string;
+  evidence_kind: AttributionEvidenceKind;
+  review_status: AttributionReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  attribution_locked_at: string | null;
+  owner_user_id: string | null;
+  owner_assigned_at: string | null;
+  first_response_at: string | null;
+  first_response_channel: LeadFirstResponseChannel | null;
+  outcome: LeadAccountabilityOutcome;
+  outcome_at: string | null;
+  lost_reason_code: LeadLostReasonCode | null;
+  lost_reason_notes: string | null;
+  won_contract_value: number | null;
+  won_value_basis: LeadWonValueBasis | null;
+  record_version: number;
+  last_operation_key: string | null;
+  last_request_fingerprint: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LeadAccountabilityEventRecord = {
+  id: string;
+  lead_accountability_id: string;
+  company_id: string;
+  lead_id: string;
+  event_type: LeadAccountabilityEventType;
+  operation_key: string;
+  request_fingerprint: string;
+  actor_user_id: string | null;
+  actor_kind: LeadAccountabilityActorKind;
+  reason_code: string | null;
+  source_key: AttributionSourceKey | null;
+  source_detail: string | null;
+  intake_provider: string | null;
+  campaign_id: string | null;
+  owner_user_id: string | null;
+  first_response_channel: LeadFirstResponseChannel | null;
+  linked_table: string | null;
+  linked_record_id: string | null;
+  outcome: LeadAccountabilityOutcome | null;
+  lost_reason_code: LeadLostReasonCode | null;
+  won_contract_value: number | null;
+  won_value_basis: LeadWonValueBasis | null;
+  occurred_at: string;
+  resulting_record_version: number;
+  created_at: string;
+};
+
+export type MarketingSpendMonthRecord = {
+  id: string;
+  company_id: string;
+  spend_month: string;
+  source_key: AttributionSourceKey;
+  source_detail: string | null;
+  vendor_key: string | null;
+  vendor_name: string | null;
+  campaign_id: string | null;
+  spend_amount: number;
+  currency: "USD";
+  notes: string | null;
+  entered_by: string | null;
+  updated_by: string | null;
+  record_version: number;
+  last_operation_key: string | null;
+  last_request_fingerprint: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2347,6 +2513,213 @@ export type LeadInput = {
   next_follow_up?: string | null;
   notes?: string | null;
   created_by?: string | null;
+};
+
+export type CreateAccountableLeadRequest = {
+  operation_key: string;
+  company_id: string;
+  contact_name: string;
+  phone?: string | null;
+  email?: string | null;
+  property_address: string;
+  city?: string | null;
+  state?: string;
+  postal_code?: string | null;
+  service_type: ServiceType;
+  priority?: LeadPriority;
+  estimated_value?: number;
+  next_follow_up?: string | null;
+  notes?: string | null;
+  source_key: AttributionSourceKey;
+  source_detail?: string | null;
+  intake_provider?: string | null;
+  campaign_id?: string | null;
+  intake_record_id?: string | null;
+  evidence_kind: AttributionEvidenceKind;
+  review_status: AttributionReviewStatus;
+  owner_user_id?: string | null;
+  received_at?: string;
+};
+
+export type CreateAccountableLeadResult = {
+  status: "created" | "idempotent";
+  lead_id: string;
+  accountability_id: string;
+  record_version: number;
+};
+
+type LeadAccountabilityActionBase = {
+  operation_key: string;
+  lead_id: string;
+  expected_version: number;
+};
+
+export type LeadAccountabilityActionRequest =
+  | (LeadAccountabilityActionBase & {
+      action: "attribution_reviewed";
+      source_key: AttributionSourceKey;
+      source_detail?: string | null;
+      intake_provider?: string | null;
+      campaign_id?: string | null;
+      intake_record_id?: string | null;
+      evidence_kind: AttributionEvidenceKind;
+      review_status: AttributionReviewStatus;
+      reason_code: LeadAttributionReviewReasonCode;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "owner_assigned";
+      owner_user_id: string | null;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "contacted";
+      occurred_at?: string;
+      first_response_channel: LeadFirstResponseChannel;
+      human_contact: true;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "appointment_scheduled";
+      schedule_event_id: string;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "inspection_completed";
+      inspection_id: string;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "estimate_sent";
+      estimate_id: string;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "won";
+      proposal_acceptance_id?: string;
+      won_contract_value?: number;
+      won_value_basis?: LeadWonValueBasis;
+    })
+  | (LeadAccountabilityActionBase & {
+      action: "lost";
+      lost_reason_code: LeadLostReasonCode;
+      lost_reason_notes?: string | null;
+    });
+
+export type LeadAccountabilityActionResult = {
+  status: "applied" | "idempotent";
+  action: LeadAccountabilityEventType;
+  event_id: string;
+  lead_id: string;
+  accountability_id: string;
+  record_version: number;
+};
+
+export type UpsertMarketingCampaignRequest = {
+  operation_key: string;
+  company_id: string;
+  campaign_id?: string;
+  expected_version: number;
+  source_key: AttributionSourceKey;
+  source_detail?: string | null;
+  intake_provider?: string | null;
+  vendor_key?: string | null;
+  vendor_name?: string | null;
+  campaign_key: string;
+  campaign_name: string;
+  external_campaign_id?: string | null;
+  starts_on?: string | null;
+  ends_on?: string | null;
+  is_active: boolean;
+};
+
+export type UpsertMarketingCampaignResult = {
+  status: "created" | "updated" | "idempotent";
+  campaign_id: string;
+  record_version: number;
+};
+
+export type UpsertMarketingSpendRequest = {
+  operation_key: string;
+  company_id: string;
+  spend_id?: string;
+  expected_version: number;
+  spend_month: string;
+  source_key: AttributionSourceKey;
+  source_detail?: string | null;
+  vendor_key?: string | null;
+  vendor_name?: string | null;
+  campaign_id?: string | null;
+  spend_amount: number;
+  currency: "USD";
+  notes?: string | null;
+};
+
+export type UpsertMarketingSpendResult = {
+  status: "created" | "updated" | "idempotent";
+  spend_id: string;
+  record_version: number;
+};
+
+export type CreateRepeatOpportunityRequest = {
+  operation_key: string;
+  company_id: string;
+  customer_id: string;
+  customer_expected_updated_at: string;
+  property_id?: string | null;
+  property_expected_updated_at?: string | null;
+  service_type: ServiceType;
+  owner_user_id?: string | null;
+  priority?: LeadPriority;
+  next_follow_up?: string | null;
+  notes?: string | null;
+  received_at?: string;
+};
+
+export type MarketingAccountabilityDashboardMetrics = {
+  lead_count: number;
+  marketing_spend: number;
+  cost_per_lead: number | null;
+  booked_lead_count: number;
+  booking_rate: number | null;
+  inspection_completed_lead_count: number;
+  inspection_completion_rate: number | null;
+  won_lead_count: number;
+  closing_rate: number | null;
+  cost_per_sold_job: number | null;
+  attributed_contract_revenue: number;
+  marketing_revenue_divided_by_spend: number | null;
+  new_awaiting_contact: number;
+  unsold_estimates_overdue: number;
+  unsold_estimates_missing_follow_up: number;
+  unattributed_lead_count: number;
+  attribution_coverage: number | null;
+  missing_won_value_count: number;
+  workflow_linkage_gap_count: number;
+  untracked_legacy_lead_count: number;
+};
+
+export type MarketingAccountabilityDashboardResult = {
+  company_id: string;
+  month: string;
+  timezone: "America/Phoenix";
+  source_key: AttributionSourceKey | null;
+  metrics: MarketingAccountabilityDashboardMetrics;
+  by_source: Array<
+    Pick<
+      MarketingAccountabilityDashboardMetrics,
+      | "lead_count"
+      | "marketing_spend"
+      | "cost_per_lead"
+      | "booked_lead_count"
+      | "booking_rate"
+      | "inspection_completed_lead_count"
+      | "inspection_completion_rate"
+      | "won_lead_count"
+      | "closing_rate"
+      | "cost_per_sold_job"
+      | "attributed_contract_revenue"
+      | "marketing_revenue_divided_by_spend"
+      | "unattributed_lead_count"
+      | "attribution_coverage"
+      | "missing_won_value_count"
+      | "workflow_linkage_gap_count"
+    > & { source_key: AttributionSourceKey }
+  >;
 };
 
 export type CustomerInput = {
@@ -3912,6 +4285,10 @@ export type CrmSnapshot = {
   companies: CompanyRecord[];
   properties: PropertyRecord[];
   leads: LeadRecord[];
+  marketingCampaigns: MarketingCampaignRecord[];
+  leadAccountability: LeadAccountabilityRecord[];
+  leadAccountabilityEvents: LeadAccountabilityEventRecord[];
+  marketingSpendMonths: MarketingSpendMonthRecord[];
   customers: CustomerRecord[];
   estimates: EstimateRecord[];
   estimateLineItems: EstimateLineItemRecord[];
@@ -4027,6 +4404,30 @@ export type Database = {
         Row: LeadRecord;
         Insert: LeadInsert;
         Update: Partial<Database["public"]["Tables"]["leads"]["Insert"]>;
+        Relationships: [];
+      };
+      marketing_campaigns: {
+        Row: MarketingCampaignRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      lead_accountability: {
+        Row: LeadAccountabilityRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      lead_accountability_events: {
+        Row: LeadAccountabilityEventRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      marketing_spend_months: {
+        Row: MarketingSpendMonthRecord;
+        Insert: never;
+        Update: never;
         Relationships: [];
       };
       estimates: {
@@ -4496,6 +4897,36 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_create_accountable_lead: {
+        Args: { accountability_request: CreateAccountableLeadRequest };
+        Returns: CreateAccountableLeadResult;
+      };
+      wtos_apply_lead_accountability_action: {
+        Args: { action_request: LeadAccountabilityActionRequest };
+        Returns: LeadAccountabilityActionResult;
+      };
+      wtos_upsert_marketing_campaign: {
+        Args: { campaign_request: UpsertMarketingCampaignRequest };
+        Returns: UpsertMarketingCampaignResult;
+      };
+      wtos_upsert_marketing_spend: {
+        Args: { spend_request: UpsertMarketingSpendRequest };
+        Returns: UpsertMarketingSpendResult;
+      };
+      wtos_create_repeat_opportunity: {
+        Args: { opportunity_request: CreateRepeatOpportunityRequest };
+        Returns: CreateAccountableLeadResult;
+      };
+      wtos_get_marketing_accountability_dashboard: {
+        Args: {
+          report_request: {
+            company_id: string;
+            month: string;
+            source_key?: AttributionSourceKey | null;
+          };
+        };
+        Returns: MarketingAccountabilityDashboardResult;
+      };
       wtos_ingest_mighty_apes_yelp: {
         Args: {
           intake_request: MightyApesYelpIntakeRequest;

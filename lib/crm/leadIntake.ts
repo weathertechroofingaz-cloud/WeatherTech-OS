@@ -38,11 +38,16 @@ import {
   type LeadIntakeUrgency,
 } from "./leadRouting";
 import {
+  assertLeadAccountabilityIntakeReady,
   createIntegrationSyncLog,
   createLead,
   createNotification,
   updateIntegrationSyncLog,
 } from "./repository";
+import {
+  getAttributionReferrerHost,
+  resolveLeadAcquisitionAttribution,
+} from "./marketingAccountability";
 import type {
   CompanyRecord,
   CustomerRecord,
@@ -113,6 +118,7 @@ export type WebsiteLeadRequestBody = {
   utmTerm?: unknown;
   utmContent?: unknown;
   gclid?: unknown;
+  externalCampaignId?: unknown;
   googleClickId?: unknown;
   campaignId?: unknown;
   campaign?: unknown;
@@ -451,6 +457,9 @@ export type NormalizedLeadIntake = {
   utmSource: string | null;
   utmCampaign: string | null;
   utmMedium: string | null;
+  googleClickId: string | null;
+  referrer: string | null;
+  externalCampaignId: string | null;
   sourceMappingId: string | null;
   sourceMappingDisplayName: string | null;
   sourceMappingMatchType: string | null;
@@ -1086,13 +1095,19 @@ export function normalizeWebsiteLeadBody(
       assignedUserId: canonical.assignedUserId,
       urgency: canonical.urgency,
       preferredContactMethod: canonical.preferredContactMethod,
-      websiteUrl: getText(body.websiteUrl ?? body.pageUrl ?? body.referrer, 240),
+      websiteUrl: getText(body.websiteUrl ?? body.pageUrl, 240),
       yelpBusinessId: getText(body.yelpBusinessId, 160),
       yelpConversationId: null,
       yelpLeadId: null,
       utmSource: getText(body.utmSource, 120),
       utmCampaign: getText(body.utmCampaign, 120),
       utmMedium: getText(body.utmMedium, 120),
+      googleClickId: getText(body.gclid ?? body.googleClickId, 180),
+      referrer: getText(body.referrer ?? body.referringPage, 500),
+      externalCampaignId: getText(
+        body.externalCampaignId ?? body.campaignId,
+        180,
+      ),
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
@@ -1215,6 +1230,9 @@ export function normalizeYelpLeadBody(
       utmSource: null,
       utmCampaign: null,
       utmMedium: null,
+      googleClickId: null,
+      referrer: null,
+      externalCampaignId: null,
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
@@ -1354,6 +1372,9 @@ export function normalizeGoogleBusinessProfileLeadBody(
       utmSource: null,
       utmCampaign: null,
       utmMedium: null,
+      googleClickId: null,
+      referrer: null,
+      externalCampaignId: null,
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
@@ -1469,6 +1490,9 @@ function normalizeTwilioCommonLeadBody(
       utmSource: null,
       utmCampaign: null,
       utmMedium: null,
+      googleClickId: null,
+      referrer: null,
+      externalCampaignId: null,
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
@@ -1598,6 +1622,9 @@ export function normalizeGmailLeadBody(
       utmSource: null,
       utmCampaign: null,
       utmMedium: null,
+      googleClickId: null,
+      referrer: null,
+      externalCampaignId: null,
       sourceMappingId: null,
       sourceMappingDisplayName: null,
       sourceMappingMatchType: null,
@@ -1650,10 +1677,57 @@ function isMissingLeadIntakeRecordsTable(error: unknown) {
   );
 }
 
+function getAttributionReferrerSignal(referrer: string | null) {
+  if (!referrer?.trim()) {
+    return null;
+  }
+
+  return getAttributionReferrerHost(referrer) ?? "invalid_referrer";
+}
+
 function buildIntakeRecordMetadata(
   lead: NormalizedLeadIntake,
   matches: LeadIntakeDuplicateMatch[],
 ) {
+  const attribution = resolveLeadAcquisitionAttribution({
+    provider: lead.provider,
+    source: lead.source,
+    utmSource: lead.utmSource,
+    utmMedium: lead.utmMedium,
+    utmCampaign: lead.utmCampaign,
+    googleClickId: lead.googleClickId,
+    referrer: getAttributionReferrerSignal(lead.referrer),
+  });
+  const attributionEvidence =
+    attribution.reviewStatus === "verified" &&
+    attribution.shouldLock &&
+    (attribution.evidenceKind === "provider_verified" ||
+      attribution.evidenceKind === "provider_metadata")
+      ? {
+          sourceKey: attribution.sourceKey,
+          ...(attribution.sourceDetail
+            ? { sourceDetail: attribution.sourceDetail }
+            : {}),
+          ...(attribution.intakeProvider
+            ? { intakeProvider: attribution.intakeProvider }
+            : {}),
+          evidenceKind: attribution.evidenceKind,
+          verified: true,
+          inputs: {
+            source: lead.source,
+            provider: lead.provider,
+            utmSource: lead.utmSource,
+            utmMedium: lead.utmMedium,
+            utmCampaign: lead.utmCampaign,
+            googleClickId: lead.googleClickId,
+            referrerHost: getAttributionReferrerSignal(lead.referrer),
+            externalCampaignId: lead.externalCampaignId,
+            sourceMappingId: lead.sourceMappingId,
+            sourceMappingMatchType: lead.sourceMappingMatchType,
+          },
+        }
+      : null;
+
   return {
     sourceMapping: {
       id: lead.sourceMappingId,
@@ -1661,6 +1735,7 @@ function buildIntakeRecordMetadata(
       matchType: lead.sourceMappingMatchType,
     },
     sourceMetadata: lead.sourceMetadata,
+    attributionEvidence,
     duplicatePolicy: {
       autoMerge: false,
       confidence: lead.duplicateConfidence,
@@ -1813,7 +1888,14 @@ function buildLeadIntakeFingerprint(lead: NormalizedLeadIntake) {
     yelpBusinessId: normalizeFingerprintValue(lead.yelpBusinessId),
     yelpConversationId: normalizeFingerprintValue(lead.yelpConversationId),
     yelpLeadId: normalizeFingerprintValue(lead.yelpLeadId),
+    utmSource: normalizeFingerprintValue(lead.utmSource),
+    utmMedium: normalizeFingerprintValue(lead.utmMedium),
     utmCampaign: normalizeFingerprintValue(lead.utmCampaign),
+    googleClickId: normalizeFingerprintValue(lead.googleClickId),
+    referrerHost: normalizeFingerprintValue(
+      getAttributionReferrerSignal(lead.referrer),
+    ),
+    externalCampaignId: normalizeFingerprintValue(lead.externalCampaignId),
   };
 
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -1862,6 +1944,9 @@ function buildRetryPayload(lead: NormalizedLeadIntake) {
     utmSource: lead.utmSource,
     utmCampaign: lead.utmCampaign,
     utmMedium: lead.utmMedium,
+    googleClickId: lead.googleClickId,
+    referrerHost: getAttributionReferrerSignal(lead.referrer),
+    externalCampaignId: lead.externalCampaignId,
     sourceMetadata: lead.sourceMetadata,
   };
 }
@@ -1988,6 +2073,9 @@ function buildRequestSummary(lead: NormalizedLeadIntake) {
     utmSource: lead.utmSource,
     utmCampaign: lead.utmCampaign,
     utmMedium: lead.utmMedium,
+    googleClickId: lead.googleClickId,
+    referrerHost: getAttributionReferrerSignal(lead.referrer),
+    externalCampaignId: lead.externalCampaignId,
     sourceMapping: {
       id: lead.sourceMappingId,
       displayName: lead.sourceMappingDisplayName,
@@ -2966,6 +3054,7 @@ export async function processLeadIntake(
   }
 
   try {
+    await assertLeadAccountabilityIntakeReady(client, company.id);
     const createdLead = await createLead(client, buildLeadInput(company, mappedLead));
     let syncLogId: string | undefined;
 
@@ -3163,7 +3252,7 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
       ? payload.routingReasons.filter((value): value is string => typeof value === "string")
       : route.reasons,
     assignedQueue: getText(payload.assignedQueue, 120) ?? route.assignedQueue,
-    source: getText(payload.source, 80) ?? (provider === "website" ? "Website" : "Yelp"),
+    source: getText(payload.source, 80) ?? provider,
     contactName,
     firstName: getText(payload.firstName, 80),
     lastName: getText(payload.lastName, 120),
@@ -3203,6 +3292,9 @@ function getRetryPayload(log: IntegrationSyncLogRecord): NormalizedLeadIntake | 
     utmSource: getText(payload.utmSource, 120),
     utmCampaign: getText(payload.utmCampaign, 120),
     utmMedium: getText(payload.utmMedium, 120),
+    googleClickId: getText(payload.googleClickId, 180),
+    referrer: getText(payload.referrerHost ?? payload.referrer, 253),
+    externalCampaignId: getText(payload.externalCampaignId, 180),
     sourceMappingId: null,
     sourceMappingDisplayName: null,
     sourceMappingMatchType: null,

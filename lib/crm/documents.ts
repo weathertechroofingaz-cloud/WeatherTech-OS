@@ -19,6 +19,7 @@ import {
   paintingAreaLabel,
   surfacePrepLabel,
 } from "./painting";
+import { getLeadOwnerUserId } from "./marketingAccountability";
 
 type DocumentSourceType =
   | "lead"
@@ -611,6 +612,11 @@ function buildOpportunityDraft(
   const template = templateForSource(snapshot, lead.company_id, "opportunity");
   const estimate = snapshot.estimates.find((item) => item.lead_id === lead.id) ?? null;
   const job = snapshot.jobs.find((item) => item.lead_id === lead.id) ?? null;
+  const ownerUserId = getLeadOwnerUserId(
+    snapshot.leadAccountability,
+    lead.id,
+    lead.company_id,
+  );
   const probability =
     lead.status === "won"
       ? 100
@@ -652,7 +658,7 @@ function buildOpportunityDraft(
             ["Status", lead.status],
             ["Expected revenue", formatMoney(lead.estimated_value)],
             ["Probability", `${probability}%`],
-            ["Assigned owner", lead.created_by],
+            ["Assigned owner", ownerUserId],
             ["Next follow-up", formatDate(lead.next_follow_up)],
             ["Lead source", lead.source],
           ]),

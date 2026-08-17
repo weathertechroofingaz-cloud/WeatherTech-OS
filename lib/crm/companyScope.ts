@@ -74,6 +74,10 @@ export function scopeCrmSnapshotByCompany(
     companies,
     properties,
     leads,
+    marketingCampaigns: byCompany(snapshot.marketingCampaigns, companyId),
+    leadAccountability: byCompany(snapshot.leadAccountability, companyId),
+    leadAccountabilityEvents: byCompany(snapshot.leadAccountabilityEvents, companyId),
+    marketingSpendMonths: byCompany(snapshot.marketingSpendMonths, companyId),
     customers,
     estimates,
     estimateLineItems: snapshot.estimateLineItems.filter((item) =>

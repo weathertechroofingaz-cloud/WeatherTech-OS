@@ -66,6 +66,8 @@ for (const [needle, message] of [
   ["TWILIO_OUTBOUND_SMS_ENABLED = \"false\"", "Outbound SMS is locked false"],
   ["providerNetworkRequests: 0", "The report requires zero provider network requests"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
+  ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
+  ['deleteExactIds(client, "lead_accountability_events", eventIds)', "Immutable accountability events are deleted before current accountability state"],
   ["capturedIdsAuthorizedForCleanup", "Cleanup is authorized only after every collision check passes"],
   ["if (capturedIdsAuthorizedForCleanup)", "Collision failure cannot delete pre-existing rows"],
   ["assertExactIdsAbsent", "Final exact-ID residue is verified"],
@@ -87,6 +89,13 @@ check(
 check(
   /\.delete\(\)\.in\("id", ids\)/.test(source),
   "Cleanup deletes only captured exact ID sets",
+);
+check(
+  source.indexOf('deleteExactIds(client, "lead_accountability_events", eventIds)') <
+    source.indexOf('deleteExactIds(client, "lead_accountability", accountabilityIds)') &&
+    source.indexOf("deleteLeadAccountabilityForExactLeadIds(") <
+      source.lastIndexOf('deleteExactIds(client, "leads", capturedIds.leads)'),
+  "Accountability cleanup runs events then current state before exact synthetic leads",
 );
 
 if (process.env[TWILIO_INBOUND_REGRESSION_RUN] === "true") {

@@ -33,6 +33,7 @@ import {
   getCommunicationWaitingLabel,
   type UnifiedInboxItem,
 } from "./communications";
+import { getLeadOwnerUserId } from "./marketingAccountability";
 
 export type OperationsQueuePriority = "critical" | "high" | "medium" | "low";
 
@@ -373,13 +374,26 @@ function createQueueContext(snapshot: CrmSnapshot, now: Date): QueueContext {
 
 function buildNewLeadItems(snapshot: CrmSnapshot, context: QueueContext) {
   return snapshot.leads
-    .filter((lead) =>
-      lead.status !== "won" &&
-      lead.status !== "lost" &&
-      (lead.status === "new" || lead.pipeline_stage === "new_lead" || !lead.created_by),
-    )
-    .map((lead) =>
-      createQueueItem(context, {
+    .filter((lead) => {
+      const ownerUserId = getLeadOwnerUserId(
+        snapshot.leadAccountability,
+        lead.id,
+        lead.company_id,
+      );
+      return (
+        lead.status !== "won" &&
+        lead.status !== "lost" &&
+        (lead.status === "new" || lead.pipeline_stage === "new_lead" || !ownerUserId)
+      );
+    })
+    .map((lead) => {
+      const ownerUserId = getLeadOwnerUserId(
+        snapshot.leadAccountability,
+        lead.id,
+        lead.company_id,
+      );
+
+      return createQueueItem(context, {
         id: `lead-assignment:${lead.id}`,
         priority: mapLeadPriority(lead.priority),
         companyId: lead.company_id,
@@ -388,19 +402,19 @@ function buildNewLeadItems(snapshot: CrmSnapshot, context: QueueContext) {
         propertyId: lead.property_id ?? null,
         propertyLabel: getRecordPropertyLabel(context, lead.property_id ?? null, lead.customer_id, lead.property_address),
         category: "lead",
-        assignedOwner: lead.created_by ? "Assigned lead owner" : "Unassigned",
+        assignedOwner: ownerUserId ? "Assigned lead owner" : "Unassigned",
         dueAt: lead.next_follow_up ?? lead.created_at,
         createdAt: lead.created_at,
         currentWorkflowStage: leadStatusLabel(lead.status),
         sourceModule: "Leads",
         sourceRecordId: lead.id,
-        suggestedNextAction: lead.created_by ? "Qualify lead and set next action" : "Assign owner and qualify lead",
+        suggestedNextAction: ownerUserId ? "Qualify lead and set next action" : "Assign owner and qualify lead",
         title: "New lead awaiting assignment",
         detail: `${lead.contact_name} requested ${serviceTypeLabel(lead.service_type)} from ${lead.source}.`,
         workflow: "lead",
         targetView: "leads",
-      }),
-    );
+      });
+    });
 }
 
 function buildCustomerFollowUpItems(snapshot: CrmSnapshot, context: QueueContext) {
@@ -412,8 +426,14 @@ function buildCustomerFollowUpItems(snapshot: CrmSnapshot, context: QueueContext
         lead.next_follow_up !== null &&
         lead.next_follow_up <= context.today,
     )
-    .map((lead) =>
-      createQueueItem(context, {
+    .map((lead) => {
+      const ownerUserId = getLeadOwnerUserId(
+        snapshot.leadAccountability,
+        lead.id,
+        lead.company_id,
+      );
+
+      return createQueueItem(context, {
         id: `lead-follow-up:${lead.id}`,
         priority: lead.next_follow_up && lead.next_follow_up < context.today ? "high" : "medium",
         companyId: lead.company_id,
@@ -422,7 +442,7 @@ function buildCustomerFollowUpItems(snapshot: CrmSnapshot, context: QueueContext
         propertyId: lead.property_id ?? null,
         propertyLabel: getRecordPropertyLabel(context, lead.property_id ?? null, lead.customer_id, lead.property_address),
         category: "communication",
-        assignedOwner: lead.created_by ? "Assigned lead owner" : "Unassigned",
+        assignedOwner: ownerUserId ? "Assigned lead owner" : "Unassigned",
         dueAt: lead.next_follow_up,
         createdAt: lead.created_at,
         currentWorkflowStage: "Follow-up due",
@@ -433,8 +453,8 @@ function buildCustomerFollowUpItems(snapshot: CrmSnapshot, context: QueueContext
         detail: `${lead.contact_name} has a follow-up due from ${lead.source}.`,
         workflow: "communications",
         targetView: "leads",
-      }),
-    );
+      });
+    });
 }
 
 function buildEstimateApprovalItems(snapshot: CrmSnapshot, context: QueueContext) {

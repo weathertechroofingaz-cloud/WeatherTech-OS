@@ -59,6 +59,7 @@ import {
   type DragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -81,7 +82,8 @@ import {
   createJobPhoto,
   createJobTask,
   deleteJobTask,
-  createLead,
+  createAccountableLead,
+  createRepeatOpportunity,
   createMaterialOrder,
   createNotification,
   createPayment,
@@ -92,6 +94,9 @@ import {
   createScopeTemplate,
   createTimeEntry,
   fetchCrmSnapshot,
+  getLeadAccountabilityEventsForRecord,
+  getMarketingAccountabilityDashboard,
+  applyLeadAccountabilityAction,
   reconcileCustomerPropertyIdentity,
   updateIntegrationConnection,
   updateIntegrationSyncLog,
@@ -118,8 +123,24 @@ import {
   uploadDocumentFile,
   updateScope,
   updateScopeTemplate,
+  upsertMarketingCampaign,
+  upsertMarketingSpend,
   upsertCalendarEventSync,
 } from "../lib/crm/repository";
+import {
+  attributionSourceLabels,
+  calculateMarketingAccountabilityMetrics,
+  canonicalAttributionSourceKeys,
+  getPhoenixMonthBounds,
+  getLeadAccountabilityForLead,
+  getLeadOwnerUserId,
+  getAccountabilityActionPreflightError,
+  getOperationPayloadFingerprint,
+  lostReasonOptions,
+  parseFiniteFinancialInput,
+  resolveLeadAcquisitionAttribution,
+  wonValueBasisOptions,
+} from "../lib/crm/marketingAccountability";
 import {
   buildIdentityReconciliationCases,
   buildIdentityReconciliationRequest,
@@ -393,6 +414,7 @@ import { scopeCategoryLabels } from "../lib/crm/scopeTemplates";
 import type {
   ColorSelectionStatus,
   CompanyRecord,
+  CompanyMembershipRole,
   CrmSnapshot,
   EmailMessageRecord,
   IntegrationConnectionRecord,
@@ -455,9 +477,20 @@ import type {
   JobTaskRecord,
   JobTaskStatus,
   LeadPriority,
+  AttributionSourceKey,
+  AttributionEvidenceKind,
+  AttributionReviewStatus,
+  CreateAccountableLeadRequest,
+  LeadAccountabilityEventRecord,
+  LeadAccountabilityActionRequest,
+  LeadAccountabilityRecord,
+  LeadFirstResponseChannel,
   LeadInput,
   LeadRecord,
   LeadStatus,
+  MarketingAccountabilityDashboardResult,
+  MarketingCampaignRecord,
+  MarketingSpendMonthRecord,
   MaterialOrderInput,
   MaterialOrderItemInput,
   MaterialOrderItemRecord,
@@ -502,6 +535,128 @@ import { getSupabaseBrowserClient } from "../lib/supabase/client";
 
 type CrmClient = SupabaseClient<Database>;
 type ThemeMode = "light" | "dark";
+
+const marketingAccountabilityManagerRoles = new Set<CompanyMembershipRole>([
+  "owner",
+  "admin",
+]);
+const eligibleLeadOwnerRoles = new Set<CompanyMembershipRole>([
+  "owner",
+  "admin",
+  "office",
+  "sales",
+  "production",
+  "field",
+  "technician",
+  "team_member",
+]);
+const salesAccountabilityRoles = new Set<CompanyMembershipRole>([
+  "owner",
+  "admin",
+  "office",
+  "sales",
+  "team_member",
+]);
+const attributionReviewReasonOptions = [
+  { value: "initial_review", label: "Initial review" },
+  { value: "staff_correction", label: "Staff correction" },
+  { value: "campaign_correction", label: "Campaign correction" },
+  { value: "unknown_confirmed", label: "Insufficient evidence confirmed" },
+] as const;
+
+function userCanManageMarketingAccountability(
+  snapshot: CrmSnapshot,
+  userId: string | null | undefined,
+  companyId: string | null | undefined,
+  globalManager = false,
+) {
+  return Boolean(
+    globalManager ||
+      (userId &&
+      companyId &&
+      snapshot.companyMemberships.some(
+        (membership) =>
+          membership.user_id === userId &&
+          membership.company_id === companyId &&
+          marketingAccountabilityManagerRoles.has(membership.role),
+      )),
+  );
+}
+
+function useGlobalMarketingManagerRole(
+  client: CrmClient | null,
+  user: User | null,
+  isDemoMode: boolean,
+) {
+  const [isGlobalManager, setIsGlobalManager] = useState(false);
+
+  useEffect(() => {
+    if (isDemoMode || !client || !user) {
+      setIsGlobalManager(false);
+      return;
+    }
+
+    let active = true;
+    client
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (active) {
+          setIsGlobalManager(
+            !error &&
+              Boolean(
+                data?.role &&
+                  marketingAccountabilityManagerRoles.has(data.role),
+              ),
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [client, isDemoMode, user]);
+
+  return isGlobalManager;
+}
+
+type StableOperationKeyToken = {
+  fingerprint: string;
+  operationKey: string;
+};
+
+function useStableOperationKeyCache() {
+  const cacheRef = useRef(new Map<string, StableOperationKeyToken>());
+
+  const acquire = useCallback(async (scope: string, payload: unknown) => {
+    const fingerprint = await getOperationPayloadFingerprint(payload);
+    const current = cacheRef.current.get(scope);
+    if (current?.fingerprint === fingerprint) {
+      return current;
+    }
+
+    const token = { fingerprint, operationKey: crypto.randomUUID() };
+    cacheRef.current.set(scope, token);
+    return token;
+  }, []);
+
+  const complete = useCallback(
+    (scope: string, token: StableOperationKeyToken) => {
+      const current = cacheRef.current.get(scope);
+      if (
+        current?.fingerprint === token.fingerprint &&
+        current.operationKey === token.operationKey
+      ) {
+        cacheRef.current.delete(scope);
+      }
+    },
+    [],
+  );
+
+  return { acquire, complete };
+}
 type WorkspaceView =
   | "dashboard"
   | "operations"
@@ -611,7 +766,7 @@ const workspaceNavigationGroups: NavigationGroup[] = [
     items: [
       { view: "ai", label: "AI Tools", icon: Bot },
       { view: "weather", label: "Weather", icon: CloudSun },
-      { view: "marketing", label: "Website & Marketing", icon: Globe2 },
+      { view: "marketing", label: "Marketing Accountability", icon: Globe2 },
       { view: "notifications", label: "Notifications", icon: Mail },
     ],
   },
@@ -1380,6 +1535,18 @@ function getFormNumber(formData: FormData, key: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getOptionalFiniteFinancialFormNumber(
+  formData: FormData,
+  key: string,
+): number | undefined {
+  const parsed = parseFiniteFinancialInput(formData.get(key));
+  if (parsed.status === "empty") {
+    return undefined;
+  }
+
+  return parsed.status === "valid" ? parsed.value : Number.NaN;
+}
+
 function companyInitials(company: CompanyRecord | null | undefined) {
   if (!company) {
     return "OS";
@@ -1447,7 +1614,7 @@ function leadStatusForPipelineStage(stage: PipelineStage): LeadStatus {
     stage === "completed" ||
     stage === "paid"
   ) {
-    return "won";
+    return "estimate_sent";
   }
 
   return stage;
@@ -1461,7 +1628,24 @@ function getLeadPipelineStageFromForm(formData: FormData) {
     : "new_lead";
 }
 
-function buildLeadInputFromFormData(formData: FormData, companies: CompanyRecord[]) {
+type ManualLeadInput = LeadInput & {
+  source_detail?: string | null;
+  campaign_id?: string | null;
+};
+
+function normalizeAttributionSlug(value: string | null) {
+  const slug = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug || null;
+}
+
+function buildLeadInputFromFormData(
+  formData: FormData,
+  companies: CompanyRecord[],
+): ManualLeadInput {
   const pipelineStage = getLeadPipelineStageFromForm(formData);
 
   return {
@@ -1474,14 +1658,150 @@ function buildLeadInputFromFormData(formData: FormData, companies: CompanyRecord
     state: getNormalizedFormString(formData, "state", "AZ"),
     postal_code: getNormalizedOptionalFormString(formData, "postal_code"),
     service_type: getNormalizedFormString(formData, "service_type", "roofing") as ServiceType,
-    source: getNormalizedFormString(formData, "source", "Website"),
+    source: getNormalizedFormString(formData, "source", "unknown"),
+    source_detail: normalizeAttributionSlug(
+      getNormalizedOptionalFormString(formData, "source_detail"),
+    ),
+    campaign_id: getNormalizedOptionalFormString(formData, "campaign_id"),
     status: leadStatusForPipelineStage(pipelineStage),
     pipeline_stage: pipelineStage,
     priority: getNormalizedFormString(formData, "priority", "normal") as LeadPriority,
-    estimated_value: getFormNumber(formData, "estimated_value"),
+    estimated_value: getOptionalFiniteFinancialFormNumber(
+      formData,
+      "estimated_value",
+    ),
     next_follow_up: getNormalizedOptionalFormString(formData, "next_follow_up"),
     notes: getNormalizedOptionalFormString(formData, "notes"),
-  } satisfies LeadInput;
+  } satisfies ManualLeadInput;
+}
+
+function buildCreateAccountableLeadRequest(
+  input: ManualLeadInput,
+  operationKey = crypto.randomUUID(),
+): CreateAccountableLeadRequest {
+  const requestedSource = canonicalAttributionSourceKeys.includes(
+    input.source as AttributionSourceKey,
+  )
+    ? (input.source as AttributionSourceKey)
+    : "unknown";
+  if (requestedSource === "repeat_customer") {
+    throw new Error(
+      "Repeat-customer attribution can only be created from the same-company Customer 360 workflow.",
+    );
+  }
+  const attribution = resolveLeadAcquisitionAttribution({
+    explicitSourceKey: requestedSource,
+    explicitSourceDetail: input.source_detail,
+    explicitUnknown: requestedSource === "unknown",
+    intakeProvider: "manual",
+  });
+
+  return {
+    operation_key: operationKey,
+    company_id: input.company_id,
+    contact_name: input.contact_name,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    property_address: input.property_address,
+    city: input.city ?? null,
+    state: input.state ?? "AZ",
+    postal_code: input.postal_code ?? null,
+    service_type: input.service_type,
+    priority: input.priority ?? "normal",
+    ...(input.estimated_value !== undefined
+      ? { estimated_value: input.estimated_value }
+      : {}),
+    next_follow_up: input.next_follow_up ?? null,
+    notes: input.notes ?? null,
+    source_key: attribution.sourceKey,
+    source_detail: attribution.sourceDetail,
+    intake_provider: "manual",
+    campaign_id: input.campaign_id ?? null,
+    evidence_kind: attribution.evidenceKind,
+    review_status: attribution.reviewStatus,
+  };
+}
+
+function createDemoLeadAccountability(
+  lead: LeadRecord,
+  sourceKey: AttributionSourceKey,
+  evidenceKind: AttributionEvidenceKind,
+  reviewStatus: AttributionReviewStatus,
+  attribution?: Pick<
+    CreateAccountableLeadRequest,
+    "source_detail" | "intake_provider" | "campaign_id" | "intake_record_id"
+  >,
+  requestedOperationKey?: string,
+): {
+  accountability: LeadAccountabilityRecord;
+  event: LeadAccountabilityEventRecord;
+} {
+  const createdAt = lead.created_at;
+  const accountabilityId = `demo-accountability-${lead.id}`;
+  const operationKey = requestedOperationKey ?? `demo-create:${lead.id}`;
+  const accountability: LeadAccountabilityRecord = {
+    id: accountabilityId,
+    company_id: lead.company_id,
+    lead_id: lead.id,
+    source_key: sourceKey,
+    source_detail: attribution?.source_detail ?? null,
+    intake_provider: attribution?.intake_provider ?? "manual",
+    campaign_id: attribution?.campaign_id ?? null,
+    intake_record_id: attribution?.intake_record_id ?? null,
+    attribution_model: "first_touch",
+    received_at: createdAt,
+    evidence_kind: evidenceKind,
+    review_status: reviewStatus,
+    reviewed_by: null,
+    reviewed_at: null,
+    attribution_locked_at: reviewStatus === "verified" ? createdAt : null,
+    owner_user_id: null,
+    owner_assigned_at: null,
+    first_response_at: null,
+    first_response_channel: null,
+    outcome: "open",
+    outcome_at: null,
+    lost_reason_code: null,
+    lost_reason_notes: null,
+    won_contract_value: null,
+    won_value_basis: null,
+    record_version: 1,
+    last_operation_key: operationKey,
+    last_request_fingerprint: operationKey,
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+
+  return {
+    accountability,
+    event: {
+      id: `demo-accountability-event-${lead.id}`,
+      lead_accountability_id: accountabilityId,
+      company_id: lead.company_id,
+      lead_id: lead.id,
+      event_type: "lead_created",
+      operation_key: operationKey,
+      request_fingerprint: operationKey,
+      actor_user_id: null,
+      actor_kind: "user",
+      reason_code: null,
+      source_key: sourceKey,
+      source_detail: attribution?.source_detail ?? null,
+      intake_provider: accountability.intake_provider,
+      campaign_id: attribution?.campaign_id ?? null,
+      owner_user_id: null,
+      first_response_channel: null,
+      linked_table: "leads",
+      linked_record_id: lead.id,
+      outcome: "open",
+      lost_reason_code: null,
+      won_contract_value: null,
+      won_value_basis: null,
+      occurred_at: createdAt,
+      resulting_record_version: 1,
+      created_at: createdAt,
+    },
+  };
 }
 
 function createDemoLeadRecord(input: LeadInput): LeadRecord {
@@ -1503,7 +1823,7 @@ function createDemoLeadRecord(input: LeadInput): LeadRecord {
     google_place_id: input.google_place_id ?? null,
     address_verified_at: input.address_verified_at ?? null,
     service_type: input.service_type,
-    source: input.source ?? "Website",
+    source: input.source ?? "unknown",
     status: input.status ?? "new",
     pipeline_stage: input.pipeline_stage ?? "new_lead",
     priority: input.priority ?? "normal",
@@ -1514,6 +1834,273 @@ function createDemoLeadRecord(input: LeadInput): LeadRecord {
     created_at: now,
     updated_at: now,
   };
+}
+
+function projectDemoAccountabilityMilestones(
+  previous: CrmSnapshot,
+  next: CrmSnapshot,
+): CrmSnapshot {
+  let accountability = [...next.leadAccountability];
+  let events = [...next.leadAccountabilityEvents];
+  let leads = [...next.leads];
+
+  const appendMilestone = ({
+    companyId,
+    leadId,
+    eventType,
+    linkedTable,
+    linkedRecordId,
+    occurredAt,
+    wonContractValue = null,
+    wonValueBasis = null,
+  }: {
+    companyId: string;
+    leadId: string;
+    eventType: Extract<
+      LeadAccountabilityEventRecord["event_type"],
+      "appointment_scheduled" | "inspection_completed" | "estimate_sent" | "won"
+    >;
+    linkedTable: string;
+    linkedRecordId: string;
+    occurredAt: string;
+    wonContractValue?: number | null;
+    wonValueBasis?: LeadAccountabilityEventRecord["won_value_basis"];
+  }) => {
+    const recordIndex = accountability.findIndex(
+      (record) =>
+        record.company_id === companyId && record.lead_id === leadId,
+    );
+    if (recordIndex < 0) {
+      return;
+    }
+    const current = accountability[recordIndex];
+    const operationKey = `demo-workflow:${linkedTable}:${linkedRecordId}:${eventType}`;
+    if (
+      events.some(
+        (event) =>
+          event.company_id === companyId && event.operation_key === operationKey,
+      )
+    ) {
+      return;
+    }
+    const preflightError = getAccountabilityActionPreflightError({
+      action: eventType,
+      outcome: current.outcome,
+      firstResponseAt: current.first_response_at,
+      occurredAt,
+      events: events
+        .filter((event) => event.lead_accountability_id === current.id)
+        .map((event) => ({
+          eventType: event.event_type,
+          occurredAt: event.occurred_at,
+        })),
+    });
+    if (preflightError) {
+      return;
+    }
+
+    const nextVersion = current.record_version + 1;
+    const updated: LeadAccountabilityRecord = {
+      ...current,
+      ...(eventType === "won"
+        ? {
+            outcome: "won" as const,
+            outcome_at: occurredAt,
+            won_contract_value: wonContractValue,
+            won_value_basis: wonValueBasis,
+          }
+        : {}),
+      record_version: nextVersion,
+      last_operation_key: operationKey,
+      last_request_fingerprint: operationKey,
+      updated_at: occurredAt,
+    };
+    accountability[recordIndex] = updated;
+    events = [
+      {
+        id: `demo-accountability-event-${crypto.randomUUID()}`,
+        lead_accountability_id: current.id,
+        company_id: companyId,
+        lead_id: leadId,
+        event_type: eventType,
+        operation_key: operationKey,
+        request_fingerprint: operationKey,
+        actor_user_id: null,
+        actor_kind: "system",
+        reason_code: null,
+        source_key: updated.source_key,
+        source_detail: updated.source_detail,
+        intake_provider: updated.intake_provider,
+        campaign_id: updated.campaign_id,
+        owner_user_id: null,
+        first_response_channel: null,
+        linked_table: linkedTable,
+        linked_record_id: linkedRecordId,
+        outcome: eventType === "won" ? "won" : null,
+        lost_reason_code: null,
+        won_contract_value: eventType === "won" ? wonContractValue : null,
+        won_value_basis: eventType === "won" ? wonValueBasis : null,
+        occurred_at: occurredAt,
+        resulting_record_version: nextVersion,
+        created_at: occurredAt,
+      },
+      ...events,
+    ];
+    leads = leads.map((lead) => {
+      if (lead.id !== leadId || lead.company_id !== companyId) {
+        return lead;
+      }
+      if (eventType === "won") {
+        return { ...lead, status: "won", pipeline_stage: "approved", updated_at: occurredAt };
+      }
+      if (eventType === "estimate_sent") {
+        return {
+          ...lead,
+          status: ["new", "contacted", "qualified"].includes(lead.status)
+            ? "estimate_sent"
+            : lead.status,
+          pipeline_stage: ["new_lead", "contacted", "estimate_scheduled"].includes(
+            lead.pipeline_stage,
+          )
+            ? "estimate_sent"
+            : lead.pipeline_stage,
+          updated_at: occurredAt,
+        };
+      }
+      return {
+        ...lead,
+        status: lead.status === "new" || lead.status === "contacted" ? "qualified" : lead.status,
+        pipeline_stage:
+          lead.pipeline_stage === "new_lead" || lead.pipeline_stage === "contacted"
+            ? "estimate_scheduled"
+            : lead.pipeline_stage,
+        updated_at: occurredAt,
+      };
+    });
+  };
+
+  const scheduleChanged = (record: ScheduleEventRecord) => {
+    const prior = previous.scheduleEvents.find((item) => item.id === record.id);
+    return (
+      !prior ||
+      prior.updated_at !== record.updated_at ||
+      prior.status !== record.status ||
+      prior.start_at !== record.start_at
+    );
+  };
+  next.scheduleEvents
+    .filter(
+      (record) =>
+        scheduleChanged(record) &&
+        Boolean(record.lead_id) &&
+        (record.event_type === "inspection" || record.event_type === "estimate") &&
+        (record.status === "scheduled" || record.status === "completed"),
+    )
+    .forEach((record) =>
+      appendMilestone({
+        companyId: record.company_id,
+        leadId: record.lead_id as string,
+        eventType: "appointment_scheduled",
+        linkedTable: "schedule_events",
+        linkedRecordId: record.id,
+        occurredAt: record.created_at,
+      }),
+    );
+
+  next.inspections
+    .filter((record) => {
+      const prior = previous.inspections.find((item) => item.id === record.id);
+      return (
+        (!prior ||
+          prior.updated_at !== record.updated_at ||
+          prior.status !== record.status ||
+          prior.completed_at !== record.completed_at) &&
+        (record.completed_at !== null ||
+          ["completed", "passed", "failed", "no_work_needed"].includes(record.status))
+      );
+    })
+    .forEach((record) => {
+      const estimateLeadId = record.estimate_id
+        ? next.estimates.find(
+            (estimate) =>
+              estimate.id === record.estimate_id &&
+              estimate.company_id === record.company_id,
+          )?.lead_id
+        : null;
+      const jobLeadId = record.job_id
+        ? next.jobs.find(
+            (job) => job.id === record.job_id && job.company_id === record.company_id,
+          )?.lead_id
+        : null;
+      const leadId = record.lead_id ?? estimateLeadId ?? jobLeadId;
+      if (leadId) {
+        appendMilestone({
+          companyId: record.company_id,
+          leadId,
+          eventType: "inspection_completed",
+          linkedTable: "inspections",
+          linkedRecordId: record.id,
+          occurredAt: record.completed_at ?? record.updated_at,
+        });
+      }
+    });
+
+  next.estimates
+    .filter((record) => {
+      const prior = previous.estimates.find((item) => item.id === record.id);
+      return (
+        Boolean(record.lead_id) &&
+        record.status === "sent" &&
+        (!prior || prior.status !== record.status || prior.updated_at !== record.updated_at)
+      );
+    })
+    .forEach((record) =>
+      appendMilestone({
+        companyId: record.company_id,
+        leadId: record.lead_id as string,
+        eventType: "estimate_sent",
+        linkedTable: "estimates",
+        linkedRecordId: record.id,
+        occurredAt: record.updated_at,
+      }),
+    );
+
+  next.proposalAcceptances
+    .filter((record) => {
+      const prior = previous.proposalAcceptances.find((item) => item.id === record.id);
+      return (
+        record.terms_accepted &&
+        record.accepted_total > 0 &&
+        (record.acceptance_method !== "signature_provider" ||
+          record.signature_status === "signed") &&
+        (!prior ||
+          prior.accepted_at !== record.accepted_at ||
+          prior.signature_status !== record.signature_status)
+      );
+    })
+    .forEach((record) => {
+      const estimate = next.estimates.find(
+        (item) =>
+          item.id === record.estimate_id && item.company_id === record.company_id,
+      );
+      if (estimate?.lead_id) {
+        appendMilestone({
+          companyId: record.company_id,
+          leadId: estimate.lead_id,
+          eventType: "won",
+          linkedTable: "estimate_proposal_acceptances",
+          linkedRecordId: record.id,
+          occurredAt: record.accepted_at,
+          wonContractValue: record.accepted_total,
+          wonValueBasis:
+            record.signature_status === "signed"
+              ? "signed_proposal"
+              : "accepted_proposal",
+        });
+      }
+    });
+
+  return { ...next, leads, leadAccountability: accountability, leadAccountabilityEvents: events };
 }
 
 function customerStatusLabel(status: CustomerStatus) {
@@ -5189,7 +5776,12 @@ export function CrmApp() {
   const handleDemoSnapshotChange = useCallback(
     (updater: (currentSnapshot: CrmSnapshot) => CrmSnapshot) => {
       setSnapshot((currentSnapshot) =>
-        currentSnapshot ? updater(currentSnapshot) : currentSnapshot,
+        currentSnapshot
+          ? projectDemoAccountabilityMilestones(
+              currentSnapshot,
+              updater(currentSnapshot),
+            )
+          : currentSnapshot,
       );
     },
     [],
@@ -5945,9 +6537,11 @@ function CrmWorkspace({
           {view === "leads" ? (
             <LeadsView
               client={client ?? ({} as CrmClient)}
+              isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               onReload={onScrollPreservingReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
               onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
@@ -5965,6 +6559,7 @@ function CrmWorkspace({
               focusLeadId={identityReconciliationFocusLeadId}
               onViewChange={onViewChange}
               onReload={onReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
             />
@@ -6082,8 +6677,15 @@ function CrmWorkspace({
 
           {view === "marketing" ? (
             <WebsiteMarketingView
+              client={client}
+              isDemoMode={isDemoMode}
               snapshot={scopedSnapshot}
               companyMap={companyMap}
+              user={user}
+              onReload={onScrollPreservingReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
+              onNotice={onNotice}
+              onError={onError}
               onViewChange={onViewChange}
             />
           ) : null}
@@ -7896,6 +8498,7 @@ function leadHasReviewMetadata(lead: LeadRecord) {
 function leadMatchesDashboardPipelineFilter(
   lead: LeadRecord,
   companyMap: Map<string, CompanyRecord>,
+  accountability: readonly LeadAccountabilityRecord[],
   filter: DashboardPipelineFilter,
 ) {
   if (filter === "all") {
@@ -7919,7 +8522,7 @@ function leadMatchesDashboardPipelineFilter(
   }
 
   if (filter === "unassigned") {
-    return !lead.created_by;
+    return !getLeadOwnerUserId(accountability, lead.id, lead.company_id);
   }
 
   if (!company || isPaintingCompany(company)) {
@@ -8136,7 +8739,12 @@ function buildDashboardOperationData({
     .filter((item) => isTodayDate(item.followUpAt, today))
     .slice(0, 6);
   const pipelineLeads = focusLeads.filter((lead) =>
-    leadMatchesDashboardPipelineFilter(lead, companyMap, pipelineFilter),
+    leadMatchesDashboardPipelineFilter(
+      lead,
+      companyMap,
+      snapshot.leadAccountability,
+      pipelineFilter,
+    ),
   );
   const pipelineGroups = dashboardPipelineBuckets.map((bucket) => {
     const leads = pipelineLeads.filter(
@@ -8789,7 +9397,14 @@ function buildDashboardOperationData({
     return Boolean(updated && updated < addDaysIsoDate(-3));
   });
   const unassignedLeads = focusLeads.filter(
-    (lead) => lead.status !== "won" && lead.status !== "lost" && !lead.created_by,
+    (lead) =>
+      lead.status !== "won" &&
+      lead.status !== "lost" &&
+      !getLeadOwnerUserId(
+        snapshot.leadAccountability,
+        lead.id,
+        lead.company_id,
+      ),
   );
   const estimatesAwaitingFollowUp = focusEstimates.filter(
     (estimate) =>
@@ -14043,26 +14658,30 @@ function BarChartIcon() {
 
 type LeadsViewProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onViewChange: (view: WorkspaceView) => void;
   onOpenIdentityReconciliation: (leadId: string) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
 
-type LeadIntakeViewProps = LeadsViewProps & {
-  isDemoMode: boolean;
-  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
-};
+type LeadIntakeViewProps = LeadsViewProps;
 
 type SalesPipelineViewProps = LeadsViewProps & {
-  isDemoMode: boolean;
   user: User | null;
-  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onViewChange: (view: WorkspaceView) => void;
 };
+
+type LeadAccountabilityActionPayload =
+  LeadAccountabilityActionRequest extends infer Action
+    ? Action extends { operation_key: string }
+      ? Omit<Action, "operation_key">
+      : never
+    : never;
 
 type LeadEditDraft = {
   pipeline_stage: PipelineStage;
@@ -14073,7 +14692,7 @@ type LeadEditDraft = {
 };
 
 type OpportunityEditDraft = LeadEditDraft & {
-  owner: "unassigned" | "me" | "existing";
+  owner: string;
 };
 
 function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
@@ -14086,20 +14705,37 @@ function getLeadEditDraft(lead: LeadRecord | null): LeadEditDraft {
   };
 }
 
-function getOpportunityEditDraft(lead: LeadRecord | null, user: User | null): OpportunityEditDraft {
+function getOpportunityEditDraft(
+  lead: LeadRecord | null,
+  user: User | null,
+  accountability: readonly LeadAccountabilityRecord[],
+): OpportunityEditDraft {
+  const ownerUserId = lead
+    ? getLeadOwnerUserId(accountability, lead.id, lead.company_id)
+    : null;
+
   return {
     ...getLeadEditDraft(lead),
-    owner: lead?.created_by
-      ? lead.created_by === user?.id
+    owner: ownerUserId
+      ? ownerUserId === user?.id
         ? "me"
-        : "existing"
+        : `user:${ownerUserId}`
       : "unassigned",
   };
 }
 
-function getLeadCreateValidationMessage(companies: CompanyRecord[], input: LeadInput) {
-  if (!companies.some((company) => company.id === input.company_id)) {
+function getLeadCreateValidationMessage(
+  companies: CompanyRecord[],
+  input: ManualLeadInput,
+  campaigns: readonly MarketingCampaignRecord[] = [],
+) {
+  const company = companies.find((record) => record.id === input.company_id);
+  if (!company) {
     return "Choose a valid company before creating the lead.";
+  }
+
+  if (!isServiceAllowedForCompany(company, input.service_type)) {
+    return `${company.name} does not accept ${serviceLabel(input.service_type)} leads.`;
   }
 
   if (!input.contact_name || !input.property_address) {
@@ -14108,6 +14744,39 @@ function getLeadCreateValidationMessage(companies: CompanyRecord[], input: LeadI
 
   if (!isValidOptionalEmail(input.email)) {
     return "Enter a valid lead email address before saving.";
+  }
+
+  if (
+    input.estimated_value !== undefined &&
+    (!Number.isFinite(input.estimated_value) || input.estimated_value < 0)
+  ) {
+    return "Expected revenue must be a nonnegative amount.";
+  }
+
+  if (
+    !canonicalAttributionSourceKeys.includes(input.source as AttributionSourceKey)
+  ) {
+    return "Choose a canonical acquisition source or explicit Unknown.";
+  }
+
+  if (input.source === "repeat_customer") {
+    return "Create repeat-customer opportunities from the same-company Customer 360 record.";
+  }
+
+  if (input.source === "other" && !input.source_detail) {
+    return "Other acquisition source requires a non-personal category code.";
+  }
+
+  if (
+    input.campaign_id &&
+    !campaigns.some(
+      (campaign) =>
+        campaign.id === input.campaign_id &&
+        campaign.company_id === input.company_id &&
+        campaign.source_key === input.source,
+    )
+  ) {
+    return "Choose a campaign that belongs to the selected company and source.";
   }
 
   return "";
@@ -14141,16 +14810,26 @@ function getOpportunityStageTone(stage: PipelineStage): "blue" | "green" | "ambe
   return "blue";
 }
 
-function getOpportunityOwnerLabel(lead: LeadRecord, user: User | null) {
-  if (!lead.created_by) {
+function getOpportunityOwnerLabel(
+  lead: LeadRecord,
+  user: User | null,
+  accountability: readonly LeadAccountabilityRecord[],
+) {
+  const ownerUserId = getLeadOwnerUserId(
+    accountability,
+    lead.id,
+    lead.company_id,
+  );
+
+  if (!ownerUserId) {
     return "Unassigned";
   }
 
-  if (lead.created_by === user?.id) {
+  if (ownerUserId === user?.id) {
     return user.email ?? "You";
   }
 
-  return `User ${lead.created_by.slice(0, 8)}`;
+  return `User ${ownerUserId.slice(0, 8)}`;
 }
 
 function getOpportunityNextAction(lead: LeadRecord, estimate: EstimateRecord | null, job: JobRecord | null) {
@@ -14178,18 +14857,32 @@ function getOpportunityNextAction(lead: LeadRecord, estimate: EstimateRecord | n
 }
 
 function getOpportunityRelatedEstimate(snapshot: CrmSnapshot, lead: LeadRecord) {
-  return (
-    snapshot.estimates.find((estimate) => estimate.lead_id === lead.id) ??
-    (lead.customer_id
-      ? snapshot.estimates.find(
-          (estimate) =>
-            estimate.customer_id === lead.customer_id &&
-            estimate.company_id === lead.company_id &&
-            estimate.location === lead.property_address,
-        )
-      : null) ??
-    null
+  const exactLeadEstimate = snapshot.estimates.find(
+    (estimate) =>
+      estimate.lead_id === lead.id && estimate.company_id === lead.company_id,
   );
+  if (exactLeadEstimate) {
+    return exactLeadEstimate;
+  }
+
+  if (
+    getLeadAccountabilityForLead(
+      snapshot.leadAccountability,
+      lead.id,
+      lead.company_id,
+    )
+  ) {
+    return null;
+  }
+
+  return lead.customer_id
+    ? snapshot.estimates.find(
+        (estimate) =>
+          estimate.customer_id === lead.customer_id &&
+          estimate.company_id === lead.company_id &&
+          estimate.location === lead.property_address,
+      ) ?? null
+    : null;
 }
 
 function getOpportunityRelatedJob(
@@ -14197,11 +14890,29 @@ function getOpportunityRelatedJob(
   lead: LeadRecord,
   estimate: EstimateRecord | null,
 ) {
-  return (
-    snapshot.jobs.find((job) => job.lead_id === lead.id) ??
-    (estimate ? snapshot.jobs.find((job) => job.estimate_id === estimate.id) : null) ??
-    null
+  const exactLeadJob = snapshot.jobs.find(
+    (job) => job.lead_id === lead.id && job.company_id === lead.company_id,
   );
+  if (exactLeadJob) {
+    return exactLeadJob;
+  }
+
+  if (
+    getLeadAccountabilityForLead(
+      snapshot.leadAccountability,
+      lead.id,
+      lead.company_id,
+    )
+  ) {
+    return null;
+  }
+
+  return estimate
+    ? snapshot.jobs.find(
+        (job) =>
+          job.estimate_id === estimate.id && job.company_id === lead.company_id,
+      ) ?? null
+    : null;
 }
 
 function buildOpportunityEstimateInput(
@@ -14537,13 +15248,1055 @@ function LeadIntakeRoutingEnginePanel({
   );
 }
 
+function currentPhoenixMonthValue() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Phoenix",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: "year" | "month") =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${value("year")}-${value("month")}`;
+}
+
+function buildSnapshotMarketingAccountabilityDashboard(
+  snapshot: CrmSnapshot,
+  companyId: string,
+  month: string,
+  sourceKey: AttributionSourceKey | null,
+): MarketingAccountabilityDashboardResult {
+  const leads = snapshot.leadAccountability.map((record) => ({
+      leadId: record.lead_id,
+      companyId: record.company_id,
+      sourceKey: record.source_key,
+      reviewStatus: record.review_status,
+      receivedAt: record.received_at,
+      firstResponseAt: record.first_response_at,
+      outcome: record.outcome,
+      wonContractValue: record.won_contract_value,
+      nextFollowUpAt:
+        snapshot.leads.find(
+          (lead) =>
+            lead.id === record.lead_id && lead.company_id === record.company_id,
+        )?.next_follow_up ?? null,
+    }));
+  const events = snapshot.leadAccountabilityEvents.map((event) => ({
+      leadId: event.lead_id,
+      companyId: event.company_id,
+      eventType: event.event_type,
+      occurredAt: event.occurred_at,
+    }));
+  const spend = snapshot.marketingSpendMonths.map((entry) => ({
+      companyId: entry.company_id,
+      spendMonth: entry.spend_month.slice(0, 7),
+      sourceKey: entry.source_key,
+      amount: entry.spend_amount,
+    }));
+  const monthBounds = getPhoenixMonthBounds(month);
+  const monthStart = new Date(monthBounds.start).getTime();
+  const monthEnd = new Date(monthBounds.endExclusive).getTime();
+  const missingAccountabilityLeadCount = snapshot.leads.filter(
+      (lead) => {
+        const createdAt = new Date(lead.created_at).getTime();
+        return (
+        lead.company_id === companyId &&
+        Number.isFinite(createdAt) &&
+        createdAt >= monthStart &&
+        createdAt < monthEnd &&
+        !snapshot.leadAccountability.some(
+          (record) =>
+            record.lead_id === lead.id && record.company_id === companyId,
+        )
+        );
+      },
+    ).length;
+  const hasLinkedEvent = (
+    accountabilityId: string,
+    eventType: LeadAccountabilityEventRecord["event_type"],
+    linkedTable: string,
+    linkedRecordId: string,
+  ) =>
+    snapshot.leadAccountabilityEvents.some(
+      (event) =>
+        event.lead_accountability_id === accountabilityId &&
+        event.event_type === eventType &&
+        event.linked_table === linkedTable &&
+        event.linked_record_id === linkedRecordId,
+    );
+  const getWorkflowLinkageGapCount = (
+    filter: AttributionSourceKey | "all",
+  ) =>
+    snapshot.leadAccountability.filter((accountability) => {
+      const receivedAt = new Date(accountability.received_at).getTime();
+      if (
+        accountability.company_id !== companyId ||
+        !Number.isFinite(receivedAt) ||
+        receivedAt < monthStart ||
+        receivedAt >= monthEnd ||
+        (filter !== "all" && accountability.source_key !== filter)
+      ) {
+        return false;
+      }
+
+      const hasUnlinkedAppointment = snapshot.scheduleEvents.some(
+        (schedule) =>
+          schedule.company_id === accountability.company_id &&
+          schedule.lead_id === accountability.lead_id &&
+          (schedule.event_type === "inspection" || schedule.event_type === "estimate") &&
+          (schedule.status === "scheduled" || schedule.status === "completed") &&
+          !hasLinkedEvent(
+            accountability.id,
+            "appointment_scheduled",
+            "schedule_events",
+            schedule.id,
+          ),
+      );
+      const hasUnlinkedInspection = snapshot.inspections.some((inspection) => {
+        if (inspection.company_id !== accountability.company_id) {
+          return false;
+        }
+        const estimateLeadId = inspection.estimate_id
+          ? snapshot.estimates.find(
+              (estimate) =>
+                estimate.id === inspection.estimate_id &&
+                estimate.company_id === inspection.company_id,
+            )?.lead_id
+          : null;
+        const jobLeadId = inspection.job_id
+          ? snapshot.jobs.find(
+              (job) =>
+                job.id === inspection.job_id &&
+                job.company_id === inspection.company_id,
+            )?.lead_id
+          : null;
+        const isLinked =
+          inspection.lead_id === accountability.lead_id ||
+          estimateLeadId === accountability.lead_id ||
+          jobLeadId === accountability.lead_id;
+        const isTerminal =
+          inspection.completed_at !== null ||
+          ["completed", "passed", "failed", "no_work_needed"].includes(
+            inspection.status,
+          );
+        return (
+          isLinked &&
+          isTerminal &&
+          !hasLinkedEvent(
+            accountability.id,
+            "inspection_completed",
+            "inspections",
+            inspection.id,
+          )
+        );
+      });
+      const hasUnlinkedEstimate = snapshot.estimates.some(
+        (estimate) =>
+          estimate.company_id === accountability.company_id &&
+          estimate.lead_id === accountability.lead_id &&
+          estimate.status === "sent" &&
+          !hasLinkedEvent(
+            accountability.id,
+            "estimate_sent",
+            "estimates",
+            estimate.id,
+          ),
+      );
+      const hasUnlinkedWonAcceptance = snapshot.proposalAcceptances.some(
+        (acceptance) => {
+          const estimate = snapshot.estimates.find(
+            (record) =>
+              record.id === acceptance.estimate_id &&
+              record.company_id === acceptance.company_id,
+          );
+          return (
+            acceptance.company_id === accountability.company_id &&
+            estimate?.lead_id === accountability.lead_id &&
+            acceptance.terms_accepted &&
+            acceptance.accepted_total > 0 &&
+            (acceptance.acceptance_method !== "signature_provider" ||
+              acceptance.signature_status === "signed") &&
+            !hasLinkedEvent(
+              accountability.id,
+              "won",
+              "estimate_proposal_acceptances",
+              acceptance.id,
+            )
+          );
+        },
+      );
+
+      return (
+        hasUnlinkedAppointment ||
+        hasUnlinkedInspection ||
+        hasUnlinkedEstimate ||
+        hasUnlinkedWonAcceptance
+      );
+    }).length;
+  const calculateForSource = (filter: AttributionSourceKey | "all") =>
+    calculateMarketingAccountabilityMetrics({
+      month,
+      companyId,
+      sourceKey: filter,
+      leads,
+      events,
+      spend,
+      // Legacy rows cannot be attributed to a source safely. Keep the
+      // company/month data-quality gap visible even when a KPI source filter
+      // is active instead of manufacturing a source-specific zero.
+      missingAccountabilityLeadCount,
+      workflowLinkageGapCount: getWorkflowLinkageGapCount(filter),
+    });
+  const metrics = calculateForSource(sourceKey ?? "all");
+  const bySource = (sourceKey ? [sourceKey] : canonicalAttributionSourceKeys).map(
+    (currentSourceKey) => {
+      const sourceMetrics = calculateForSource(currentSourceKey);
+      return {
+        source_key: currentSourceKey,
+        lead_count: sourceMetrics.leadCount,
+        marketing_spend: sourceMetrics.marketingSpend,
+        cost_per_lead: sourceMetrics.costPerLead,
+        booked_lead_count: sourceMetrics.bookedLeadCount,
+        booking_rate: sourceMetrics.bookingRate,
+        inspection_completed_lead_count:
+          sourceMetrics.inspectionCompletedLeadCount,
+        inspection_completion_rate: sourceMetrics.inspectionCompletionRate,
+        won_lead_count: sourceMetrics.wonLeadCount,
+        closing_rate: sourceMetrics.closingRate,
+        cost_per_sold_job: sourceMetrics.costPerSoldJob,
+        attributed_contract_revenue: sourceMetrics.attributedContractRevenue,
+        marketing_revenue_divided_by_spend:
+          sourceMetrics.marketingRevenuePerSpend,
+        unattributed_lead_count: sourceMetrics.unattributedLeadCount,
+        attribution_coverage: sourceMetrics.attributionCoverage,
+        missing_won_value_count: sourceMetrics.missingWonValueCount,
+        workflow_linkage_gap_count: sourceMetrics.workflowLinkageGapCount,
+      };
+    },
+  );
+
+  return {
+    company_id: companyId,
+    month: `${month}-01`,
+    timezone: "America/Phoenix",
+    source_key: sourceKey,
+    metrics: {
+      lead_count: metrics.leadCount,
+      marketing_spend: metrics.marketingSpend,
+      cost_per_lead: metrics.costPerLead,
+      booked_lead_count: metrics.bookedLeadCount,
+      booking_rate: metrics.bookingRate,
+      inspection_completed_lead_count: metrics.inspectionCompletedLeadCount,
+      inspection_completion_rate: metrics.inspectionCompletionRate,
+      won_lead_count: metrics.wonLeadCount,
+      closing_rate: metrics.closingRate,
+      cost_per_sold_job: metrics.costPerSoldJob,
+      attributed_contract_revenue: metrics.attributedContractRevenue,
+      marketing_revenue_divided_by_spend: metrics.marketingRevenuePerSpend,
+      new_awaiting_contact: metrics.newAwaitingContact,
+      unsold_estimates_overdue: metrics.unsoldEstimatesNeedingFollowUp,
+      unsold_estimates_missing_follow_up:
+        metrics.unsoldEstimatesMissingFollowUp,
+      unattributed_lead_count: metrics.unattributedLeadCount,
+      attribution_coverage: metrics.attributionCoverage,
+      missing_won_value_count: metrics.missingWonValueCount,
+      workflow_linkage_gap_count: metrics.workflowLinkageGapCount,
+      untracked_legacy_lead_count: metrics.missingAccountabilityLeadCount,
+    },
+    by_source: bySource,
+  };
+}
+
+function formatAccountabilityRate(value: number | null) {
+  return value === null ? "—" : `${Math.round(value * 1000) / 10}%`;
+}
+
+function formatAccountabilityMoney(value: number | null) {
+  return value === null ? "—" : formatMoney(value);
+}
+
+function MarketingAccountabilityPanel({
+  client,
+  isDemoMode,
+  snapshot,
+  user,
+  onReload,
+  onDemoSnapshotChange,
+  onNotice,
+  onError,
+}: {
+  client: CrmClient | null;
+  isDemoMode: boolean;
+  snapshot: CrmSnapshot;
+  user: User | null;
+  onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [companyId, setCompanyId] = useState(snapshot.companies[0]?.id ?? "");
+  const [month, setMonth] = useState(currentPhoenixMonthValue);
+  const [sourceKey, setSourceKey] = useState<AttributionSourceKey | "all">("all");
+  const [dashboardState, setDashboardState] = useState<{
+    requestKey: string;
+    result: MarketingAccountabilityDashboardResult;
+  } | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [dashboardRefresh, setDashboardRefresh] = useState(0);
+  const [isSavingCampaign, setIsSavingCampaign] = useState(false);
+  const [isSavingSpend, setIsSavingSpend] = useState(false);
+  const [campaignEditId, setCampaignEditId] = useState("");
+  const [spendEditId, setSpendEditId] = useState("");
+  const [campaignSourceKey, setCampaignSourceKey] =
+    useState<AttributionSourceKey>("website");
+  const [spendSourceKey, setSpendSourceKey] =
+    useState<AttributionSourceKey>("website");
+  const dashboardRequestKey = `${companyId}:${month}:${sourceKey}`;
+  const dashboard =
+    dashboardState?.requestKey === dashboardRequestKey
+      ? dashboardState.result
+      : null;
+  const stableOperationKeys = useStableOperationKeyCache();
+  const isGlobalMarketingManager = useGlobalMarketingManagerRole(
+    client,
+    user,
+    isDemoMode,
+  );
+  const canManage =
+    isDemoMode ||
+    userCanManageMarketingAccountability(
+      snapshot,
+      user?.id,
+      companyId,
+      isGlobalMarketingManager,
+    );
+  const editingCampaign = campaignEditId
+    ? snapshot.marketingCampaigns.find(
+        (campaign) =>
+          campaign.id === campaignEditId && campaign.company_id === companyId,
+      ) ?? null
+    : null;
+  const editingSpend = spendEditId
+    ? snapshot.marketingSpendMonths.find(
+        (entry) => entry.id === spendEditId && entry.company_id === companyId,
+      ) ?? null
+    : null;
+
+  useEffect(() => {
+    if (!snapshot.companies.some((company) => company.id === companyId)) {
+      setCompanyId(snapshot.companies[0]?.id ?? "");
+    }
+    if (
+      campaignEditId &&
+      !snapshot.marketingCampaigns.some(
+        (campaign) =>
+          campaign.id === campaignEditId && campaign.company_id === companyId,
+      )
+    ) {
+      setCampaignEditId("");
+    }
+    if (
+      spendEditId &&
+      !snapshot.marketingSpendMonths.some(
+        (entry) => entry.id === spendEditId && entry.company_id === companyId,
+      )
+    ) {
+      setSpendEditId("");
+    }
+  }, [
+    campaignEditId,
+    companyId,
+    snapshot.companies,
+    snapshot.marketingCampaigns,
+    snapshot.marketingSpendMonths,
+    spendEditId,
+  ]);
+
+  useEffect(() => {
+    setCampaignEditId("");
+    setSpendEditId("");
+    setCampaignSourceKey("website");
+    setSpendSourceKey("website");
+  }, [companyId]);
+
+  useEffect(() => {
+    if (!companyId || !/^\d{4}-\d{2}$/.test(month)) {
+      setDashboardState(null);
+      return;
+    }
+
+    if (isDemoMode || !client) {
+      setDashboardState({
+        requestKey: dashboardRequestKey,
+        result: buildSnapshotMarketingAccountabilityDashboard(
+          snapshot,
+          companyId,
+          month,
+          sourceKey === "all" ? null : sourceKey,
+        ),
+      });
+      setDashboardError(null);
+      return;
+    }
+
+    let active = true;
+    setDashboardState(null);
+    setDashboardError(null);
+    getMarketingAccountabilityDashboard(client, {
+      company_id: companyId,
+      month: `${month}-01`,
+      source_key: sourceKey === "all" ? null : sourceKey,
+    })
+      .then((result) => {
+        if (active) {
+          setDashboardState({ requestKey: dashboardRequestKey, result });
+        }
+      })
+      .catch((currentError) => {
+        if (active) {
+          setDashboardState(null);
+          setDashboardError(
+            getCaughtErrorMessage(
+              currentError,
+              "Marketing accountability reporting is unavailable.",
+            ),
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    client,
+    companyId,
+    dashboardRefresh,
+    dashboardRequestKey,
+    isDemoMode,
+    month,
+    snapshot,
+    sourceKey,
+  ]);
+
+  const handleCampaignSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canManage) {
+      onError("Only a company owner or admin can manage campaigns.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    if (campaignEditId && !editingCampaign) {
+      onError("Choose a campaign from the selected company before editing.");
+      return;
+    }
+    const submittedCampaignSourceKey = getNormalizedFormString(
+      formData,
+      "campaign_source_key",
+      campaignSourceKey,
+    ) as AttributionSourceKey;
+    const requestPayload = {
+      company_id: companyId,
+      campaign_id: editingCampaign?.id,
+      expected_version: editingCampaign?.record_version ?? 0,
+      source_key: submittedCampaignSourceKey,
+      source_detail: normalizeAttributionSlug(
+        getNormalizedOptionalFormString(formData, "campaign_source_detail"),
+      ),
+      intake_provider: normalizeAttributionSlug(
+        getNormalizedOptionalFormString(formData, "campaign_intake_provider"),
+      ),
+      vendor_key: normalizeAttributionSlug(
+        getNormalizedOptionalFormString(formData, "campaign_vendor_key"),
+      ),
+      vendor_name: getNormalizedOptionalFormString(formData, "campaign_vendor_name"),
+      campaign_key:
+        normalizeAttributionSlug(getNormalizedFormString(formData, "campaign_key")) ??
+        "",
+      campaign_name: getNormalizedFormString(formData, "campaign_name"),
+      external_campaign_id: getNormalizedOptionalFormString(
+        formData,
+        "campaign_external_id",
+      ),
+      starts_on: getNormalizedOptionalFormString(formData, "campaign_starts_on"),
+      ends_on: getNormalizedOptionalFormString(formData, "campaign_ends_on"),
+      is_active: formData.get("campaign_is_active") === "on",
+    };
+
+    if (!requestPayload.campaign_key || !requestPayload.campaign_name) {
+      onError("Campaign key and campaign name are required.");
+      return;
+    }
+    if (Boolean(requestPayload.vendor_key) !== Boolean(requestPayload.vendor_name)) {
+      onError("Campaign vendor key and vendor name must be entered together.");
+      return;
+    }
+    if (requestPayload.external_campaign_id && !requestPayload.intake_provider) {
+      onError("External campaign ID requires an intake provider.");
+      return;
+    }
+    if (requestPayload.source_key === "other" && !requestPayload.source_detail) {
+      onError("Other campaigns require a non-personal source detail code.");
+      return;
+    }
+    if (
+      requestPayload.starts_on &&
+      requestPayload.ends_on &&
+      requestPayload.ends_on < requestPayload.starts_on
+    ) {
+      onError("Campaign end date cannot be before its start date.");
+      return;
+    }
+
+    try {
+      setIsSavingCampaign(true);
+      onError("");
+      const operationScope = "marketing_campaign";
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        requestPayload,
+      );
+      const request = {
+        operation_key: operationToken.operationKey,
+        ...requestPayload,
+      };
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        onDemoSnapshotChange((currentSnapshot) => {
+          const existing = editingCampaign
+            ? currentSnapshot.marketingCampaigns.find(
+                (record) => record.id === editingCampaign.id,
+              )
+            : currentSnapshot.marketingCampaigns.find(
+                (record) =>
+                  record.company_id === companyId &&
+                  record.campaign_key === request.campaign_key,
+              );
+          const record: MarketingCampaignRecord = {
+            id: existing?.id ?? `demo-campaign-${crypto.randomUUID()}`,
+            company_id: companyId,
+            source_key: request.source_key,
+            source_detail: request.source_detail,
+            intake_provider: request.intake_provider,
+            vendor_key: request.vendor_key,
+            vendor_name: request.vendor_name,
+            campaign_key: request.campaign_key,
+            campaign_name: request.campaign_name,
+            external_campaign_id: request.external_campaign_id,
+            starts_on: request.starts_on,
+            ends_on: request.ends_on,
+            is_active: request.is_active,
+            record_version: (existing?.record_version ?? 0) + 1,
+            last_operation_key: operationToken.operationKey,
+            last_request_fingerprint: operationToken.fingerprint,
+            created_by: existing?.created_by ?? user?.id ?? null,
+            updated_by: user?.id ?? null,
+            created_at: existing?.created_at ?? now,
+            updated_at: now,
+          };
+          return {
+            ...currentSnapshot,
+            marketingCampaigns: existing
+              ? currentSnapshot.marketingCampaigns.map((item) =>
+                  item.id === existing.id ? record : item,
+                )
+              : [record, ...currentSnapshot.marketingCampaigns],
+          };
+        });
+      } else {
+        if (!client) {
+          throw new Error("Marketing campaign storage is unavailable.");
+        }
+        await upsertMarketingCampaign(client, request);
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
+      form.reset();
+      setCampaignEditId("");
+      setDashboardRefresh((value) => value + 1);
+      onNotice("Marketing campaign saved.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save campaign."));
+    } finally {
+      setIsSavingCampaign(false);
+    }
+  };
+
+  const handleSpendSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canManage) {
+      onError("Only a company owner or admin can enter marketing spend.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    if (spendEditId && !editingSpend) {
+      onError("Choose a spend record from the selected company before editing.");
+      return;
+    }
+    const spendMonth = getNormalizedFormString(formData, "spend_month");
+    const parsedSpendAmount = parseFiniteFinancialInput(
+      formData.get("spend_amount"),
+    );
+    const submittedSpendSourceKey = getNormalizedFormString(
+      formData,
+      "spend_source_key",
+      spendSourceKey,
+    ) as AttributionSourceKey;
+    const campaignId = getNormalizedOptionalFormString(formData, "spend_campaign_id");
+    const campaign = campaignId
+      ? snapshot.marketingCampaigns.find(
+          (record) =>
+            record.id === campaignId &&
+            record.company_id === companyId &&
+            record.source_key === submittedSpendSourceKey,
+        )
+      : null;
+
+    if (!/^\d{4}-\d{2}$/.test(spendMonth)) {
+      onError("Choose a valid spend month.");
+      return;
+    }
+    if (parsedSpendAmount.status !== "valid" || parsedSpendAmount.value < 0) {
+      onError("Marketing spend must be a nonnegative amount.");
+      return;
+    }
+    const spendAmount = parsedSpendAmount.value;
+    if (campaignId && !campaign) {
+      onError("Choose a campaign from the selected company and source.");
+      return;
+    }
+    const spendVendorKey = normalizeAttributionSlug(
+      getNormalizedOptionalFormString(formData, "spend_vendor_key"),
+    );
+    const spendVendorName = getNormalizedOptionalFormString(
+      formData,
+      "spend_vendor_name",
+    );
+    if (Boolean(spendVendorKey) !== Boolean(spendVendorName)) {
+      onError("Spend vendor key and vendor name must be entered together.");
+      return;
+    }
+    if (
+      submittedSpendSourceKey === "other" &&
+      !normalizeAttributionSlug(
+        getNormalizedOptionalFormString(formData, "spend_source_detail"),
+      )
+    ) {
+      onError("Other marketing spend requires a non-personal source detail code.");
+      return;
+    }
+
+    try {
+      setIsSavingSpend(true);
+      onError("");
+      const requestPayload = {
+        company_id: companyId,
+        spend_id: editingSpend?.id,
+        expected_version: editingSpend?.record_version ?? 0,
+        spend_month: `${spendMonth}-01`,
+        source_key: submittedSpendSourceKey,
+        source_detail: normalizeAttributionSlug(
+          getNormalizedOptionalFormString(formData, "spend_source_detail"),
+        ),
+        vendor_key: spendVendorKey,
+        vendor_name: spendVendorName,
+        campaign_id: campaign?.id ?? null,
+        spend_amount: spendAmount,
+        currency: "USD",
+        notes: getNormalizedOptionalFormString(formData, "spend_notes"),
+      } as const;
+      const operationScope = "marketing_spend";
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        requestPayload,
+      );
+      const request = {
+        operation_key: operationToken.operationKey,
+        ...requestPayload,
+      };
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        onDemoSnapshotChange((currentSnapshot) => {
+          const existing = editingSpend
+            ? currentSnapshot.marketingSpendMonths.find(
+                (record) => record.id === editingSpend.id,
+              )
+            : currentSnapshot.marketingSpendMonths.find(
+                (record) =>
+                  record.company_id === companyId &&
+                  record.spend_month === request.spend_month &&
+                  record.source_key === request.source_key &&
+                  record.source_detail === request.source_detail &&
+                  record.vendor_key === request.vendor_key &&
+                  record.campaign_id === request.campaign_id,
+              );
+          const record: MarketingSpendMonthRecord = {
+            id: existing?.id ?? `demo-spend-${crypto.randomUUID()}`,
+            company_id: companyId,
+            spend_month: request.spend_month,
+            source_key: request.source_key,
+            source_detail: request.source_detail,
+            vendor_key: request.vendor_key,
+            vendor_name: request.vendor_name,
+            campaign_id: request.campaign_id,
+            spend_amount: request.spend_amount,
+            currency: "USD",
+            notes: request.notes,
+            entered_by: existing?.entered_by ?? user?.id ?? null,
+            updated_by: user?.id ?? null,
+            record_version: (existing?.record_version ?? 0) + 1,
+            last_operation_key: operationToken.operationKey,
+            last_request_fingerprint: operationToken.fingerprint,
+            created_at: existing?.created_at ?? now,
+            updated_at: now,
+          };
+          return {
+            ...currentSnapshot,
+            marketingSpendMonths: existing
+              ? currentSnapshot.marketingSpendMonths.map((item) =>
+                  item.id === existing.id ? record : item,
+                )
+              : [record, ...currentSnapshot.marketingSpendMonths],
+          };
+        });
+      } else {
+        if (!client) {
+          throw new Error("Marketing spend storage is unavailable.");
+        }
+        await upsertMarketingSpend(client, request);
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
+      form.reset();
+      setSpendEditId("");
+      setDashboardRefresh((value) => value + 1);
+      onNotice("Monthly marketing spend saved.");
+    } catch (currentError) {
+      onError(getCaughtErrorMessage(currentError, "Unable to save marketing spend."));
+    } finally {
+      setIsSavingSpend(false);
+    }
+  };
+
+  const metrics = dashboard?.metrics ?? null;
+  const metricCards = [
+    ["Lead count", metrics ? metrics.lead_count : "—", "marketing-metric-lead-count"],
+    ["Marketing spend", metrics ? formatAccountabilityMoney(metrics.marketing_spend) : "—", "marketing-metric-spend"],
+    ["Cost per lead", metrics ? formatAccountabilityMoney(metrics.cost_per_lead) : "—", "marketing-metric-cost-per-lead"],
+    ["Booking rate", metrics ? formatAccountabilityRate(metrics.booking_rate) : "—", "marketing-metric-booking-rate"],
+    ["Inspection rate", metrics ? formatAccountabilityRate(metrics.inspection_completion_rate) : "—", "marketing-metric-inspection-rate"],
+    ["Closing rate", metrics ? formatAccountabilityRate(metrics.closing_rate) : "—", "marketing-metric-closing-rate"],
+    ["Cost per sold job", metrics ? formatAccountabilityMoney(metrics.cost_per_sold_job) : "—", "marketing-metric-cost-per-sold-job"],
+    ["Attributed revenue", metrics ? formatAccountabilityMoney(metrics.attributed_contract_revenue) : "—", "marketing-metric-revenue"],
+    ["Revenue / spend", metrics?.marketing_revenue_divided_by_spend === null || metrics?.marketing_revenue_divided_by_spend === undefined ? "—" : `${metrics.marketing_revenue_divided_by_spend.toFixed(2)}x`, "marketing-metric-roas"],
+    ["Awaiting contact", metrics ? metrics.new_awaiting_contact : "—", "marketing-metric-awaiting-contact"],
+    ["Overdue estimate follow-up", metrics ? metrics.unsold_estimates_overdue : "—", "marketing-metric-unsold-follow-up"],
+    ["Unattributed", metrics ? metrics.unattributed_lead_count : "—", "marketing-metric-unattributed"],
+    ["Attribution coverage", metrics ? formatAccountabilityRate(metrics.attribution_coverage) : "—", "marketing-metric-coverage"],
+    ["Missing won value", metrics ? metrics.missing_won_value_count : "—", "marketing-metric-missing-won-value"],
+  ] as const;
+  const matchingSpendCampaigns = snapshot.marketingCampaigns.filter(
+    (campaign) =>
+      campaign.company_id === companyId &&
+      campaign.source_key === spendSourceKey &&
+      (campaign.is_active || campaign.id === editingSpend?.campaign_id),
+  );
+
+  return (
+    <section
+      className="grid gap-5 rounded-2xl border border-sky-200 bg-sky-50/40 p-5 shadow-sm"
+      data-testid="marketing-accountability-workspace"
+    >
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-bold uppercase text-sky-700">
+            Verified origin, funnel & manual spend
+          </p>
+          <h2 className="mt-1 text-2xl font-black text-slate-950">
+            Marketing Accountability
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            KPI denominators include only leads with a Phase 1 accountability record.
+            Pre-sprint test or legacy leads remain visible as untracked data-quality
+            gaps and are never presented as historical marketing performance.
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <select
+            aria-label="Accountability company"
+            data-testid="marketing-accountability-company-filter"
+            value={companyId}
+            onChange={(event) => {
+              setDashboardState(null);
+              setDashboardError(null);
+              setCampaignEditId("");
+              setSpendEditId("");
+              setCampaignSourceKey("website");
+              setSpendSourceKey("website");
+              setCompanyId(event.target.value);
+            }}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {snapshot.companies.map((company) => (
+              <option key={company.id} value={company.id}>{company.name}</option>
+            ))}
+          </select>
+          <input
+            aria-label="Accountability month"
+            data-testid="marketing-accountability-month-filter"
+            type="month"
+            value={month}
+            onChange={(event) => {
+              setDashboardState(null);
+              setDashboardError(null);
+              setMonth(event.target.value);
+            }}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          />
+          <select
+            aria-label="Accountability source"
+            data-testid="marketing-accountability-source-filter"
+            value={sourceKey}
+            onChange={(event) => {
+              setDashboardState(null);
+              setDashboardError(null);
+              setSourceKey(event.target.value as AttributionSourceKey | "all");
+            }}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All sources</option>
+            {canonicalAttributionSourceKeys.map((key) => (
+              <option key={key} value={key}>{attributionSourceLabels[key]}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {dashboardError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {dashboardError} No fallback KPI values were fabricated.
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+        {metricCards.map(([label, value, testId]) => (
+          <div key={testId} data-testid={testId} className="rounded-lg border border-slate-200 bg-white p-3">
+            <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+            <p className="mt-2 text-xl font-black text-slate-950">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div
+        data-testid="marketing-metric-data-gaps"
+        className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:grid-cols-2 xl:grid-cols-4"
+      >
+        <ProfileStat
+          label="Pre-sprint test/legacy rows"
+          value={metrics ? metrics.untracked_legacy_lead_count : "—"}
+        />
+        <ProfileStat
+          label="Estimates missing follow-up"
+          value={metrics ? metrics.unsold_estimates_missing_follow_up : "—"}
+        />
+        <ProfileStat
+          label="Unattributed accountable leads"
+          value={metrics ? metrics.unattributed_lead_count : "—"}
+        />
+        <div data-testid="marketing-metric-workflow-linkage-gaps">
+          <ProfileStat
+            label="Workflow linkage gaps"
+            value={metrics ? metrics.workflow_linkage_gap_count : "—"}
+          />
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table
+          className="min-w-[1180px] w-full text-left text-xs"
+          data-testid="marketing-accountability-source-table"
+        >
+          <thead className="bg-slate-50 uppercase text-slate-500">
+            <tr>
+              <th className="px-3 py-2">Source</th>
+              <th className="px-3 py-2">Leads</th>
+              <th className="px-3 py-2">Spend</th>
+              <th className="px-3 py-2">CPL</th>
+              <th className="px-3 py-2">Booking</th>
+              <th className="px-3 py-2">Inspection</th>
+              <th className="px-3 py-2">Closing</th>
+              <th className="px-3 py-2">Sold-job cost</th>
+              <th className="px-3 py-2">Revenue</th>
+              <th className="px-3 py-2">Revenue / spend</th>
+              <th className="px-3 py-2">Data gaps</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 text-slate-700">
+            {(dashboard?.by_source ?? []).map((row) => (
+              <tr
+                key={row.source_key}
+                data-testid="marketing-accountability-source-row"
+                data-company-id={companyId}
+                data-source-key={row.source_key}
+              >
+                <td className="px-3 py-2 font-bold text-slate-950">
+                  {attributionSourceLabels[row.source_key]}
+                </td>
+                <td className="px-3 py-2">{row.lead_count}</td>
+                <td className="px-3 py-2">{formatAccountabilityMoney(row.marketing_spend)}</td>
+                <td className="px-3 py-2">{formatAccountabilityMoney(row.cost_per_lead)}</td>
+                <td className="px-3 py-2">{formatAccountabilityRate(row.booking_rate)}</td>
+                <td className="px-3 py-2">{formatAccountabilityRate(row.inspection_completion_rate)}</td>
+                <td className="px-3 py-2">{formatAccountabilityRate(row.closing_rate)}</td>
+                <td className="px-3 py-2">{formatAccountabilityMoney(row.cost_per_sold_job)}</td>
+                <td className="px-3 py-2">{formatAccountabilityMoney(row.attributed_contract_revenue)}</td>
+                <td className="px-3 py-2">
+                  {row.marketing_revenue_divided_by_spend === null
+                    ? "—"
+                    : `${row.marketing_revenue_divided_by_spend.toFixed(2)}x`}
+                </td>
+                <td className="px-3 py-2">
+                  {`${row.unattributed_lead_count} unattributed · ${row.missing_won_value_count} missing value · ${row.workflow_linkage_gap_count} linkage`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <form
+          key={`campaign-form-${companyId}-${campaignEditId || "new"}`}
+          onSubmit={handleCampaignSubmit}
+          data-testid="marketing-campaign-form"
+          className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
+        >
+          <div>
+            <h3 className="font-black text-slate-950">Campaign registry</h3>
+            <p className="mt-1 text-sm text-slate-500">Owner/admin only; no provider campaign is auto-created.</p>
+          </div>
+          <select
+            value={campaignEditId}
+            data-testid="marketing-campaign-edit-select"
+            onChange={(event) => {
+              const nextId = event.target.value;
+              const nextCampaign = snapshot.marketingCampaigns.find(
+                (campaign) =>
+                  campaign.id === nextId && campaign.company_id === companyId,
+              );
+              setCampaignEditId(nextId);
+              if (nextCampaign) {
+                setCampaignSourceKey(nextCampaign.source_key);
+              }
+            }}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">Register new campaign</option>
+            {snapshot.marketingCampaigns
+              .filter((campaign) => campaign.company_id === companyId)
+              .map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>
+                  {`Edit ${campaign.campaign_name}`}
+                </option>
+              ))}
+          </select>
+          <input type="hidden" name="campaign_company_id" value={companyId} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <select name="campaign_source_key" value={campaignSourceKey} onChange={(event) => setCampaignSourceKey(event.target.value as AttributionSourceKey)} className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+              {canonicalAttributionSourceKeys.filter((key) => key !== "unknown").map((key) => <option key={key} value={key}>{attributionSourceLabels[key]}</option>)}
+            </select>
+            <input name="campaign_source_detail" defaultValue={editingCampaign?.source_detail ?? ""} required={campaignSourceKey === "other"} placeholder="Non-personal source detail code" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_intake_provider" defaultValue={editingCampaign?.intake_provider ?? ""} placeholder="Intake provider" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_vendor_key" defaultValue={editingCampaign?.vendor_key ?? ""} placeholder="Vendor key" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_vendor_name" defaultValue={editingCampaign?.vendor_name ?? ""} placeholder="Vendor name" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input required name="campaign_key" defaultValue={editingCampaign?.campaign_key ?? ""} placeholder="Campaign key" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input required name="campaign_name" defaultValue={editingCampaign?.campaign_name ?? ""} placeholder="Campaign name" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_external_id" defaultValue={editingCampaign?.external_campaign_id ?? ""} placeholder="External campaign ID" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_starts_on" defaultValue={editingCampaign?.starts_on ?? ""} type="date" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="campaign_ends_on" defaultValue={editingCampaign?.ends_on ?? ""} type="date" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700"><input name="campaign_is_active" type="checkbox" defaultChecked={editingCampaign?.is_active ?? true} /> Active campaign</label>
+          <button type="submit" data-testid="marketing-campaign-submit" disabled={!canManage || (!client && !isDemoMode) || isSavingCampaign} className="rounded-md bg-sky-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isSavingCampaign ? "Saving campaign" : editingCampaign ? "Save campaign changes" : "Register campaign"}</button>
+        </form>
+
+        <form
+          key={`spend-form-${companyId}-${spendEditId || "new"}`}
+          onSubmit={handleSpendSubmit}
+          data-testid="marketing-spend-form"
+          className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
+        >
+          <div>
+            <h3 className="font-black text-slate-950">Manual monthly spend</h3>
+            <p className="mt-1 text-sm text-slate-500">Enter verified USD spend; no estimated allocation is prefilled.</p>
+          </div>
+          <select
+            value={spendEditId}
+            data-testid="marketing-spend-edit-select"
+            onChange={(event) => {
+              const nextId = event.target.value;
+              const nextSpend = snapshot.marketingSpendMonths.find(
+                (entry) => entry.id === nextId && entry.company_id === companyId,
+              );
+              setSpendEditId(nextId);
+              if (nextSpend) {
+                setSpendSourceKey(nextSpend.source_key);
+              }
+            }}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">Enter new monthly spend</option>
+            {snapshot.marketingSpendMonths
+              .filter((entry) => entry.company_id === companyId)
+              .map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {`Edit ${entry.spend_month.slice(0, 7)} · ${attributionSourceLabels[entry.source_key]} · ${formatAccountabilityMoney(entry.spend_amount)}`}
+                </option>
+              ))}
+          </select>
+          <input type="hidden" name="spend_company_id" value={companyId} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input required name="spend_month" type="month" defaultValue={editingSpend?.spend_month.slice(0, 7) ?? month} className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <select name="spend_source_key" value={spendSourceKey} onChange={(event) => setSpendSourceKey(event.target.value as AttributionSourceKey)} className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+              {canonicalAttributionSourceKeys.filter((key) => key !== "unknown").map((key) => <option key={key} value={key}>{attributionSourceLabels[key]}</option>)}
+            </select>
+            <input name="spend_source_detail" defaultValue={editingSpend?.source_detail ?? ""} required={spendSourceKey === "other"} placeholder="Non-personal source detail code" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="spend_vendor_key" defaultValue={editingSpend?.vendor_key ?? ""} placeholder="Vendor key" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <input name="spend_vendor_name" defaultValue={editingSpend?.vendor_name ?? ""} placeholder="Vendor name" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <select name="spend_campaign_id" defaultValue={editingSpend?.campaign_id ?? ""} className="rounded-md border border-slate-300 px-3 py-2 text-sm"><option value="">No campaign</option>{matchingSpendCampaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.campaign_name}</option>)}</select>
+            <input required name="spend_amount" type="number" min="0" step="0.01" defaultValue={editingSpend?.spend_amount ?? ""} placeholder="Spend amount" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <textarea name="spend_notes" defaultValue={editingSpend?.notes ?? ""} placeholder="Notes" className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+          <button type="submit" data-testid="marketing-spend-submit" disabled={!canManage || (!client && !isDemoMode) || isSavingSpend} className="rounded-md bg-sky-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isSavingSpend ? "Saving spend" : editingSpend ? "Save spend changes" : "Save monthly spend"}</button>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 function WebsiteMarketingView({
+  client,
+  isDemoMode,
   snapshot,
   companyMap,
+  user,
+  onReload,
+  onDemoSnapshotChange,
+  onNotice,
+  onError,
   onViewChange,
 }: {
+  client: CrmClient | null;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
+  user: User | null;
+  onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
   onViewChange: (view: WorkspaceView) => void;
 }) {
   const marketingProviders = useMemo(
@@ -14568,33 +16321,52 @@ function WebsiteMarketingView({
       ),
     [marketingProviders, snapshot],
   );
+  const marketingAccountabilityByLead = useMemo(
+    () =>
+      new Map(
+        snapshot.leadAccountability.map((record) => [
+          `${record.company_id}:${record.lead_id}`,
+          record,
+        ]),
+      ),
+    [snapshot.leadAccountability],
+  );
   const marketingLeads = useMemo(
     () =>
       sortByNewest(
         snapshot.leads.filter((lead) => {
-          const source = lead.source.toLowerCase();
-          const compactSource = source.replace(/\s+/g, "");
+          const accountability = marketingAccountabilityByLead.get(
+            `${lead.company_id}:${lead.id}`,
+          );
+          if (!accountability) {
+            return false;
+          }
 
           return (
-            marketingProviders.has(compactSource) ||
-            ["website", "yelp", "gohighlevel", "go high level", "ghl"].some(
-              (candidate) => source.includes(candidate),
+            ["website", "google", "yelp"].includes(accountability.source_key) ||
+            Boolean(
+              accountability.intake_provider &&
+                marketingProviders.has(accountability.intake_provider),
             )
           );
         }),
       ),
-    [marketingProviders, snapshot.leads],
+    [marketingAccountabilityByLead, marketingProviders, snapshot.leads],
   );
   const marketingItems = useMemo(
     () =>
       [...inboxItems]
         .filter(
           (item) =>
-            marketingProviders.has(item.provider) ||
-            marketingProviders.has(item.channel),
+            (marketingProviders.has(item.provider) ||
+              marketingProviders.has(item.channel)) &&
+            (!item.leadId ||
+              marketingAccountabilityByLead.has(
+                `${item.companyId}:${item.leadId}`,
+              )),
         )
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [inboxItems, marketingProviders],
+    [inboxItems, marketingAccountabilityByLead, marketingProviders],
   );
   const marketingSyncLogs = useMemo(
     () =>
@@ -14614,10 +16386,20 @@ function WebsiteMarketingView({
       ...adapter,
       count:
         adapter.provider === "gohighlevel"
-          ? marketingItems.filter((item) => item.provider === "gohighlevel").length
-          : marketingLeads.filter((lead) =>
-              lead.source.toLowerCase().includes(adapter.provider),
-            ).length,
+          ? marketingLeads.filter(
+              (lead) =>
+                marketingAccountabilityByLead.get(
+                  `${lead.company_id}:${lead.id}`,
+                )?.intake_provider === "gohighlevel",
+            ).length
+          : marketingLeads.filter((lead) => {
+              const accountability = marketingAccountabilityByLead.get(
+                `${lead.company_id}:${lead.id}`,
+              );
+              return adapter.provider === "website"
+                ? accountability?.source_key === "website"
+                : accountability?.source_key === "yelp";
+            }).length,
     }));
   const companySummaries = snapshot.companies.map((company) => {
     const companyLeads = marketingLeads.filter((lead) => lead.company_id === company.id);
@@ -14647,6 +16429,16 @@ function WebsiteMarketingView({
       className="grid gap-5"
       data-testid="website-marketing-foundation"
     >
+      <MarketingAccountabilityPanel
+        client={client}
+        isDemoMode={isDemoMode}
+        snapshot={snapshot}
+        user={user}
+        onReload={onReload}
+        onDemoSnapshotChange={onDemoSnapshotChange}
+        onNotice={onNotice}
+        onError={onError}
+      />
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
@@ -14657,14 +16449,15 @@ function WebsiteMarketingView({
               Marketing integration foundation
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Read-only operating view for website leads, Yelp conversations,
-              Google Business Profile readiness, GoHighLevel readiness, source routing, duplicate protection, and
-              owner setup requirements. This page does not connect providers,
-              send campaigns, alter CRM records, or create new workflows.
+              Provider-readiness view for accounted website and Yelp acquisition,
+              Google Business Profile readiness, GoHighLevel readiness, source
+              routing, and duplicate protection. Owner/admin campaign and spend
+              changes above are audited; this provider section does not connect
+              providers, send campaigns, or activate new workflows.
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[440px]">
-            <ProfileStat label="Marketing leads" value={marketingLeads.length} />
+            <ProfileStat label="Accounted marketing leads" value={marketingLeads.length} />
             <ProfileStat label="Visible activity" value={marketingItems.length} />
             <ProfileStat label="Failed/retry logs" value={failedMarketingLogs.length} />
           </div>
@@ -14729,7 +16522,7 @@ function WebsiteMarketingView({
                   />
                 </div>
                 <p className="mt-4 text-xs font-bold uppercase text-slate-500">
-                  {source.count} existing item{source.count === 1 ? "" : "s"}
+                  {source.count} accountable lead{source.count === 1 ? "" : "s"}
                 </p>
               </article>
             ))}
@@ -14790,7 +16583,7 @@ function WebsiteMarketingView({
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                     <div>
                       <p className="text-xs font-semibold uppercase text-slate-500">
-                        Leads
+                        Accounted leads
                       </p>
                       <p className="font-bold text-slate-950">{leads}</p>
                     </div>
@@ -14857,7 +16650,7 @@ function WebsiteMarketingView({
               Recent marketing activity
             </p>
             <h3 className="mt-1 text-xl font-black text-slate-950">
-              Existing intake and campaign-adjacent records
+              Accounted intake and provider activity
             </h3>
           </div>
           <ProviderStatusBadge
@@ -15793,13 +17586,81 @@ function SalesPipelineView({
   const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | "unassigned">("all");
   const [followUpFilter, setFollowUpFilter] = useState<"all" | "due" | "none">("all");
   const [isSavingOpportunity, setIsSavingOpportunity] = useState(false);
+  const [isApplyingAccountabilityAction, setIsApplyingAccountabilityAction] =
+    useState(false);
+  const [pendingAccountabilityReload, setPendingAccountabilityReload] =
+    useState<{ leadId: string; recordVersion: number } | null>(null);
+  const [attributionReviewSource, setAttributionReviewSource] =
+    useState<AttributionSourceKey>("unknown");
+  const [attributionReviewDetail, setAttributionReviewDetail] = useState("");
+  const [attributionReviewProvider, setAttributionReviewProvider] = useState("");
+  const [attributionReviewCampaignId, setAttributionReviewCampaignId] =
+    useState("");
+  const [attributionReviewStatus, setAttributionReviewStatus] =
+    useState<AttributionReviewStatus>("unattributed");
   const [isCreatingEstimate, setIsCreatingEstimate] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
+  const stableOperationKeys = useStableOperationKeyCache();
+  const isGlobalMarketingManager = useGlobalMarketingManagerRole(
+    client,
+    user,
+    isDemoMode,
+  );
 
   const selectedOpportunity =
     snapshot.leads.find((lead) => lead.id === selectedOpportunityId) ?? null;
+  const selectedOpportunityAccountability = selectedOpportunity
+    ? getLeadAccountabilityForLead(
+        snapshot.leadAccountability,
+        selectedOpportunity.id,
+        selectedOpportunity.company_id,
+      )
+    : null;
+  const isWaitingForAccountabilityReload = Boolean(
+    pendingAccountabilityReload &&
+      selectedOpportunity?.id === pendingAccountabilityReload.leadId &&
+      (!selectedOpportunityAccountability ||
+        selectedOpportunityAccountability.record_version <
+          pendingAccountabilityReload.recordVersion),
+  );
+  const isAccountabilityActionBusy =
+    isApplyingAccountabilityAction || isWaitingForAccountabilityReload;
+  const canManageSelectedOpportunityAccountability =
+    isDemoMode ||
+    userCanManageMarketingAccountability(
+      snapshot,
+      user?.id,
+      selectedOpportunity?.company_id,
+      isGlobalMarketingManager,
+    );
+  const eligibleOpportunityOwners = selectedOpportunity
+    ? snapshot.companyMemberships.filter(
+        (membership) =>
+          membership.company_id === selectedOpportunity.company_id &&
+          eligibleLeadOwnerRoles.has(membership.role),
+      )
+    : [];
+  const currentUserIsEligibleOpportunityOwner = Boolean(
+    user &&
+      eligibleOpportunityOwners.some(
+        (membership) => membership.user_id === user.id,
+      ),
+  );
+  const canRecordSelectedOpportunityLifecycle =
+    isDemoMode ||
+    isGlobalMarketingManager ||
+    Boolean(
+      user &&
+        selectedOpportunity &&
+        snapshot.companyMemberships.some(
+          (membership) =>
+            membership.user_id === user.id &&
+            membership.company_id === selectedOpportunity.company_id &&
+            salesAccountabilityRoles.has(membership.role),
+        ),
+    );
   const [opportunityDraft, setOpportunityDraft] = useState(() =>
-    getOpportunityEditDraft(selectedOpportunity, user),
+    getOpportunityEditDraft(selectedOpportunity, user, snapshot.leadAccountability),
   );
   const selectedOpportunityCompany = selectedOpportunity
     ? companyMap.get(selectedOpportunity.company_id)
@@ -15814,6 +17675,17 @@ function SalesPipelineView({
   const selectedOpportunityEstimate = selectedOpportunity
     ? getOpportunityRelatedEstimate(snapshot, selectedOpportunity)
     : null;
+  const selectedOpportunityAcceptances = selectedOpportunityEstimate
+    ? snapshot.proposalAcceptances.filter(
+        (acceptance) =>
+          acceptance.company_id === selectedOpportunityEstimate.company_id &&
+          acceptance.estimate_id === selectedOpportunityEstimate.id &&
+          acceptance.terms_accepted &&
+          acceptance.accepted_total > 0 &&
+          (acceptance.acceptance_method !== "signature_provider" ||
+            acceptance.signature_status === "signed"),
+      )
+    : [];
   const selectedOpportunityJob = selectedOpportunity
     ? getOpportunityRelatedJob(snapshot, selectedOpportunity, selectedOpportunityEstimate)
     : null;
@@ -15849,8 +17721,55 @@ function SalesPipelineView({
   }, [selectedOpportunityId, snapshot.leads]);
 
   useEffect(() => {
-    setOpportunityDraft(getOpportunityEditDraft(selectedOpportunity, user));
-  }, [selectedOpportunity, user]);
+    setOpportunityDraft(
+      getOpportunityEditDraft(
+        selectedOpportunity,
+        user,
+        snapshot.leadAccountability,
+      ),
+    );
+  }, [selectedOpportunity, snapshot.leadAccountability, user]);
+
+  useEffect(() => {
+    if (
+      pendingAccountabilityReload &&
+      selectedOpportunityAccountability?.lead_id ===
+        pendingAccountabilityReload.leadId &&
+      selectedOpportunityAccountability.record_version >=
+        pendingAccountabilityReload.recordVersion
+    ) {
+      setPendingAccountabilityReload(null);
+    }
+  }, [pendingAccountabilityReload, selectedOpportunityAccountability]);
+
+  useEffect(() => {
+    if (!selectedOpportunityAccountability) {
+      setAttributionReviewSource("unknown");
+      setAttributionReviewDetail("");
+      setAttributionReviewProvider("");
+      setAttributionReviewCampaignId("");
+      setAttributionReviewStatus("unattributed");
+      return;
+    }
+
+    setAttributionReviewSource(selectedOpportunityAccountability.source_key);
+    setAttributionReviewDetail(
+      selectedOpportunityAccountability.source_detail ?? "",
+    );
+    setAttributionReviewProvider(
+      selectedOpportunityAccountability.intake_provider ?? "",
+    );
+    setAttributionReviewCampaignId(
+      selectedOpportunityAccountability.campaign_id ?? "",
+    );
+    setAttributionReviewStatus(
+      selectedOpportunityAccountability.source_key === "unknown"
+        ? selectedOpportunityAccountability.review_status === "needs_review"
+          ? "needs_review"
+          : "unattributed"
+        : "verified",
+    );
+  }, [selectedOpportunityAccountability]);
 
   const filteredOpportunities = snapshot.leads.filter((lead) => {
     const company = companyMap.get(lead.company_id);
@@ -15868,10 +17787,15 @@ function SalesPipelineView({
       (job?.title ?? "").toLowerCase().includes(query);
     const matchesStage =
       stageFilter === "all" || lead.pipeline_stage === stageFilter;
+    const ownerUserId = getLeadOwnerUserId(
+      snapshot.leadAccountability,
+      lead.id,
+      lead.company_id,
+    );
     const matchesOwner =
       ownerFilter === "all" ||
-      (ownerFilter === "mine" && lead.created_by === user?.id) ||
-      (ownerFilter === "unassigned" && !lead.created_by);
+      (ownerFilter === "mine" && ownerUserId === user?.id) ||
+      (ownerFilter === "unassigned" && !ownerUserId);
     const matchesFollowUp =
       followUpFilter === "all" ||
       (followUpFilter === "due" &&
@@ -15950,18 +17874,6 @@ function SalesPipelineView({
     const estimatedValue = Number(
       opportunityDraft.estimated_value.replace(/[^0-9.]/g, ""),
     );
-    const ownerUpdate =
-      opportunityDraft.owner === "me"
-        ? user?.id
-        : opportunityDraft.owner === "unassigned"
-          ? null
-          : selectedOpportunity.created_by;
-
-    if (opportunityDraft.owner === "me" && !user?.id) {
-      onError("Sign in before assigning an opportunity to yourself.");
-      return;
-    }
-
     if (
       opportunityDraft.next_follow_up &&
       !/^\d{4}-\d{2}-\d{2}$/.test(opportunityDraft.next_follow_up)
@@ -15971,15 +17883,20 @@ function SalesPipelineView({
     }
 
     const pipelineStage = opportunityDraft.pipeline_stage;
+    if (!selectedOpportunityAccountability && pipelineStage === "lost") {
+      onError("Use the accountable Lost action and select a structured reason.");
+      return;
+    }
     const updates: Partial<LeadInput> = {
-      status: leadStatusForPipelineStage(pipelineStage),
-      pipeline_stage: pipelineStage,
       priority: opportunityDraft.priority,
       estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : 0,
       next_follow_up: opportunityDraft.next_follow_up || null,
       notes: opportunityDraft.notes || null,
-      created_by: ownerUpdate,
     };
+    if (!selectedOpportunityAccountability) {
+      updates.status = leadStatusForPipelineStage(pipelineStage);
+      updates.pipeline_stage = pipelineStage;
+    }
 
     try {
       setIsSavingOpportunity(true);
@@ -16000,8 +17917,572 @@ function SalesPipelineView({
     }
   };
 
+  const handleAssignOpportunityOwner = async (
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    if (!canManageSelectedOpportunityAccountability) {
+      onError("Only a company owner or admin can change lead ownership.");
+      return;
+    }
+
+    if (
+      !selectedOpportunity ||
+      !selectedOpportunityAccountability ||
+      isAccountabilityActionBusy
+    ) {
+      if (selectedOpportunity && !selectedOpportunityAccountability) {
+        onError(
+          "This legacy opportunity has no accountability record. Ownership cannot be changed until it is explicitly reconciled.",
+        );
+      }
+      return;
+    }
+
+    const selectedOwner = event.currentTarget.form
+      ? getNormalizedFormString(
+          new FormData(event.currentTarget.form),
+          "owner",
+          opportunityDraft.owner,
+        )
+      : opportunityDraft.owner;
+    const ownerUserId =
+      selectedOwner === "me"
+        ? user?.id ?? null
+        : selectedOwner === "unassigned"
+          ? null
+          : selectedOwner.startsWith("user:")
+            ? selectedOwner.slice(5)
+            : selectedOpportunityAccountability.owner_user_id;
+
+    if (selectedOwner === "me" && !ownerUserId) {
+      onError("Sign in before assigning an opportunity to yourself.");
+      return;
+    }
+
+    if (ownerUserId === selectedOpportunityAccountability.owner_user_id) {
+      onNotice("Opportunity owner is already current.");
+      return;
+    }
+
+    try {
+      setIsApplyingAccountabilityAction(true);
+      onError("");
+      const operationScope = `lead_owner:${selectedOpportunity.id}`;
+      const requestPayload = {
+        lead_id: selectedOpportunity.id,
+        expected_version: selectedOpportunityAccountability.record_version,
+        action: "owner_assigned" as const,
+        owner_user_id: ownerUserId,
+      };
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        requestPayload,
+      );
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        const nextVersion = selectedOpportunityAccountability.record_version + 1;
+        setPendingAccountabilityReload({
+          leadId: selectedOpportunity.id,
+          recordVersion: nextVersion,
+        });
+        const event: LeadAccountabilityEventRecord = {
+          id: `demo-accountability-event-${crypto.randomUUID()}`,
+          lead_accountability_id: selectedOpportunityAccountability.id,
+          company_id: selectedOpportunityAccountability.company_id,
+          lead_id: selectedOpportunityAccountability.lead_id,
+          event_type: "owner_assigned",
+          operation_key: operationToken.operationKey,
+          request_fingerprint: operationToken.fingerprint,
+          actor_user_id: user?.id ?? null,
+          actor_kind: "user",
+          reason_code: null,
+          source_key: null,
+          source_detail: null,
+          intake_provider: selectedOpportunityAccountability.intake_provider,
+          campaign_id: null,
+          owner_user_id: ownerUserId,
+          first_response_channel: null,
+          linked_table: null,
+          linked_record_id: null,
+          outcome: null,
+          lost_reason_code: null,
+          won_contract_value: null,
+          won_value_basis: null,
+          occurred_at: now,
+          resulting_record_version: nextVersion,
+          created_at: now,
+        };
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          leadAccountability: currentSnapshot.leadAccountability.map((record) =>
+            record.id === selectedOpportunityAccountability.id
+              ? {
+                  ...record,
+                  owner_user_id: ownerUserId,
+                  owner_assigned_at: now,
+                  record_version: nextVersion,
+                  last_operation_key: operationToken.operationKey,
+                  last_request_fingerprint: operationToken.fingerprint,
+                  updated_at: now,
+                }
+              : record,
+          ),
+          leadAccountabilityEvents: [
+            event,
+            ...currentSnapshot.leadAccountabilityEvents,
+          ],
+        }));
+      } else {
+        const result = await applyLeadAccountabilityAction(client, {
+          operation_key: operationToken.operationKey,
+          ...requestPayload,
+        });
+        setPendingAccountabilityReload({
+          leadId: selectedOpportunity.id,
+          recordVersion: result.record_version,
+        });
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
+      onNotice(ownerUserId ? "Opportunity owner assigned." : "Opportunity unassigned.");
+    } catch (currentError) {
+      setPendingAccountabilityReload(null);
+      onError(
+        getCaughtErrorMessage(currentError, "Unable to update the opportunity owner."),
+      );
+    } finally {
+      setIsApplyingAccountabilityAction(false);
+    }
+  };
+
+  const executeAccountabilityAction = async (
+    requestPayload: LeadAccountabilityActionPayload,
+    successMessage: string,
+  ) => {
+    if (!selectedOpportunity || !selectedOpportunityAccountability) {
+      onError(
+        "This opportunity has no accountability record. The action is blocked until the record is explicitly reconciled.",
+      );
+      return;
+    }
+    if (isAccountabilityActionBusy) {
+      return;
+    }
+    if (!canRecordSelectedOpportunityLifecycle) {
+      onError("A signed-in internal company member is required for this action.");
+      return;
+    }
+
+    try {
+      setIsApplyingAccountabilityAction(true);
+      onError("");
+      const eventRecords = isDemoMode
+        ? snapshot.leadAccountabilityEvents.filter(
+            (event) =>
+              event.lead_accountability_id ===
+                selectedOpportunityAccountability.id &&
+              event.company_id === selectedOpportunityAccountability.company_id &&
+              event.lead_id === selectedOpportunityAccountability.lead_id,
+          )
+        : requestPayload.action === "attribution_reviewed"
+          ? []
+          : await getLeadAccountabilityEventsForRecord(client, {
+              accountabilityId: selectedOpportunityAccountability.id,
+              companyId: selectedOpportunityAccountability.company_id,
+              leadId: selectedOpportunityAccountability.lead_id,
+            });
+      const preflightError = getAccountabilityActionPreflightError({
+        action: requestPayload.action,
+        outcome: selectedOpportunityAccountability.outcome,
+        firstResponseAt: selectedOpportunityAccountability.first_response_at,
+        occurredAt:
+          requestPayload.action === "contacted"
+            ? requestPayload.occurred_at ?? new Date().toISOString()
+            : new Date().toISOString(),
+        events: eventRecords.map((event) => ({
+          eventType: event.event_type,
+          occurredAt: event.occurred_at,
+        })),
+      });
+      if (preflightError) {
+        onError(preflightError);
+        return;
+      }
+
+      const operationScope = `lead_action:${requestPayload.lead_id}:${requestPayload.action}`;
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        requestPayload,
+      );
+      const request = {
+        ...requestPayload,
+        operation_key: operationToken.operationKey,
+      } as LeadAccountabilityActionRequest;
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        setPendingAccountabilityReload({
+          leadId: selectedOpportunity.id,
+          recordVersion: selectedOpportunityAccountability.record_version + 1,
+        });
+        onDemoSnapshotChange((currentSnapshot) => {
+          const currentRecord = currentSnapshot.leadAccountability.find(
+            (record) => record.id === selectedOpportunityAccountability.id,
+          );
+          if (!currentRecord || currentRecord.record_version !== request.expected_version) {
+            return currentSnapshot;
+          }
+
+          const nextVersion = currentRecord.record_version + 1;
+          let recordUpdate: Partial<LeadAccountabilityRecord> = {};
+          let leadUpdate: Partial<LeadRecord> = {};
+          let linkedTable: string | null = null;
+          let linkedRecordId: string | null = null;
+
+          if (request.action === "attribution_reviewed") {
+            recordUpdate = {
+              source_key: request.source_key,
+              source_detail: request.source_detail ?? null,
+              intake_provider: request.intake_provider ?? null,
+              campaign_id: request.campaign_id ?? null,
+              intake_record_id: request.intake_record_id ?? null,
+              evidence_kind: request.evidence_kind,
+              review_status: request.review_status,
+              reviewed_by: user?.id ?? null,
+              reviewed_at: now,
+              attribution_locked_at:
+                request.review_status === "verified" ? now : null,
+            };
+          } else if (request.action === "contacted") {
+            recordUpdate = {
+              first_response_at: currentRecord.first_response_at ?? request.occurred_at ?? now,
+              first_response_channel:
+                currentRecord.first_response_channel ?? request.first_response_channel,
+            };
+            leadUpdate = { status: "contacted", pipeline_stage: "contacted" };
+          } else if (request.action === "won") {
+            const acceptance = request.proposal_acceptance_id
+              ? currentSnapshot.proposalAcceptances.find(
+                  (record) => record.id === request.proposal_acceptance_id,
+                )
+              : null;
+            recordUpdate = {
+              outcome: "won",
+              outcome_at: now,
+              won_contract_value:
+                acceptance?.accepted_total ?? request.won_contract_value ?? null,
+              won_value_basis: acceptance
+                ? acceptance.signature_status === "signed"
+                  ? "signed_proposal"
+                  : "accepted_proposal"
+                : request.won_value_basis ?? null,
+              lost_reason_code: null,
+              lost_reason_notes: null,
+            };
+            leadUpdate = { status: "won", pipeline_stage: "approved" };
+            linkedTable = acceptance ? "estimate_proposal_acceptances" : null;
+            linkedRecordId = acceptance?.id ?? null;
+          } else if (request.action === "lost") {
+            recordUpdate = {
+              outcome: "lost",
+              outcome_at: now,
+              lost_reason_code: request.lost_reason_code,
+              lost_reason_notes: request.lost_reason_notes ?? null,
+              won_contract_value: null,
+              won_value_basis: null,
+            };
+            leadUpdate = { status: "lost", pipeline_stage: "lost" };
+          }
+
+          const updatedRecord: LeadAccountabilityRecord = {
+            ...currentRecord,
+            ...recordUpdate,
+            record_version: nextVersion,
+            last_operation_key: request.operation_key,
+            last_request_fingerprint: operationToken.fingerprint,
+            updated_at: now,
+          };
+          const event: LeadAccountabilityEventRecord = {
+            id: `demo-accountability-event-${crypto.randomUUID()}`,
+            lead_accountability_id: currentRecord.id,
+            company_id: currentRecord.company_id,
+            lead_id: currentRecord.lead_id,
+            event_type: request.action,
+            operation_key: request.operation_key,
+            request_fingerprint: operationToken.fingerprint,
+            actor_user_id: user?.id ?? null,
+            actor_kind: "user",
+            reason_code:
+              request.action === "attribution_reviewed" ? request.reason_code : null,
+            source_key:
+              request.action === "attribution_reviewed" ? request.source_key : null,
+            source_detail:
+              request.action === "attribution_reviewed"
+                ? request.source_detail ?? null
+                : null,
+            intake_provider: updatedRecord.intake_provider,
+            campaign_id:
+              request.action === "attribution_reviewed"
+                ? request.campaign_id ?? null
+                : null,
+            owner_user_id: null,
+            first_response_channel:
+              request.action === "contacted"
+                ? request.first_response_channel
+                : null,
+            linked_table: linkedTable,
+            linked_record_id: linkedRecordId,
+            outcome:
+              request.action === "won" || request.action === "lost"
+                ? request.action
+                : null,
+            lost_reason_code:
+              request.action === "lost" ? request.lost_reason_code : null,
+            won_contract_value:
+              request.action === "won"
+                ? updatedRecord.won_contract_value
+                : null,
+            won_value_basis:
+              request.action === "won" ? updatedRecord.won_value_basis : null,
+            occurred_at: now,
+            resulting_record_version: nextVersion,
+            created_at: now,
+          };
+
+          return {
+            ...currentSnapshot,
+            leads: currentSnapshot.leads.map((lead) =>
+              lead.id === selectedOpportunity.id
+                ? { ...lead, ...leadUpdate, updated_at: now }
+                : lead,
+            ),
+            leadAccountability: currentSnapshot.leadAccountability.map((record) =>
+              record.id === updatedRecord.id ? updatedRecord : record,
+            ),
+            leadAccountabilityEvents: [
+              event,
+              ...currentSnapshot.leadAccountabilityEvents,
+            ],
+          };
+        });
+      } else {
+        const result = await applyLeadAccountabilityAction(client, request);
+        setPendingAccountabilityReload({
+          leadId: selectedOpportunity.id,
+          recordVersion: result.record_version,
+        });
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
+      onNotice(successMessage);
+    } catch (currentError) {
+      setPendingAccountabilityReload(null);
+      onError(
+        getCaughtErrorMessage(currentError, "Unable to record accountability action."),
+      );
+    } finally {
+      setIsApplyingAccountabilityAction(false);
+    }
+  };
+
+  const handleAttributionReview = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOpportunityAccountability) {
+      onError("No accountability record is available for attribution review.");
+      return;
+    }
+    if (!canManageSelectedOpportunityAccountability) {
+      onError("Only a company owner or admin can correct acquisition attribution.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    if (attributionReviewSource === "repeat_customer") {
+      onError("Repeat-customer attribution is created only from Customer 360.");
+      return;
+    }
+    const campaignId = attributionReviewCampaignId || null;
+    const sourceDetail = normalizeAttributionSlug(attributionReviewDetail);
+    const intakeProvider = normalizeAttributionSlug(attributionReviewProvider);
+    const campaign = campaignId
+      ? snapshot.marketingCampaigns.find(
+          (record) =>
+            record.id === campaignId &&
+            record.company_id === selectedOpportunityAccountability.company_id &&
+            record.source_key === attributionReviewSource &&
+            record.source_detail === sourceDetail &&
+            record.intake_provider === intakeProvider,
+        )
+      : null;
+    if (campaignId && !campaign) {
+      onError("Choose a campaign from this opportunity's company and source.");
+      return;
+    }
+    if (attributionReviewSource === "other" && !sourceDetail) {
+      onError("Other attribution requires a non-personal source detail code.");
+      return;
+    }
+    const reviewStatus = attributionReviewStatus;
+    if (attributionReviewSource === "unknown" && reviewStatus === "verified") {
+      onError("Unknown attribution cannot be marked verified.");
+      return;
+    }
+    const reasonCode = getNormalizedFormString(
+      formData,
+      "review_reason_code",
+    ) as (typeof attributionReviewReasonOptions)[number]["value"];
+    if (
+      !attributionReviewReasonOptions.some(
+        (option) => option.value === reasonCode,
+      )
+    ) {
+      onError("Choose a valid attribution review reason.");
+      return;
+    }
+
+    await executeAccountabilityAction(
+      {
+        lead_id: selectedOpportunityAccountability.lead_id,
+        expected_version: selectedOpportunityAccountability.record_version,
+        action: "attribution_reviewed",
+        source_key: attributionReviewSource,
+        source_detail: sourceDetail,
+        intake_provider: intakeProvider,
+        campaign_id: campaign?.id ?? null,
+        evidence_kind:
+          attributionReviewSource === "unknown" ? "insufficient" : "staff_selected",
+        review_status: reviewStatus,
+        reason_code: reasonCode,
+      },
+      "Acquisition attribution reviewed and audited.",
+    );
+  };
+
+  const handleFirstHumanContact = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOpportunityAccountability) {
+      onError("No accountability record is available for contact logging.");
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    const channel = getNormalizedFormString(
+      formData,
+      "first_response_channel",
+      "phone",
+    ) as LeadFirstResponseChannel;
+    await executeAccountabilityAction(
+      {
+        lead_id: selectedOpportunityAccountability.lead_id,
+        expected_version: selectedOpportunityAccountability.record_version,
+        action: "contacted",
+        first_response_channel: channel,
+        human_contact: true,
+      },
+      "First successful human contact recorded.",
+    );
+  };
+
+  const handleWonOutcome = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOpportunityAccountability) {
+      onError("No accountability record is available for a won outcome.");
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    const acceptanceId = getNormalizedOptionalFormString(
+      formData,
+      "won_record_id",
+    );
+    const acceptance = acceptanceId
+      ? selectedOpportunityAcceptances.find((record) => record.id === acceptanceId)
+      : null;
+    const parsedValue = parseFiniteFinancialInput(
+      formData.get("won_contract_value"),
+    );
+    const basis = getNormalizedFormString(
+      formData,
+      "won_value_basis",
+      "approved_contract_total",
+    );
+    if (acceptanceId && !acceptance) {
+      onError("Choose an accepted or signed proposal linked to this opportunity.");
+      return;
+    }
+    if (!acceptance && !canManageSelectedOpportunityAccountability) {
+      onError(
+        "Only a company owner or admin can record a manual approved contract total.",
+      );
+      return;
+    }
+    if (!acceptance && (parsedValue.status !== "valid" || parsedValue.value <= 0)) {
+      onError("Won requires an accepted proposal or a positive approved contract total.");
+      return;
+    }
+    if (!acceptance && basis !== "approved_contract_total") {
+      onError("Manual won value must use the approved contract total basis.");
+      return;
+    }
+    const manualWonValue = parsedValue.status === "valid" ? parsedValue.value : null;
+
+    await executeAccountabilityAction(
+      acceptance
+        ? {
+            lead_id: selectedOpportunityAccountability.lead_id,
+            expected_version: selectedOpportunityAccountability.record_version,
+            action: "won",
+            proposal_acceptance_id: acceptance.id,
+          }
+        : {
+            lead_id: selectedOpportunityAccountability.lead_id,
+            expected_version: selectedOpportunityAccountability.record_version,
+            action: "won",
+            won_contract_value: manualWonValue as number,
+            won_value_basis: "approved_contract_total",
+          },
+      "Won outcome recorded from authoritative contract evidence.",
+    );
+  };
+
+  const handleLostOutcome = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOpportunityAccountability) {
+      onError("No accountability record is available for a lost outcome.");
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    const reason = getNormalizedFormString(formData, "lost_reason_code") as
+      (typeof lostReasonOptions)[number]["value"];
+    const notes = getNormalizedOptionalFormString(formData, "lost_reason_notes");
+    if (reason === "other" && !notes) {
+      onError("Lost reason Other requires notes.");
+      return;
+    }
+
+    await executeAccountabilityAction(
+      {
+        lead_id: selectedOpportunityAccountability.lead_id,
+        expected_version: selectedOpportunityAccountability.record_version,
+        action: "lost",
+        lost_reason_code: reason,
+        lost_reason_notes: notes,
+      },
+      "Lost outcome and reason recorded.",
+    );
+  };
+
   const handleMoveOpportunityStage = async (stage: PipelineStage) => {
     if (!selectedOpportunity) {
+      return;
+    }
+
+    if (selectedOpportunityAccountability) {
+      onError(
+        "Accountable opportunities move only through exact linked milestone actions.",
+      );
+      return;
+    }
+
+    if (stage === "lost") {
+      onError("Use the accountable Lost action and select a structured reason.");
       return;
     }
 
@@ -16127,23 +18608,9 @@ function SalesPipelineView({
           ...currentSnapshot,
           estimates: [estimate, ...currentSnapshot.estimates],
           estimateLineItems: [...lineRecords, ...currentSnapshot.estimateLineItems],
-          leads: currentSnapshot.leads.map((lead) =>
-            lead.id === selectedOpportunity.id
-              ? {
-                  ...lead,
-                  status: "qualified",
-                  pipeline_stage: "estimate_scheduled",
-                  updated_at: now,
-                }
-              : lead,
-          ),
         }));
       } else {
         await createEstimate(client, input, lineItems);
-        await updateLead(client, selectedOpportunity.id, {
-          status: "qualified",
-          pipeline_stage: "estimate_scheduled",
-        });
         await onReload();
       }
 
@@ -16214,23 +18681,9 @@ function SalesPipelineView({
         onDemoSnapshotChange((currentSnapshot) => ({
           ...currentSnapshot,
           jobs: [job, ...currentSnapshot.jobs],
-          leads: currentSnapshot.leads.map((lead) =>
-            lead.id === selectedOpportunity.id
-              ? {
-                  ...lead,
-                  status: "won",
-                  pipeline_stage: "job_scheduled",
-                  updated_at: now,
-                }
-              : lead,
-          ),
         }));
       } else {
         await createJob(client, input);
-        await updateLead(client, selectedOpportunity.id, {
-          status: "won",
-          pipeline_stage: "job_scheduled",
-        });
         await onReload();
       }
 
@@ -16448,7 +18901,11 @@ function SalesPipelineView({
               <ContactLine icon={Building2} value={selectedOpportunity.property_address} />
               <ContactLine
                 icon={UserRound}
-                value={getOpportunityOwnerLabel(selectedOpportunity, user)}
+                value={getOpportunityOwnerLabel(
+                  selectedOpportunity,
+                  user,
+                  snapshot.leadAccountability,
+                )}
               />
             </div>
 
@@ -16462,6 +18919,7 @@ function SalesPipelineView({
                   Stage
                   <select
                     name="pipeline_stage"
+                    disabled={Boolean(selectedOpportunityAccountability)}
                     value={opportunityDraft.pipeline_stage}
                     onChange={(event) =>
                       setOpportunityDraft((current) => ({
@@ -16477,11 +18935,21 @@ function SalesPipelineView({
                       </option>
                     ))}
                   </select>
+                  {selectedOpportunityAccountability ? (
+                    <span className="text-xs font-normal text-slate-500">
+                      Funnel stage is controlled by audited milestone actions.
+                    </span>
+                  ) : null}
                 </label>
                 <label className="grid gap-1 text-sm font-medium text-slate-700">
                   Owner
                   <select
                     name="owner"
+                    data-testid="lead-owner-select"
+                    disabled={
+                      !selectedOpportunityAccountability ||
+                      !canManageSelectedOpportunityAccountability
+                    }
                     value={opportunityDraft.owner}
                     onChange={(event) =>
                       setOpportunityDraft((current) => ({
@@ -16492,12 +18960,33 @@ function SalesPipelineView({
                     className="rounded-md border border-slate-300 px-3 py-2"
                   >
                     <option value="unassigned">Unassigned</option>
-                    <option value="me">Assign to me</option>
-                    {selectedOpportunity.created_by &&
-                    selectedOpportunity.created_by !== user?.id ? (
-                      <option value="existing">Keep current owner</option>
+                    {currentUserIsEligibleOpportunityOwner ? (
+                      <option value="me">Assign to me</option>
                     ) : null}
+                    {eligibleOpportunityOwners
+                      .filter((membership) => membership.user_id !== user?.id)
+                      .map((membership) => (
+                        <option
+                          key={membership.user_id}
+                          value={`user:${membership.user_id}`}
+                        >
+                          {`${membership.role} - ${membership.user_id.slice(0, 8)}`}
+                        </option>
+                      ))}
                   </select>
+                  <button
+                    type="button"
+                    data-testid="lead-owner-submit"
+                    disabled={
+                      isAccountabilityActionBusy ||
+                      !selectedOpportunityAccountability ||
+                      !canManageSelectedOpportunityAccountability
+                    }
+                    onClick={handleAssignOpportunityOwner}
+                    className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    {isAccountabilityActionBusy ? "Saving owner" : "Save owner"}
+                  </button>
                 </label>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -16578,35 +19067,307 @@ function SalesPipelineView({
               </button>
             </form>
 
-            <div className="mt-5 grid gap-2 sm:grid-cols-2">
-              {pipelineStages.map((stage) => (
-                <button
-                  key={stage.value}
-                  type="button"
-                  onClick={() => void handleMoveOpportunityStage(stage.value)}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Move to {stage.label}
-                </button>
-              ))}
-            </div>
+            {selectedOpportunityAccountability ? (
+              <div
+                className="mt-5 grid gap-4 rounded-xl border border-sky-200 bg-sky-50/50 p-4"
+                data-testid="lead-accountability-panel"
+              >
+                <div>
+                  <p className="font-black text-slate-950">Audited accountability</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {`${attributionSourceLabels[selectedOpportunityAccountability.source_key]} · ${selectedOpportunityAccountability.review_status} · ${selectedOpportunityAccountability.outcome} · version ${selectedOpportunityAccountability.record_version}`}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Communication alone never overwrites locked first-touch attribution.
+                  </p>
+                </div>
 
-            <div className="mt-5 grid gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => void handleMoveOpportunityStage("approved")}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
-              >
-                Mark won
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleMoveOpportunityStage("lost")}
-                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
-              >
-                Mark lost
-              </button>
-            </div>
+                <form
+                  onSubmit={handleAttributionReview}
+                  className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3"
+                  data-testid="lead-attribution-review-form"
+                >
+                  <p className="text-sm font-bold text-slate-950">Review acquisition origin</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <select
+                      name="attribution_source_key"
+                      value={attributionReviewSource}
+                      onChange={(event) => {
+                        const nextSource = event.target.value as AttributionSourceKey;
+                        setAttributionReviewSource(nextSource);
+                        setAttributionReviewDetail("");
+                        setAttributionReviewProvider("");
+                        setAttributionReviewCampaignId("");
+                        setAttributionReviewStatus(
+                          nextSource === "unknown" ? "unattributed" : "verified",
+                        );
+                      }}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {attributionReviewSource === "repeat_customer" ? (
+                        <option value="repeat_customer" disabled>
+                          Repeat customer (Customer 360 only)
+                        </option>
+                      ) : null}
+                      {canonicalAttributionSourceKeys
+                        .filter((key) => key !== "repeat_customer")
+                        .map((key) => (
+                        <option key={key} value={key}>
+                          {attributionSourceLabels[key]}
+                        </option>
+                        ))}
+                    </select>
+                    <input
+                      name="attribution_source_detail"
+                      value={attributionReviewDetail}
+                      onChange={(event) => {
+                        setAttributionReviewDetail(event.target.value);
+                        setAttributionReviewCampaignId("");
+                      }}
+                      placeholder="Category code, e.g. google_ads (never a name)"
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <input
+                      name="intake_provider"
+                      value={attributionReviewProvider}
+                      onChange={(event) => {
+                        setAttributionReviewProvider(event.target.value);
+                        setAttributionReviewCampaignId("");
+                      }}
+                      placeholder="Provider slug, e.g. website"
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <select
+                      name="campaign_id"
+                      value={attributionReviewCampaignId}
+                      onChange={(event) =>
+                        setAttributionReviewCampaignId(event.target.value)
+                      }
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">No campaign</option>
+                      {snapshot.marketingCampaigns
+                        .filter(
+                          (campaign) =>
+                            campaign.company_id === selectedOpportunity.company_id &&
+                            campaign.source_key === attributionReviewSource &&
+                            campaign.source_detail ===
+                              normalizeAttributionSlug(attributionReviewDetail) &&
+                            campaign.intake_provider ===
+                              normalizeAttributionSlug(attributionReviewProvider),
+                        )
+                        .map((campaign) => (
+                          <option key={campaign.id} value={campaign.id}>
+                            {campaign.campaign_name}
+                          </option>
+                        ))}
+                    </select>
+                    <select
+                      name="review_status"
+                      value={attributionReviewStatus}
+                      onChange={(event) =>
+                        setAttributionReviewStatus(
+                          event.target.value as AttributionReviewStatus,
+                        )
+                      }
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {attributionReviewSource === "unknown" ? (
+                        <>
+                          <option value="unattributed">Unattributed</option>
+                          <option value="needs_review">Needs review</option>
+                        </>
+                      ) : (
+                        <option value="verified">Verified</option>
+                      )}
+                    </select>
+                    <select
+                      name="review_reason_code"
+                      required
+                      defaultValue="initial_review"
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {attributionReviewReasonOptions.map((reason) => (
+                        <option key={reason.value} value={reason.value}>
+                          {reason.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    data-testid="lead-attribution-review-submit"
+                    disabled={
+                      isAccountabilityActionBusy ||
+                      !canManageSelectedOpportunityAccountability
+                    }
+                    className="rounded-md bg-sky-700 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Review and audit attribution
+                  </button>
+                </form>
+
+                <form
+                  onSubmit={handleFirstHumanContact}
+                  className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[1fr_auto] sm:items-end"
+                >
+                  <label className="grid gap-1 text-sm font-medium text-slate-700">
+                    Successful human-contact channel
+                    <select
+                      name="first_response_channel"
+                      data-testid="lead-first-response-channel"
+                      defaultValue="phone"
+                      className="rounded-md border border-slate-300 px-3 py-2"
+                    >
+                      <option value="phone">Phone</option>
+                      <option value="sms">SMS</option>
+                      <option value="email">Email</option>
+                      <option value="in_person">In person</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <button
+                    type="submit"
+                    data-testid="lead-first-response-submit"
+                    disabled={
+                      isAccountabilityActionBusy ||
+                      !canRecordSelectedOpportunityLifecycle ||
+                      Boolean(selectedOpportunityAccountability.first_response_at)
+                    }
+                    className="rounded-md bg-slate-950 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Record contacted
+                  </button>
+                  <p className="text-xs text-slate-500 sm:col-span-2">
+                    Automated acknowledgements do not count as human contact.
+                  </p>
+                </form>
+
+                <form
+                  onSubmit={handleWonOutcome}
+                  className="grid gap-2 rounded-lg border border-emerald-200 bg-white p-3"
+                  data-testid="lead-won-form"
+                >
+                  <p className="text-sm font-bold text-slate-950">Record won</p>
+                  <select
+                    name="won_record_id"
+                    data-testid="lead-won-record-id"
+                    defaultValue=""
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">No accepted proposal selected</option>
+                    {selectedOpportunityAcceptances.map((acceptance) => (
+                      <option key={acceptance.id} value={acceptance.id}>
+                        {`${formatMoney(acceptance.accepted_total)} · ${acceptance.signature_status === "signed" ? "signed" : "accepted"}`}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input
+                      name="won_contract_value"
+                      data-testid="lead-won-value"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      disabled={!canManageSelectedOpportunityAccountability}
+                      placeholder="Approved contract total"
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <select
+                      name="won_value_basis"
+                      data-testid="lead-won-basis"
+                      disabled={!canManageSelectedOpportunityAccountability}
+                      defaultValue="approved_contract_total"
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {wonValueBasisOptions.map((basis) => (
+                        <option
+                          key={basis.value}
+                          value={basis.value}
+                          disabled={basis.value !== "approved_contract_total"}
+                        >
+                          {basis.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    data-testid="lead-won-submit"
+                    disabled={
+                      isAccountabilityActionBusy ||
+                      !canRecordSelectedOpportunityLifecycle ||
+                      selectedOpportunityAccountability.outcome !== "open"
+                    }
+                    className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Record authoritative won outcome
+                  </button>
+                  <p className="text-xs text-slate-500">
+                    Manual approved contract totals are owner/admin only; accepted or
+                    signed proposal evidence remains authoritative for sales users.
+                  </p>
+                </form>
+
+                <form
+                  onSubmit={handleLostOutcome}
+                  className="grid gap-2 rounded-lg border border-amber-200 bg-white p-3"
+                  data-testid="lead-lost-form"
+                >
+                  <p className="text-sm font-bold text-slate-950">Record lost</p>
+                  <select
+                    name="lost_reason_code"
+                    data-testid="lead-lost-reason"
+                    defaultValue="no_response"
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    {lostReasonOptions.map((reason) => (
+                      <option key={reason.value} value={reason.value}>
+                        {reason.label}
+                      </option>
+                    ))}
+                  </select>
+                  <textarea
+                    name="lost_reason_notes"
+                    data-testid="lead-lost-notes"
+                    placeholder="Required when reason is Other"
+                    className="min-h-16 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="submit"
+                    data-testid="lead-lost-submit"
+                    disabled={
+                      isAccountabilityActionBusy ||
+                      !canRecordSelectedOpportunityLifecycle ||
+                      selectedOpportunityAccountability.outcome !== "open"
+                    }
+                    className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Record lost outcome
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                This pre-sprint test or legacy opportunity is untracked by Phase 1.
+                Legacy stage editing remains available, but it is excluded from
+                accountability KPI denominators until explicitly reconciled.
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {pipelineStages
+                    .filter((stage) => stage.value !== "lost")
+                    .map((stage) => (
+                      <button
+                        key={stage.value}
+                        type="button"
+                        onClick={() => void handleMoveOpportunityStage(stage.value)}
+                        className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-amber-100"
+                      >
+                        Move legacy row to {stage.label}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
           </section>
         ) : (
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -16723,7 +19484,14 @@ function SalesPipelineView({
             <ProfileStat label="Linked estimates" value={linkedEstimateCount} />
             <ProfileStat
               label="Unassigned"
-              value={filteredOpportunities.filter((lead) => !lead.created_by).length}
+              value={filteredOpportunities.filter(
+                (lead) =>
+                  !getLeadOwnerUserId(
+                    snapshot.leadAccountability,
+                    lead.id,
+                    lead.company_id,
+                  ),
+              ).length}
             />
             <ProfileStat
               label="Won opportunities"
@@ -16788,6 +19556,7 @@ function LeadIntakeView({
     () => new Set(),
   );
   const creatingLeadFingerprintsRef = useRef<Set<string>>(new Set());
+  const stableOperationKeys = useStableOperationKeyCache();
   const recentLeads = [...snapshot.leads]
     .sort(
       (first, second) =>
@@ -16821,6 +19590,7 @@ function LeadIntakeView({
       const validationMessage = getLeadCreateValidationMessage(
         snapshot.companies,
         input,
+        snapshot.marketingCampaigns,
       );
 
       if (validationMessage) {
@@ -16842,17 +19612,42 @@ function LeadIntakeView({
       }
 
       creatingLeadFingerprintsRef.current.add(duplicateFingerprint);
+      const operationScope = "lead_intake_create";
+      const requestDraft = buildCreateAccountableLeadRequest(input, "");
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        { ...requestDraft, operation_key: undefined },
+      );
+      const accountabilityRequest = {
+        ...requestDraft,
+        operation_key: operationToken.operationKey,
+      };
 
       if (isDemoMode) {
         const createdLead = createDemoLeadRecord(input);
+        const { accountability, event: accountabilityEvent } =
+          createDemoLeadAccountability(
+            createdLead,
+            accountabilityRequest.source_key,
+            accountabilityRequest.evidence_kind,
+            accountabilityRequest.review_status,
+            accountabilityRequest,
+            operationToken.operationKey,
+          );
         onDemoSnapshotChange((currentSnapshot) => ({
           ...currentSnapshot,
           leads: [createdLead, ...currentSnapshot.leads],
+          leadAccountability: [accountability, ...currentSnapshot.leadAccountability],
+          leadAccountabilityEvents: [
+            accountabilityEvent,
+            ...currentSnapshot.leadAccountabilityEvents,
+          ],
         }));
       } else {
-        await createLead(client, input);
+        await createAccountableLead(client, accountabilityRequest);
         await onReload();
       }
+      stableOperationKeys.complete(operationScope, operationToken);
 
       setCreatedLeadFingerprints((current) => {
         const next = new Set(current);
@@ -16932,9 +19727,9 @@ function LeadIntakeView({
           </div>
           <LeadCreateForm
             companies={snapshot.companies}
+            campaigns={snapshot.marketingCampaigns}
             isSubmitting={isCreating}
             onSubmit={handleCreateLead}
-            showPipelineStage
             submitLabel="Save lead intake"
           />
         </div>
@@ -17002,9 +19797,11 @@ function LeadIntakeView({
 
 function LeadsView({
   client,
+  isDemoMode,
   snapshot,
   companyMap,
   onReload,
+  onDemoSnapshotChange,
   onViewChange,
   onOpenIdentityReconciliation,
   onNotice,
@@ -17018,9 +19815,17 @@ function LeadsView({
     () => new Set(),
   );
   const creatingLeadFingerprintsRef = useRef<Set<string>>(new Set());
+  const stableOperationKeys = useStableOperationKeyCache();
 
   const selectedLead =
     snapshot.leads.find((lead) => lead.id === selectedLeadId) ?? null;
+  const selectedLeadAccountability = selectedLead
+    ? getLeadAccountabilityForLead(
+        snapshot.leadAccountability,
+        selectedLead.id,
+        selectedLead.company_id,
+      )
+    : null;
   const [leadEditDraft, setLeadEditDraft] = useState(() =>
     getLeadEditDraft(selectedLead),
   );
@@ -17125,6 +19930,7 @@ function LeadsView({
       const validationMessage = getLeadCreateValidationMessage(
         snapshot.companies,
         input,
+        snapshot.marketingCampaigns,
       );
 
       if (validationMessage) {
@@ -17146,15 +19952,51 @@ function LeadsView({
       }
 
       creatingLeadFingerprintsRef.current.add(duplicateFingerprint);
-      const createdLead = await createLead(client, input);
+      const operationScope = "leads_create";
+      const requestDraft = buildCreateAccountableLeadRequest(input, "");
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        { ...requestDraft, operation_key: undefined },
+      );
+      const accountabilityRequest = {
+        ...requestDraft,
+        operation_key: operationToken.operationKey,
+      };
+      let createdLeadId: string;
+      if (isDemoMode) {
+        const createdLead = createDemoLeadRecord(input);
+        const { accountability, event: accountabilityEvent } =
+          createDemoLeadAccountability(
+            createdLead,
+            accountabilityRequest.source_key,
+            accountabilityRequest.evidence_kind,
+            accountabilityRequest.review_status,
+            accountabilityRequest,
+            operationToken.operationKey,
+          );
+        createdLeadId = createdLead.id;
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          leads: [createdLead, ...currentSnapshot.leads],
+          leadAccountability: [accountability, ...currentSnapshot.leadAccountability],
+          leadAccountabilityEvents: [
+            accountabilityEvent,
+            ...currentSnapshot.leadAccountabilityEvents,
+          ],
+        }));
+      } else {
+        const result = await createAccountableLead(client, accountabilityRequest);
+        createdLeadId = result.lead_id;
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
       setCreatedLeadFingerprints((current) => {
         const next = new Set(current);
         next.add(duplicateFingerprint);
         return next;
       });
-      setSelectedLeadId(createdLead.id);
+      setSelectedLeadId(createdLeadId);
       form.reset();
-      await onReload();
       onNotice("Lead created.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to create lead."));
@@ -17173,19 +20015,38 @@ function LeadsView({
 
     try {
       const pipelineStage = leadEditDraft.pipeline_stage;
+      if (!selectedLeadAccountability && pipelineStage === "lost") {
+        onError("Use Sales Pipeline to record Lost with a structured reason.");
+        return;
+      }
       const estimatedValue = Number(
         leadEditDraft.estimated_value.replace(/[^0-9.]/g, ""),
       );
 
-      await updateLead(client, selectedLead.id, {
-        status: leadStatusForPipelineStage(pipelineStage),
-        pipeline_stage: pipelineStage,
+      const updates: Partial<LeadInput> = {
         priority: leadEditDraft.priority,
         estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : 0,
         next_follow_up: leadEditDraft.next_follow_up || null,
         notes: leadEditDraft.notes || null,
-      });
-      await onReload();
+      };
+      if (!selectedLeadAccountability) {
+        updates.status = leadStatusForPipelineStage(pipelineStage);
+        updates.pipeline_stage = pipelineStage;
+      }
+      if (isDemoMode) {
+        const now = new Date().toISOString();
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          leads: currentSnapshot.leads.map((lead) =>
+            lead.id === selectedLead.id
+              ? { ...lead, ...updates, updated_at: now }
+              : lead,
+          ),
+        }));
+      } else {
+        await updateLead(client, selectedLead.id, updates);
+        await onReload();
+      }
       onNotice("Lead updated.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to update lead."));
@@ -17426,6 +20287,7 @@ function LeadsView({
                   Pipeline stage
                   <select
                     name="pipeline_stage"
+                    disabled={Boolean(selectedLeadAccountability)}
                     value={leadEditDraft.pipeline_stage}
                     onChange={(event) =>
                       setLeadEditDraft((current) => ({
@@ -17441,6 +20303,15 @@ function LeadsView({
                       </option>
                     ))}
                   </select>
+                  {selectedLeadAccountability ? (
+                    <span className="text-xs font-normal text-slate-500">
+                      Use Sales Pipeline audited actions for funnel milestones.
+                    </span>
+                  ) : (
+                    <span className="text-xs font-normal text-amber-700">
+                      This pre-sprint test or legacy row is not in accountability KPIs.
+                    </span>
+                  )}
                 </label>
                 <label className="grid gap-1 text-sm font-medium text-slate-700">
                   Priority
@@ -17538,6 +20409,7 @@ function LeadsView({
           <h3 className="text-lg font-bold text-slate-950">New lead</h3>
           <LeadCreateForm
             companies={snapshot.companies}
+            campaigns={snapshot.marketingCampaigns}
             isSubmitting={isCreating}
             onSubmit={handleCreateLead}
           />
@@ -17549,25 +20421,59 @@ function LeadsView({
 
 type LeadCreateFormProps = {
   companies: CompanyRecord[];
+  campaigns: MarketingCampaignRecord[];
   isSubmitting: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  showPipelineStage?: boolean;
   submitLabel?: string;
 };
 
 function LeadCreateForm({
   companies,
+  campaigns,
   isSubmitting,
   onSubmit,
-  showPipelineStage = false,
   submitLabel = "Create lead",
 }: LeadCreateFormProps) {
+  const [selectedCompanyId, setSelectedCompanyId] = useState(
+    companies[0]?.id ?? "",
+  );
+  const [selectedSourceKey, setSelectedSourceKey] =
+    useState<AttributionSourceKey>("unknown");
+  const selectedCompany =
+    companies.find((company) => company.id === selectedCompanyId) ?? null;
+  const [selectedServiceType, setSelectedServiceType] = useState<ServiceType>(
+    getDefaultServiceTypeForCompany(selectedCompany),
+  );
+  const availableServiceTypes = serviceTypes.filter((service) =>
+    isServiceAllowedForCompany(selectedCompany, service.value),
+  );
+  const availableCampaigns = campaigns.filter(
+    (campaign) =>
+      campaign.company_id === selectedCompanyId &&
+      campaign.source_key === selectedSourceKey &&
+      campaign.is_active,
+  );
+
+  useEffect(() => {
+    if (!companies.some((company) => company.id === selectedCompanyId)) {
+      setSelectedCompanyId(companies[0]?.id ?? "");
+    }
+  }, [companies, selectedCompanyId]);
+
+  useEffect(() => {
+    if (!isServiceAllowedForCompany(selectedCompany, selectedServiceType)) {
+      setSelectedServiceType(getDefaultServiceTypeForCompany(selectedCompany));
+    }
+  }, [selectedCompany, selectedServiceType]);
+
   return (
     <form onSubmit={onSubmit} className="mt-4 grid gap-3">
       <label className="grid gap-1 text-sm font-medium text-slate-700">
         Company
         <select
           name="company_id"
+          value={selectedCompanyId}
+          onChange={(event) => setSelectedCompanyId(event.target.value)}
           required
           className="rounded-md border border-slate-300 px-3 py-2"
         >
@@ -17624,9 +20530,13 @@ function LeadCreateForm({
       <div className="grid gap-3 sm:grid-cols-2">
         <select
           name="service_type"
+          value={selectedServiceType}
+          onChange={(event) =>
+            setSelectedServiceType(event.target.value as ServiceType)
+          }
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
         >
-          {serviceTypes.map((service) => (
+          {availableServiceTypes.map((service) => (
             <option key={service.value} value={service.value}>
               {service.label}
             </option>
@@ -17643,35 +20553,63 @@ function LeadCreateForm({
           ))}
         </select>
       </div>
-      {showPipelineStage ? (
-        <label className="grid gap-1 text-sm font-medium text-slate-700">
-          Lead status
-          <select
-            name="pipeline_stage"
-            defaultValue="new_lead"
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          >
-            {pipelineStages.map((stage) => (
-              <option key={stage.value} value={stage.value}>
-                {stage.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input
-          name="source"
-          defaultValue="Website"
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Lead source"
-        />
+      <label className="grid gap-1 text-sm font-medium text-slate-700">
+        Prospective expected revenue
         <input
           name="estimated_value"
+          type="number"
+          min="0"
+          step="0.01"
+          defaultValue="0"
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-          placeholder="Estimated value"
         />
+        <span className="text-xs font-normal text-slate-500">
+          Planning value only; it never counts as won contract revenue.
+        </span>
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Acquisition source
+          <select
+            name="source"
+            value={selectedSourceKey}
+            onChange={(event) =>
+              setSelectedSourceKey(event.target.value as AttributionSourceKey)
+            }
+            required
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {canonicalAttributionSourceKeys
+              .filter((sourceKey) => sourceKey !== "repeat_customer")
+              .map((sourceKey) => (
+              <option key={sourceKey} value={sourceKey}>
+                {attributionSourceLabels[sourceKey]}
+              </option>
+              ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Non-personal source detail
+          <input
+            name="source_detail"
+            required={selectedSourceKey === "other"}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="google_ads or customer_referral; never a name"
+          />
+        </label>
       </div>
+      <select
+        name="campaign_id"
+        defaultValue=""
+        className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+      >
+        <option value="">No campaign</option>
+        {availableCampaigns.map((campaign) => (
+          <option key={campaign.id} value={campaign.id}>
+            {campaign.campaign_name}
+          </option>
+        ))}
+      </select>
       <input
         name="next_follow_up"
         type="date"
@@ -17702,6 +20640,7 @@ type CustomersViewProps = {
   user: User | null;
   focusLeadId: string | null;
   onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
   onViewChange: (view: WorkspaceView) => void;
@@ -19523,7 +22462,7 @@ function buildCustomerTimelineItems(
           lead.pipeline_stage,
         )}`,
         occurredAt: lead.updated_at,
-        user: lead.created_by ?? "CRM",
+        user: "CRM workflow",
         icon: ArrowUp,
         tone: lead.status === "won" ? "green" : lead.status === "lost" ? "amber" : "blue",
         kind: "lead",
@@ -19832,10 +22771,17 @@ function getLeadTimelineLabel(lead: LeadRecord) {
 
 function getCustomerAssignedSalesperson(
   related: CustomerRelatedRecords,
+  accountability: readonly LeadAccountabilityRecord[],
   fallback = "Unassigned",
 ) {
+  const leadOwner = related.leads
+    .map((lead) =>
+      getLeadOwnerUserId(accountability, lead.id, lead.company_id),
+    )
+    .find((ownerUserId): ownerUserId is string => Boolean(ownerUserId));
+
   return (
-    related.leads.find((lead) => lead.created_by)?.created_by ??
+    leadOwner ??
     related.jobs.find((job) => job.project_manager)?.project_manager ??
     related.jobs.find((job) => job.crew_name)?.crew_name ??
     fallback
@@ -20446,6 +23392,7 @@ function CustomersView({
   user,
   focusLeadId,
   onReload,
+  onDemoSnapshotChange,
   onNotice,
   onError,
   onViewChange,
@@ -20879,9 +23826,16 @@ function CustomersView({
             </div>
 
             <CustomerProfilePanel
+              client={client}
+              isDemoMode={isDemoMode}
               snapshot={snapshot}
               companyMap={companyMap}
               customer={selectedCustomer}
+              user={user}
+              onReload={onReload}
+              onDemoSnapshotChange={onDemoSnapshotChange}
+              onNotice={onNotice}
+              onError={onError}
               onViewChange={onViewChange}
               onAddNote={handleFocusCustomerNotes}
             />
@@ -21041,15 +23995,29 @@ function CustomersView({
 }
 
 function CustomerProfilePanel({
+  client,
+  isDemoMode,
   snapshot,
   companyMap,
   customer,
+  user,
+  onReload,
+  onDemoSnapshotChange,
+  onNotice,
+  onError,
   onViewChange,
   onAddNote,
 }: {
+  client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   customer: CustomerRecord;
+  user: User | null;
+  onReload: () => Promise<void>;
+  onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
   onViewChange: (view: WorkspaceView) => void;
   onAddNote: () => void;
 }) {
@@ -21057,6 +24025,15 @@ function CustomerProfilePanel({
     useState<CustomerWorkspaceSection>("overview");
   const [timelineFilter, setTimelineFilter] = useState<CustomerTimelineKind | "all">(
     "all",
+  );
+  const [showRepeatOpportunityForm, setShowRepeatOpportunityForm] = useState(false);
+  const [isCreatingRepeatOpportunity, setIsCreatingRepeatOpportunity] =
+    useState(false);
+  const stableOperationKeys = useStableOperationKeyCache();
+  const isGlobalSalesManager = useGlobalMarketingManagerRole(
+    client,
+    user,
+    isDemoMode,
   );
   const related = useMemo(
     () => getCustomerRelatedRecords(snapshot, customer),
@@ -21101,6 +24078,26 @@ function CustomerProfilePanel({
     [customer, snapshot.customers],
   );
   const company = companyMap.get(customer.company_id);
+  const canCreateRepeatOpportunity =
+    isDemoMode ||
+    isGlobalSalesManager ||
+    Boolean(
+      user &&
+        snapshot.companyMemberships.some(
+          (membership) =>
+            membership.user_id === user.id &&
+            membership.company_id === customer.company_id &&
+            salesAccountabilityRoles.has(membership.role),
+        ),
+    );
+  const repeatOpportunityProperties = snapshot.properties.filter(
+    (property) =>
+      property.company_id === customer.company_id &&
+      property.customer_id === customer.id,
+  );
+  const repeatOpportunityServiceTypes = serviceTypes.filter((service) =>
+    isServiceAllowedForCompany(company, service.value),
+  );
   const openEstimates = related.estimates.filter(isOpenEstimate);
   const activeJobs = related.jobs.filter(isActiveJob);
   const scheduledJobs = getCustomerScheduledJobs(related);
@@ -21108,7 +24105,10 @@ function CustomerProfilePanel({
   const outstandingInvoices = related.invoices.filter(isOutstandingInvoice);
   const realTimelineItems = timelineItems.filter((item) => item.kind !== "future");
   const lastActivity = realTimelineItems[0];
-  const assignedSalesperson = getCustomerAssignedSalesperson(related);
+  const assignedSalesperson = getCustomerAssignedSalesperson(
+    related,
+    snapshot.leadAccountability,
+  );
   const leadSources = uniqueById(
     related.leads.map((lead) => ({ id: lead.source, label: lead.source })),
   )
@@ -21124,6 +24124,128 @@ function CustomerProfilePanel({
   const nextAppointment = getCustomerNextAppointment(related);
   const lastCommunication = getCustomerLastCommunication(communicationItems);
   const primaryPhoto = getCustomerPrimaryPhoto(related);
+
+  const handleCreateRepeatOpportunity = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (!canCreateRepeatOpportunity || isCreatingRepeatOpportunity) {
+      onError("A signed-in internal company member is required to create an opportunity.");
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const propertyId = getNormalizedOptionalFormString(
+      formData,
+      "repeat_property_id",
+    );
+    const serviceType = getNormalizedFormString(
+      formData,
+      "repeat_service_type",
+      getDefaultServiceTypeForCompany(company),
+    ) as ServiceType;
+    const property = propertyId
+      ? repeatOpportunityProperties.find((record) => record.id === propertyId)
+      : null;
+
+    if (propertyId && !property) {
+      onError("Choose a property belonging to this customer and company.");
+      return;
+    }
+    if (!isServiceAllowedForCompany(company, serviceType)) {
+      onError("Choose a service offered by this company.");
+      return;
+    }
+
+    try {
+      setIsCreatingRepeatOpportunity(true);
+      onError("");
+      const operationScope = `repeat_opportunity:${customer.id}`;
+      const requestPayload = {
+        company_id: customer.company_id,
+        customer_id: customer.id,
+        customer_expected_updated_at: customer.updated_at,
+        property_id: property?.id ?? null,
+        property_expected_updated_at: property?.updated_at ?? null,
+        service_type: serviceType,
+        priority: getNormalizedFormString(
+          formData,
+          "repeat_priority",
+          "normal",
+        ) as LeadPriority,
+        next_follow_up: getNormalizedOptionalFormString(
+          formData,
+          "repeat_next_follow_up",
+        ),
+        notes: getNormalizedOptionalFormString(formData, "repeat_notes"),
+      };
+      const operationToken = await stableOperationKeys.acquire(
+        operationScope,
+        requestPayload,
+      );
+      if (isDemoMode) {
+        const lead = {
+          ...createDemoLeadRecord({
+            company_id: customer.company_id,
+            customer_id: customer.id,
+            property_id: property?.id ?? null,
+            contact_name: customer.contact_name,
+            phone: customer.phone,
+            email: customer.email,
+            property_address: property?.address ?? customer.property_address,
+            city: property?.city ?? customer.city,
+            state: property?.state ?? customer.state,
+            postal_code: property?.postal_code ?? customer.postal_code,
+            service_type: serviceType,
+            source: "repeat_customer",
+            priority: requestPayload.priority,
+            next_follow_up: requestPayload.next_follow_up,
+            notes: requestPayload.notes,
+          }),
+          customer_id: customer.id,
+          property_id: property?.id ?? null,
+        };
+        const { accountability, event: accountabilityEvent } =
+          createDemoLeadAccountability(
+            lead,
+            "repeat_customer",
+            "repeat_customer",
+            "verified",
+            undefined,
+            operationToken.operationKey,
+          );
+        onDemoSnapshotChange((currentSnapshot) => ({
+          ...currentSnapshot,
+          leads: [lead, ...currentSnapshot.leads],
+          leadAccountability: [accountability, ...currentSnapshot.leadAccountability],
+          leadAccountabilityEvents: [
+            accountabilityEvent,
+            ...currentSnapshot.leadAccountabilityEvents,
+          ],
+        }));
+      } else {
+        await createRepeatOpportunity(client, {
+          operation_key: operationToken.operationKey,
+          ...requestPayload,
+        });
+        await onReload();
+      }
+      stableOperationKeys.complete(operationScope, operationToken);
+      form.reset();
+      setShowRepeatOpportunityForm(false);
+      onNotice("Repeat-customer opportunity created with locked first-touch attribution.");
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to create the repeat-customer opportunity.",
+        ),
+      );
+    } finally {
+      setIsCreatingRepeatOpportunity(false);
+    }
+  };
   const sectionCounts: Record<CustomerWorkspaceSection, number | null> = {
     overview: null,
     properties: properties.length,
@@ -21276,6 +24398,14 @@ function CustomerProfilePanel({
         data-testid="customer-quick-actions"
       >
         <CustomerQuickAction
+          label="Create repeat opportunity"
+          detail="Open a new same-company opportunity with repeat-customer first touch."
+          icon={RefreshCcw}
+          testId="create-repeat-opportunity-button"
+          disabled={!canCreateRepeatOpportunity}
+          onClick={() => setShowRepeatOpportunityForm((current) => !current)}
+        />
+        <CustomerQuickAction
           label="New Estimate"
           detail="Build pricing from this customer context."
           icon={Calculator}
@@ -21342,6 +24472,60 @@ function CustomerProfilePanel({
           onClick={() => onViewChange("calendar")}
         />
       </div>
+
+      {showRepeatOpportunityForm ? (
+        <form
+          onSubmit={handleCreateRepeatOpportunity}
+          data-testid="repeat-opportunity-form"
+          className="mt-4 grid gap-3 rounded-lg border border-sky-200 bg-sky-50 p-4"
+        >
+          <div>
+            <p className="font-bold text-slate-950">New repeat-customer opportunity</p>
+            <p className="mt-1 text-sm text-slate-600">
+              This creates a new opportunity inside {company?.name ?? "this company"};
+              it never reuses another company&apos;s customer or campaign.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Property
+              <select name="repeat_property_id" className="rounded-md border border-slate-300 bg-white px-3 py-2">
+                <option value="">Customer primary address</option>
+                {repeatOpportunityProperties.map((property) => (
+                  <option key={property.id} value={property.id}>
+                    {property.display_name} - {property.address}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Service
+              <select name="repeat_service_type" defaultValue={getDefaultServiceTypeForCompany(company)} className="rounded-md border border-slate-300 bg-white px-3 py-2">
+                {repeatOpportunityServiceTypes.map((service) => (
+                  <option key={service.value} value={service.value}>{service.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Priority
+              <select name="repeat_priority" defaultValue="normal" className="rounded-md border border-slate-300 bg-white px-3 py-2">
+                {leadPriorities.map((priority) => <option key={priority.value} value={priority.value}>{priority.label}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-slate-700">
+              Next follow-up
+              <input name="repeat_next_follow_up" type="date" className="rounded-md border border-slate-300 bg-white px-3 py-2" />
+            </label>
+          </div>
+          <textarea name="repeat_notes" placeholder="Opportunity notes" className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2" />
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" data-testid="repeat-opportunity-submit" disabled={!canCreateRepeatOpportunity || isCreatingRepeatOpportunity} className="rounded-md bg-sky-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+              {isCreatingRepeatOpportunity ? "Creating opportunity" : "Create repeat opportunity"}
+            </button>
+            <button type="button" onClick={() => setShowRepeatOpportunityForm(false)} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700">Cancel</button>
+          </div>
+        </form>
+      ) : null}
 
       <div className="mt-4">
         <DailyWorkflowHandoffPanel
@@ -21604,17 +24788,23 @@ function CustomerQuickAction({
   detail,
   icon: Icon,
   onClick,
+  testId,
+  disabled = false,
 }: {
   label: string;
   detail: string;
   icon: typeof Home;
   onClick: () => void;
+  testId?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
-      className="group flex min-h-24 w-full items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+      disabled={disabled}
+      className="group flex min-h-24 w-full items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-slate-200 disabled:hover:shadow-none"
     >
       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-sky-50 text-sky-700 transition group-hover:bg-white">
         <Icon className="h-5 w-5" />
@@ -41708,7 +44898,7 @@ function buildExecutiveIntelligence(
         tone: productionKpis.activeJobs.length > productionKpis.completedJobs.length ? "blue" : "green",
       },
     ],
-    leaderboard: buildExecutiveLeaderboard(openLeads),
+    leaderboard: buildExecutiveLeaderboard(openLeads, snapshot.leadAccountability),
   };
 }
 
@@ -42197,11 +45387,16 @@ function getHealthyExecutiveItems(label: string): ExecutiveListItem[] {
   ];
 }
 
-function buildExecutiveLeaderboard(openLeads: LeadRecord[]) {
+function buildExecutiveLeaderboard(
+  openLeads: LeadRecord[],
+  accountability: readonly LeadAccountabilityRecord[],
+) {
   const rows = new Map<string, ExecutiveLeaderboardRow>();
 
   openLeads.forEach((lead) => {
-    const owner = lead.created_by?.trim() || "Unassigned";
+    const owner =
+      getLeadOwnerUserId(accountability, lead.id, lead.company_id)?.trim() ||
+      "Unassigned";
     const row = rows.get(owner) ?? { owner, count: 0, value: 0 };
     row.count += 1;
     row.value += lead.estimated_value;

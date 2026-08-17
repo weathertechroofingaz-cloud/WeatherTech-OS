@@ -51,6 +51,16 @@ for (const [needle, message] of [
   ["controller.abort", "Hung auth and PostgREST requests are actively aborted"],
   ["settleWithTimeout", "Sign-out cannot hang cleanup indefinitely"],
   ["wtos_reconcile_customer_property", "The production transaction RPC is exercised"],
+  ["recordFixtureContact", "Synthetic contacted state is established through the audited accountability boundary"],
+  ['status: "new"', "Synthetic leads begin in invariant-safe new status"],
+  ['pipeline_stage: "new_lead"', "Synthetic leads begin in invariant-safe new pipeline stage"],
+  ["wtos_apply_lead_accountability_action", "Every synthetic contact uses the production accountability action RPC"],
+  ["expected_version: 1", "Initial accountability version is reviewed exactly"],
+  ['action: "contacted"', "The audited human-contact milestone is explicit"],
+  ['human_contact: true', "Fixture contact is explicitly human"],
+  ['first_response_channel: "phone"', "Fixture contact records its channel"],
+  ["Refetch exact contacted lead fixtures", "Lead timestamps are refreshed after audited contact before reconciliation"],
+  ["Audited fixture contact did not advance every exact lead", "All exact fixtures prove contacted status and pipeline state"],
   ["Exact retry", "Exact idempotent retry is asserted"],
   ["Conflicting operation-key reuse", "Conflicting key reuse is rejected"],
   ["Concurrent approvals", "Concurrency convergence is asserted"],
@@ -71,7 +81,11 @@ for (const [needle, message] of [
   ["Direct lead customer reassignment", "Authenticated direct lead customer reassignment is refused"],
   ["Direct lead property reassignment", "Authenticated direct lead property reassignment is refused"],
   ["Direct property customer reassignment", "Authenticated direct property customer reassignment is refused"],
-  ["Ordinary authenticated lead status update", "Ordinary lead workflow updates remain permitted"],
+  ["Unaudited qualified lead shortcut", "Direct funnel-stage shortcuts without accountable appointment evidence are refused"],
+  ["Verify unaudited qualified shortcut rollback", "Rejected funnel-stage shortcuts are read back unchanged"],
+  ["Rejected unaudited qualified shortcut changed lead state", "Rejected funnel-stage shortcuts are atomic"],
+  ["qualified.*accountable appointment event", "Shortcut refusal asserts the accountable appointment invariant"],
+  ["Ordinary authenticated lead priority update", "Ordinary non-funnel lead updates remain permitted"],
   ["Ordinary authenticated property address update", "Ordinary property updates remain permitted"],
   ["uuidOperationKey", "A real UUID operation key is used independently of cleanup markers"],
   ['.in("source_lead_id", ids.leads)', "Audit discovery is anchored to exact synthetic source-lead IDs"],
@@ -86,6 +100,8 @@ for (const [needle, message] of [
   ["providerOrFinancialEffects: 0", "Provider and financial tables remain unchanged"],
   ["blockedExternalRequests === 0", "Provider network side effects remain zero"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
+  ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
+  ['deleteExactIds(client, "lead_accountability_events", eventIds)', "Immutable accountability events are deleted before current accountability state"],
   ["cleanupAuthorized", "Collision checks authorize cleanup"],
   ["assertExactIdsAbsent", "Final exact-ID residue is verified"],
   ["cleanupResidue = 0", "The report closes only after zero residue"],
@@ -107,6 +123,13 @@ check(
   source.includes('.delete().in("id", [...new Set(ids)])'),
   "Business cleanup deletes only captured exact ID sets",
 );
+check(
+  source.indexOf('deleteExactIds(client, "lead_accountability_events", eventIds)') <
+    source.indexOf('deleteExactIds(client, "lead_accountability", accountabilityIds)') &&
+    source.indexOf("deleteLeadAccountabilityForExactLeadIds(") <
+      source.lastIndexOf('deleteExactIds(service, "leads", ids.leads)'),
+  "Accountability cleanup runs events then current state before exact synthetic leads",
+);
 
 if (process.env[CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN] === "true") {
   const report = await runCrmIdentityReconciliationRegression({ cwd });
@@ -123,6 +146,7 @@ if (process.env[CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN] === "true") {
   assert.equal(report.exactLinkWithoutAddressVerified, true);
   assert.equal(report.propertyOnlyOfficeTaskLinked, true);
   assert.equal(report.directIdentityMutationRejected, true);
+  assert.equal(report.unauditedFunnelShortcutRejected, true);
   assert.equal(report.ordinaryOperationalUpdatesPreserved, true);
   assert.equal(report.uuidOperationAuditRecorded, true);
   assert.equal(report.uuidOperationAuditCleanupVerified, true);
@@ -137,7 +161,7 @@ if (process.env[CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN] === "true") {
   assert.equal(report.providerOrFinancialEffects, 0);
   assert.equal(report.providerNetworkRequests, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 27;
+  assertionCount += 28;
   console.log("CRM identity reconciliation hosted regression execution: PASS");
 } else {
   console.log(

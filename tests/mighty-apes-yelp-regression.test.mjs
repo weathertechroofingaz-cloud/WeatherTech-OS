@@ -78,7 +78,13 @@ for (const [needle, message] of [
   ["providerOrFinancialEffects: 0", "Unrelated provider and financial state remains unchanged"],
   ["blockedExternalRequests === 0", "Provider network side effects remain zero"],
   ["cleanupAuthorized", "Collision checks authorize cleanup"],
+  ["providerMarker", "Provider delivery, lead-ID, and message fixtures retain the Mighty-specific marker"],
+  ["leadNameMarker", "CRM lead labels use a separately guarded synthetic marker"],
+  ["TEST WTOS REGRESSION ${runId} MIGHTY APES", "CRM lead labels match the accountability cleanup allowlist"],
+  ['like("contact_name", `${leadNameMarker}%`)', "Lead collision and cleanup discovery use only the allowed CRM label marker"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
+  ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
+  ['deleteExactIds(client, "lead_accountability_events", eventIds)', "Immutable accountability events are deleted before current accountability state"],
   ["assertExactIdsAbsent", "Final exact-ID residue is verified"],
   ["cleanupResidue = 0", "The report closes only after zero residue"],
 ]) {
@@ -98,6 +104,47 @@ check(
 check(
   source.includes('.delete().in("id", exactIds)'),
   "Business cleanup deletes only captured exact ID sets",
+);
+check(
+  source.includes('name: `${leadNameMarker} CREATED`') &&
+    source.includes('deliveryId: `${providerMarker}:delivery:created`') &&
+    source.includes('message: `${providerMarker} authenticated test delivery`') &&
+    !source.includes('name: `${providerMarker}'),
+  "Provider identifiers/messages remain Mighty-scoped while every possible CRM lead name uses the accountability-approved generic marker",
+);
+check(
+  source.indexOf('deleteExactIds(client, "lead_accountability_events", eventIds)') <
+    source.indexOf('deleteExactIds(client, "lead_accountability", accountabilityIds)') &&
+    source.indexOf("deleteLeadAccountabilityForExactLeadIds(") <
+      source.lastIndexOf('deleteExactIds(service, "leads", ids.leads)'),
+  "Accountability cleanup runs events then current state before exact synthetic leads",
+);
+const mightyAuditDeleteCall = source.lastIndexOf(
+  "await deleteExactIds(service, AUDIT_TABLE, ids.mighty_apes_yelp_webhook_events)",
+);
+const accountabilityCleanupCall = source.lastIndexOf(
+  "const accountabilityCleanup = await deleteLeadAccountabilityForExactLeadIds(",
+);
+const notificationDeleteCall = source.lastIndexOf(
+  'await deleteExactIds(service, "notifications", ids.notifications)',
+);
+const intakeDeleteCall = source.lastIndexOf(
+  'await deleteExactIds(service, "lead_intake_records", ids.lead_intake_records)',
+);
+const syncDeleteCall = source.lastIndexOf(
+  'await deleteExactIds(service, "integration_sync_logs", ids.integration_sync_logs)',
+);
+const leadDeleteCall = source.lastIndexOf(
+  'await deleteExactIds(service, "leads", ids.leads)',
+);
+check(
+  mightyAuditDeleteCall > -1 &&
+    mightyAuditDeleteCall < accountabilityCleanupCall &&
+    accountabilityCleanupCall < notificationDeleteCall &&
+    accountabilityCleanupCall < intakeDeleteCall &&
+    accountabilityCleanupCall < syncDeleteCall &&
+    accountabilityCleanupCall < leadDeleteCall,
+  "The caller deletes Mighty audit rows, then accountability events/state, before every intake, sync, or lead dependency",
 );
 
 if (process.env[MIGHTY_APES_YELP_REGRESSION_RUN] === "true") {

@@ -51,11 +51,62 @@ function applyFilters(rows, filters) {
   );
 }
 
+const canonicalAttributionSources = [
+  "website",
+  "google",
+  "yelp",
+  "phone",
+  "email",
+  "referral",
+  "repeat_customer",
+  "manual",
+  "other",
+  "unknown",
+];
+
+function emptyDashboardMetrics() {
+  return {
+    lead_count: 0,
+    marketing_spend: 0,
+    cost_per_lead: null,
+    booked_lead_count: 0,
+    booking_rate: null,
+    inspection_completed_lead_count: 0,
+    inspection_completion_rate: null,
+    won_lead_count: 0,
+    closing_rate: null,
+    cost_per_sold_job: null,
+    attributed_contract_revenue: 0,
+    marketing_revenue_divided_by_spend: null,
+    new_awaiting_contact: 0,
+    unsold_estimates_overdue: 0,
+    unsold_estimates_missing_follow_up: 0,
+    unattributed_lead_count: 0,
+    attribution_coverage: null,
+    missing_won_value_count: 0,
+    workflow_linkage_gap_count: 0,
+    untracked_legacy_lead_count: 0,
+  };
+}
+
+function emptyBySourceMetrics(sourceKey) {
+  const {
+    new_awaiting_contact: _newAwaitingContact,
+    unsold_estimates_overdue: _unsoldEstimatesOverdue,
+    unsold_estimates_missing_follow_up: _unsoldEstimatesMissingFollowUp,
+    untracked_legacy_lead_count: _untrackedLegacyLeadCount,
+    ...metrics
+  } = emptyDashboardMetrics();
+
+  return { source_key: sourceKey, ...metrics };
+}
+
 function createMockSupabase(initialState) {
   const state = {
     companies: [],
     customers: [],
     leads: [],
+    lead_accountability: [],
     lead_source_mappings: [],
     integration_sync_logs: [],
     lead_intake_records: [],
@@ -183,6 +234,26 @@ function createMockSupabase(initialState) {
     client: {
       from(table) {
         return new Query(table);
+      },
+      async rpc(name, args) {
+        if (name !== "wtos_get_marketing_accountability_dashboard") {
+          return { data: null, error: new Error(`Unknown RPC ${name}`) };
+        }
+
+        const report = args?.report_request ?? {};
+        const sourceKey = report.source_key ?? null;
+        const sources = sourceKey === null ? canonicalAttributionSources : [sourceKey];
+        return {
+          data: {
+            company_id: report.company_id,
+            month: report.month,
+            timezone: "America/Phoenix",
+            source_key: sourceKey,
+            metrics: emptyDashboardMetrics(),
+            by_source: sources.map(emptyBySourceMetrics),
+          },
+          error: null,
+        };
       },
     },
   };
@@ -317,6 +388,31 @@ try {
     "New intake records scheduled follow-up state",
   );
   assertEqual(newLeadDb.state.notifications.length, 1, "New intake creates a follow-up");
+
+  const websiteYelpDb = createMockSupabase({ companies: [baseCompany] });
+  const websiteYelpLead = leadIntake.normalizeWebsiteLeadBody({
+    business: "WeatherTech",
+    name: "Website Yelp Claim",
+    phone: "6025550199",
+    address: "299 Attribution Review Ave",
+    city: "Phoenix",
+    serviceType: "roofing",
+    source: "Yelp",
+    externalLeadId: "website-yelp-claim",
+  });
+  assert(websiteYelpLead.lead, "Website/Yelp attribution candidate normalizes");
+  await leadIntake.processLeadIntake(websiteYelpDb.client, websiteYelpLead.lead);
+  assertEqual(
+    websiteYelpDb.state.lead_intake_records[0]?.provider,
+    "website",
+    "Website/Yelp attribution candidate preserves website as its intake provider",
+  );
+  assertEqual(
+    websiteYelpDb.state.lead_intake_records[0]?.source_metadata
+      ?.attributionEvidence,
+    null,
+    "Website transport cannot promote a self-asserted Yelp source to verified intake attribution",
+  );
 
   const leadMatchDb = createMockSupabase({
     companies: [baseCompany],

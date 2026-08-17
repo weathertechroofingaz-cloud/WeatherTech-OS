@@ -128,6 +128,39 @@ assert.match(
 );
 assert.match(
   source,
+  /\["lead_accountability_events", "operation_key"\]/,
+  "Lead-accountability operation markers participate in zero-residue verification",
+);
+assert.match(
+  source,
+  /\["marketing_accountability_operation_receipts", "operation_kind", "\*"\]/,
+  "The isolated regression project requires zero durable marketing operation receipts",
+);
+assert.match(
+  source,
+  /\["marketing_campaigns", "campaign_name"\]/,
+  "Marketing campaign markers participate in zero-residue verification",
+);
+assert.match(
+  source,
+  /\["marketing_spend_months", "notes"\]/,
+  "Marketing-spend markers participate in zero-residue verification",
+);
+for (const ownerReference of [
+  ["lead_accountability", "owner_user_id"],
+  ["lead_accountability", "reviewed_by"],
+  ["lead_accountability_events", "actor_user_id"],
+  ["marketing_campaigns", "created_by"],
+  ["marketing_spend_months", "entered_by"],
+]) {
+  assert.match(
+    source,
+    new RegExp(`\\["${ownerReference[0]}", "${ownerReference[1]}"\\]`),
+    `Synthetic owner cleanup retains the ${ownerReference.join(".")} reference guard`,
+  );
+}
+assert.match(
+  source,
   /"mighty_apes_yelp_webhook_events"/,
   "Mighty Apes delivery evidence must be empty before isolated provider regression",
 );

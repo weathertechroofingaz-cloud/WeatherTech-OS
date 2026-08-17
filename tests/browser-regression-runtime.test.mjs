@@ -106,6 +106,14 @@ assertEqual(
   "The focused CRM reconciliation group is allowed without changing full-run defaults",
 );
 assertEqual(
+  resolveBrowserRegressionGroups({
+    groups: ["crm-accountability"],
+    fullRun: false,
+  }).groups[0],
+  "crm-accountability",
+  "The focused lead-accountability group is allowed without changing full-run defaults",
+);
+assertEqual(
   DEFAULT_BROWSER_REGRESSION_GROUPS.length,
   24,
   "The reconciliation scenario does not increase the established full-run group count",

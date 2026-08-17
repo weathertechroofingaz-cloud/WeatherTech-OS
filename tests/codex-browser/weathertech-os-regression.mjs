@@ -3,6 +3,7 @@ import {
   createHash,
   createHmac,
   randomBytes,
+  randomUUID,
 } from "node:crypto";
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -337,6 +338,12 @@ async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
   const derivedInvoiceMarker = `Invoice for ${runMarker}`;
   const checks = await Promise.all([
     findByLikeIfPresent(env, "jobs", "title", runMarker),
+    findByLikeIfPresent(
+      env,
+      "lead_accountability_events",
+      "operation_key",
+      runMarker,
+    ),
     findByLikeIfPresent(env, "estimates", "title", runMarker),
     findByLikeIfPresent(env, "inspections", "title", runMarker),
     findByLikeIfPresent(env, "documents", "title", runMarker),
@@ -344,6 +351,8 @@ async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
     findByLikeIfPresent(env, "invoices", "title", derivedInvoiceMarker),
     findByLikeIfPresent(env, "change_orders", "title", runMarker),
     findByLikeIfPresent(env, "leads", leadNameColumn, runMarker),
+    findByLikeIfPresent(env, "marketing_campaigns", "campaign_name", runMarker),
+    findByLikeIfPresent(env, "marketing_spend_months", "notes", runMarker),
     findByLikeIfPresent(env, "customers", "display_name", runMarker),
     findByLikeIfPresent(env, "properties", "display_name", runMarker),
     findByLikeIfPresent(
@@ -545,6 +554,24 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     env,
     `crm_identity_reconciliation_events?select=id,operation_key&operation_key=like.${prefixFilter}`,
   );
+  const accountabilityEventsByOperation = await findByLikeIfPresent(
+    env,
+    "lead_accountability_events",
+    "operation_key",
+    runMarker,
+  );
+  const marketingCampaigns = await findByLikeIfPresent(
+    env,
+    "marketing_campaigns",
+    "campaign_name",
+    runMarker,
+  );
+  const marketingSpendByNotes = await findByLikeIfPresent(
+    env,
+    "marketing_spend_months",
+    "notes",
+    runMarker,
+  );
   const [
     leadIntakeRecords,
     notifications,
@@ -563,6 +590,53 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   const invoiceIds = invoices.map((invoice) => invoice.id);
   const changeOrderIds = changeOrders.map((changeOrder) => changeOrder.id);
   const leadIds = leads.map((lead) => lead.id);
+  const leadAccountability = await findByForeignIdsIfPresent(
+    env,
+    "lead_accountability",
+    "lead_id",
+    leadIds,
+  );
+  const leadAccountabilityIds = leadAccountability.map((row) => row.id);
+  const accountabilityEvents = mergeRowsById(
+    accountabilityEventsByOperation,
+    await findByForeignIdsIfPresent(
+      env,
+      "lead_accountability_events",
+      "lead_id",
+      leadIds,
+    ),
+    await findByForeignIdsIfPresent(
+      env,
+      "lead_accountability_events",
+      "lead_accountability_id",
+      leadAccountabilityIds,
+    ),
+  );
+  const marketingCampaignIds = marketingCampaigns.map((campaign) => campaign.id);
+  const marketingSpend = mergeRowsById(
+    marketingSpendByNotes,
+    await findByForeignIdsIfPresent(
+      env,
+      "marketing_spend_months",
+      "campaign_id",
+      marketingCampaignIds,
+    ),
+  );
+  const marketingSpendIds = marketingSpend.map((entry) => entry.id);
+  const marketingOperationReceipts = mergeRowsById(
+    await findByForeignIdsIfPresent(
+      env,
+      "marketing_accountability_operation_receipts",
+      "campaign_id",
+      marketingCampaignIds,
+    ),
+    await findByForeignIdsIfPresent(
+      env,
+      "marketing_accountability_operation_receipts",
+      "spend_id",
+      marketingSpendIds,
+    ),
+  );
   const reconciliationEventsByLead = await findByForeignIdsIfPresent(
     env,
     "crm_identity_reconciliation_events",
@@ -673,6 +747,18 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   );
   await deleteByIds(
     env,
+    "lead_accountability_events",
+    "id",
+    accountabilityEvents.map((event) => event.id),
+  );
+  await deleteByIds(
+    env,
+    "lead_accountability",
+    "id",
+    leadAccountabilityIds,
+  );
+  await deleteByIds(
+    env,
     "lead_intake_records",
     "id",
     leadIntakeRecords.map((record) => record.id),
@@ -701,6 +787,14 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     "id",
     reconciliationEventIds,
   );
+  await deleteByIds(
+    env,
+    "marketing_accountability_operation_receipts",
+    "id",
+    marketingOperationReceipts.map((receipt) => receipt.id),
+  );
+  await deleteByIds(env, "marketing_spend_months", "id", marketingSpendIds);
+  await deleteByIds(env, "marketing_campaigns", "id", marketingCampaignIds);
   await deleteByLike(env, "schedule_events", "title", runMarker);
   await deleteByLike(env, "scopes", "title", runMarker);
   await deleteByIds(env, "signatures", "document_id", documentIds);
@@ -737,6 +831,23 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       findByIds(env, "customers", customerIds),
       findByIds(env, "properties", propertyIds),
       findByIds(env, "crm_identity_reconciliation_events", reconciliationEventIds),
+      findByIds(env, "lead_accountability", leadAccountabilityIds),
+      findByIds(
+        env,
+        "lead_accountability_events",
+        accountabilityEvents.map((event) => event.id),
+      ),
+      findByIds(env, "marketing_campaigns", marketingCampaignIds),
+      findByIds(
+        env,
+        "marketing_accountability_operation_receipts",
+        marketingOperationReceipts.map((receipt) => receipt.id),
+      ),
+      findByIds(
+        env,
+        "marketing_spend_months",
+        marketingSpendIds,
+      ),
       findByIds(
         env,
         "mighty_apes_yelp_webhook_events",
@@ -777,6 +888,10 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     customersDeleted: customerIds.length,
     propertiesDeleted: propertyIds.length,
     reconciliationEventsDeleted: reconciliationEventIds.length,
+    accountabilityDeleted: leadAccountabilityIds.length,
+    accountabilityEventsDeleted: accountabilityEvents.length,
+    marketingCampaignsDeleted: marketingCampaignIds.length,
+    marketingSpendDeleted: marketingSpend.length,
     notificationsDeleted: notifications.length,
     officeTasksDeleted: officeTasks.length,
     ...communicationCleanup,
@@ -927,6 +1042,37 @@ async function seedTestLead(env, companyId, runId, leadNameColumn, suffix = "LEA
   }
 
   throw lastError ?? new Error("Unable to seed estimate lead.");
+}
+
+async function recordExactFixtureHumanContact(env, leadId) {
+  const result = await restRequest(
+    env,
+    "rpc/wtos_apply_lead_accountability_action",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        action_request: {
+          operation_key: randomUUID(),
+          lead_id: leadId,
+          expected_version: 1,
+          action: "contacted",
+          human_contact: true,
+          first_response_channel: "phone",
+        },
+      }),
+    },
+  );
+
+  if (
+    result?.status !== "applied" ||
+    result?.action !== "contacted" ||
+    result?.lead_id !== leadId ||
+    result?.record_version !== 2
+  ) {
+    throw new Error(`Fixture contact did not apply exactly once for lead ${leadId}.`);
+  }
+
+  return result;
 }
 
 async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) {
@@ -2005,6 +2151,59 @@ async function clickUnique(locator, label, options = {}) {
   throw new Error(`${label} could not be clicked.${details}`);
 }
 
+async function clickEnabledUntilPersisted({
+  tab,
+  locator,
+  clickLabel,
+  persistenceLabel,
+  readPersisted,
+  errorPrefix,
+  timeoutMs = 15000,
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  while (Date.now() - startedAt < timeoutMs && attempts < 3) {
+    const existing = await readPersisted();
+    if (existing) {
+      return existing;
+    }
+
+    await waitForAsync(
+      () => locator.isEnabled().catch(() => false),
+      `enabled ${clickLabel}`,
+      Math.min(5000, timeoutMs - (Date.now() - startedAt)),
+    );
+    await clickUnique(locator, clickLabel, { retryTransientClick: true });
+    attempts += 1;
+
+    const attemptStartedAt = Date.now();
+    while (
+      Date.now() - attemptStartedAt < 4000 &&
+      Date.now() - startedAt < timeoutMs
+    ) {
+      const persisted = await readPersisted();
+      if (persisted) {
+        return persisted;
+      }
+
+      const visibleError = await tab.playwright
+        .locator('[role="alert"][aria-label="Error notification"]')
+        .textContent({ timeoutMs: 250 })
+        .catch(() => null);
+      if (visibleError?.trim()) {
+        throw new Error(`${errorPrefix}: ${visibleError.trim()}`);
+      }
+
+      await tab.playwright.waitForTimeout(250);
+    }
+  }
+
+  throw new Error(
+    `Timed out waiting for ${persistenceLabel} after ${attempts} enabled UI attempt(s).`,
+  );
+}
+
 async function withAcceptedConfirm(tab, action) {
   let actionError = null;
   let actionSettled = false;
@@ -2913,7 +3112,16 @@ async function clickCompanyScope(tab, companyName) {
       const scopeButton = headerCount === 1 ? headerScopeButton : dashboardScopeButton;
       await scopeButton.click({ timeoutMs: 10000 });
       await tab.playwright.waitForTimeout(600);
-      return;
+      const selected = await tab.playwright.evaluate((targetName) =>
+        [...document.querySelectorAll('button[aria-pressed="true"]')].some(
+          (button) =>
+            button.innerText
+              ?.split("\n")
+              .some((line) => line.replace(/\s+/g, " ").trim() === targetName),
+        ), companyName);
+      if (selected) {
+        return;
+      }
     }
 
     await tab.playwright.waitForTimeout(250);
@@ -5143,11 +5351,14 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
     10000,
   );
 
-  await selectUnique(
-    tab.playwright.locator(`${leadUpdateForm}//select[@name="pipeline_stage"]`),
-    "estimate_scheduled",
-    "lead pipeline stage",
-  );
+  const accountableStageState = await tab.playwright
+    .locator(`${leadUpdateForm}//select[@name="pipeline_stage"]`)
+    .evaluate((element) => ({ disabled: element.disabled, value: element.value }));
+  if (!accountableStageState.disabled || accountableStageState.value !== "new_lead") {
+    throw new Error(
+      `Accountable lead stage control was ${JSON.stringify(accountableStageState)}, expected disabled new_lead.`,
+    );
+  }
   await selectUnique(
     tab.playwright.locator(`${leadUpdateForm}//select[@name="priority"]`),
     "high",
@@ -5172,7 +5383,8 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
 
       return (
         stage?.tagName === "SELECT" &&
-        stage.value === "estimate_scheduled" &&
+        stage.disabled &&
+        stage.value === "new_lead" &&
         priority?.tagName === "SELECT" &&
         priority.value === "high" &&
         notes?.tagName === "TEXTAREA" &&
@@ -5193,7 +5405,8 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
         const lead = await findLeadByContactName(env, leadName, leadNameColumn);
 
         if (
-          lead?.pipeline_stage === "estimate_scheduled" &&
+          lead?.pipeline_stage === "new_lead" &&
+          lead.status === "new" &&
           lead.priority === "high" &&
           lead.notes === updatedNote
         ) {
@@ -5261,7 +5474,8 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
 
       return (
         stage?.tagName === "SELECT" &&
-        stage.value === "estimate_scheduled" &&
+        stage.disabled &&
+        stage.value === "new_lead" &&
         priority?.tagName === "SELECT" &&
         priority.value === "high" &&
         notes?.tagName === "TEXTAREA" &&
@@ -5308,7 +5522,7 @@ async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
   return {
     leadId: createdLead.id,
     leadName,
-    pipelineStage: "estimate_scheduled",
+    pipelineStage: "new_lead",
     priority: "high",
   };
 }
@@ -5509,15 +5723,91 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
     leadName,
   );
 
+  const initialAccountableStage = await tab.playwright
+    .locator(`${detailForm} select[name="pipeline_stage"]`)
+    .evaluate((element) => ({ disabled: element.disabled, value: element.value }));
+  if (!initialAccountableStage.disabled || initialAccountableStage.value !== "new_lead") {
+    throw new Error(
+      `Accountable opportunity stage was ${JSON.stringify(initialAccountableStage)}, expected disabled new_lead.`,
+    );
+  }
   await selectUnique(
-    tab.playwright.locator(`${detailForm} select[name="pipeline_stage"]`),
-    "estimate_sent",
-    "opportunity stage",
-  );
-  await selectUnique(
-    tab.playwright.locator(`${detailForm} select[name="owner"]`),
+    tab.playwright.locator('[data-testid="lead-owner-select"]'),
     "me",
     "opportunity owner",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const ownerSelect = document.querySelector(
+        '[data-testid="lead-owner-select"]',
+      );
+      const ownerSubmit = document.querySelector(
+        '[data-testid="lead-owner-submit"]',
+      );
+
+      return ownerSelect?.value === "me" && ownerSubmit?.disabled === false;
+    },
+    "accountable opportunity owner DOM precondition",
+    10000,
+  );
+  const assignedAccountability = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-owner-submit"]'),
+    clickLabel: "assign opportunity owner through accountability",
+    persistenceLabel: "accountable opportunity owner assignment",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability?select=owner_user_id,record_version&lead_id=eq.${encodeURIComponent(lead.leadId)}`,
+      );
+      return rows[0]?.owner_user_id ? rows[0] : null;
+    },
+    errorPrefix: "Opportunity owner assignment was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.querySelector('[data-testid="lead-first-response-submit"]')
+        ?.disabled === false,
+    "owner assignment UI settlement before contact",
+    15000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="lead-first-response-channel"]'),
+    "phone",
+    "accountable opportunity human-contact channel",
+  );
+  const contactedAccountability = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-first-response-submit"]'),
+    clickLabel: "record accountable opportunity human contact",
+    persistenceLabel: "accountable opportunity human contact",
+    readPersisted: async () => {
+      const [currentLead, accountabilityRows] = await Promise.all([
+        findLeadById(env, lead.leadId),
+        restRequest(
+          env,
+          `lead_accountability?select=owner_user_id,first_response_at,first_response_channel,outcome,record_version&lead_id=eq.${encodeURIComponent(lead.leadId)}`,
+        ),
+      ]);
+      return currentLead?.status === "contacted" &&
+        currentLead.pipeline_stage === "contacted" &&
+        accountabilityRows[0]?.owner_user_id === assignedAccountability.owner_user_id &&
+        accountabilityRows[0]?.first_response_at &&
+        accountabilityRows[0]?.first_response_channel === "phone"
+        ? accountabilityRows[0]
+        : null;
+    },
+    errorPrefix: "Opportunity human contact was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.querySelector('[data-testid="lead-owner-submit"]')?.disabled ===
+      false,
+    "contact UI settlement before operational edit",
+    15000,
   );
   await fillUnique(
     tab.playwright.locator(`${detailForm} input[name="estimated_value"]`),
@@ -5545,7 +5835,8 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
       const form = document.querySelector('[data-testid="sales-pipeline-detail-form"]');
 
       return (
-        form?.querySelector('select[name="pipeline_stage"]')?.value === "estimate_sent" &&
+        form?.querySelector('select[name="pipeline_stage"]')?.disabled === true &&
+        form?.querySelector('select[name="pipeline_stage"]')?.value === "contacted" &&
         form?.querySelector('select[name="owner"]')?.value === "me" &&
         form?.querySelector('input[name="estimated_value"]')?.value === String(expected.expectedRevenue) &&
         form?.querySelector('input[name="next_follow_up"]')?.value === expected.followUpDate &&
@@ -5562,12 +5853,12 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
     const row = await findLeadById(env, lead.leadId);
 
     if (
-      row?.pipeline_stage === "estimate_sent" &&
+      row?.pipeline_stage === "contacted" &&
+      row.status === "contacted" &&
       row.priority === "urgent" &&
       Number(row.estimated_value) === expectedRevenue &&
       row.next_follow_up === followUpDate &&
-      row.notes === opportunityNotes &&
-      row.created_by
+      row.notes === opportunityNotes
     ) {
       return row;
     }
@@ -5588,7 +5879,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
 
   await selectUnique(
     tab.playwright.locator('[data-testid="sales-pipeline-stage-filter"]'),
-    "estimate_sent",
+    "contacted",
     "opportunity stage filter",
   );
   await waitFor(
@@ -6020,7 +6311,7 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
         text.includes(expected.leadName) &&
         text.toLowerCase().includes("estimate linked") &&
         text.toLowerCase().includes("job linked") &&
-        text.includes("95%")
+        text.includes("25%")
       );
     },
     "opportunity conversion persisted after reload",
@@ -6030,9 +6321,23 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
   progress("sales-pipeline:refresh:done");
 
   const finalLead = await findLeadById(env, lead.leadId);
+  const finalAccountabilityRows = await restRequest(
+    env,
+    `lead_accountability?select=owner_user_id,first_response_at,outcome,record_version&lead_id=eq.${encodeURIComponent(lead.leadId)}`,
+  );
+  const finalAccountability = finalAccountabilityRows[0];
 
-  if (finalLead?.pipeline_stage !== "job_scheduled" || finalLead.status !== "won") {
-    throw new Error("Opportunity final won/job-scheduled state did not persist.");
+  if (
+    finalLead?.pipeline_stage !== "contacted" ||
+    finalLead.status !== "contacted" ||
+    finalAccountability?.outcome !== "open" ||
+    !finalAccountability.first_response_at ||
+    finalAccountability.owner_user_id !== assignedAccountability.owner_user_id ||
+    finalAccountability.record_version < contactedAccountability.record_version
+  ) {
+    throw new Error(
+      "Draft estimate/job workflow fabricated funnel progress or lost audited owner/contact state.",
+    );
   }
 
   if ("customer_id" in finalLead && finalLead.customer_id !== estimate.customer_id) {
@@ -6047,6 +6352,8 @@ async function testSalesPipelineWorkflow(tab, env, company, lead, runId, baseUrl
     explicitIdentityApproval: true,
     finalStage: finalLead.pipeline_stage,
     finalStatus: finalLead.status,
+    finalOutcome: finalAccountability.outcome,
+    draftWorkflowDidNotFabricateSale: true,
     unlinkedWritesRefused: true,
   };
 }
@@ -6100,20 +6407,15 @@ async function testLeadIntakeWorkspace(tab, env, company, runId, leadNameColumn)
     "Phoenix",
     "lead intake city",
   );
-  await fillUnique(
-    tab.playwright.locator(`${intakeSection}//input[@name="source"]`),
-    "Office intake",
+  await selectUnique(
+    tab.playwright.locator(`${intakeSection}//select[@name="source"]`),
+    "manual",
     "lead intake source",
   );
   await fillUnique(
     tab.playwright.locator(`${intakeSection}//input[@name="estimated_value"]`),
     "7650",
     "lead intake estimated value",
-  );
-  await selectUnique(
-    tab.playwright.locator(`${intakeSection}//select[@name="pipeline_stage"]`),
-    "contacted",
-    "lead intake status",
   );
   await fillUnique(
     tab.playwright.locator(`${intakeSection}//textarea[@name="notes"]`),
@@ -6160,9 +6462,9 @@ async function testLeadIntakeWorkspace(tab, env, company, runId, leadNameColumn)
     throw new Error(`Lead intake email was ${createdLead.email}, expected ${normalizedLeadEmail}.`);
   }
 
-  if (createdLead.pipeline_stage !== "contacted" || createdLead.status !== "contacted") {
+  if (createdLead.pipeline_stage !== "new_lead" || createdLead.status !== "new") {
     throw new Error(
-      `Lead intake status was ${createdLead.status}/${createdLead.pipeline_stage}, expected contacted/contacted.`,
+      `Lead intake status was ${createdLead.status}/${createdLead.pipeline_stage}, expected new/new_lead until an audited human contact.`,
     );
   }
 
@@ -6279,13 +6581,13 @@ async function testIdentityReconciliationWorkflow(
     postal_code: "85251",
     service_type: "roofing",
     source: marker,
-    status: "contacted",
-    pipeline_stage: "contacted",
+    status: "new",
+    pipeline_stage: "new_lead",
     priority: "normal",
     estimated_value: 0,
     notes: marker,
   });
-  const [exactLead, ambiguousLead] = await restRequest(env, "leads", {
+  const insertedReconciliationLeads = await restRequest(env, "leads", {
     method: "POST",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify([
@@ -6293,6 +6595,31 @@ async function testIdentityReconciliationWorkflow(
       leadPayload(ambiguousLeadName, ambiguousPhone, ambiguousAddress),
     ]),
   });
+  for (const lead of insertedReconciliationLeads) {
+    await recordExactFixtureHumanContact(env, lead.id);
+  }
+  const exactLeadIds = insertedReconciliationLeads.map((lead) => lead.id);
+  const contactedReconciliationLeads = await restRequest(
+    env,
+    `leads?select=*&id=in.${encodeURIComponent(`(${exactLeadIds.join(",")})`)}`,
+  );
+  const reconciliationLeadById = new Map(
+    contactedReconciliationLeads.map((lead) => [lead.id, lead]),
+  );
+  const exactLead = reconciliationLeadById.get(insertedReconciliationLeads[0].id);
+  const ambiguousLead = reconciliationLeadById.get(insertedReconciliationLeads[1].id);
+  if (
+    !exactLead ||
+    !ambiguousLead ||
+    contactedReconciliationLeads.length !== 2 ||
+    contactedReconciliationLeads.some(
+      (lead) => lead.status !== "contacted" || lead.pipeline_stage !== "contacted",
+    )
+  ) {
+    throw new Error(
+      "Audited CRM identity fixtures did not refetch as exact contacted leads.",
+    );
+  }
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
@@ -8511,19 +8838,21 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     `${TEST_PREFIX} ${runId} estimate notes`,
     "estimate notes",
   );
-  await clickVisibleDomSubmitByText(tab, "Create estimate", "Create estimate");
+  const savedEstimate = await clickEnabledUntilPersisted({
+    tab,
+    locator: estimateSubmit,
+    clickLabel: "Create estimate",
+    persistenceLabel: "created estimate persistence",
+    readPersisted: () => findEstimateByTitle(env, estimateTitle),
+    errorPrefix: "Estimate creation was refused",
+    timeoutMs: 30000,
+  });
   await waitFor(
     tab,
     (title) => document.body.innerText.includes(title),
     `draft estimate ${estimateTitle}`,
     15000,
     estimateTitle,
-  );
-
-  const savedEstimate = await waitForAsync(
-    () => findEstimateByTitle(env, estimateTitle),
-    "created estimate persistence",
-    30000,
   );
 
   if (savedEstimate.status !== "draft") {
@@ -9518,7 +9847,7 @@ async function testProductionReadinessCenter(browser, tab, baseUrl) {
 
 async function testWebsiteMarketingFoundation(browser, tab) {
   await clickCompanyScope(tab, "All companies");
-  await clickNav(tab, "Website & Marketing");
+  await clickNav(tab, "Marketing Accountability");
   await waitFor(
     tab,
     () => {
@@ -9526,12 +9855,18 @@ async function testWebsiteMarketingFoundation(browser, tab) {
       const text = workspace?.textContent?.toLowerCase() ?? "";
 
       return (
+        Boolean(
+          workspace?.querySelector(
+            '[data-testid="marketing-accountability-workspace"]',
+          ),
+        ) &&
+        text.includes("verified origin, funnel & manual spend") &&
+        text.includes("kpi denominators include only leads with a phase 1 accountability record") &&
         text.includes("marketing integration foundation") &&
-        text.includes("read-only operating view") &&
+        text.includes("provider-readiness view for accounted website and yelp acquisition") &&
         text.includes("website, google business profile, yelp, and gohighlevel intake") &&
         text.includes("no live provider activation") &&
-        text.includes("weathertech roofing llc - phoenix") &&
-        text.includes("weathertech roofing llc - tucson") &&
+        text.includes("weathertech roofing llc") &&
         text.includes("ihc painting") &&
         text.includes("website lead capture") &&
         text.includes("secure form-intake foundation") &&
@@ -9708,7 +10043,7 @@ async function testWebsiteMarketingFoundation(browser, tab) {
     throw new Error("Gmail foundation no longer exposes the draft and owner-approval workflow.");
   }
 
-  await clickNav(tab, "Website & Marketing");
+  await clickNav(tab, "Marketing Accountability");
   await clickUnique(
     tab.playwright.locator(
       'xpath=//*[@data-testid="website-marketing-foundation"]//button[contains(normalize-space(.), "Open lead intake")]',
@@ -9724,7 +10059,7 @@ async function testWebsiteMarketingFoundation(browser, tab) {
 
   const viewport = await browser.capabilities.get("viewport");
   await viewport.set({ width: 390, height: 844 });
-  await clickNav(tab, "Website & Marketing");
+  await clickNav(tab, "Marketing Accountability");
   const mobileState = await tab.playwright.evaluate(() => {
     const workspace = document.querySelector('[data-testid="website-marketing-foundation"]');
 
@@ -9751,6 +10086,629 @@ async function testWebsiteMarketingFoundation(browser, tab) {
   }
 
   return { desktopState, mobileState };
+}
+
+function phoenixYearMonth() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Phoenix",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+
+  if (!year || !month) {
+    throw new Error("Unable to derive the Phoenix reporting month.");
+  }
+
+  return `${year}-${month}`;
+}
+
+async function testMarketingAccountabilityWorkflow(
+  tab,
+  env,
+  companies,
+  runId,
+  leadNameColumn,
+) {
+  const marker = `${TEST_PREFIX} ${runId} ACCOUNTABILITY`;
+  const wonLeadName = `${marker} WON`;
+  const lostLeadName = `${marker} LOST`;
+  const customerName = `${marker} REPEAT CUSTOMER`;
+  const propertyName = `${marker} REPEAT PROPERTY`;
+  const campaignName = `${marker} CAMPAIGN`;
+  const campaignKey = `browser_accountability_${runId.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  const month = phoenixYearMonth();
+  const leadPayload = (name) => ({
+    company_id: companies.weatherTech.id,
+    customer_id: null,
+    [leadNameColumn]: name,
+    phone: null,
+    email: null,
+    property_address: `${name} Way, Phoenix, AZ`,
+    city: "Phoenix",
+    state: "AZ",
+    postal_code: "85001",
+    service_type: "roofing",
+    source: "Unknown",
+    status: "new",
+    pipeline_stage: "new_lead",
+    priority: "normal",
+    estimated_value: 0,
+    notes: marker,
+  });
+  const [wonLead, lostLead] = await restRequest(env, "leads", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify([leadPayload(wonLeadName), leadPayload(lostLeadName)]),
+  });
+  const [customer] = await restRequest(env, "customers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      display_name: customerName,
+      contact_name: customerName,
+      phone: null,
+      email: null,
+      property_address: `${marker} Repeat Way, Phoenix, AZ`,
+      city: "Phoenix",
+      state: "AZ",
+      postal_code: "85001",
+      customer_type: "homeowner",
+      status: "active",
+      notes: marker,
+    }),
+  });
+  const [property] = await restRequest(env, "properties", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      customer_id: customer.id,
+      display_name: propertyName,
+      address: `${marker} Repeat Way, Phoenix, AZ`,
+      city: "Phoenix",
+      state: "AZ",
+      postal_code: "85001",
+      notes: marker,
+    }),
+  });
+
+  const selectOpportunity = async (name, label) => {
+    await clickNav(tab, "Sales Pipeline");
+    await waitFor(
+      tab,
+      () => Boolean(document.querySelector('[data-testid="sales-pipeline-workspace"]')),
+      `${label} sales pipeline workspace`,
+      15000,
+    );
+    await fillUnique(
+      tab.playwright.locator('[data-testid="sales-pipeline-search"]'),
+      name,
+      `${label} opportunity search`,
+    );
+    const row = tab.playwright.locator(
+      `xpath=//*[@data-testid="sales-pipeline-opportunity-row" and .//p[normalize-space(.)=${xpathString(name)}]]`,
+    );
+    await clickUnique(row, `${label} opportunity row`, { retryTransientClick: true });
+    await waitFor(
+      tab,
+      (expectedName) =>
+        document
+          .querySelector('[data-testid="lead-accountability-panel"]')
+          ?.closest("section")
+          ?.querySelector("h3")
+          ?.textContent?.trim() === expectedName,
+      `${label} accountability panel`,
+      15000,
+      name,
+    );
+  };
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await selectOpportunity(wonLeadName, "won");
+  const reviewForm = '[data-testid="lead-attribution-review-form"]';
+  await selectUnique(
+    tab.playwright.locator(`${reviewForm} select[name="attribution_source_key"]`),
+    "referral",
+    "review referral source",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${reviewForm} input[name="attribution_source_detail"]`),
+    "customer_referral",
+    "review referral detail",
+  );
+  await fillUnique(
+    tab.playwright.locator(`${reviewForm} input[name="intake_provider"]`),
+    "manual",
+    "review intake provider",
+  );
+  await selectUnique(
+    tab.playwright.locator(`${reviewForm} select[name="review_status"]`),
+    "verified",
+    "review status",
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="lead-attribution-review-submit"]'),
+    "review and audit attribution",
+    { retryTransientClick: true },
+  );
+  const reviewed = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      `lead_accountability?select=id,source_key,source_detail,review_status,attribution_locked_at,record_version&lead_id=eq.${encodeURIComponent(wonLead.id)}`,
+    );
+    return rows[0]?.source_key === "referral" && rows[0]?.attribution_locked_at
+      ? rows[0]
+      : null;
+  }, "browser attribution review persistence", 15000);
+  await waitFor(
+    tab,
+    () =>
+      document.querySelector('[data-testid="lead-owner-submit"]')?.disabled ===
+      false,
+    "attribution review UI settlement",
+    15000,
+  );
+
+  await selectUnique(
+    tab.playwright.locator('[data-testid="lead-owner-select"]'),
+    "me",
+    "lead owner assignment",
+  );
+  const assigned = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-owner-submit"]'),
+    clickLabel: "save accountable lead owner",
+    persistenceLabel: "browser lead owner persistence",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability?select=owner_user_id,record_version&lead_id=eq.${encodeURIComponent(wonLead.id)}`,
+      );
+      return rows[0]?.owner_user_id ? rows[0] : null;
+    },
+    errorPrefix: "Lead owner assignment was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.querySelector('[data-testid="lead-first-response-submit"]')
+        ?.disabled === false,
+    "lead owner UI settlement",
+    15000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="lead-first-response-channel"]'),
+    "phone",
+    "first human response channel",
+  );
+  await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-first-response-submit"]'),
+    clickLabel: "record first human contact",
+    persistenceLabel: "browser human response without first-touch overwrite",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability?select=first_response_at,first_response_channel,source_key,record_version&lead_id=eq.${encodeURIComponent(wonLead.id)}`,
+      );
+      return rows[0]?.first_response_at &&
+        rows[0]?.first_response_channel === "phone" &&
+        rows[0]?.source_key === "referral"
+        ? rows[0]
+        : null;
+    },
+    errorPrefix: "First human response was refused",
+  });
+
+  const now = Date.now();
+  const [schedule] = await restRequest(env, "schedule_events", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      customer_id: null,
+      lead_id: wonLead.id,
+      job_id: null,
+      title: `${marker} WON APPOINTMENT`,
+      event_type: "inspection",
+      status: "scheduled",
+      start_at: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
+      end_at: new Date(now + 25 * 60 * 60 * 1000).toISOString(),
+      notes: marker,
+    }),
+  });
+  const [inspection] = await restRequest(env, "inspections", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      customer_id: null,
+      lead_id: wonLead.id,
+      job_id: null,
+      schedule_event_id: schedule.id,
+      title: `${marker} WON INSPECTION`,
+      status: "completed",
+      checklist: "[]",
+    }),
+  });
+  const [estimate] = await restRequest(env, "estimates", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      customer_id: null,
+      lead_id: wonLead.id,
+      title: `${marker} WON ESTIMATE`,
+      status: "sent",
+      service_type: "roofing",
+      total: 12345,
+      notes: marker,
+    }),
+  });
+  try {
+    await waitForAsync(async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability_events?select=event_type,linked_record_id&lead_id=eq.${encodeURIComponent(wonLead.id)}`,
+      );
+      const types = new Set(rows.map((row) => row.event_type));
+      return types.has("appointment_scheduled") &&
+        types.has("inspection_completed") &&
+        types.has("estimate_sent")
+        ? rows
+        : null;
+    }, "browser authoritative funnel prerequisites", 15000);
+  } catch (error) {
+    const rows = await restRequest(
+      env,
+      `lead_accountability_events?select=event_type,linked_table,linked_record_id,occurred_at&lead_id=eq.${encodeURIComponent(wonLead.id)}&order=occurred_at.asc`,
+    );
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} Persisted events: ${JSON.stringify(rows)}.`,
+    );
+  }
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await selectOpportunity(wonLeadName, "won ready");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="lead-won-value"]'),
+    "12345",
+    "approved won contract value",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="lead-won-basis"]'),
+    "approved_contract_total",
+    "approved won value basis",
+  );
+  await waitFor(
+    tab,
+    () => document.querySelector('[data-testid="lead-won-submit"]')?.disabled === false,
+    "enabled authoritative won action",
+    15000,
+  );
+  await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-won-submit"]'),
+    clickLabel: "record won outcome",
+    persistenceLabel: "browser won outcome persistence",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability?select=outcome,won_contract_value,won_value_basis&lead_id=eq.${encodeURIComponent(wonLead.id)}`,
+      );
+      return rows[0]?.outcome === "won" &&
+        Number(rows[0]?.won_contract_value) === 12345 &&
+        rows[0]?.won_value_basis === "approved_contract_total"
+        ? rows[0]
+        : null;
+    },
+    errorPrefix: "Won accountability action was refused",
+  });
+
+  await tab.reload();
+  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+  await selectOpportunity(lostLeadName, "lost");
+  await selectUnique(
+    tab.playwright.locator('[data-testid="lead-lost-reason"]'),
+    "other",
+    "lost other reason",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="lead-lost-notes"]'),
+    `${marker} customer chose not to proceed`,
+    "lost other notes",
+  );
+  await waitFor(
+    tab,
+    () => document.querySelector('[data-testid="lead-lost-submit"]')?.disabled === false,
+    "enabled structured lost action",
+    15000,
+  );
+  await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="lead-lost-submit"]'),
+    clickLabel: "record lost outcome",
+    persistenceLabel: "browser structured lost outcome persistence",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `lead_accountability?select=outcome,lost_reason_code,lost_reason_notes&lead_id=eq.${encodeURIComponent(lostLead.id)}`,
+      );
+      return rows[0]?.outcome === "lost" && rows[0]?.lost_reason_code === "other"
+        ? rows[0]
+        : null;
+    },
+    errorPrefix: "Lost accountability action was refused",
+  });
+
+  // Marketing needs both company records loaded so its internal company filter
+  // can prove WeatherTech/IHC isolation in one signed-in workflow.
+  await clickCompanyScope(tab, "All companies");
+  await clickNav(tab, "Marketing Accountability");
+  await waitFor(
+    tab,
+    () => Boolean(document.querySelector('[data-testid="marketing-accountability-workspace"]')),
+    "marketing accountability workspace",
+    15000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="marketing-accountability-company-filter"]'),
+    companies.weatherTech.id,
+    "marketing accountability WeatherTech filter",
+  );
+  const campaignForm = '[data-testid="marketing-campaign-form"]';
+  await selectUnique(tab.playwright.locator(`${campaignForm} select[name="campaign_source_key"]`), "google", "campaign source");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_source_detail"]`), "google_ads", "campaign source detail");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_intake_provider"]`), "website", "campaign provider");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_vendor_key"]`), "regression_vendor", "campaign vendor key");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_vendor_name"]`), "Regression Vendor", "campaign vendor name");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_key"]`), campaignKey, "campaign key");
+  await fillUnique(tab.playwright.locator(`${campaignForm} input[name="campaign_name"]`), campaignName, "campaign name");
+  const campaign = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="marketing-campaign-submit"]'),
+    clickLabel: "save marketing campaign",
+    persistenceLabel: "browser campaign persistence",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `marketing_campaigns?select=id,company_id,source_key,campaign_name&campaign_name=eq.${encodeURIComponent(campaignName)}`,
+      );
+      return rows.length === 1 ? rows[0] : null;
+    },
+    errorPrefix: "Marketing campaign save was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Marketing campaign saved.") &&
+      document.querySelector('[data-testid="marketing-campaign-submit"]')?.disabled === false,
+    "marketing campaign UI settlement",
+    15000,
+  );
+  const spendForm = '[data-testid="marketing-spend-form"]';
+  await fillUnique(tab.playwright.locator(`${spendForm} input[name="spend_month"]`), month, "spend month");
+  await selectUnique(tab.playwright.locator(`${spendForm} select[name="spend_source_key"]`), "google", "spend source");
+  try {
+    await waitFor(
+      tab,
+      (campaignId) =>
+        Boolean(
+          document.querySelector(
+            `${campaignId ? '[data-testid="marketing-spend-form"] ' : ''}select[name="spend_campaign_id"] option[value="${campaignId}"]`,
+          ),
+        ),
+      "campaign option available for spend",
+      15000,
+      campaign.id,
+    );
+  } catch (error) {
+    const [campaignDetails, formState] = await Promise.all([
+      restRequest(
+        env,
+        `marketing_campaigns?select=id,company_id,source_key,is_active,record_version&id=eq.${encodeURIComponent(campaign.id)}`,
+      ),
+      tab.playwright.evaluate(() => ({
+        spendSource: document.querySelector(
+          '[data-testid="marketing-spend-form"] select[name="spend_source_key"]',
+        )?.value ?? null,
+        spendCampaignOptions: [
+          ...document.querySelectorAll(
+            '[data-testid="marketing-spend-form"] select[name="spend_campaign_id"] option',
+          ),
+        ].map((option) => ({ value: option.value, text: option.textContent })),
+        campaignEditOptions: [
+          ...document.querySelectorAll(
+            '[data-testid="marketing-campaign-edit-select"] option',
+          ),
+        ].map((option) => ({ value: option.value, text: option.textContent })),
+      })),
+    ]);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} Campaign: ${JSON.stringify(campaignDetails)}. Form: ${JSON.stringify(formState)}.`,
+    );
+  }
+  await fillUnique(tab.playwright.locator(`${spendForm} input[name="spend_source_detail"]`), "google_ads", "spend source detail");
+  await fillUnique(tab.playwright.locator(`${spendForm} input[name="spend_vendor_key"]`), "regression_vendor", "spend vendor key");
+  await fillUnique(tab.playwright.locator(`${spendForm} input[name="spend_vendor_name"]`), "Regression Vendor", "spend vendor name");
+  await selectUnique(tab.playwright.locator(`${spendForm} select[name="spend_campaign_id"]`), campaign.id, "spend campaign");
+  await fillUnique(tab.playwright.locator(`${spendForm} input[name="spend_amount"]`), "1234", "spend amount");
+  await fillUnique(tab.playwright.locator(`${spendForm} textarea[name="spend_notes"]`), `${marker} SPEND`, "spend notes");
+  await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="marketing-spend-submit"]'),
+    clickLabel: "save monthly marketing spend",
+    persistenceLabel: "browser spend persistence",
+    readPersisted: async () => {
+      const rows = await restRequest(
+        env,
+        `marketing_spend_months?select=id,company_id,campaign_id,spend_amount,notes&notes=eq.${encodeURIComponent(`${marker} SPEND`)}`,
+      );
+      return rows.length === 1 && Number(rows[0].spend_amount) === 1234
+        ? rows[0]
+        : null;
+    },
+    errorPrefix: "Marketing spend save was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Monthly marketing spend saved.") &&
+      document.querySelector('[data-testid="marketing-spend-submit"]')?.disabled === false,
+    "marketing spend UI settlement",
+    15000,
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="marketing-accountability-month-filter"]'),
+    month,
+    "marketing dashboard month",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="marketing-accountability-source-filter"]'),
+    "google",
+    "marketing dashboard Google filter",
+  );
+  await waitFor(
+    tab,
+    () => {
+      const workspace = document.querySelector('[data-testid="marketing-accountability-workspace"]');
+      return Boolean(
+        workspace &&
+          document.querySelector('[data-testid="marketing-metric-spend"]')?.textContent?.includes("1,234") &&
+          document.querySelector('[data-testid="marketing-metric-workflow-linkage-gaps"]') &&
+          document.querySelector('[data-testid="marketing-metric-data-gaps"]'),
+      );
+    },
+    "marketing dashboard verified metrics and data gaps",
+    15000,
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="marketing-accountability-company-filter"]'),
+    companies.ihc.id,
+    "marketing accountability IHC filter",
+  );
+  await waitFor(
+    tab,
+    (companyId) => {
+      const rows = [
+        ...document.querySelectorAll(
+          '[data-testid="marketing-accountability-source-row"]',
+        ),
+      ];
+      const campaignCompany = document.querySelector(
+        '[data-testid="marketing-campaign-form"] input[name="campaign_company_id"]',
+      );
+      const spendCompany = document.querySelector(
+        '[data-testid="marketing-spend-form"] input[name="spend_company_id"]',
+      );
+      const campaignName = document.querySelector(
+        '[data-testid="marketing-campaign-form"] input[name="campaign_name"]',
+      );
+      const spendAmount = document.querySelector(
+        '[data-testid="marketing-spend-form"] input[name="spend_amount"]',
+      );
+      return (
+        rows.length > 0 &&
+        rows.every((row) => row.getAttribute("data-company-id") === companyId) &&
+        campaignCompany?.value === companyId &&
+        spendCompany?.value === companyId &&
+        campaignName?.value === "" &&
+        spendAmount?.value === "" &&
+        !document
+          .querySelector('[data-testid="marketing-metric-spend"]')
+          ?.textContent?.includes("1,234")
+      );
+    },
+    "marketing dashboard and company-keyed forms IHC isolation",
+    15000,
+    companies.ihc.id,
+  );
+
+  // Restore the workflow's original company scope before returning to
+  // WeatherTech Customer 360 and creating the reviewed repeat opportunity.
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await clickNav(tab, "Customers");
+  await fillUnique(
+    tab.playwright.locator('[data-testid="customers-search"]'),
+    customerName,
+    "repeat customer search",
+  );
+  await clickListRowByParagraph(tab, "Customer management", customerName, "repeat customer row");
+  await waitFor(
+    tab,
+    (name) => document.querySelector('[data-testid="customer-workspace"]')?.textContent?.includes(name),
+    "repeat customer workspace",
+    15000,
+    customerName,
+  );
+  await clickUnique(
+    tab.playwright.locator('[data-testid="create-repeat-opportunity-button"]'),
+    "open repeat opportunity form",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="repeat-opportunity-form"] select[name="repeat_property_id"]'),
+    property.id,
+    "repeat opportunity property",
+  );
+  await selectUnique(
+    tab.playwright.locator('[data-testid="repeat-opportunity-form"] select[name="repeat_service_type"]'),
+    "roofing",
+    "repeat opportunity service",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="repeat-opportunity-form"] textarea[name="repeat_notes"]'),
+    `${marker} REPEAT OPPORTUNITY`,
+    "repeat opportunity notes",
+  );
+  const repeat = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="repeat-opportunity-submit"]'),
+    clickLabel: "create repeat opportunity",
+    persistenceLabel: "browser repeat opportunity persistence",
+    readPersisted: async () => {
+      const leads = await restRequest(
+        env,
+        `leads?select=id,company_id,customer_id,property_id&company_id=eq.${encodeURIComponent(companies.weatherTech.id)}&customer_id=eq.${encodeURIComponent(customer.id)}&property_id=eq.${encodeURIComponent(property.id)}`,
+      );
+      if (!leads.length) return null;
+      const accountabilities = await restRequest(
+        env,
+        `lead_accountability?select=lead_id,company_id,source_key,review_status&lead_id=in.(${leads.map((lead) => lead.id).join(",")})`,
+      );
+      return accountabilities.find(
+        (row) => row.source_key === "repeat_customer" && row.company_id === companies.weatherTech.id,
+      ) ?? null;
+    },
+    errorPrefix: "Repeat opportunity creation was refused",
+  });
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes(
+        "Repeat-customer opportunity created with locked first-touch attribution.",
+      ) &&
+      !document.querySelector('[data-testid="repeat-opportunity-form"]'),
+    "repeat opportunity UI settlement",
+    15000,
+  );
+
+  return {
+    reviewedVersion: reviewed.record_version,
+    ownerAssigned: Boolean(assigned.owner_user_id),
+    wonLeadId: wonLead.id,
+    lostLeadId: lostLead.id,
+    scheduleId: schedule.id,
+    inspectionId: inspection.id,
+    estimateId: estimate.id,
+    campaignId: campaign.id,
+    repeatLeadId: repeat.lead_id,
+    companyIsolation: true,
+  };
 }
 
 async function testCalendarScreen(tab) {
@@ -11278,13 +12236,22 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   await waitFor(
     tab,
     () =>
+      Boolean(document.querySelector('[data-testid="inspections-search"]')) &&
       document.body.innerText.includes("Schedule site visits") &&
-      document.body.innerText.includes("Create site inspection"),
+      [...document.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "New inspection",
+      ),
     "inspections screen",
   );
   progress("inspections:open:done");
 
   await clickUnique(tab.playwright.getByRole("button", { name: "New inspection" }), "New inspection");
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Create site inspection"),
+    "new inspection form",
+    10000,
+  );
   await fillUnique(
     tab.playwright.locator('xpath=//aside//form//input[@name="title"]'),
     inspectionTitle,
@@ -12648,6 +13615,8 @@ export async function runWeatherTechOsRegression({
       enabledGroups.has("crm") || enabledGroups.has("crm-customers");
     const shouldRunReconciliationWorkflow =
       enabledGroups.has("crm") || enabledGroups.has("crm-reconciliation");
+    const shouldRunAccountabilityWorkflow =
+      enabledGroups.has("crm") || enabledGroups.has("crm-accountability");
     const shouldRunInboxWorkflow =
       enabledGroups.has("crm") ||
       enabledGroups.has("crm-inbox") ||
@@ -12658,6 +13627,7 @@ export async function runWeatherTechOsRegression({
       shouldRunSalesPipelineWorkflow ||
       shouldRunCustomersWorkflow ||
       shouldRunReconciliationWorkflow ||
+      shouldRunAccountabilityWorkflow ||
       shouldRunInboxWorkflow ||
         enabledGroups.has("operations") ||
         enabledGroups.has("financial") ||
@@ -12747,6 +13717,18 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("marketing")) {
       await record("Website & Marketing foundation opens and routes to existing workspaces", () =>
         testWebsiteMarketingFoundation(browser, tab),
+      );
+    }
+
+    if (shouldRunAccountabilityWorkflow) {
+      await record("Marketing accountability reviews attribution, owns funnel outcomes, records spend, reports isolation, and creates a repeat opportunity", () =>
+        testMarketingAccountabilityWorkflow(
+          tab,
+          env,
+          companies,
+          runId,
+          leadNameColumn,
+        ),
       );
     }
 

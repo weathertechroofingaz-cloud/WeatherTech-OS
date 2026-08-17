@@ -239,6 +239,51 @@ async function deleteExactIds(client, table, ids) {
   }
 }
 
+function isMissingOptionalRelation(error, table) {
+  const evidence = [error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    new RegExp(`(?:relation|table).*${table}.*(?:does not exist|schema cache)`, "i").test(evidence)
+  );
+}
+
+async function deleteLeadAccountabilityForExactLeadIds(client, leadIds) {
+  const exactLeadIds = [...new Set(leadIds.filter(Boolean))];
+  if (!exactLeadIds.length) {
+    return { available: true, accountabilityIds: [], eventIds: [] };
+  }
+
+  const { data: accountabilities, error: accountabilityError } = await client
+    .from("lead_accountability")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (accountabilityError) {
+    if (isMissingOptionalRelation(accountabilityError, "lead_accountability")) {
+      return { available: false, accountabilityIds: [], eventIds: [] };
+    }
+    throw new Error(
+      `Discover exact-lead accountability cleanup rows failed: ${accountabilityError.message}`,
+    );
+  }
+
+  const accountabilityIds = (accountabilities ?? []).map((row) => row.id);
+  const { data: events, error: eventError } = await client
+    .from("lead_accountability_events")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (eventError) {
+    throw new Error(`Discover exact-lead accountability events failed: ${eventError.message}`);
+  }
+
+  const eventIds = (events ?? []).map((row) => row.id);
+  await deleteExactIds(client, "lead_accountability_events", eventIds);
+  await deleteExactIds(client, "lead_accountability", accountabilityIds);
+  return { available: true, accountabilityIds, eventIds };
+}
+
 async function assertExactIdsAbsent(client, table, ids, label) {
   if (!ids.length) {
     return;
@@ -1130,6 +1175,14 @@ export async function runTwilioInboundRegression({
           capturedIds.communication_provider_events,
         );
         await deleteExactIds(client, "sms_messages", capturedIds.sms_messages);
+        const accountabilityCleanup = await deleteLeadAccountabilityForExactLeadIds(
+          client,
+          capturedIds.leads,
+        );
+        if (accountabilityCleanup.available) {
+          capturedIds.lead_accountability_events = accountabilityCleanup.eventIds;
+          capturedIds.lead_accountability = accountabilityCleanup.accountabilityIds;
+        }
         await deleteExactIds(client, "leads", capturedIds.leads);
         await deleteExactIds(client, "customers", capturedIds.customers);
         await deleteExactIds(

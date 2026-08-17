@@ -62,6 +62,10 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
         updated_at: now,
       },
     ],
+    marketingCampaigns: [],
+    leadAccountability: [],
+    leadAccountabilityEvents: [],
+    marketingSpendMonths: [],
     customers: [
       {
         id: weatherTechCustomerId,

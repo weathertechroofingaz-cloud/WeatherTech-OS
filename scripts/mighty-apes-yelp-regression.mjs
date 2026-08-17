@@ -171,6 +171,51 @@ async function deleteExactIds(client, table, ids) {
   }
 }
 
+function isMissingOptionalRelation(error, table) {
+  const evidence = [error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    new RegExp(`(?:relation|table).*${table}.*(?:does not exist|schema cache)`, "i").test(evidence)
+  );
+}
+
+async function deleteLeadAccountabilityForExactLeadIds(client, leadIds) {
+  const exactLeadIds = [...new Set(leadIds.filter(Boolean))];
+  if (!exactLeadIds.length) {
+    return { available: true, accountabilityIds: [], eventIds: [] };
+  }
+
+  const { data: accountabilities, error: accountabilityError } = await client
+    .from("lead_accountability")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (accountabilityError) {
+    if (isMissingOptionalRelation(accountabilityError, "lead_accountability")) {
+      return { available: false, accountabilityIds: [], eventIds: [] };
+    }
+    throw new Error(
+      `Discover exact-lead accountability cleanup rows failed: ${accountabilityError.message}`,
+    );
+  }
+
+  const accountabilityIds = (accountabilities ?? []).map((row) => row.id);
+  const { data: events, error: eventError } = await client
+    .from("lead_accountability_events")
+    .select("id")
+    .in("lead_id", exactLeadIds);
+  if (eventError) {
+    throw new Error(`Discover exact-lead accountability events failed: ${eventError.message}`);
+  }
+
+  const eventIds = (events ?? []).map((row) => row.id);
+  await deleteExactIds(client, "lead_accountability_events", eventIds);
+  await deleteExactIds(client, "lead_accountability", accountabilityIds);
+  return { available: true, accountabilityIds, eventIds };
+}
+
 async function assertExactIdsAbsent(client, table, ids) {
   const exactIds = [...new Set(ids.filter(Boolean))];
 
@@ -275,14 +320,14 @@ function pushResultIds(ids, result) {
   ids.notifications.push(result?.notification_id);
 }
 
-async function discoverRunRows(service, marker, ids) {
+async function discoverRunRows(service, providerMarker, leadNameMarker, ids) {
   const [auditByDelivery, auditByLead, intakes, logs, leads] = await Promise.all([
     requireRows(
-      service.from(AUDIT_TABLE).select("*").like("delivery_id", `${marker}%`),
+      service.from(AUDIT_TABLE).select("*").like("delivery_id", `${providerMarker}%`),
       "Discover Mighty Apes audit rows by delivery",
     ),
     requireRows(
-      service.from(AUDIT_TABLE).select("*").like("provider_lead_id", `${marker}%`),
+      service.from(AUDIT_TABLE).select("*").like("provider_lead_id", `${providerMarker}%`),
       "Discover Mighty Apes audit rows by provider lead",
     ),
     requireRows(
@@ -290,7 +335,7 @@ async function discoverRunRows(service, marker, ids) {
         .from("lead_intake_records")
         .select("id,linked_lead_id,integration_sync_log_id,provider_event_id")
         .eq("provider", "yelp")
-        .like("provider_event_id", `${marker}%`),
+        .like("provider_event_id", `${providerMarker}%`),
       "Discover Mighty Apes intake rows",
     ),
     requireRows(
@@ -298,11 +343,11 @@ async function discoverRunRows(service, marker, ids) {
         .from("integration_sync_logs")
         .select("id,related_record_id,external_id")
         .eq("provider", "yelp")
-        .like("external_id", `${marker}%`),
+        .like("external_id", `${providerMarker}%`),
       "Discover Mighty Apes sync logs",
     ),
     requireRows(
-      service.from("leads").select("id").like("contact_name", `${marker}%`),
+      service.from("leads").select("id").like("contact_name", `${leadNameMarker}%`),
       "Discover Mighty Apes CRM leads",
     ),
   ]);
@@ -369,7 +414,8 @@ export async function runMightyApesYelpRegression({
     global: { fetch: guardedFetch },
   });
   const runId = randomUUID();
-  const marker = `${MARKER_PREFIX}${runId}`;
+  const providerMarker = `${MARKER_PREFIX}${runId}`;
+  const leadNameMarker = `TEST WTOS REGRESSION ${runId} MIGHTY APES`;
   const ids = {
     mighty_apes_yelp_webhook_events: [],
     leads: [],
@@ -394,23 +440,23 @@ export async function runMightyApesYelpRegression({
 
     await Promise.all([
       assertNoRows(
-        service.from(AUDIT_TABLE).select("id").like("delivery_id", `${marker}%`),
+        service.from(AUDIT_TABLE).select("id").like("delivery_id", `${providerMarker}%`),
         "Mighty Apes delivery marker collision",
       ),
       assertNoRows(
-        service.from(AUDIT_TABLE).select("id").like("provider_lead_id", `${marker}%`),
+        service.from(AUDIT_TABLE).select("id").like("provider_lead_id", `${providerMarker}%`),
         "Mighty Apes provider-lead marker collision",
       ),
       assertNoRows(
-        service.from("lead_intake_records").select("id").like("provider_event_id", `${marker}%`),
+        service.from("lead_intake_records").select("id").like("provider_event_id", `${providerMarker}%`),
         "Mighty Apes intake marker collision",
       ),
       assertNoRows(
-        service.from("integration_sync_logs").select("id").like("external_id", `${marker}%`),
+        service.from("integration_sync_logs").select("id").like("external_id", `${providerMarker}%`),
         "Mighty Apes sync-log marker collision",
       ),
       assertNoRows(
-        service.from("leads").select("id").like("contact_name", `${marker}%`),
+        service.from("leads").select("id").like("contact_name", `${leadNameMarker}%`),
         "Mighty Apes lead marker collision",
       ),
     ]);
@@ -441,19 +487,19 @@ export async function runMightyApesYelpRegression({
     ];
     const testBefore = await snapshotCounts(service, testIsolationTables);
     const createdAt = "2026-08-12T17:04:22.000Z";
-    const testLeadId = `${marker}:lead:test`;
+    const testLeadId = `${providerMarker}:lead:test`;
     const testPayload = buildProviderPayload({
       event: "lead.test",
       providerLeadId: testLeadId,
-      name: `${marker} TEST DELIVERY`,
+      name: `${leadNameMarker} TEST DELIVERY`,
       phone: "+14805550101",
       zipCode: "85255",
-      message: `${marker} authenticated test delivery`,
+      message: `${providerMarker} authenticated test delivery`,
       createdAt,
     });
     const testResult = await callIngest(
       service,
-      buildIntakeRequest({ payload: testPayload, deliveryId: `${marker}:delivery:test` }),
+      buildIntakeRequest({ payload: testPayload, deliveryId: `${providerMarker}:delivery:test` }),
     );
     pushResultIds(ids, testResult);
     requireCondition(
@@ -499,12 +545,12 @@ export async function runMightyApesYelpRegression({
       "Authenticated lead.test changed salesperson, CRM, task, communication, or sync-log state.",
     );
 
-    const primaryLeadId = `${marker}:lead:created`;
-    const multilineMessage = `${marker} questionnaire\nRoof age: 17 years\nLeak active: yes`;
+    const primaryLeadId = `${providerMarker}:lead:created`;
+    const multilineMessage = `${providerMarker} questionnaire\nRoof age: 17 years\nLeak active: yes`;
     const createdPayload = buildProviderPayload({
       event: "lead.created",
       providerLeadId: primaryLeadId,
-      name: `${marker} CREATED`,
+      name: `${leadNameMarker} CREATED`,
       phone: "+14805550102",
       zipCode: "85255",
       message: multilineMessage,
@@ -512,7 +558,7 @@ export async function runMightyApesYelpRegression({
     });
     const createdRequest = buildIntakeRequest({
       payload: createdPayload,
-      deliveryId: `${marker}:delivery:created`,
+      deliveryId: `${providerMarker}:delivery:created`,
     });
     const created = await callIngest(service, createdRequest);
     pushResultIds(ids, created);
@@ -617,7 +663,7 @@ export async function runMightyApesYelpRegression({
 
     const alternateDelivery = await callIngest(service, {
       ...createdRequest,
-      delivery_id: `${marker}:delivery:alternate`,
+      delivery_id: `${providerMarker}:delivery:alternate`,
       received_at: new Date().toISOString(),
     });
     pushResultIds(ids, alternateDelivery);
@@ -641,7 +687,7 @@ export async function runMightyApesYelpRegression({
       () => callIngest(service, {
         ...createdRequest,
         payload_fingerprint: crypto.createHash("sha256").update("conflicting payload").digest("hex"),
-        lead: { ...createdRequest.lead, name: `${marker} CONFLICT` },
+        lead: { ...createdRequest.lead, name: `${leadNameMarker} CONFLICT` },
       }),
       "Conflicting delivery reuse",
       /MIGHTY_APES_YELP_DELIVERY_CONFLICT|conflict/i,
@@ -662,15 +708,15 @@ export async function runMightyApesYelpRegression({
     const changedLeadPayload = buildProviderPayload({
       event: "lead.created",
       providerLeadId: primaryLeadId,
-      name: `${marker} CHANGED PAYLOAD`,
+      name: `${leadNameMarker} CHANGED PAYLOAD`,
       phone: "+14805550102",
       zipCode: "85255",
-      message: `${marker} changed provider body for the same stable lead ID`,
+      message: `${providerMarker} changed provider body for the same stable lead ID`,
       createdAt,
     });
     const changedLeadRequest = buildIntakeRequest({
       payload: changedLeadPayload,
-      deliveryId: `${marker}:delivery:lead-payload-conflict`,
+      deliveryId: `${providerMarker}:delivery:lead-payload-conflict`,
     });
     await expectRejected(
       () => callIngest(service, changedLeadRequest),
@@ -687,20 +733,20 @@ export async function runMightyApesYelpRegression({
       "Stable-lead payload conflict left an extra lead, intake, sync log, notification, or audit row.",
     );
 
-    const sharedDeliveryId = `${marker}:delivery:concurrent-conflicting-leads`;
+    const sharedDeliveryId = `${providerMarker}:delivery:concurrent-conflicting-leads`;
     const deliveryCollisionLeadIds = [
-      `${marker}:lead:delivery-collision:a`,
-      `${marker}:lead:delivery-collision:b`,
+      `${providerMarker}:lead:delivery-collision:a`,
+      `${providerMarker}:lead:delivery-collision:b`,
     ];
     const deliveryCollisionPayloads = deliveryCollisionLeadIds.map(
       (providerLeadId, index) => buildProviderPayload({
         event: "lead.created",
         providerLeadId,
-        name: `${marker} DELIVERY COLLISION ${index === 0 ? "A" : "B"}`,
+        name: `${leadNameMarker} DELIVERY COLLISION ${index === 0 ? "A" : "B"}`,
         phone: index === 0 ? "+14805550104" : "+14805550105",
         zipCode: "85255",
         jobCategory: "Roofing",
-        message: `${marker} concurrent shared-delivery body ${index + 1}`,
+        message: `${providerMarker} concurrent shared-delivery body ${index + 1}`,
         createdAt,
       }),
     );
@@ -803,26 +849,26 @@ export async function runMightyApesYelpRegression({
     );
     ids.office_tasks.push(deliveryCollisionOfficeTasks[0].id);
 
-    const concurrentLeadId = `${marker}:lead:concurrent`;
+    const concurrentLeadId = `${providerMarker}:lead:concurrent`;
     const concurrentPayload = buildProviderPayload({
       event: "lead.created",
       providerLeadId: concurrentLeadId,
-      name: `${marker} CONCURRENT`,
+      name: `${leadNameMarker} CONCURRENT`,
       phone: "+14805550103",
       zipCode: "85255",
       jobCategory: "Roofing",
-      message: `${marker} concurrent delivery`,
+      message: `${providerMarker} concurrent delivery`,
       createdAt,
     });
     const concurrentBase = buildIntakeRequest({
       payload: concurrentPayload,
-      deliveryId: `${marker}:delivery:concurrent:a`,
+      deliveryId: `${providerMarker}:delivery:concurrent:a`,
     });
     const concurrentResults = await Promise.all([
       callIngest(service, concurrentBase),
       callIngest(service, {
         ...concurrentBase,
-        delivery_id: `${marker}:delivery:concurrent:b`,
+        delivery_id: `${providerMarker}:delivery:concurrent:b`,
         received_at: new Date().toISOString(),
       }),
     ]);
@@ -871,7 +917,7 @@ export async function runMightyApesYelpRegression({
     const { data: anonymousAuditRows, error: anonymousAuditError } = await anonymous
       .from(AUDIT_TABLE)
       .select("id")
-      .like("delivery_id", `${marker}%`);
+      .like("delivery_id", `${providerMarker}%`);
     requireCondition(
       anonymousAuditError || (anonymousAuditRows ?? []).length === 0,
       "Anonymous callers could read the private Mighty Apes delivery ledger.",
@@ -965,7 +1011,7 @@ export async function runMightyApesYelpRegression({
   } finally {
     if (cleanupAuthorized) {
       try {
-        await discoverRunRows(service, marker, ids);
+        await discoverRunRows(service, providerMarker, leadNameMarker, ids);
         const leadIds = [...new Set(ids.leads.filter(Boolean))];
         const officeTasks = leadIds.length
           ? await requireRows(
@@ -976,6 +1022,14 @@ export async function runMightyApesYelpRegression({
         ids.office_tasks.push(...officeTasks.map((row) => row.id));
 
         await deleteExactIds(service, AUDIT_TABLE, ids.mighty_apes_yelp_webhook_events);
+        const accountabilityCleanup = await deleteLeadAccountabilityForExactLeadIds(
+          service,
+          ids.leads,
+        );
+        if (accountabilityCleanup.available) {
+          ids.lead_accountability_events = accountabilityCleanup.eventIds;
+          ids.lead_accountability = accountabilityCleanup.accountabilityIds;
+        }
         await deleteExactIds(service, "notifications", ids.notifications);
         await deleteExactIds(service, "office_tasks", ids.office_tasks);
         await deleteExactIds(service, "lead_intake_records", ids.lead_intake_records);

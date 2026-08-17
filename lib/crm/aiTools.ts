@@ -20,6 +20,7 @@ import type {
   ServiceType,
 } from "./types";
 import { scopeCrmSnapshotByCompany, type CompanyScopeId } from "./companyScope";
+import { getLeadOwnerUserId } from "./marketingAccountability";
 
 export type AiProviderKey = "disabled" | "openai" | "anthropic" | "owner_approved";
 export type AiTaskType =
@@ -568,7 +569,11 @@ export function buildAiPriorityItems(
           : `Lead is still ${lead.status.replace("_", " ")}.`,
         category: "sales",
         companyId: lead.company_id,
-        owner: lead.created_by,
+        owner: getLeadOwnerUserId(
+          authorizedSnapshot.leadAccountability,
+          lead.id,
+          lead.company_id,
+        ),
         dueAt: lead.next_follow_up,
         ageDays: ageInDays(lead.created_at, now),
         source,
