@@ -157,6 +157,10 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.8.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
 
       - name: Verify target, bootstrap identity, and prove zero-residue lifecycle
         env:

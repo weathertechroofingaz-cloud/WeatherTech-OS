@@ -99,6 +99,26 @@ const regressionSafetySource = await import("node:fs").then(({ readFileSync }) =
     "utf8",
   ),
 );
+const repositoryValidationSource = await import("node:fs").then(({ readFileSync }) =>
+  readFileSync(
+    new URL("../.github/workflows/repository-validation.yml", import.meta.url),
+    "utf8",
+  ),
+);
+const lifecycleJobSource = repositoryValidationSource.slice(
+  repositoryValidationSource.indexOf("  regression-environment-lifecycle:"),
+);
+const lifecycleInstallIndex = lifecycleJobSource.indexOf(
+  "      - name: Install locked dependencies\n        run: npm ci",
+);
+const lifecycleExecutionIndex = lifecycleJobSource.indexOf(
+  "      - name: Verify target, bootstrap identity, and prove zero-residue lifecycle",
+);
+assert.ok(
+  lifecycleInstallIndex >= 0 &&
+    lifecycleExecutionIndex > lifecycleInstallIndex,
+  "The isolated lifecycle job installs locked dependencies before executing the Supabase lifecycle",
+);
 const regressionSafetyFlagBlock = regressionSafetySource.slice(
   regressionSafetySource.indexOf("REGRESSION_SIDE_EFFECT_FLAGS"),
   regressionSafetySource.indexOf("] as const"),
