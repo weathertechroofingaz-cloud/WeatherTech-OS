@@ -7,8 +7,9 @@ import {
 } from "node:crypto";
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createClient } from "@supabase/supabase-js";
 import {
   BROWSER_REGRESSION_EXPECTED_PROJECT_REF,
   BROWSER_REGRESSION_REMOTE_WRITE_FLAG,
@@ -36,6 +37,11 @@ const MIGHTY_APES_CAMPAIGN_NAME =
   "Weather Tech Roofing - Scottsdale, AZ 85255";
 const MIGHTY_APES_WEBHOOK_PATH =
   "/api/integrations/mighty-apes/yelp/webhook";
+const JOB_PHOTO_STORAGE_BUCKET = "job-photos";
+const JOB_PHOTO_TEST_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
 const LAPTOP_VIEWPORT = { width: 1366, height: 768 };
 
 function readLinkedSupabaseProjectRef(cwd) {
@@ -191,6 +197,207 @@ async function restRequest(env, path, options = {}) {
   throw lastNetworkError ?? new Error(`Supabase ${method} ${path} did not complete.`);
 }
 
+function createRegressionServiceClient(env) {
+  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Supabase URL or service role key is missing.");
+  }
+
+  return createClient(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.SUPABASE_SERVICE_ROLE_KEY,
+    {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    },
+  );
+}
+
+async function createRegressionOwnerClient(env) {
+  const authCredentials = getBrowserRegressionAuthCredentials(env);
+
+  if (
+    !env.NEXT_PUBLIC_SUPABASE_URL ||
+    !env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    !authCredentials
+  ) {
+    throw new Error(
+      "The approved isolated browser owner credentials are required for private job-photo Storage fixtures.",
+    );
+  }
+
+  const client = createClient(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    },
+  );
+  const { data, error } = await client.auth.signInWithPassword(authCredentials);
+
+  if (error || !data.user?.id || !data.session?.access_token) {
+    throw new Error(
+      `Unable to authenticate the isolated browser owner for private photo fixtures: ${error?.message ?? "missing session"}`,
+    );
+  }
+
+  return client;
+}
+
+function assertExactRegressionJobPhotoPath(path) {
+  if (
+    typeof path !== "string" ||
+    !/^[0-9a-f-]{36}\/(?:inspection|job|property|customer|estimate|company)\/[0-9a-f-]{36}\/[0-9a-f-]{36}-[^/]+$/i.test(
+      path,
+    )
+  ) {
+    throw new Error(`Refusing unsafe job-photo Storage path: ${String(path)}`);
+  }
+
+  return path;
+}
+
+async function uploadRegressionJobPhotoObject(client, path) {
+  const exactPath = assertExactRegressionJobPhotoPath(path);
+  const { error } = await client.storage
+    .from(JOB_PHOTO_STORAGE_BUCKET)
+    .upload(exactPath, JOB_PHOTO_TEST_PNG, {
+      cacheControl: "60",
+      contentType: "image/png",
+      upsert: false,
+    });
+
+  if (error) {
+    throw new Error(`Unable to seed exact job-photo object: ${error.message}`);
+  }
+
+  return exactPath;
+}
+
+async function removeRegressionJobPhotoObjects(env, paths) {
+  const exactPaths = [...new Set(paths.filter(Boolean))].map(
+    assertExactRegressionJobPhotoPath,
+  );
+
+  if (exactPaths.length === 0) {
+    return [];
+  }
+
+  const client = createRegressionServiceClient(env);
+  const { data, error } = await client.storage
+    .from(JOB_PHOTO_STORAGE_BUCKET)
+    .remove(exactPaths);
+
+  if (error) {
+    throw new Error(`Unable to remove exact job-photo objects: ${error.message}`);
+  }
+
+  return data ?? [];
+}
+
+async function assertRegressionJobPhotoObjectsRemoved(env, paths) {
+  const exactPaths = [...new Set(paths.filter(Boolean))].map(
+    assertExactRegressionJobPhotoPath,
+  );
+  const client = createRegressionServiceClient(env);
+  const remaining = [];
+
+  for (const path of exactPaths) {
+    const { data } = await client.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .exists(path);
+
+    if (data === true) {
+      remaining.push(path);
+    }
+  }
+
+  if (remaining.length > 0) {
+    throw new Error(
+      `Browser regression cleanup left ${remaining.length} exact job-photo object(s).`,
+    );
+  }
+
+  return { count: 0, residueVerified: true };
+}
+
+async function listRegressionJobPhotoObjects(env, relations) {
+  const client = createRegressionServiceClient(env);
+  const paths = [];
+
+  for (const relation of relations) {
+    if (
+      !/^[0-9a-f-]{36}$/i.test(relation.companyId) ||
+      !/^(?:inspection|job|property|customer|estimate)$/i.test(relation.kind) ||
+      !/^[0-9a-f-]{36}$/i.test(relation.id)
+    ) {
+      throw new Error(
+        `Refusing unsafe job-photo cleanup relation: ${JSON.stringify(relation)}`,
+      );
+    }
+
+    const prefix = `${relation.companyId}/${relation.kind}/${relation.id}`;
+    const { data, error } = await client.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .list(prefix, { limit: 1000 });
+
+    if (error) {
+      throw new Error(
+        `Unable to discover exact job-photo cleanup objects under ${prefix}: ${error.message}`,
+      );
+    }
+
+    for (const object of data ?? []) {
+      if (!object.name || object.name.includes("/")) {
+        throw new Error(
+          `Refusing unexpected nested job-photo cleanup object under ${prefix}.`,
+        );
+      }
+
+      paths.push(assertExactRegressionJobPhotoPath(`${prefix}/${object.name}`));
+    }
+  }
+
+  return [...new Set(paths)];
+}
+
+async function findJobPhotoUploadOperationsForCleanup(env, relations) {
+  const select = encodeURIComponent(
+    "id,company_id,upload_operation_key,file_path,state",
+  );
+  const groups = [];
+
+  for (const relation of relations) {
+    if (
+      !/^[0-9a-f-]{36}$/i.test(relation.companyId) ||
+      !/^(?:inspection|job|property|customer|estimate)$/i.test(relation.kind) ||
+      !/^[0-9a-f-]{36}$/i.test(relation.id)
+    ) {
+      throw new Error(
+        `Refusing unsafe job-photo operation cleanup relation: ${JSON.stringify(relation)}`,
+      );
+    }
+
+    const pathPrefix = encodeURIComponent(
+      `${relation.companyId}/${relation.kind}/${relation.id}/%`,
+    );
+    groups.push(
+      await restRequest(
+        env,
+        `job_photo_upload_operations?select=${select}&file_path=like.${pathPrefix}`,
+      ),
+    );
+  }
+
+  return mergeRowsById(...groups);
+}
+
 async function deleteByIds(env, table, column, ids) {
   if (!ids.length) {
     return;
@@ -283,6 +490,48 @@ function mergeRowsById(...groups) {
   return [
     ...new Map(groups.flat().map((row) => [row.id, row])).values(),
   ];
+}
+
+async function findJobPhotosForCleanup(
+  env,
+  {
+    runMarker,
+    jobIds,
+    inspectionIds,
+    propertyIds,
+    customerIds,
+    estimateIds,
+  },
+) {
+  const select = encodeURIComponent(
+    "id,company_id,job_id,inspection_id,property_id,customer_id,estimate_id,file_path,caption",
+  );
+  const byForeignIds = async (column, ids) => {
+    if (!ids.length) {
+      return [];
+    }
+
+    const idFilter = encodeURIComponent(`(${ids.join(",")})`);
+    return restRequest(
+      env,
+      `job_photos?select=${select}&${column}=in.${idFilter}`,
+    );
+  };
+  const captionFilter = encodeURIComponent(`${runMarker}%`);
+
+  return mergeRowsById(
+    ...(await Promise.all([
+      byForeignIds("job_id", jobIds),
+      byForeignIds("inspection_id", inspectionIds),
+      byForeignIds("property_id", propertyIds),
+      byForeignIds("customer_id", customerIds),
+      byForeignIds("estimate_id", estimateIds),
+      restRequest(
+        env,
+        `job_photos?select=${select}&caption=like.${captionFilter}`,
+      ),
+    ])),
+  );
 }
 
 async function findLeadIntakeRecordsForRun(env, runMarker) {
@@ -507,15 +756,15 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   const derivedInvoiceFilter = encodeURIComponent(`Invoice for ${runMarker}%`);
   const jobs = await restRequest(
     env,
-    `jobs?select=id,title&title=like.${prefixFilter}`,
+    `jobs?select=id,title,company_id&title=like.${prefixFilter}`,
   );
   const estimates = await restRequest(
     env,
-    `estimates?select=id,title&title=like.${prefixFilter}`,
+    `estimates?select=id,title,company_id&title=like.${prefixFilter}`,
   );
   const inspections = await restRequest(
     env,
-    `inspections?select=id,title&title=like.${prefixFilter}`,
+    `inspections?select=id,title,company_id&title=like.${prefixFilter}`,
   );
   const documents = await restRequest(
     env,
@@ -544,11 +793,11 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   );
   const customers = await restRequest(
     env,
-    `customers?select=id,display_name&display_name=like.${prefixFilter}`,
+    `customers?select=id,display_name,company_id&display_name=like.${prefixFilter}`,
   );
   const properties = await restRequest(
     env,
-    `properties?select=id,display_name&display_name=like.${prefixFilter}`,
+    `properties?select=id,display_name,company_id&display_name=like.${prefixFilter}`,
   );
   const reconciliationEventsByOperation = await restRequest(
     env,
@@ -590,6 +839,61 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   const invoiceIds = invoices.map((invoice) => invoice.id);
   const changeOrderIds = changeOrders.map((changeOrder) => changeOrder.id);
   const leadIds = leads.map((lead) => lead.id);
+  const customerIds = customers.map((customer) => customer.id);
+  const propertyIds = properties.map((property) => property.id);
+  const jobPhotos = await findJobPhotosForCleanup(env, {
+    runMarker,
+    jobIds,
+    inspectionIds,
+    propertyIds,
+    customerIds,
+    estimateIds,
+  });
+  const jobPhotoIds = jobPhotos.map((photo) => photo.id);
+  const jobPhotoRelations = [
+      ...jobs.map((job) => ({
+        companyId: job.company_id,
+        kind: "job",
+        id: job.id,
+      })),
+      ...inspections.map((inspection) => ({
+        companyId: inspection.company_id,
+        kind: "inspection",
+        id: inspection.id,
+      })),
+      ...properties.map((property) => ({
+        companyId: property.company_id,
+        kind: "property",
+        id: property.id,
+      })),
+      ...customers.map((customer) => ({
+        companyId: customer.company_id,
+        kind: "customer",
+        id: customer.id,
+      })),
+      ...estimates.map((estimate) => ({
+        companyId: estimate.company_id,
+        kind: "estimate",
+        id: estimate.id,
+      })),
+    ];
+  const [discoveredJobPhotoStoragePaths, jobPhotoUploadOperations] =
+    await Promise.all([
+      listRegressionJobPhotoObjects(env, jobPhotoRelations),
+      findJobPhotoUploadOperationsForCleanup(env, jobPhotoRelations),
+    ]);
+  const jobPhotoUploadOperationIds = jobPhotoUploadOperations.map(
+    (operation) => operation.id,
+  );
+  const jobPhotoStoragePaths = [
+    ...new Set([
+      ...jobPhotos.map((photo) => photo.file_path).filter(Boolean),
+      ...jobPhotoUploadOperations
+        .map((operation) => operation.file_path)
+        .filter(Boolean),
+      ...discoveredJobPhotoStoragePaths,
+    ]),
+  ];
   const leadAccountability = await findByForeignIdsIfPresent(
     env,
     "lead_accountability",
@@ -647,8 +951,6 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     reconciliationEventsByOperation,
     reconciliationEventsByLead,
   );
-  const customerIds = customers.map((customer) => customer.id);
-  const propertyIds = properties.map((property) => property.id);
   const reconciliationEventIds = reconciliationEvents.map((event) => event.id);
   const officeTasks = mergeRowsById(
     ...(await Promise.all([
@@ -797,6 +1099,14 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   await deleteByIds(env, "marketing_campaigns", "id", marketingCampaignIds);
   await deleteByLike(env, "schedule_events", "title", runMarker);
   await deleteByLike(env, "scopes", "title", runMarker);
+  await removeRegressionJobPhotoObjects(env, jobPhotoStoragePaths);
+  await deleteByIds(env, "job_photos", "id", jobPhotoIds);
+  await deleteByIds(
+    env,
+    "job_photo_upload_operations",
+    "id",
+    jobPhotoUploadOperationIds,
+  );
   await deleteByIds(env, "signatures", "document_id", documentIds);
   await deleteByIds(env, "inspections", "id", inspectionIds);
   await deleteByIds(env, "schedule_events", "job_id", jobIds);
@@ -805,7 +1115,6 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   await deleteByIds(env, "job_tasks", "job_id", jobIds);
   await deleteByIds(env, "job_notes", "job_id", jobIds);
   await deleteByIds(env, "job_materials", "job_id", jobIds);
-  await deleteByIds(env, "job_photos", "job_id", jobIds);
   await deleteByIds(env, "payments", "id", paymentIds);
   await deleteByIds(env, "invoice_line_items", "invoice_id", invoiceIds);
   await deleteByIds(env, "jobs", "id", jobIds);
@@ -818,7 +1127,7 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   await deleteByIds(env, "properties", "id", propertyIds);
   await deleteByIds(env, "customers", "id", customerIds);
 
-  const [capturedIdResidue, markerResidue] = await Promise.all([
+  const [capturedIdResidue, markerResidue, jobPhotoStorageResidue] = await Promise.all([
     Promise.all([
       findByIds(env, "jobs", jobIds),
       findByIds(env, "estimates", estimateIds),
@@ -830,6 +1139,12 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       findByIds(env, "leads", leadIds),
       findByIds(env, "customers", customerIds),
       findByIds(env, "properties", propertyIds),
+      findByIds(env, "job_photos", jobPhotoIds),
+      findByIds(
+        env,
+        "job_photo_upload_operations",
+        jobPhotoUploadOperationIds,
+      ),
       findByIds(env, "crm_identity_reconciliation_events", reconciliationEventIds),
       findByIds(env, "lead_accountability", leadAccountabilityIds),
       findByIds(
@@ -865,10 +1180,12 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       ),
     ]),
     findRegressionMarkerResidue(env, runId, resolvedLeadNameColumn),
+    assertRegressionJobPhotoObjectsRemoved(env, jobPhotoStoragePaths),
   ]);
   const residueCount =
     capturedIdResidue.reduce((count, rows) => count + rows.length, 0) +
-    markerResidue.count;
+    markerResidue.count +
+    jobPhotoStorageResidue.count;
 
   if (residueCount > 0) {
     throw new Error(
@@ -887,6 +1204,9 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     leadsDeleted: leadIds.length,
     customersDeleted: customerIds.length,
     propertiesDeleted: propertyIds.length,
+    jobPhotosDeleted: jobPhotoIds.length,
+    jobPhotoObjectsDeleted: jobPhotoStoragePaths.length,
+    jobPhotoUploadOperationsDeleted: jobPhotoUploadOperationIds.length,
     reconciliationEventsDeleted: reconciliationEventIds.length,
     accountabilityDeleted: leadAccountabilityIds.length,
     accountabilityEventsDeleted: accountabilityEvents.length,
@@ -972,6 +1292,13 @@ async function findJobNoteContaining(env, jobId, text) {
   );
 
   return rows.find((row) => String(row.note ?? "").includes(text)) ?? null;
+}
+
+async function findJobMaterialsByName(env, jobId, name) {
+  return restRequest(
+    env,
+    `job_materials?select=id,job_id,name,quantity,unit,notes&job_id=eq.${jobId}&name=eq.${encodeURIComponent(name)}`,
+  );
 }
 
 async function seedTestLead(env, companyId, runId, leadNameColumn, suffix = "LEAD") {
@@ -2204,6 +2531,70 @@ async function clickEnabledUntilPersisted({
   );
 }
 
+async function clickFieldMaterialUntilPersisted({
+  tab,
+  locator,
+  clickLabel,
+  persistenceLabel,
+  readMaterials,
+  readNote,
+  errorPrefix,
+  timeoutMs = 20000,
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+  let nextRetryAt = startedAt;
+  let lastMaterial = null;
+  let lastNote = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const [materials, note] = await Promise.all([readMaterials(), readNote()]);
+
+    if (materials.length > 1) {
+      throw new Error(
+        `${persistenceLabel} created ${materials.length} exact material rows; expected one.`,
+      );
+    }
+
+    lastMaterial = materials[0] ?? null;
+    lastNote = note;
+
+    if (lastMaterial && lastNote) {
+      return { material: lastMaterial, note: lastNote, attempts };
+    }
+
+    const visibleError = await tab.playwright
+      .locator('[role="alert"][aria-label="Error notification"]')
+      .textContent({ timeoutMs: 250 })
+      .catch(() => null);
+    if (visibleError?.trim()) {
+      throw new Error(`${errorPrefix}: ${visibleError.trim()}`);
+    }
+
+    const actionHasPersisted = Boolean(lastMaterial || lastNote);
+    if (
+      !actionHasPersisted &&
+      attempts < 3 &&
+      Date.now() >= nextRetryAt
+    ) {
+      await waitForAsync(
+        () => locator.isEnabled().catch(() => false),
+        `enabled ${clickLabel}`,
+        Math.min(5000, timeoutMs - (Date.now() - startedAt)),
+      );
+      await clickUnique(locator, clickLabel, { retryTransientClick: true });
+      attempts += 1;
+      nextRetryAt = Date.now() + 4000;
+    }
+
+    await tab.playwright.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `Timed out waiting for ${persistenceLabel} after ${attempts} enabled UI attempt(s); exact material=${Boolean(lastMaterial)}, structured note=${Boolean(lastNote)}.`,
+  );
+}
+
 async function withAcceptedConfirm(tab, action) {
   let actionError = null;
   let actionSettled = false;
@@ -2459,6 +2850,178 @@ async function selectUnique(locator, value, label) {
       value),
     label,
     3000,
+  );
+}
+
+function isTransientFileChooserInteractionError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    /^(?:Error: )?Timed out after \d+ms waiting for file chooser\.?$/.test(
+      message,
+    ) ||
+    message.includes("Unable to translate Input.dispatchMouseEvent") ||
+    /^No element found at point .+ waiting on click selector .+$/.test(message)
+  );
+}
+
+async function readFileInputInteractionState(locator) {
+  return locator.evaluate((input) => {
+    const rect = input.getBoundingClientRect();
+    const style = getComputedStyle(input);
+
+    return {
+      connected: input.isConnected,
+      disabled: "disabled" in input ? Boolean(input.disabled) : null,
+      multiple: "multiple" in input ? Boolean(input.multiple) : null,
+      rect: {
+        height: rect.height,
+        width: rect.width,
+        x: rect.x,
+        y: rect.y,
+      },
+      tagName: input.tagName,
+      type: "type" in input ? String(input.type).toLowerCase() : null,
+      selectedFileName:
+        "value" in input && input.value
+          ? String(input.value).replace(/^.*[\\/]/, "")
+          : null,
+      visible:
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden",
+    };
+  });
+}
+
+function isReadySingleFileInputState(state) {
+  return Boolean(
+    state?.connected &&
+      state.tagName === "INPUT" &&
+      state.type === "file" &&
+      state.disabled === false &&
+      state.multiple === false &&
+      state.visible,
+  );
+}
+
+async function chooseFileFromLocator(tab, locator, path, label) {
+  if (!isAbsolute(path)) {
+    throw new Error(`${label} requires an exact absolute file path.`);
+  }
+
+  const expectedFileName = basename(path);
+  let lastInputState = null;
+  let lastTransientErrors = [];
+  await waitForUniqueLocator(locator, `${label} upload control`);
+  const uploadControlTagName = await locator.evaluate((control) =>
+    control.tagName.toUpperCase(),
+  );
+  const inputLocator =
+    uploadControlTagName === "INPUT"
+      ? locator
+      : locator.locator('input[type="file"]');
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForUniqueLocator(inputLocator, `${label} input`);
+    lastInputState = await waitForAsync(async () => {
+      const state = await readFileInputInteractionState(inputLocator).catch(
+        () => null,
+      );
+
+      return isReadySingleFileInputState(state) ? state : null;
+    }, `${label} connected visible enabled single-file input`, 5000).catch(
+      async () => readFileInputInteractionState(inputLocator).catch(() => null),
+    );
+
+    if (!isReadySingleFileInputState(lastInputState)) {
+      throw new Error(
+        `${label} input is not a connected visible enabled single-file control: ${JSON.stringify(lastInputState)}`,
+      );
+    }
+
+    await locator.evaluate((input) => {
+      input.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+    await tab.playwright.waitForTimeout(250);
+    lastInputState = await readFileInputInteractionState(inputLocator);
+
+    if (!isReadySingleFileInputState(lastInputState)) {
+      throw new Error(
+        `${label} input changed before chooser activation: ${JSON.stringify(lastInputState)}`,
+      );
+    }
+
+    const chooserPromise = tab.playwright.waitForEvent("filechooser", {
+      timeoutMs: 10000,
+    });
+    const clickPromise = locator.click({ timeoutMs: 8000 });
+    const [clickResult, chooserResult] = await Promise.allSettled([
+      clickPromise,
+      chooserPromise,
+    ]);
+
+    if (chooserResult.status === "fulfilled") {
+      if (
+        clickResult.status === "rejected" &&
+        !isTransientFileChooserInteractionError(clickResult.reason)
+      ) {
+        throw new Error(
+          `${label} chooser opened but its click failed outside the transient allowlist: ${clickResult.reason instanceof Error ? clickResult.reason.message : String(clickResult.reason)}`,
+        );
+      }
+
+      if (chooserResult.value.isMultiple()) {
+        throw new Error(`${label} unexpectedly opened a multiple-file chooser.`);
+      }
+
+      await chooserResult.value.setFiles(path, { timeoutMs: 10000 });
+      const selectedState = await waitForAsync(async () => {
+        const state = await readFileInputInteractionState(inputLocator).catch(
+          () => null,
+        );
+
+        return state?.multiple === false &&
+          state.selectedFileName === expectedFileName
+          ? state
+          : null;
+      }, `${label} exact selected file`, 5000);
+
+      if (
+        selectedState.multiple !== false ||
+        selectedState.selectedFileName !== expectedFileName
+      ) {
+        throw new Error(
+          `${label} chooser did not retain the exact selected file name.`,
+        );
+      }
+
+      return;
+    }
+
+    const attemptErrors = [
+      chooserResult.reason,
+      ...(clickResult.status === "rejected" ? [clickResult.reason] : []),
+    ];
+    const attemptMessages = attemptErrors.map((error) =>
+      error instanceof Error ? error.message : String(error),
+    );
+
+    if (!attemptErrors.every(isTransientFileChooserInteractionError)) {
+      throw new Error(
+        `${label} chooser failed outside the transient allowlist: ${attemptMessages.join(" | ")}`,
+      );
+    }
+
+    lastTransientErrors = attemptMessages;
+    if (attempt < 3) {
+      await tab.playwright.waitForTimeout(300);
+    }
+  }
+
+  throw new Error(
+    `${label} chooser did not open after 3 bounded attempts: ${JSON.stringify({ expectedFileName, lastInputState, lastTransientErrors })}`,
   );
 }
 
@@ -3071,6 +3634,7 @@ async function activateSubmitButtonByText(tab, text, label) {
   ]) {
     try {
       await strategy();
+      return;
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -4879,6 +5443,116 @@ async function testFinancialOperationsWorkspace(
   return { createdInvoiceId: createdInvoice.id, paidInvoice, desktopLayout, mobileLayout };
 }
 
+async function readFieldOperationsReadinessState(
+  tab,
+  { companyId, jobTitle, inspectionTitle },
+) {
+  return tab.playwright.evaluate(
+    ({ companyId, jobTitle, inspectionTitle }) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const workspace = document.querySelector(
+        '[data-testid="field-operations-workspace"]',
+      );
+      const companyFilter = document.querySelector(
+        '[data-testid="field-company-filter"]',
+      );
+      const cards = [...document.querySelectorAll(
+        '[data-testid="field-assignment-card"]',
+      )].map((card) => ({
+        title: normalize(card.querySelector("p")?.textContent),
+        companyId: card.getAttribute("data-company-id"),
+        kind: card.getAttribute("data-assignment-kind"),
+        pressed: card.getAttribute("aria-pressed"),
+      }));
+      const exactJobCards = cards.filter(
+        (card) =>
+          card.title === jobTitle &&
+          card.companyId === companyId &&
+          card.kind === "job",
+      );
+      const exactInspectionCards = cards.filter(
+        (card) =>
+          card.title === inspectionTitle &&
+          card.companyId === companyId &&
+          card.kind === "inspection",
+      );
+
+      return {
+        href: location.href,
+        workspacePresent: Boolean(workspace),
+        companyFilterPresent: Boolean(companyFilter),
+        companyFilterValue:
+          companyFilter && "value" in companyFilter
+            ? String(companyFilter.value)
+            : null,
+        companyFilterOptions: companyFilter
+          ? [...companyFilter.querySelectorAll("option")].map((option) => ({
+              label: normalize(option.textContent),
+              value: option.value,
+            }))
+          : [],
+        cards,
+        exactJobCardCount: exactJobCards.length,
+        exactInspectionCardCount: exactInspectionCards.length,
+        selectedTitle:
+          cards.find((card) => card.pressed === "true")?.title ?? null,
+        formState: {
+          photo: Boolean(document.querySelector('[data-testid="field-photo-upload-form"]')),
+          issue: Boolean(document.querySelector('[data-testid="field-issue-form"]')),
+          material: Boolean(document.querySelector('[data-testid="field-material-form"]')),
+          materialSubmitEnabled: Boolean(
+            document.querySelector('[data-testid="field-material-submit"]') &&
+              !document
+                .querySelector('[data-testid="field-material-submit"]')
+                ?.hasAttribute("disabled"),
+          ),
+        },
+        liveError:
+          normalize(
+            document.querySelector(
+              '[role="alert"][aria-label="Error notification"]',
+            )?.textContent,
+          ) || null,
+        loadingState: document.body.innerText.includes("Loading CRM workspace"),
+      };
+    },
+    { companyId, jobTitle, inspectionTitle },
+  );
+}
+
+async function waitForFieldOperationsAssignmentReadiness(
+  tab,
+  expected,
+  timeoutMs = 15000,
+) {
+  const startedAt = Date.now();
+  let lastState = null;
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastState = await readFieldOperationsReadinessState(tab, expected);
+      lastError = null;
+
+      if (
+        lastState.workspacePresent &&
+        lastState.companyFilterPresent &&
+        lastState.companyFilterValue === "all" &&
+        lastState.exactJobCardCount === 1 &&
+        lastState.exactInspectionCardCount === 1
+      ) {
+        return { ready: true, state: lastState, error: null };
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+
+    await tab.playwright.waitForTimeout(250);
+  }
+
+  return { ready: false, state: lastState, error: lastError };
+}
+
 async function testFieldOperationsWorkspace(browser, tab, env, company, runId, baseUrl, progress) {
   progress("field-operations:prepare:start");
   const fieldRunId = `${runId} FIELDOPS`;
@@ -4892,6 +5566,7 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
   const today = fieldStart.toISOString().slice(0, 10);
   const fieldCrew = `${TEST_PREFIX} ${fieldRunId} FIELD CREW`;
   const fieldOwner = `${TEST_PREFIX} ${fieldRunId} FIELD OWNER`;
+  const fieldInspector = `${TEST_PREFIX} ${fieldRunId} DISPATCH INSPECTOR`;
   await restRequest(env, `jobs?id=eq.${encodeURIComponent(seededJob.id)}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
@@ -4914,37 +5589,152 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
     inspectionEnd,
   );
 
-  await tab.reload();
-  await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await ensureAppShell(tab, baseUrl, progress);
+  const [persistedJobs, persistedInspections] = await Promise.all([
+    restRequest(
+      env,
+      `jobs?select=id,company_id,title,status,scheduled_start,scheduled_end,start_date,end_date,crew_name,project_manager&id=eq.${encodeURIComponent(seededJob.id)}`,
+    ),
+    restRequest(
+      env,
+      `inspections?select=id,company_id,job_id,title,status,scheduled_start,scheduled_end,assigned_inspector&id=eq.${encodeURIComponent(inspection.id)}`,
+    ),
+  ]);
+  const persistedJob = persistedJobs[0] ?? null;
+  const persistedInspection = persistedInspections[0] ?? null;
+  const fieldSeedProof = {
+    job: persistedJob,
+    jobRowCount: persistedJobs.length,
+    inspection: persistedInspection,
+    inspectionRowCount: persistedInspections.length,
+  };
+
+  if (
+    persistedJobs.length !== 1 ||
+    persistedInspections.length !== 1 ||
+    persistedJob?.id !== seededJob.id ||
+    persistedJob?.company_id !== company.id ||
+    persistedJob?.title !== seededJob.title ||
+    persistedJob?.status !== "scheduled" ||
+    Date.parse(persistedJob?.scheduled_start ?? "") !== fieldStart.getTime() ||
+    Date.parse(persistedJob?.scheduled_end ?? "") !== fieldEnd.getTime() ||
+    persistedJob?.start_date !== today ||
+    persistedJob?.end_date !== today ||
+    persistedJob?.crew_name !== fieldCrew ||
+    persistedJob?.project_manager !== fieldOwner ||
+    persistedInspection?.id !== inspection.id ||
+    persistedInspection?.company_id !== company.id ||
+    persistedInspection?.job_id !== seededJob.id ||
+    persistedInspection?.title !== inspection.title ||
+    persistedInspection?.status !== "scheduled" ||
+    persistedInspection?.assigned_inspector !== fieldInspector ||
+    Date.parse(persistedInspection?.scheduled_start ?? "") !==
+      inspectionStart.getTime() ||
+    Date.parse(persistedInspection?.scheduled_end ?? "") !==
+      inspectionEnd.getTime()
+  ) {
+    throw new Error(
+      `Field Operations exact seed proof failed: ${JSON.stringify(fieldSeedProof)}`,
+    );
+  }
+
+  const expectedAssignments = {
+    companyId: company.id,
+    jobTitle: seededJob.title,
+    inspectionTitle: inspection.title,
+  };
+  let readinessResult = null;
+  let readinessAttemptError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await tab.reload();
+      await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+      await ensureAppShell(tab, baseUrl, progress);
+      await clickNav(tab, "Field Ops");
+      await selectUnique(
+        tab.playwright.locator('[data-testid="field-company-filter"]'),
+        "all",
+        `field company filter all companies attempt ${attempt}`,
+      );
+      readinessResult = await waitForFieldOperationsAssignmentReadiness(
+        tab,
+        expectedAssignments,
+      );
+      readinessAttemptError = readinessResult.error;
+
+      if (readinessResult.ready) {
+        break;
+      }
+    } catch (error) {
+      readinessAttemptError = error instanceof Error ? error.message : String(error);
+      readinessResult = {
+        ready: false,
+        state: await readFieldOperationsReadinessState(
+          tab,
+          expectedAssignments,
+        ).catch(() => null),
+        error: readinessAttemptError,
+      };
+    }
+  }
+
+  if (!readinessResult?.ready) {
+    throw new Error(
+      `Field Operations assignments did not settle after two bounded reload attempts: ${JSON.stringify({ fieldSeedProof, readinessAttemptError, uiState: readinessResult?.state ?? null })}`,
+    );
+  }
+
   progress("field-operations:prepare:done");
 
-  await clickNav(tab, "Field Ops");
   const companyFilter = tab.playwright.locator('[data-testid="field-company-filter"]');
-  await selectUnique(companyFilter, "all", "field company filter all companies");
+  const selectedJobCard = tab.playwright
+    .locator(
+      `[data-testid="field-assignment-card"][data-company-id="${company.id}"][data-assignment-kind="job"]`,
+    )
+    .filter({ hasText: seededJob.title });
+  await clickUnique(selectedJobCard, "field job assignment", {
+    retryTransientClick: true,
+  });
   await waitFor(
     tab,
-    ({ jobTitle, inspectionTitle }) => {
-      const text = document.body.innerText.toLowerCase();
+    ({ companyId, jobTitle }) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const cards = [...document.querySelectorAll(
+        `[data-testid="field-assignment-card"][data-company-id="${companyId}"][data-assignment-kind="job"]`,
+      )];
+      const exactCard = cards.find(
+        (card) => normalize(card.querySelector("p")?.textContent) === jobTitle,
+      );
+      const detailTitle = normalize(
+        document.querySelector('[data-testid="field-assignment-detail"] h3')
+          ?.textContent,
+      );
+      const materialSubmit = document.querySelector(
+        '[data-testid="field-material-submit"]',
+      );
 
-      return (
-        Boolean(document.querySelector('[data-testid="field-operations-workspace"]')) &&
-        text.includes("mobile crew workspace") &&
-        text.includes("today's assigned work") &&
-        text.includes(jobTitle.toLowerCase()) &&
-        text.includes(inspectionTitle.toLowerCase()) &&
-        text.includes("upload field photo") &&
-        text.includes("report issue") &&
-        text.includes("materials")
+      return Boolean(
+        exactCard?.getAttribute("aria-pressed") === "true" &&
+          detailTitle === jobTitle &&
+          document.querySelector('[data-testid="field-photo-upload-form"]') &&
+          document.querySelector('[data-testid="field-issue-form"]') &&
+          document.querySelector('[data-testid="field-material-form"]') &&
+          materialSubmit &&
+          !materialSubmit.hasAttribute("disabled"),
       );
     },
-    "field operations workspace",
-    15000,
-    {
-      jobTitle: seededJob.title,
-      inspectionTitle: inspection.title,
-    },
-  );
+    "exact Field Operations job selection and forms",
+    10000,
+    { companyId: company.id, jobTitle: seededJob.title },
+  ).catch(async (error) => {
+    const uiState = await readFieldOperationsReadinessState(
+      tab,
+      expectedAssignments,
+    ).catch(() => null);
+    throw new Error(
+      `Exact Field Operations job selection did not settle: ${error instanceof Error ? error.message : String(error)} Last state: ${JSON.stringify(uiState)}`,
+    );
+  });
 
   const initialLayout = await tab.playwright.evaluate(() => ({
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
@@ -4965,11 +5755,6 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
   if (!initialLayout.uploadStateVisible) {
     throw new Error("Field photo upload state is not visible.");
   }
-
-  const selectedJobCard = tab.playwright
-    .locator('[data-testid="field-assignment-card"]')
-    .filter({ hasText: seededJob.title });
-  await clickUnique(selectedJobCard, "field job assignment");
 
   await selectUnique(companyFilter, company.id, "field company filter WeatherTech");
   await waitFor(
@@ -5051,32 +5836,73 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
     throw new Error("Field work started did not create a daily log.");
   }
 
+  await waitFor(
+    tab,
+    () =>
+      document.body.innerText.includes("Field status saved as Work Started.") &&
+      document.querySelector('[data-testid="field-save-status"]')?.disabled === false,
+    "field work started UI settlement before checklist action",
+    15000,
+  );
+
+  const seededChecklistTask = await waitForAsync(
+    () => findJobTaskByTitle(env, seededJob.id, seededTaskTitle),
+    "exact seeded field checklist task before completion",
+    10000,
+  );
+  if (
+    !seededChecklistTask.id ||
+    seededChecklistTask.title !== seededTaskTitle ||
+    seededChecklistTask.status !== "todo"
+  ) {
+    throw new Error(
+      `Seeded field checklist task did not retain its exact pre-action identity: ${JSON.stringify(seededChecklistTask)}.`,
+    );
+  }
+
   const seededChecklistRow = tab.playwright
     .locator('[data-testid="field-checklist-row"]')
     .filter({ hasText: seededTaskTitle });
+  const completedChecklistDescriptionMarker = "Field checklist - complete";
   await scrollSelectorIntoView(tab, '[data-testid="field-checklist-section"]', "field checklist section");
-  await clickUnique(
-    seededChecklistRow.locator('[data-testid="field-checklist-complete"]'),
-    "field checklist complete",
-  );
-  const completedTask = await waitForAsync(
-    async () => {
+  const completedTask = await clickEnabledUntilPersisted({
+    tab,
+    locator: seededChecklistRow.locator('[data-testid="field-checklist-complete"]'),
+    clickLabel: "complete exact field checklist task",
+    persistenceLabel: "exact field checklist completion persistence",
+    readPersisted: async () => {
       const task = await findJobTaskByTitle(env, seededJob.id, seededTaskTitle);
 
-      return task?.status === "done" ? task : null;
+      if (task && task.id !== seededChecklistTask.id) {
+        throw new Error(
+          `Field checklist completion changed task identity from ${seededChecklistTask.id} to ${task.id}.`,
+        );
+      }
+
+      return task?.status === "done" &&
+        task.description?.includes(completedChecklistDescriptionMarker)
+        ? task
+        : null;
     },
-    "field checklist persisted",
-    15000,
-  );
-  if (completedTask?.status !== "done") {
-    throw new Error(`Field checklist action did not persist; got ${completedTask?.status ?? "missing"}.`);
+    errorPrefix: "Field checklist completion was refused",
+    timeoutMs: 20000,
+  });
+  if (
+    completedTask.id !== seededChecklistTask.id ||
+    completedTask.status !== "done" ||
+    !completedTask.description?.includes(completedChecklistDescriptionMarker)
+  ) {
+    throw new Error(
+      `Field checklist action did not preserve its exact task/status/description contract: ${JSON.stringify(completedTask)}.`,
+    );
   }
 
   await selectUnique(tab.playwright.locator('[data-testid="field-issue-category"]'), "Safety", "field issue category");
   await selectUnique(tab.playwright.locator('[data-testid="field-issue-priority"]'), "critical", "field issue priority");
+  const fieldIssueDetails = `${TEST_PREFIX} ${fieldRunId} safety harness concern`;
   await fillUnique(
     tab.playwright.locator('[data-testid="field-issue-details"]'),
-    `${TEST_PREFIX} ${fieldRunId} safety harness concern`,
+    fieldIssueDetails,
     "field issue details",
   );
   await fillUnique(
@@ -5085,44 +5911,67 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
     "field issue office action",
   );
   await scrollSelectorIntoView(tab, '[data-testid="field-issue-submit"]', "field issue submit");
-  await clickVisibleDomSubmitByText(tab, "Report issue", "submit field issue");
-  const fieldIssueNote = await waitForAsync(
-    () => findJobNoteContaining(env, seededJob.id, "Field issue - Safety"),
-    "field issue persisted",
-    15000,
-  );
-  if (!fieldIssueNote) {
-    throw new Error("Field issue did not persist as a job note.");
+  const fieldIssueNote = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="field-issue-submit"]'),
+    clickLabel: "submit field issue",
+    persistenceLabel: "field issue persisted",
+    readPersisted: () =>
+      findJobNoteContaining(env, seededJob.id, fieldIssueDetails),
+    errorPrefix: "Field issue submission was refused",
+  });
+  if (!fieldIssueNote.note.includes("Field issue - Safety")) {
+    throw new Error("Field issue persisted without its structured category.");
   }
 
   await selectUnique(tab.playwright.locator('[data-testid="field-material-action"]'), "Materials missing", "field material missing");
+  const fieldMaterialName = `${TEST_PREFIX} ${fieldRunId} ridge cap`;
   await fillUnique(
     tab.playwright.locator('[data-testid="field-material-name"]'),
-    `${TEST_PREFIX} ${fieldRunId} ridge cap`,
+    fieldMaterialName,
     "field material name",
   );
   await scrollSelectorIntoView(tab, '[data-testid="field-material-submit"]', "field material submit");
-  await clickVisibleDomSubmitByText(tab, "Save material update", "save field material");
-  const materialIssueNote = await waitForAsync(
-    () => findJobNoteContaining(env, seededJob.id, "Field material issue - Materials missing"),
-    "field material issue persisted",
-    15000,
-  );
-  if (!materialIssueNote) {
-    throw new Error("Missing material report did not create an office-visible note.");
+  const materialIssueResult = await clickFieldMaterialUntilPersisted({
+    tab,
+    locator: tab.playwright.locator('[data-testid="field-material-submit"]'),
+    clickLabel: "save field material",
+    persistenceLabel: "field material issue persisted",
+    readMaterials: () =>
+      findJobMaterialsByName(env, seededJob.id, fieldMaterialName),
+    readNote: () =>
+      findJobNoteContaining(
+        env,
+        seededJob.id,
+        `Field material issue - Materials missing\nMaterial: 1 each ${fieldMaterialName}`,
+      ),
+    errorPrefix: "Field material submission was refused",
+  });
+  if (
+    materialIssueResult.material.job_id !== seededJob.id ||
+    materialIssueResult.material.name !== fieldMaterialName ||
+    Number(materialIssueResult.material.quantity) !== 1 ||
+    materialIssueResult.material.unit !== "each" ||
+    materialIssueResult.material.notes !== "Materials missing" ||
+    !materialIssueResult.note.note.includes(fieldMaterialName)
+  ) {
+    throw new Error(
+      "Missing material report did not preserve its exact material row and structured office note.",
+    );
   }
 
   const invalidPhotoPath = join(tmpdir(), `${TEST_PREFIX}-${fieldRunId}-not-photo.txt`);
   writeFileSync(invalidPhotoPath, "not an image");
   try {
     await scrollSelectorIntoView(tab, '[data-testid="field-photo-upload-form"]', "field photo upload form");
-    const fileChooserPromise = tab.playwright.waitForEvent("filechooser", { timeoutMs: 10000 });
-    await clickUnique(
-      tab.playwright.locator('xpath=//*[@data-testid="field-photo-upload-form"]//label[.//*[@data-testid="field-photo-file-input"]]'),
-      "field photo chooser",
+    await chooseFileFromLocator(
+      tab,
+      tab.playwright.locator(
+        'xpath=//*[@data-testid="field-photo-file-input"]/ancestor::label[1]',
+      ),
+      invalidPhotoPath,
+      "field invalid photo chooser",
     );
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(invalidPhotoPath, { timeoutMs: 10000 });
     await waitFor(
       tab,
       () => {
@@ -5154,6 +6003,104 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
     "field invalid photo retry visible",
     30000,
   );
+
+  const fieldPhotoCaption = `${TEST_PREFIX} ${fieldRunId} SECURE FIELD PHOTO`;
+  const validPhotoPath = join(
+    tmpdir(),
+    `${TEST_PREFIX.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${fieldRunId}-field-photo.png`,
+  );
+  writeFileSync(validPhotoPath, JOB_PHOTO_TEST_PNG);
+  try {
+    await chooseFileFromLocator(
+      tab,
+      tab.playwright.locator(
+        'xpath=//*[@data-testid="field-photo-file-input"]/ancestor::label[1]',
+      ),
+      validPhotoPath,
+      "valid field photo",
+    );
+    await selectUnique(
+      tab.playwright.locator('[data-testid="field-photo-category-select"]'),
+      "During-work photos",
+      "field photo category",
+    );
+    await fillUnique(
+      tab.playwright.locator('[data-testid="field-photo-caption-input"]'),
+      fieldPhotoCaption,
+      "field photo caption",
+    );
+    await clickUnique(
+      tab.playwright.locator('[data-testid="field-photo-submit"]'),
+      "upload valid field photo",
+    );
+    await waitFor(
+      tab,
+      () => document.body.innerText.includes("Field photo uploaded securely."),
+      "valid field photo acknowledgement",
+      30000,
+    );
+    await waitFor(
+      tab,
+      () => {
+        const file = document.querySelector(
+          '[data-testid="field-photo-file-input"]',
+        );
+        const category = document.querySelector(
+          '[data-testid="field-photo-category-select"]',
+        );
+        const caption = document.querySelector(
+          '[data-testid="field-photo-caption-input"]',
+        );
+
+        return Boolean(
+          document.querySelector('[data-testid="field-photo-upload-lock"]') ===
+            null &&
+            file &&
+            !file.hasAttribute("disabled") &&
+            category &&
+            !category.hasAttribute("disabled") &&
+            caption &&
+            !caption.hasAttribute("disabled"),
+        );
+      },
+      "committed field photo releases its frozen upload identity",
+      10000,
+    );
+  } finally {
+    try {
+      unlinkSync(validPhotoPath);
+    } catch {
+      // The temporary upload fixture is best-effort cleanup only.
+    }
+  }
+
+  const fieldPhoto = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      [
+        "job_photos?select=id,company_id,job_id,file_path,file_url,upload_operation_key,upload_request_fingerprint,caption,label",
+        `company_id=eq.${encodeURIComponent(company.id)}`,
+        `caption=eq.${encodeURIComponent(fieldPhotoCaption)}`,
+      ].join("&"),
+    );
+
+    return rows.length === 1 ? rows[0] : null;
+  }, "valid field photo persistence", 20000);
+
+  if (
+    fieldPhoto.company_id !== company.id ||
+    fieldPhoto.job_id !== seededJob.id ||
+    fieldPhoto.label !== "During-work photos" ||
+    fieldPhoto.file_url !== null ||
+    !/^[a-f0-9]{64}$/.test(fieldPhoto.upload_request_fingerprint) ||
+    !assertExactRegressionJobPhotoPath(fieldPhoto.file_path).startsWith(
+      `${company.id}/job/${seededJob.id}/${fieldPhoto.upload_operation_key}-`,
+    )
+  ) {
+    throw new Error(
+      `Field photo violated the secure company/path contract: ${JSON.stringify(fieldPhoto)}`,
+    );
+  }
 
   await clickVisibleDomButtonByText(tab, "Operations Queue", "open operations queue from field");
   await waitFor(
@@ -5209,8 +6156,862 @@ async function testFieldOperationsWorkspace(browser, tab, env, company, runId, b
     seededJobId: seededJob.id,
     inspectionId: inspection.id,
     fieldIssueNoteId: fieldIssueNote.id,
-    materialIssueNoteId: materialIssueNote.id,
+    fieldPhotoId: fieldPhoto.id,
+    materialIssueNoteId: materialIssueResult.note.id,
   };
+}
+
+function assertPrivateJobPhotoSignedUrl(value, filePath, label) {
+  let url;
+
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} did not return a valid signed URL.`);
+  }
+
+  const decodedPathname = decodeURIComponent(url.pathname);
+
+  if (
+    !decodedPathname.includes(
+      `/storage/v1/object/sign/${JOB_PHOTO_STORAGE_BUCKET}/${filePath}`,
+    ) ||
+    decodedPathname.includes("/object/public/") ||
+    !url.searchParams.has("token")
+  ) {
+    throw new Error(`${label} did not use private, tokenized job-photo access.`);
+  }
+
+  const tokenPayload = url.searchParams.get("token")?.split(".")[1] ?? "";
+  let expiresAt = null;
+
+  try {
+    expiresAt = Number(
+      JSON.parse(Buffer.from(tokenPayload, "base64url").toString("utf8")).exp,
+    );
+  } catch {
+    expiresAt = null;
+  }
+
+  const remainingSeconds =
+    expiresAt === null ? null : expiresAt - Math.floor(Date.now() / 1000);
+
+  if (
+    !Number.isFinite(remainingSeconds) ||
+    remainingSeconds <= 0 ||
+    remainingSeconds > 610
+  ) {
+    throw new Error(`${label} did not preserve the bounded ten-minute expiry.`);
+  }
+
+  return url.toString();
+}
+
+async function readCommittedUiJobPhotoUploadOperation(env, photo) {
+  const rows = await restRequest(
+    env,
+    [
+      "job_photo_upload_operations?select=id,company_id,upload_operation_key,file_path,recovery_lease_token,state",
+      `company_id=eq.${encodeURIComponent(photo.company_id)}`,
+      `upload_operation_key=eq.${encodeURIComponent(photo.upload_operation_key)}`,
+    ].join("&"),
+  );
+  const operation = rows.length === 1 ? rows[0] : null;
+
+  if (
+    !operation?.id ||
+    operation.company_id !== photo.company_id ||
+    operation.upload_operation_key !== photo.upload_operation_key ||
+    operation.file_path !== photo.file_path ||
+    operation.state !== "committed" ||
+    !/^[0-9a-f-]{36}$/i.test(operation.recovery_lease_token)
+  ) {
+    throw new Error(
+      "The committed UI photo did not resolve to one exact non-PII recovery operation.",
+    );
+  }
+
+  return operation;
+}
+
+async function assertIndependentTabJobPhotoRecoveryWaiting(
+  browser,
+  env,
+  interruptedUpload,
+  baseUrl,
+  progress,
+) {
+  const independentTab = await browser.tabs.new();
+
+  try {
+    await independentTab.goto(baseUrl);
+    await independentTab.playwright.waitForLoadState({
+      state: "domcontentloaded",
+      timeoutMs: 15000,
+    });
+    await ensureAppShell(
+      independentTab,
+      baseUrl,
+      progress,
+      getBrowserRegressionAuthCredentials(env),
+    );
+    await waitFor(
+      independentTab,
+      () =>
+        document
+          .querySelector('[data-testid="job-photo-recovery-status"]')
+          ?.getAttribute("data-state") === "waiting",
+      "independent-tab recovery waiting state",
+      20000,
+    );
+    await assertInterruptedRegressionJobPhotoReserved(
+      env,
+      interruptedUpload,
+      "independent-tab recovery waiting residue",
+    );
+
+    const [errors, warnings] = await Promise.all([
+      independentTab.dev.logs({ levels: ["error"], limit: 100 }),
+      independentTab.dev.logs({ levels: ["warning"], limit: 100 }),
+    ]);
+
+    if (errors.length || warnings.length) {
+      throw new Error(
+        `Independent-tab recovery waiting emitted ${errors.length} error(s) and ${warnings.length} warning(s).`,
+      );
+    }
+
+    return true;
+  } finally {
+    await independentTab.close().catch(() => undefined);
+  }
+}
+
+async function assertSignedJobPhotoFixtureResponse(value, filePath, label) {
+  assertPrivateJobPhotoSignedUrl(value, filePath, label);
+
+  let response;
+
+  try {
+    response = await fetch(value, { cache: "no-store" });
+  } catch {
+    throw new Error(`${label} could not download its signed photo bytes.`);
+  }
+
+  const contentType = response.headers
+    .get("content-type")
+    ?.split(";")[0]
+    ?.trim()
+    .toLowerCase();
+  const body = Buffer.from(await response.arrayBuffer());
+
+  if (
+    response.status !== 200 ||
+    contentType !== "image/png" ||
+    !body.equals(JOB_PHOTO_TEST_PNG)
+  ) {
+    throw new Error(
+      `${label} did not return the exact private PNG fixture (${response.status}, ${contentType ?? "missing content type"}, ${body.length} bytes).`,
+    );
+  }
+}
+
+async function waitForJobPhotoRelationOptionState(
+  tab,
+  { jobId, customerId, expectedPresent },
+  label,
+  timeoutMs = 8000,
+) {
+  let lastState = null;
+
+  try {
+    const state = await waitForAsync(
+      async () => {
+        lastState = await tab.playwright.evaluate(
+          ({ jobId, customerId }) => {
+            const jobSelect = document.querySelector(
+              '[data-testid="job-photo-job-select"]',
+            );
+            const customerSelect = document.querySelector(
+              '[data-testid="job-photo-customer-select"]',
+            );
+            const hasOption = (select, value) =>
+              select?.tagName === "SELECT" &&
+              [...select.options].some((option) => option.value === value);
+
+            return {
+              jobSelectFound: Boolean(jobSelect),
+              customerSelectFound: Boolean(customerSelect),
+              jobPresent: hasOption(jobSelect, jobId),
+              customerPresent: hasOption(customerSelect, customerId),
+            };
+          },
+          { jobId, customerId },
+        );
+
+        return lastState.jobSelectFound &&
+          lastState.customerSelectFound &&
+          lastState.jobPresent === expectedPresent &&
+          lastState.customerPresent === expectedPresent
+          ? lastState
+          : null;
+      },
+      label,
+      timeoutMs,
+    );
+
+    return { ready: true, state };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === `Timed out waiting for ${label}.`
+    ) {
+      return { ready: false, state: lastState };
+    }
+
+    throw error;
+  }
+}
+
+async function testSecureJobPhotoWorkflow(
+  browser,
+  tab,
+  env,
+  companies,
+  seededJob,
+  runId,
+  baseUrl,
+  progress,
+) {
+  const caption = `${TEST_PREFIX} ${runId} SECURE PHOTO`;
+  const customer = await seedTestCustomer(
+    env,
+    companies.weatherTech.id,
+    runId,
+    "SECURE PHOTO CUSTOMER",
+    `987 TEST ${runId} Secure Photo Way, Phoenix, AZ`,
+  );
+  const persistedPhotoCustomers = await restRequest(
+    env,
+    `customers?select=id,company_id&id=eq.${encodeURIComponent(customer.id)}&limit=2`,
+  );
+  if (
+    persistedPhotoCustomers.length !== 1 ||
+    persistedPhotoCustomers[0].id !== customer.id ||
+    persistedPhotoCustomers[0].company_id !== companies.weatherTech.id
+  ) {
+    throw new Error(
+      `Secure photo customer did not persist in the exact WeatherTech company: ${JSON.stringify(persistedPhotoCustomers)}`,
+    );
+  }
+  const photoFixturePath = join(
+    tmpdir(),
+    `${TEST_PREFIX.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${runId}-secure-photo.png`,
+  );
+  writeFileSync(photoFixturePath, JOB_PHOTO_TEST_PNG);
+
+  try {
+    progress("job-photos:workspace:start");
+    await tab.reload();
+    await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+    await ensureAppShell(tab, baseUrl, progress);
+    await clickCompanyScope(tab, "All companies");
+    await clickNav(tab, "Photos");
+    await waitFor(
+      tab,
+      () =>
+        Boolean(document.querySelector('[data-testid="job-photo-upload-form"]')) &&
+        document.body.innerText.includes("Upload photo"),
+      "secure job-photo workspace",
+      15000,
+    );
+    const companySelect = tab.playwright.locator(
+      '[data-testid="job-photo-company-select"]',
+    );
+    const jobSelect = tab.playwright.locator('[data-testid="job-photo-job-select"]');
+    const customerSelect = tab.playwright.locator(
+      '[data-testid="job-photo-customer-select"]',
+    );
+
+    await selectUnique(
+      companySelect,
+      companies.weatherTech.id,
+      "secure photo initial WeatherTech upload scope",
+    );
+    let weatherTechRelations = await waitForJobPhotoRelationOptionState(
+      tab,
+      {
+        jobId: seededJob.id,
+        customerId: customer.id,
+        expectedPresent: true,
+      },
+      "secure photo initial WeatherTech relation options",
+    );
+
+    if (!weatherTechRelations.ready) {
+      await tab.reload();
+      await tab.playwright.waitForLoadState({
+        state: "domcontentloaded",
+        timeoutMs: 15000,
+      });
+      await ensureAppShell(tab, baseUrl, progress);
+      await clickCompanyScope(tab, "All companies");
+      await clickNav(tab, "Photos");
+      await waitFor(
+        tab,
+        () =>
+          Boolean(
+            document.querySelector('[data-testid="job-photo-upload-form"]'),
+          ) && document.body.innerText.includes("Upload photo"),
+        "secure job-photo workspace after relation refresh",
+        15000,
+      );
+      await selectUnique(
+        companySelect,
+        companies.weatherTech.id,
+        "secure photo refreshed WeatherTech upload scope",
+      );
+      weatherTechRelations = await waitForJobPhotoRelationOptionState(
+        tab,
+        {
+          jobId: seededJob.id,
+          customerId: customer.id,
+          expectedPresent: true,
+        },
+        "secure photo refreshed WeatherTech relation options",
+      );
+    }
+
+    if (!weatherTechRelations.ready) {
+      throw new Error(
+        `The Photos upload form did not expose the exact seeded WeatherTech job and customer after one hard reload. Last state: ${JSON.stringify(weatherTechRelations.state)}`,
+      );
+    }
+
+    await selectUnique(
+      companySelect,
+      companies.ihc.id,
+      "secure photo IHC upload scope",
+    );
+    const ihcRelations = await waitForJobPhotoRelationOptionState(
+      tab,
+      {
+        jobId: seededJob.id,
+        customerId: customer.id,
+        expectedPresent: false,
+      },
+      "secure photo IHC relation isolation",
+    );
+
+    if (!ihcRelations.ready) {
+      throw new Error(
+        `The Photos upload form exposed WeatherTech relations inside the IHC scope. Last state: ${JSON.stringify(ihcRelations.state)}`,
+      );
+    }
+
+    await selectUnique(
+      companySelect,
+      companies.weatherTech.id,
+      "secure photo WeatherTech upload scope",
+    );
+    const returnedWeatherTechRelations = await waitForJobPhotoRelationOptionState(
+      tab,
+      {
+        jobId: seededJob.id,
+        customerId: customer.id,
+        expectedPresent: true,
+      },
+      "secure photo returned WeatherTech relation options",
+    );
+    if (!returnedWeatherTechRelations.ready) {
+      throw new Error(
+        `The Photos upload form did not restore the exact WeatherTech relations after the IHC isolation check. Last state: ${JSON.stringify(returnedWeatherTechRelations.state)}`,
+      );
+    }
+    await selectUnique(jobSelect, seededJob.id, "secure photo linked job");
+    await selectUnique(customerSelect, customer.id, "secure photo linked customer");
+    await fillUnique(
+      tab.playwright.locator('[data-testid="job-photo-caption-input"]'),
+      caption,
+      "secure photo caption",
+    );
+    await chooseFileFromLocator(
+      tab,
+      tab.playwright.locator(
+        'xpath=//*[@data-testid="job-photo-file-input"]/ancestor::label[1]',
+      ),
+      photoFixturePath,
+      "secure job photo",
+    );
+    await waitFor(
+      tab,
+      () => {
+        const button = document.querySelector('[data-testid="job-photo-submit"]');
+        return Boolean(button && !button.hasAttribute("disabled"));
+      },
+      "secure photo ready to upload",
+      10000,
+    );
+    await clickUnique(
+      tab.playwright.locator('[data-testid="job-photo-submit"]'),
+      "secure photo upload",
+    );
+    await waitFor(
+      tab,
+      () => document.body.innerText.includes("Photo uploaded securely."),
+      "secure photo upload acknowledgement",
+      30000,
+    );
+    await waitFor(
+      tab,
+      () => {
+        const file = document.querySelector(
+          '[data-testid="job-photo-file-input"]',
+        );
+        const company = document.querySelector(
+          '[data-testid="job-photo-company-select"]',
+        );
+        const caption = document.querySelector(
+          '[data-testid="job-photo-caption-input"]',
+        );
+
+        return Boolean(
+          document.querySelector('[data-testid="job-photo-upload-lock"]') ===
+            null &&
+            file &&
+            !file.hasAttribute("disabled") &&
+            company &&
+            !company.hasAttribute("disabled") &&
+            caption &&
+            !caption.hasAttribute("disabled"),
+        );
+      },
+      "committed Photos upload releases its frozen upload identity",
+      10000,
+    );
+
+    const photo = await waitForAsync(async () => {
+      const rows = await restRequest(
+        env,
+        [
+          "job_photos?select=id,company_id,customer_id,job_id,estimate_id,inspection_id,file_path,file_url,upload_operation_key,upload_request_fingerprint,caption",
+          `company_id=eq.${encodeURIComponent(companies.weatherTech.id)}`,
+          `caption=eq.${encodeURIComponent(caption)}`,
+        ].join("&"),
+      );
+
+      return rows.length === 1 ? rows[0] : null;
+    }, "secure job-photo metadata persistence", 20000);
+
+    if (
+      photo.company_id !== companies.weatherTech.id ||
+      photo.job_id !== seededJob.id ||
+      photo.customer_id !== customer.id ||
+      photo.file_url !== null ||
+      !/^[a-f0-9]{64}$/.test(photo.upload_request_fingerprint) ||
+      !assertExactRegressionJobPhotoPath(photo.file_path).startsWith(
+        `${companies.weatherTech.id}/job/${seededJob.id}/${photo.upload_operation_key}-`,
+      )
+    ) {
+      throw new Error(
+        `Secure job-photo metadata violated its company/path contract: ${JSON.stringify(photo)}`,
+      );
+    }
+
+    const cardSelector = `[data-testid="job-photo-card"][data-photo-id="${photo.id}"]`;
+    const imageSelector = `[data-testid="job-photo-image"][data-photo-id="${photo.id}"]`;
+    const renderedImage = await waitFor(
+      tab,
+      ({ cardSelector, imageSelector }) => {
+        const card = document.querySelector(cardSelector);
+        const image = document.querySelector(imageSelector);
+
+        if (!image || image.tagName !== "IMG") {
+          return null;
+        }
+
+        return card && image.complete && image.naturalWidth > 0 && image.src
+          ? { src: image.src, cardText: card.textContent ?? "" }
+          : null;
+      },
+      "secure signed job-photo preview",
+      20000,
+      { cardSelector, imageSelector },
+    );
+
+    if (!renderedImage.cardText.includes(caption)) {
+      throw new Error("Secure photo card did not render its persisted caption.");
+    }
+    await assertSignedJobPhotoFixtureResponse(
+      renderedImage.src,
+      photo.file_path,
+      "Rendered photo preview",
+    );
+
+    await tab.clipboard.writeText("");
+    await clickUnique(
+      tab.playwright.locator(
+        `[data-testid="job-photo-copy-link"][data-photo-id="${photo.id}"]`,
+      ),
+      "copy temporary job-photo link",
+    );
+    await waitFor(
+      tab,
+      () => document.body.innerText.includes("Temporary photo link copied."),
+      "temporary job-photo copy",
+      15000,
+    );
+    const copiedUrl = await waitForAsync(
+      async () => (await tab.clipboard.readText()) || null,
+      "temporary job-photo clipboard value",
+      15000,
+    );
+    assertPrivateJobPhotoSignedUrl(
+      copiedUrl,
+      photo.file_path,
+      "Copied photo link",
+    );
+
+    const visiblePhotoTabsBeforeOpen = new Set(
+      (await browser.user.openTabs()).map((entry) => entry.providerTabId),
+    );
+    let openedPhotoTab = null;
+    let openedPhotoProviderTabId = null;
+
+    try {
+      await clickUnique(
+        tab.playwright.locator(
+          `[data-testid="job-photo-open"][data-photo-id="${photo.id}"]`,
+        ),
+        "open temporary job-photo link",
+      );
+      const opened = await waitForAsync(async () => {
+        const tabs = await browser.user.openTabs();
+
+        return (
+          tabs.find(
+            (entry) =>
+              !visiblePhotoTabsBeforeOpen.has(entry.providerTabId) &&
+              typeof entry.url === "string" &&
+              entry.url.includes(
+                `/storage/v1/object/sign/${JOB_PHOTO_STORAGE_BUCKET}/`,
+              ),
+          ) ?? null
+        );
+      }, "temporary job-photo open", 15000);
+      assertPrivateJobPhotoSignedUrl(
+        opened.url,
+        photo.file_path,
+        "Opened photo link",
+      );
+      openedPhotoProviderTabId = opened.providerTabId;
+      openedPhotoTab = await browser.user.claimTab(opened);
+      await waitForAsync(async () => {
+        try {
+          return (await openedPhotoTab.url()) === opened.url ? true : null;
+        } catch (error) {
+          if (
+            String(error).includes(
+              "ERR_ABORTED (-3) loading 'about:blank'",
+            )
+          ) {
+            return null;
+          }
+
+          throw error;
+        }
+      }, "temporary job-photo claimed URL", 15000);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } finally {
+      if (openedPhotoTab) {
+        const openedPhotoControlledTabId = openedPhotoTab.id;
+        let controlledPhotoTabClosed = false;
+
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await openedPhotoTab.close();
+          } catch (error) {
+            if (
+              !String(error).includes(
+                "ERR_ABORTED (-3) loading 'about:blank'",
+              )
+            ) {
+              throw new Error(
+                "Unable to close the temporary job-photo tab safely.",
+              );
+            }
+          }
+
+          const controlledPhotoTabStillOpen = (await browser.tabs.list()).some(
+            (entry) => entry.id === openedPhotoControlledTabId,
+          );
+
+          if (!controlledPhotoTabStillOpen) {
+            controlledPhotoTabClosed = true;
+            break;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const controlledPhotoTabStillOpenAfterBackoff = (
+            await browser.tabs.list()
+          ).some((entry) => entry.id === openedPhotoControlledTabId);
+
+          if (!controlledPhotoTabStillOpenAfterBackoff) {
+            controlledPhotoTabClosed = true;
+            break;
+          }
+
+          if (attempt < 3) {
+            try {
+              openedPhotoTab = await browser.tabs.get(openedPhotoControlledTabId);
+            } catch {
+              const controlledPhotoTabStillPresent = (
+                await browser.tabs.list()
+              ).some((entry) => entry.id === openedPhotoControlledTabId);
+
+              if (!controlledPhotoTabStillPresent) {
+                controlledPhotoTabClosed = true;
+                break;
+              }
+
+              throw new Error(
+                "Unable to reacquire the exact controlled temporary job-photo tab safely.",
+              );
+            }
+          }
+        }
+
+        if (!controlledPhotoTabClosed) {
+          throw new Error(
+            "Unable to close the exact controlled temporary job-photo tab safely.",
+          );
+        }
+
+        if (!openedPhotoProviderTabId) {
+          throw new Error(
+            "The temporary job-photo tab is missing its exact provider identity.",
+          );
+        }
+
+        await waitForAsync(async () => {
+          const [controlledTabs, userTabs] = await Promise.all([
+            browser.tabs.list(),
+            browser.user.openTabs(),
+          ]);
+
+          return controlledTabs.some(
+            (entry) => entry.id === openedPhotoControlledTabId,
+          ) ||
+            userTabs.some(
+              (entry) => entry.providerTabId === openedPhotoProviderTabId,
+            )
+            ? null
+            : true;
+        }, "temporary job-photo tab cleanup", 5000);
+      }
+    }
+
+    const companyFilter = tab.playwright.locator(
+      '[data-testid="job-photo-company-filter"]',
+    );
+    await selectUnique(
+      companyFilter,
+      companies.ihc.id,
+      "job-photo gallery IHC filter",
+    );
+    await waitFor(
+      tab,
+      (cardSelector) => !document.querySelector(cardSelector),
+      "job-photo gallery hides WeatherTech photo in IHC filter",
+      10000,
+      cardSelector,
+    );
+    await selectUnique(
+      companyFilter,
+      companies.weatherTech.id,
+      "job-photo gallery WeatherTech filter",
+    );
+    await waitFor(
+      tab,
+      (cardSelector) => Boolean(document.querySelector(cardSelector)),
+      "job-photo gallery restores WeatherTech photo",
+      10000,
+      cardSelector,
+    );
+
+    await tab.reload();
+    await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
+    await ensureAppShell(tab, baseUrl, progress);
+    const committedUiOperation = await readCommittedUiJobPhotoUploadOperation(
+      env,
+      photo,
+    );
+    const browserRecoveryLeaseToken =
+      committedUiOperation.recovery_lease_token;
+    const primaryRecoveryParkingPath = "/__wtos_job_photo_recovery_park__";
+    progress("job-photos:primary-recovery-parking:start");
+    await tab.goto(new URL(primaryRecoveryParkingPath, baseUrl).toString());
+    await tab.playwright.waitForLoadState({
+      state: "domcontentloaded",
+      timeoutMs: 15000,
+    });
+    await waitFor(
+      tab,
+      (parkingPath) =>
+        window.location.pathname === parkingPath &&
+        document.querySelector("main.wt-app-shell") === null &&
+        document.querySelector('[data-testid="job-photo-recovery-status"]') === null &&
+        document.body.innerText.includes("This page could not be found."),
+      "inert primary-tab job-photo recovery parking route",
+      10000,
+      primaryRecoveryParkingPath,
+    );
+    progress("job-photos:primary-recovery-parking:done");
+    const reloadRecovery = await seedInterruptedRegressionJobPhoto(env, {
+      companyId: companies.weatherTech.id,
+      jobId: seededJob.id,
+      recoveryLeaseToken: browserRecoveryLeaseToken,
+      runId,
+      suffix: "RELOAD RECOVERY",
+    });
+    await assertIndependentTabJobPhotoRecoveryWaiting(
+      browser,
+      env,
+      reloadRecovery,
+      baseUrl,
+      progress,
+    );
+    await tab.goto(baseUrl);
+    await tab.playwright.waitForLoadState({
+      state: "domcontentloaded",
+      timeoutMs: 15000,
+    });
+    await ensureAppShell(tab, baseUrl, progress);
+    await waitForInterruptedRegressionJobPhotoAbort(
+      env,
+      reloadRecovery,
+      "same-token reload interrupted-photo recovery",
+      20000,
+    );
+    await waitFor(
+      tab,
+      () =>
+        document
+          .querySelector('[data-testid="job-photo-recovery-status"]')
+          ?.getAttribute("data-state") === "idle",
+      "idle recovery state after same-token reload cleanup",
+      15000,
+    );
+    await clickNav(tab, "Photos");
+    const reloadedImage = await waitFor(
+      tab,
+      ({ cardSelector, imageSelector }) => {
+        const card = document.querySelector(cardSelector);
+        const image = document.querySelector(imageSelector);
+
+        if (!image || image.tagName !== "IMG") {
+          return null;
+        }
+
+        return card && image.complete && image.naturalWidth > 0 && image.src
+          ? image.src
+          : null;
+      },
+      "secure job-photo reload preview",
+      20000,
+      { cardSelector, imageSelector },
+    );
+    await assertSignedJobPhotoFixtureResponse(
+      reloadedImage,
+      photo.file_path,
+      "Reloaded photo preview",
+    );
+
+    const persistedRows = await restRequest(
+      env,
+      `job_photos?select=id,file_url,file_path&company_id=eq.${encodeURIComponent(companies.weatherTech.id)}&upload_operation_key=eq.${encodeURIComponent(photo.upload_operation_key)}`,
+    );
+    if (
+      persistedRows.length !== 1 ||
+      persistedRows[0].id !== photo.id ||
+      persistedRows[0].file_url !== null ||
+      persistedRows[0].file_path !== photo.file_path
+    ) {
+      throw new Error("Secure job-photo reload duplicated or persisted a durable URL.");
+    }
+
+    const internalNavigationRecovery =
+      await seedInterruptedRegressionJobPhoto(env, {
+        companyId: companies.weatherTech.id,
+        jobId: seededJob.id,
+        recoveryLeaseToken: browserRecoveryLeaseToken,
+        runId,
+        suffix: "INTERNAL NAVIGATION RECOVERY",
+      });
+
+    await clickNav(tab, "Customers");
+    await waitForInterruptedRegressionJobPhotoAbort(
+      env,
+      internalNavigationRecovery,
+      "same-token internal-navigation interrupted-photo recovery",
+      45000,
+    );
+    await waitFor(
+      tab,
+      () =>
+        document
+          .querySelector('[data-testid="job-photo-recovery-status"]')
+          ?.getAttribute("data-state") === "idle",
+      "idle recovery state after internal-navigation cleanup",
+      15000,
+    );
+    await selectUnique(
+      tab.playwright.locator('[data-testid="customers-company-filter"]'),
+      companies.weatherTech.id,
+      "secure photo Customer 360 company filter",
+    );
+    await fillUnique(
+      tab.playwright.locator('[data-testid="customers-search"]'),
+      customer.display_name,
+      "secure photo Customer 360 search",
+    );
+    await clickListRowByParagraph(
+      tab,
+      "Customer management",
+      customer.display_name,
+      "secure photo Customer 360 row",
+    );
+    await clickCustomerWorkspaceTab(tab, "Photos");
+    await waitFor(
+      tab,
+      (caption) =>
+        document
+          .querySelector('[data-testid="customer-360-photos"]')
+          ?.textContent?.includes(caption) ?? false,
+      "secure photo visible in Customer 360",
+      10000,
+      caption,
+    );
+
+    progress("job-photos:workspace:done");
+    return {
+      companyIsolation: true,
+      customer360Visible: true,
+      filePath: photo.file_path,
+      metadataId: photo.id,
+      persistedDurableUrl: false,
+      independentTabRecoveryWaiting: true,
+      internalNavigationRecovery: true,
+      reloadRecovery: true,
+      signedPreview: true,
+    };
+  } finally {
+    try {
+      unlinkSync(photoFixturePath);
+    } catch {
+      // The temporary upload fixture is best-effort cleanup only.
+    }
+  }
 }
 
 async function testLeadsWorkflow(tab, env, company, runId, leadNameColumn) {
@@ -7072,6 +8873,39 @@ async function testCustomersWorkflow(tab, env, company, runId) {
     { name: updatedDisplayName, notes: updatedNotes },
   );
 
+  await waitFor(
+    tab,
+    (expected) => {
+      const profileForm = [...document.querySelectorAll("form")].find((form) =>
+        [...form.querySelectorAll("button")]
+          .some((button) => button.textContent?.trim().includes("Save customer")),
+      );
+      const profileSection = profileForm?.closest("section");
+      const saveButton = [...(profileForm?.querySelectorAll("button") ?? [])]
+        .find((button) => button.textContent?.trim() === "Save customer");
+      const sectionText = profileSection?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+
+      return (
+        profileSection?.querySelector("h3")?.textContent?.trim() === expected.name &&
+        sectionText.includes(expected.contact) &&
+        sectionText.includes(expected.phone) &&
+        sectionText.includes(expected.email) &&
+        sectionText.includes(expected.address) &&
+        saveButton?.disabled === false &&
+        document.body.innerText.includes("Customer updated.")
+      );
+    },
+    "updated customer snapshot and idle UI before duplicate protection",
+    30000,
+    {
+      name: updatedDisplayName,
+      contact: updatedContact,
+      phone: normalizedUpdatedPhone,
+      email: normalizedUpdatedEmail,
+      address: updatedAddress,
+    },
+  );
+
   if (updatedCustomer.status !== "prospect") {
     throw new Error(`Updated customer status was ${updatedCustomer.status}.`);
   }
@@ -8783,6 +10617,28 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
   if ((await countEstimatesByTitle(env, estimateTitle)) !== 0) {
     throw new Error("Missing-customer estimate validation created an estimate.");
   }
+  const missingCustomerAlert = tab.playwright
+    .locator('[role="alert"][aria-label="Error notification"]')
+    .filter({ hasText: missingCustomerMessage, visible: true });
+  await clickUnique(
+    missingCustomerAlert.locator(
+      'button[aria-label="Dismiss error notification"]',
+    ),
+    "dismiss expected missing-customer estimate validation",
+    { retryTransientClick: true },
+  );
+  await waitFor(
+    tab,
+    (expectedMessage) =>
+      ![...document.querySelectorAll('[role="alert"][aria-label="Error notification"]')]
+        .some(
+          (alert) =>
+            alert.textContent?.replace(/\s+/g, " ").trim() === expectedMessage,
+        ),
+    "missing-customer estimate validation dismissal",
+    5000,
+    missingCustomerMessage,
+  );
   await selectUnique(
     estimateCustomerSelect,
     estimateCustomer.id,
@@ -8837,6 +10693,38 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     tab.playwright.locator('#estimate-builder textarea[name="notes"]'),
     `${TEST_PREFIX} ${runId} estimate notes`,
     "estimate notes",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const builder = document.querySelector("#estimate-builder");
+      const companySelect = builder?.querySelector('select[name="company_id"]');
+      const customerSelect = builder?.querySelector('select[name="customer_id"]');
+      const leadSelect = builder?.querySelector('select[name="lead_id"]');
+      const submit = builder?.querySelector('button[type="submit"]');
+      const selectedCustomer = customerSelect?.selectedOptions?.[0];
+      const visibleError = document.querySelector(
+        '[role="alert"][aria-label="Error notification"]',
+      );
+
+      return (
+        companySelect?.value === expected.companyId &&
+        customerSelect?.value === expected.customerId &&
+        selectedCustomer?.value === expected.customerId &&
+        selectedCustomer?.textContent?.trim() === expected.customerName &&
+        leadSelect?.value === expected.leadId &&
+        submit?.disabled === false &&
+        !visibleError
+      );
+    },
+    "valid estimate associations and idle submit after negative validation",
+    10000,
+    {
+      companyId: company.id,
+      customerId: estimateCustomer.id,
+      customerName: estimateCustomer.display_name,
+      leadId: lead.leadId,
+    },
   );
   const savedEstimate = await clickEnabledUntilPersisted({
     tab,
@@ -10088,6 +11976,102 @@ async function testWebsiteMarketingFoundation(browser, tab) {
   return { desktopState, mobileState };
 }
 
+async function enterMarketingAccountabilityWorkspace(tab, companies) {
+  let lastState = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await clickCompanyScope(tab, "All companies");
+    await clickNav(tab, "Marketing Accountability");
+
+    const ready = await waitFor(
+      tab,
+      (companyIds) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const selectedScope = [...document.querySelectorAll('header button[aria-pressed="true"]')]
+          .find((button) =>
+            button.innerText
+              ?.split("\n")
+              .some((line) => normalize(line) === "All companies"),
+          );
+        const activeNav = document.querySelector('nav button[aria-current="page"]');
+        const foundation = document.querySelector(
+          '[data-testid="website-marketing-foundation"]',
+        );
+        const workspace = document.querySelector(
+          '[data-testid="marketing-accountability-workspace"]',
+        );
+        const companyFilter = document.querySelector(
+          '[data-testid="marketing-accountability-company-filter"]',
+        );
+        const companyOptions = new Set(
+          [...(companyFilter?.querySelectorAll("option") ?? [])].map(
+            (option) => option.value,
+          ),
+        );
+
+        return Boolean(
+          selectedScope &&
+            normalize(activeNav?.textContent) === "Marketing Accountability" &&
+            foundation &&
+            workspace &&
+            companyIds.every((companyId) => companyOptions.has(companyId)),
+        );
+      },
+      `settled All-companies Marketing Accountability workspace attempt ${attempt}`,
+      7500,
+      [companies.weatherTech.id, companies.ihc.id],
+    ).catch(() => false);
+
+    if (ready) {
+      return;
+    }
+
+    lastState = await tab.playwright.evaluate(() => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const companyFilter = document.querySelector(
+        '[data-testid="marketing-accountability-company-filter"]',
+      );
+
+      return {
+        href: location.href,
+        hasShell: Boolean(document.querySelector("main.wt-app-shell")),
+        isLoading: document.body.innerText.includes("Loading CRM workspace"),
+        isPreparing: document.body.innerText.includes("Preparing WeatherTech OS"),
+        activeNav: normalize(
+          document.querySelector('nav button[aria-current="page"]')?.textContent,
+        ) || null,
+        selectedHeaderScopes: [
+          ...document.querySelectorAll('header button[aria-pressed="true"]'),
+        ].map((button) => normalize(button.textContent)),
+        hasFoundation: Boolean(
+          document.querySelector('[data-testid="website-marketing-foundation"]'),
+        ),
+        hasWorkspace: Boolean(
+          document.querySelector('[data-testid="marketing-accountability-workspace"]'),
+        ),
+        companyOptions: [...(companyFilter?.querySelectorAll("option") ?? [])].map(
+          (option) => ({ label: normalize(option.textContent), value: option.value }),
+        ),
+        visibleError:
+          normalize(
+            document.querySelector('[role="alert"][aria-label="Error notification"]')
+              ?.textContent,
+          ) || null,
+      };
+    });
+
+    if (lastState.visibleError) {
+      break;
+    }
+
+    await tab.playwright.waitForTimeout(300);
+  }
+
+  throw new Error(
+    `Marketing Accountability did not settle after two exact scope/navigation attempts: ${JSON.stringify(lastState)}.`,
+  );
+}
+
 function phoenixYearMonth() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Phoenix",
@@ -10429,7 +12413,7 @@ async function testMarketingAccountabilityWorkflow(
     "enabled structured lost action",
     15000,
   );
-  await clickEnabledUntilPersisted({
+  const lostOutcome = await clickEnabledUntilPersisted({
     tab,
     locator: tab.playwright.locator('[data-testid="lead-lost-submit"]'),
     clickLabel: "record lost outcome",
@@ -10437,7 +12421,7 @@ async function testMarketingAccountabilityWorkflow(
     readPersisted: async () => {
       const rows = await restRequest(
         env,
-        `lead_accountability?select=outcome,lost_reason_code,lost_reason_notes&lead_id=eq.${encodeURIComponent(lostLead.id)}`,
+        `lead_accountability?select=outcome,lost_reason_code,lost_reason_notes,record_version&lead_id=eq.${encodeURIComponent(lostLead.id)}`,
       );
       return rows[0]?.outcome === "lost" && rows[0]?.lost_reason_code === "other"
         ? rows[0]
@@ -10446,16 +12430,29 @@ async function testMarketingAccountabilityWorkflow(
     errorPrefix: "Lost accountability action was refused",
   });
 
-  // Marketing needs both company records loaded so its internal company filter
-  // can prove WeatherTech/IHC isolation in one signed-in workflow.
-  await clickCompanyScope(tab, "All companies");
-  await clickNav(tab, "Marketing Accountability");
   await waitFor(
     tab,
-    () => Boolean(document.querySelector('[data-testid="marketing-accountability-workspace"]')),
-    "marketing accountability workspace",
+    (expected) => {
+      const panel = document.querySelector('[data-testid="lead-accountability-panel"]');
+      const heading = panel?.closest("section")?.querySelector("h3")?.textContent?.trim();
+      const panelText = panel?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const ownerButton = document.querySelector('[data-testid="lead-owner-submit"]');
+
+      return (
+        heading === expected.leadName &&
+        panelText.includes(`lost · version ${expected.recordVersion}`) &&
+        ownerButton?.disabled === false &&
+        document.body.innerText.includes("Lost outcome and reason recorded.")
+      );
+    },
+    "lost accountability UI and snapshot settlement before Marketing navigation",
     15000,
+    { leadName: lostLeadName, recordVersion: lostOutcome.record_version },
   );
+
+  // Marketing needs both company records loaded so its internal company filter
+  // can prove WeatherTech/IHC isolation in one signed-in workflow.
+  await enterMarketingAccountabilityWorkspace(tab, companies);
   await selectUnique(
     tab.playwright.locator('[data-testid="marketing-accountability-company-filter"]'),
     companies.weatherTech.id,
@@ -10736,6 +12733,305 @@ async function testCalendarScreen(tab) {
   return { opened: true };
 }
 
+function safeRegressionPhotoFileName(value) {
+  const safeName = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+
+  return safeName || "photo.png";
+}
+
+async function seedRegressionJobPhoto(
+  env,
+  {
+    companyId,
+    customerId = null,
+    jobId,
+    caption,
+    label,
+    fileName,
+    isCustomerVisible,
+    sortOrder,
+    takenAt,
+  },
+) {
+  const operationKey = randomUUID();
+  const recoveryLeaseToken = randomUUID();
+  const filePath = `${companyId}/job/${jobId}/${operationKey}-${safeRegressionPhotoFileName(fileName)}`;
+  const normalizedTakenAt = takenAt ? String(takenAt).slice(0, 10) : null;
+  const requestFingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      caption,
+      companyId,
+      customerId,
+      filePath,
+      isCustomerVisible,
+      jobId,
+      label,
+      operationKey,
+      sortOrder,
+      takenAt: normalizedTakenAt,
+    }))
+    .digest("hex");
+  const rpcArgs = {
+    target_company_id: companyId,
+    target_upload_operation_key: operationKey,
+    target_upload_request_fingerprint: requestFingerprint,
+    target_file_path: filePath,
+    target_recovery_lease_token: recoveryLeaseToken,
+    target_customer_id: customerId,
+    target_property_id: null,
+    target_job_id: jobId,
+    target_estimate_id: null,
+    target_inspection_id: null,
+    target_caption: caption,
+    target_label: label,
+    target_taken_at: normalizedTakenAt,
+    target_is_customer_visible: isCustomerVisible,
+    target_sort_order: sortOrder,
+  };
+  const client = await createRegressionOwnerClient(env);
+
+  try {
+    const { data: reservationData, error: reservationError } = await client.rpc(
+      "wtos_begin_job_photo_upload",
+      rpcArgs,
+    );
+    const reservation = Array.isArray(reservationData)
+      ? reservationData[0]
+      : reservationData;
+
+    if (
+      reservationError ||
+      !reservation ||
+      reservation.state !== "reserved" ||
+      reservation.file_path !== filePath
+    ) {
+      throw new Error(
+        `Unable to reserve exact seeded job photo: ${reservationError?.message ?? "mismatched reservation"}`,
+      );
+    }
+
+    await uploadRegressionJobPhotoObject(client, filePath);
+    const { data, error } = await client.rpc(
+      "wtos_register_job_photo",
+      rpcArgs,
+    );
+    const photo = Array.isArray(data) ? data[0] : data;
+
+    if (error) {
+      throw new Error(`Unable to register exact seeded job photo: ${error.message}`);
+    }
+
+    if (!photo || photo.file_path !== filePath || photo.file_url !== null) {
+      throw new Error("Seeded job-photo metadata did not preserve the private object contract.");
+    }
+
+    return photo;
+  } catch (error) {
+    try {
+      const { data: cancellationData, error: cancellationError } =
+        await client.rpc("wtos_cancel_job_photo_upload", rpcArgs);
+      const cancellation = Array.isArray(cancellationData)
+        ? cancellationData[0]
+        : cancellationData;
+
+      if (!cancellationError && cancellation?.state === "canceling") {
+        await client.storage
+          .from(JOB_PHOTO_STORAGE_BUCKET)
+          .remove([filePath]);
+        await client.rpc("wtos_confirm_job_photo_upload_abort", rpcArgs);
+      }
+    } catch {
+      // The outer isolated cleanup removes the exact path and durable rows.
+    }
+
+    throw error;
+  } finally {
+    await client.auth.signOut({ scope: "local" }).catch(() => undefined);
+  }
+}
+
+async function seedInterruptedRegressionJobPhoto(
+  env,
+  {
+    companyId,
+    jobId,
+    recoveryLeaseToken,
+    runId,
+    suffix,
+  },
+) {
+  if (!/^[0-9a-f-]{36}$/i.test(recoveryLeaseToken)) {
+    throw new Error("Refusing to seed an interrupted photo without an exact recovery token.");
+  }
+
+  const operationKey = randomUUID();
+  const caption = `${TEST_PREFIX} ${runId} ${suffix}`;
+  const filePath = `${companyId}/job/${jobId}/${operationKey}-${safeRegressionPhotoFileName(`${suffix}.png`)}`;
+  const requestFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        caption,
+        companyId,
+        filePath,
+        jobId,
+        operationKey,
+      }),
+    )
+    .digest("hex");
+  const rpcArgs = {
+    target_company_id: companyId,
+    target_upload_operation_key: operationKey,
+    target_upload_request_fingerprint: requestFingerprint,
+    target_file_path: filePath,
+    target_recovery_lease_token: recoveryLeaseToken,
+    target_customer_id: null,
+    target_property_id: null,
+    target_job_id: jobId,
+    target_estimate_id: null,
+    target_inspection_id: null,
+    target_caption: caption,
+    target_label: "During",
+    target_taken_at: null,
+    target_is_customer_visible: false,
+    target_sort_order: 0,
+  };
+  const client = await createRegressionOwnerClient(env);
+
+  try {
+    const { data, error } = await client.rpc(
+      "wtos_begin_job_photo_upload",
+      rpcArgs,
+    );
+    const reservation = Array.isArray(data) ? data[0] : data;
+
+    if (
+      error ||
+      !reservation?.id ||
+      reservation?.state !== "reserved" ||
+      reservation?.file_path !== filePath ||
+      reservation?.recovery_lease_token !== recoveryLeaseToken
+    ) {
+      throw new Error(
+        `Unable to reserve interrupted job photo: ${error?.message ?? "mismatched reservation"}`,
+      );
+    }
+
+    await uploadRegressionJobPhotoObject(client, filePath);
+
+    return {
+      caption,
+      companyId,
+      filePath,
+      operationId: reservation.id,
+      operationKey,
+      recoveryLeaseToken,
+    };
+  } catch (error) {
+    try {
+      const { data: cancellationData } = await client.rpc(
+        "wtos_cancel_job_photo_upload",
+        rpcArgs,
+      );
+      const cancellation = Array.isArray(cancellationData)
+        ? cancellationData[0]
+        : cancellationData;
+
+      if (cancellation?.state === "canceling") {
+        await client.storage
+          .from(JOB_PHOTO_STORAGE_BUCKET)
+          .remove([filePath]);
+        await client.rpc("wtos_confirm_job_photo_upload_abort", rpcArgs);
+      }
+    } catch {
+      // The outer exact-path cleanup remains authoritative for setup failures.
+    }
+
+    throw error;
+  } finally {
+    await client.auth.signOut({ scope: "local" }).catch(() => undefined);
+  }
+}
+
+async function assertInterruptedRegressionJobPhotoReserved(
+  env,
+  interruptedUpload,
+  label,
+) {
+  const serviceClient = createRegressionServiceClient(env);
+  const [operations, metadata, object] = await Promise.all([
+    restRequest(
+      env,
+      `job_photo_upload_operations?select=id,state,recovery_lease_token,file_path&company_id=eq.${encodeURIComponent(interruptedUpload.companyId)}&upload_operation_key=eq.${encodeURIComponent(interruptedUpload.operationKey)}`,
+    ),
+    restRequest(
+      env,
+      `job_photos?select=id&company_id=eq.${encodeURIComponent(interruptedUpload.companyId)}&upload_operation_key=eq.${encodeURIComponent(interruptedUpload.operationKey)}`,
+    ),
+    serviceClient.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .exists(assertExactRegressionJobPhotoPath(interruptedUpload.filePath)),
+  ]);
+
+  if (
+    operations.length !== 1 ||
+    operations[0].id !== interruptedUpload.operationId ||
+    operations[0].state !== "reserved" ||
+    operations[0].recovery_lease_token !==
+      interruptedUpload.recoveryLeaseToken ||
+    operations[0].file_path !== interruptedUpload.filePath ||
+    metadata.length !== 0 ||
+    object.error ||
+    object.data !== true
+  ) {
+    throw new Error(
+      `${label} changed the reserved operation, recovery token, private object, or metadata boundary.`,
+    );
+  }
+
+  return operations[0];
+}
+
+async function waitForInterruptedRegressionJobPhotoAbort(
+  env,
+  interruptedUpload,
+  label,
+  timeoutMs = 45000,
+) {
+  const serviceClient = createRegressionServiceClient(env);
+
+  return waitForAsync(async () => {
+    const [operations, metadata, object] = await Promise.all([
+      restRequest(
+        env,
+        `job_photo_upload_operations?select=id,state,recovery_lease_token&company_id=eq.${encodeURIComponent(interruptedUpload.companyId)}&upload_operation_key=eq.${encodeURIComponent(interruptedUpload.operationKey)}`,
+      ),
+      restRequest(
+        env,
+        `job_photos?select=id&company_id=eq.${encodeURIComponent(interruptedUpload.companyId)}&upload_operation_key=eq.${encodeURIComponent(interruptedUpload.operationKey)}`,
+      ),
+      serviceClient.storage
+        .from(JOB_PHOTO_STORAGE_BUCKET)
+        .exists(assertExactRegressionJobPhotoPath(interruptedUpload.filePath)),
+    ]);
+
+    return operations.length === 1 &&
+      operations[0].state === "aborted" &&
+      operations[0].recovery_lease_token ===
+        interruptedUpload.recoveryLeaseToken &&
+      metadata.length === 0 &&
+      object.data === false &&
+      object.error &&
+      [400, 404].includes(Number(object.error.status))
+      ? operations[0]
+      : null;
+  }, label, timeoutMs);
+}
+
 async function seedCustomerPortalRecords(env, company, runId) {
   const portalRunId = `${runId} PORTAL`;
   const documentStorageWorkflowReady = await detectDocumentStorageWorkflowSupport(env);
@@ -10888,53 +13184,38 @@ async function seedCustomerPortalRecords(env, company, runId) {
       notes: `${TEST_PREFIX} ${portalRunId} portal payment history`,
     }),
   });
-  const [visiblePhoto] = await restRequest(env, "job_photos", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      company_id: company.id,
-      customer_id: customer.id,
-      job_id: job.id,
-      caption: `${TEST_PREFIX} ${portalRunId} CUSTOMER VISIBLE BEFORE PHOTO`,
-      label: "Before",
-      file_path: `regression/${portalRunId}/before.jpg`,
-      file_url: "https://example.invalid/weathertech-os-portal-before.jpg",
-      taken_at: start.toISOString(),
-      is_customer_visible: true,
-      sort_order: 0,
-    }),
+  const visiblePhoto = await seedRegressionJobPhoto(env, {
+    companyId: company.id,
+    customerId: customer.id,
+    jobId: job.id,
+    caption: `${TEST_PREFIX} ${portalRunId} CUSTOMER VISIBLE BEFORE PHOTO`,
+    label: "Before",
+    fileName: `${portalRunId}-before.png`,
+    takenAt: start.toISOString(),
+    isCustomerVisible: true,
+    sortOrder: 0,
   });
-  const [internalPhoto] = await restRequest(env, "job_photos", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      company_id: company.id,
-      customer_id: customer.id,
-      job_id: job.id,
-      caption: `${TEST_PREFIX} ${portalRunId} INTERNAL ONLY ROOF PHOTO`,
-      label: "Inspection",
-      file_path: `regression/${portalRunId}/internal.jpg`,
-      file_url: "https://example.invalid/weathertech-os-portal-internal.jpg",
-      taken_at: start.toISOString(),
-      is_customer_visible: false,
-      sort_order: 1,
-    }),
+  const internalPhoto = await seedRegressionJobPhoto(env, {
+    companyId: company.id,
+    customerId: customer.id,
+    jobId: job.id,
+    caption: `${TEST_PREFIX} ${portalRunId} INTERNAL ONLY ROOF PHOTO`,
+    label: "Inspection",
+    fileName: `${portalRunId}-internal.png`,
+    takenAt: start.toISOString(),
+    isCustomerVisible: false,
+    sortOrder: 1,
   });
-  const [otherPhoto] = await restRequest(env, "job_photos", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      company_id: company.id,
-      customer_id: otherCustomer.id,
-      job_id: otherJob.id,
-      caption: `${TEST_PREFIX} ${portalRunId} OTHER CUSTOMER PHOTO`,
-      label: "After",
-      file_path: `regression/${portalRunId}/other.jpg`,
-      file_url: "https://example.invalid/weathertech-os-portal-other.jpg",
-      taken_at: start.toISOString(),
-      is_customer_visible: true,
-      sort_order: 0,
-    }),
+  const otherPhoto = await seedRegressionJobPhoto(env, {
+    companyId: company.id,
+    customerId: otherCustomer.id,
+    jobId: otherJob.id,
+    caption: `${TEST_PREFIX} ${portalRunId} OTHER CUSTOMER PHOTO`,
+    label: "After",
+    fileName: `${portalRunId}-other.png`,
+    takenAt: start.toISOString(),
+    isCustomerVisible: true,
+    sortOrder: 0,
   });
   const [emailMessage] = await restRequest(env, "email_messages", {
     method: "POST",
@@ -11087,6 +13368,30 @@ async function testCustomerPortalWorkspace(browser, tab, env, company, runId, ba
       internalCaption: seeded.internalPhoto.caption,
       otherCaption: seeded.otherPhoto.caption,
     },
+  );
+  const portalPhotoImage = tab.playwright
+    .locator('[data-testid="customer-portal-photo-card"]')
+    .filter({ hasText: seeded.visiblePhoto.caption })
+    .locator("img");
+  const portalPhotoSignedUrl = await waitForAsync(
+    async () =>
+      portalPhotoImage
+        .evaluate((image) =>
+          image?.tagName === "IMG" &&
+          image.complete &&
+          image.naturalWidth > 0 &&
+          image.src
+            ? image.src
+            : null,
+        )
+        .catch(() => null),
+    "customer portal signed photo preview",
+    15000,
+  );
+  await assertSignedJobPhotoFixtureResponse(
+    portalPhotoSignedUrl,
+    seeded.visiblePhoto.file_path,
+    "Customer Portal photo preview",
   );
 
   await clickUnique(
@@ -12226,6 +14531,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   const internalOnlyNote = `${TEST_PREFIX} ${runId} INTERNAL ONLY NOTE`;
   const fieldInternalNote = `${TEST_PREFIX} ${runId} FIELD INTERNAL NOTE`;
   const measurementLabel = `${TEST_PREFIX} ${runId} ROOF SQUARES`;
+  const inspectionPhotoCaption = `${TEST_PREFIX} ${runId} SECURE INSPECTION PHOTO`;
   const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
   start.setMinutes(0, 0, 0);
   const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -12492,6 +14798,128 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   await waitForNoSavingState(tab, "inspection internal note save complete");
   progress("inspections:note:done");
 
+  progress("inspections:photo:start");
+  const inspectionPhotoPath = join(
+    tmpdir(),
+    `${TEST_PREFIX.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${runId}-inspection-photo.png`,
+  );
+  writeFileSync(inspectionPhotoPath, JOB_PHOTO_TEST_PNG);
+  try {
+    const inspectionPhotoForm =
+      'xpath=//form[@data-testid="inspection-photo-upload-form"]';
+    await chooseFileFromLocator(
+      tab,
+      tab.playwright.locator('[data-testid="inspection-photo-file-input"]'),
+      inspectionPhotoPath,
+      "secure inspection photo",
+    );
+    await fillUnique(
+      tab.playwright.locator(`${inspectionPhotoForm}//input[@name="label"]`),
+      "Roof slope",
+      "inspection photo label",
+    );
+    await fillUnique(
+      tab.playwright.locator(`${inspectionPhotoForm}//input[@name="caption"]`),
+      inspectionPhotoCaption,
+      "inspection photo caption",
+    );
+    await checkUnique(
+      tab.playwright.locator(
+        `${inspectionPhotoForm}//input[@name="is_customer_visible"]`,
+      ),
+      "inspection photo customer visibility",
+    );
+    const inspectionPhotoSubmitSelector =
+      '[data-testid="inspection-photo-submit"]';
+    await scrollSelectorIntoView(
+      tab,
+      inspectionPhotoSubmitSelector,
+      "secure inspection photo submit",
+    );
+    const inspectionPhotoSubmit = tab.playwright.locator(
+      inspectionPhotoSubmitSelector,
+    );
+    await inspectionPhotoSubmit.evaluate((button) => {
+      button.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+    await tab.playwright.waitForTimeout(250);
+    await clickUnique(
+      inspectionPhotoSubmit,
+      "upload secure inspection photo",
+      { retryTransientClick: true },
+    );
+    await waitFor(
+      tab,
+      () => document.body.innerText.includes("Inspection photo uploaded and finding added."),
+      "inspection secure photo acknowledgement",
+      30000,
+    );
+    await waitFor(
+      tab,
+      () => {
+        const file = document.querySelector(
+          '[data-testid="inspection-photo-file-input"]',
+        );
+        const caption = document.querySelector(
+          '[data-testid="inspection-photo-upload-form"] input[name="caption"]',
+        );
+
+        return Boolean(
+          document.querySelector(
+            '[data-testid="inspection-photo-upload-lock"]',
+          ) === null &&
+            file &&
+            !file.hasAttribute("disabled") &&
+            caption &&
+            !caption.hasAttribute("disabled"),
+        );
+      },
+      "committed inspection photo releases its frozen upload identity",
+      10000,
+    );
+  } finally {
+    try {
+      unlinkSync(inspectionPhotoPath);
+    } catch {
+      // The temporary upload fixture is best-effort cleanup only.
+    }
+  }
+
+  const inspectionPhoto = await waitForAsync(async () => {
+    const rows = await restRequest(
+      env,
+      [
+        "job_photos?select=id,company_id,job_id,inspection_id,file_path,file_url,upload_operation_key,upload_request_fingerprint,is_customer_visible,caption",
+        `company_id=eq.${encodeURIComponent(company.id)}`,
+        `caption=eq.${encodeURIComponent(inspectionPhotoCaption)}`,
+      ].join("&"),
+    );
+
+    return rows.length === 1 ? rows[0] : null;
+  }, "inspection secure photo persistence", 20000);
+  const inspectionWithPhoto = await findInspectionByTitle(env, inspectionTitle);
+
+  if (
+    inspectionPhoto.company_id !== company.id ||
+    inspectionPhoto.job_id !== testJob.id ||
+    inspectionPhoto.inspection_id !== savedInspection.id ||
+    inspectionPhoto.file_url !== null ||
+    inspectionPhoto.is_customer_visible !== true ||
+    !/^[a-f0-9]{64}$/.test(inspectionPhoto.upload_request_fingerprint) ||
+    !assertExactRegressionJobPhotoPath(inspectionPhoto.file_path).startsWith(
+      `${company.id}/inspection/${savedInspection.id}/${inspectionPhoto.upload_operation_key}-`,
+    ) ||
+    !inspectionWithPhoto.photo_ids.includes(inspectionPhoto.id) ||
+    !inspectionWithPhoto.findings.some(
+      (finding) => finding.related_photo_id === inspectionPhoto.id,
+    )
+  ) {
+    throw new Error(
+      `Inspection photo did not preserve its secure link/finding contract: ${JSON.stringify({ inspectionPhoto, inspectionWithPhoto })}`,
+    );
+  }
+  progress("inspections:photo:done");
+
   progress("inspections:estimate:start");
   await clickInspectionTabAndWait(tab, "Estimate / report", [
     "Estimate review",
@@ -12557,6 +14985,10 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Inspection report did not include selected customer-visible finding.");
   }
 
+  if (!report.body.includes(inspectionPhotoCaption)) {
+    throw new Error("Inspection report did not include the customer-visible secure photo.");
+  }
+
   if (report.body.includes(internalOnlyNote)) {
     throw new Error("Inspection report included internal-only notes.");
   }
@@ -12614,25 +15046,158 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Cancel inspection confirmation did not explain the action.");
   }
 
-  await scrollSelectorIntoView(
-    tab,
-    '[data-testid="inspection-confirm-cancel-button"]',
-    "Confirm cancel inspection button",
-  );
-  await clickUnique(
-    tab.playwright.locator('[data-testid="inspection-confirm-cancel-button"]'),
-    "Confirm cancel inspection",
-    { retryTransientClick: true },
-  );
-  await waitForAsync(
-    async () => {
-      const inspection = await findInspectionByTitle(env, inspectionTitle);
+  const cancelDialogSelector =
+    '[role="alertdialog"][aria-label="Cancel inspection confirmation"]';
+  const cancelConfirmSelector =
+    `${cancelDialogSelector} [data-testid="inspection-confirm-cancel-button"]`;
+  let canceledInspection = null;
+  let lastCancelState = null;
+  let lastCancelActivationError = null;
 
-      return inspection?.status === "canceled" ? inspection : null;
-    },
-    "inspection canceled persistence",
-    15000,
-  );
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const inspectionBeforeAttempt = await findInspectionByTitle(env, inspectionTitle);
+
+    if (inspectionBeforeAttempt?.id !== savedInspection.id) {
+      throw new Error(
+        `Cancel inspection pre-read resolved ${inspectionBeforeAttempt?.id ?? "missing"}; expected ${savedInspection.id}.`,
+      );
+    }
+
+    if (inspectionBeforeAttempt.status === "canceled") {
+      canceledInspection = inspectionBeforeAttempt;
+      break;
+    }
+
+    lastCancelState = await tab.playwright.evaluate((selectors) => {
+      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const dialogs = [...document.querySelectorAll(selectors.dialog)];
+      const dialog = dialogs[0];
+      const buttons = [...document.querySelectorAll(selectors.button)];
+      const button = buttons[0];
+      const error = document.querySelector(
+        '[role="alert"][aria-label="Error notification"]',
+      );
+
+      return {
+        dialogCount: dialogs.length,
+        dialogPresent: Boolean(dialog),
+        dialogText: normalize(dialog?.textContent) || null,
+        buttonCount: buttons.length,
+        buttonPresent: Boolean(button),
+        buttonInDialog: Boolean(dialog && button && dialog.contains(button)),
+        buttonEnabled: Boolean(button && !button.hasAttribute("disabled")),
+        buttonText: normalize(button?.textContent) || null,
+        errorText: normalize(error?.textContent) || null,
+      };
+    }, {
+      dialog: cancelDialogSelector,
+      button: cancelConfirmSelector,
+    });
+
+    if (
+      lastCancelState.dialogCount !== 1 ||
+      !lastCancelState.dialogPresent ||
+      lastCancelState.buttonCount !== 1 ||
+      !lastCancelState.buttonPresent ||
+      !lastCancelState.buttonInDialog ||
+      !lastCancelState.buttonEnabled ||
+      lastCancelState.buttonText !== "Confirm cancel" ||
+      lastCancelState.errorText
+    ) {
+      break;
+    }
+
+    try {
+      await clickVisibleDomButtonByText(
+        tab,
+        "Confirm cancel",
+        `Confirm cancel inspection attempt ${attempt}`,
+        5000,
+      );
+      lastCancelActivationError = null;
+    } catch (error) {
+      const expectedActivationTimeout =
+        `Confirm cancel inspection attempt ${attempt} visible button was not found. Visible DOM:`;
+
+      if (
+        !(error instanceof Error) ||
+        !error.message.startsWith(expectedActivationTimeout)
+      ) {
+        throw error;
+      }
+
+      lastCancelActivationError = error.message;
+    }
+    try {
+      canceledInspection = await waitForAsync(
+        async () => {
+          const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+          if (inspection && inspection.id !== savedInspection.id) {
+            throw new Error(
+              `Cancel inspection persistence resolved ${inspection.id}; expected ${savedInspection.id}.`,
+            );
+          }
+
+          return inspection?.status === "canceled" ? inspection : null;
+        },
+        `inspection canceled persistence attempt ${attempt}`,
+        7000,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !==
+          `Timed out waiting for inspection canceled persistence attempt ${attempt}.`
+      ) {
+        throw error;
+      }
+
+      canceledInspection = null;
+    }
+
+    if (canceledInspection) {
+      break;
+    }
+  }
+
+  if (!canceledInspection) {
+    const [inspectionAfterAttempts, uiState] = await Promise.all([
+      findInspectionByTitle(env, inspectionTitle),
+      tab.playwright.evaluate((selectors) => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const dialog = document.querySelector(selectors.dialog);
+        const button = dialog?.querySelector(selectors.button);
+
+        return {
+          dialogPresent: Boolean(dialog),
+          dialogText: normalize(dialog?.textContent) || null,
+          buttonPresent: Boolean(button),
+          buttonEnabled: Boolean(button && !button.hasAttribute("disabled")),
+          buttonText: normalize(button?.textContent) || null,
+          hasSavingButton: [...document.querySelectorAll("button")]
+            .some((candidate) => normalize(candidate.textContent) === "Saving"),
+          errorText:
+            normalize(
+              document.querySelector('[role="alert"][aria-label="Error notification"]')
+                ?.textContent,
+            ) || null,
+          noticeText:
+            normalize(
+              document.querySelector('[role="status"][aria-label="Success notification"]')
+                ?.textContent,
+            ) || null,
+        };
+      }, {
+        dialog: cancelDialogSelector,
+        button: '[data-testid="inspection-confirm-cancel-button"]',
+      }),
+    ]);
+
+    throw new Error(
+      `Inspection cancel did not persist after two exact dialog-scoped activations: ${JSON.stringify({ expectedId: savedInspection.id, database: inspectionAfterAttempts ? { id: inspectionAfterAttempts.id, status: inspectionAfterAttempts.status } : null, lastCancelState, lastCancelActivationError, uiState })}.`,
+    );
+  }
   await waitFor(
     tab,
     () => document.body.innerText.includes("Inspection canceled."),
@@ -12748,6 +15313,7 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     reportTitle,
     measurements: inspectionWithMeasurement.measurements.length,
     internalNoteSaved: inspectionWithNote.internal_notes.includes(fieldInternalNote),
+    photoId: inspectionPhoto.id,
   };
 }
 
@@ -13621,6 +16187,8 @@ export async function runWeatherTechOsRegression({
       enabledGroups.has("crm") ||
       enabledGroups.has("crm-inbox") ||
       enabledGroups.has("communications");
+    const shouldRunJobPhotoWorkflow =
+      enabledGroups.has("field-operations") || enabledGroups.has("job-photos");
     const shouldReloadFreshSnapshot =
       shouldRunLeadWorkflow ||
       shouldRunEstimatesWorkflow ||
@@ -13649,6 +16217,7 @@ export async function runWeatherTechOsRegression({
       enabledGroups.has("inspections") ||
       enabledGroups.has("dispatch") ||
       enabledGroups.has("field-operations") ||
+      enabledGroups.has("job-photos") ||
       enabledGroups.has("jobs-workspace") ||
       enabledGroups.has("job-builder") ||
       enabledGroups.has("job-production")
@@ -13881,6 +16450,21 @@ export async function runWeatherTechOsRegression({
     if (enabledGroups.has("field-operations")) {
       await record("Field Operations workspace manages mobile assignments, status, issues, materials, and routing", () =>
         testFieldOperationsWorkspace(browser, tab, env, weatherTech, runId, baseUrl, progress),
+      );
+    }
+
+    if (shouldRunJobPhotoWorkflow) {
+      await record("Job photos upload privately, hydrate signed previews, reload, and remain company-scoped", () =>
+        testSecureJobPhotoWorkflow(
+          browser,
+          tab,
+          env,
+          companies,
+          seededJob,
+          runId,
+          baseUrl,
+          progress,
+        ),
       );
     }
 

@@ -55,6 +55,11 @@ import type {
   JobNoteRecord,
   JobPhotoInput,
   JobPhotoRecord,
+  JobPhotoRow,
+  JobPhotoUploadOperationRecord,
+  JobPhotoUploadRecoveryClaimRecord,
+  JobPhotoUploadRecoveryListRecord,
+  JobPhotoUploadRpcArgs,
   JobRecord,
   JobTaskInput,
   JobTaskRecord,
@@ -102,6 +107,123 @@ import type {
 
 type CrmClient = SupabaseClient<Database>;
 export const DOCUMENT_STORAGE_BUCKET = "customer-documents";
+export const JOB_PHOTO_STORAGE_BUCKET = "job-photos";
+export const JOB_PHOTO_SIGNED_URL_TTL_SECONDS = 60 * 10;
+export const MAX_JOB_PHOTO_BYTES = 25 * 1024 * 1024;
+
+export type JobPhotoUploadAttempt = {
+  operationKey: string;
+  requestFingerprint: string;
+  filePath: string;
+  recoveryLeaseToken: string;
+  takenAt: string | null;
+};
+
+export type ActiveJobPhotoUpload = {
+  input: JobPhotoInput;
+  attempt: JobPhotoUploadAttempt;
+};
+
+export type JobPhotoRecoverySettlement =
+  | { status: "aborted" | "committed" }
+  | { status: "active_elsewhere" };
+
+const JOB_PHOTO_RECOVERY_LEASE_TOKEN_KEY =
+  "wtos-job-photo-recovery-lease-token";
+let inMemoryJobPhotoRecoveryLeaseToken: string | null = null;
+let jobPhotoRecoveryLeaseTokenPromise: Promise<string> | null = null;
+
+const JOB_PHOTO_UPLOAD_ABORTED_MESSAGE =
+  "The prior secure photo upload attempt was canceled safely. Submit again to start a new upload.";
+
+export class JobPhotoUploadAttemptAbortedError extends Error {
+  constructor() {
+    super(JOB_PHOTO_UPLOAD_ABORTED_MESSAGE);
+    this.name = "JobPhotoUploadAttemptAbortedError";
+  }
+}
+
+export function isJobPhotoUploadAttemptAbortedError(
+  error: unknown,
+): error is JobPhotoUploadAttemptAbortedError {
+  return error instanceof JobPhotoUploadAttemptAbortedError;
+}
+
+function holdJobPhotoRecoveryDocumentLock(token: string) {
+  return new Promise<boolean>((resolve, reject) => {
+    let acquisitionSettled = false;
+    const request = window.navigator.locks.request(
+      `${JOB_PHOTO_RECOVERY_LEASE_TOKEN_KEY}:${token}`,
+      { mode: "exclusive", ifAvailable: true },
+      async (lock) => {
+        acquisitionSettled = true;
+
+        if (!lock) {
+          resolve(false);
+          return;
+        }
+
+        resolve(true);
+        await new Promise<void>(() => undefined);
+      },
+    );
+
+    void request.catch((error) => {
+      if (!acquisitionSettled) {
+        reject(error);
+      }
+    });
+  });
+}
+
+export async function getJobPhotoRecoveryLeaseToken() {
+  const crypto = getPhotoCrypto();
+
+  if (typeof window === "undefined") {
+    inMemoryJobPhotoRecoveryLeaseToken ??= crypto.randomUUID();
+    return inMemoryJobPhotoRecoveryLeaseToken;
+  }
+
+  jobPhotoRecoveryLeaseTokenPromise ??= (async () => {
+    if (!window.navigator.locks) {
+      throw new Error(
+        "Secure photo recovery requires browser tab locking support.",
+      );
+    }
+
+    try {
+      const storedToken = window.sessionStorage
+        .getItem(JOB_PHOTO_RECOVERY_LEASE_TOKEN_KEY)
+        ?.trim()
+        .toLowerCase();
+      const candidates = [
+        storedToken && jobPhotoUuidPattern.test(storedToken)
+          ? storedToken
+          : null,
+        crypto.randomUUID().toLowerCase(),
+        crypto.randomUUID().toLowerCase(),
+      ].filter((token): token is string => Boolean(token));
+
+      for (const candidate of candidates) {
+        if (await holdJobPhotoRecoveryDocumentLock(candidate)) {
+          window.sessionStorage.setItem(
+            JOB_PHOTO_RECOVERY_LEASE_TOKEN_KEY,
+            candidate,
+          );
+          return candidate;
+        }
+      }
+    } catch {
+      throw new Error(
+        "Secure photo recovery requires session storage and browser tab locking.",
+      );
+    }
+
+    throw new Error("Secure photo recovery could not establish safe tab ownership.");
+  })();
+
+  return jobPhotoRecoveryLeaseTokenPromise;
+}
 
 type CrmListResult<T> = {
   data: T[] | null;
@@ -112,6 +234,76 @@ type CoreCrmSnapshot = Pick<
   CrmSnapshot,
   "companies" | "leads" | "customers" | "estimates" | "scopes" | "jobs"
 >;
+
+export async function hydrateJobPhotoSignedUrls(
+  client: CrmClient,
+  photos: JobPhotoRow[],
+): Promise<JobPhotoRecord[]> {
+  if (!photos.length) {
+    return [];
+  }
+
+  const paths = Array.from(new Set(photos.map((photo) => photo.file_path)));
+  let signedUrlResult: Awaited<
+    ReturnType<
+      ReturnType<typeof client.storage.from>["createSignedUrls"]
+    >
+  >;
+
+  try {
+    signedUrlResult = await client.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .createSignedUrls(paths, JOB_PHOTO_SIGNED_URL_TTL_SECONDS);
+  } catch {
+    return photos.map((photo) => ({
+      ...photo,
+      file_url: null,
+      signed_url: null,
+    }));
+  }
+
+  const { data, error } = signedUrlResult;
+
+  if (error || !data) {
+    return photos.map((photo) => ({
+      ...photo,
+      file_url: null,
+      signed_url: null,
+    }));
+  }
+
+  const signedUrlByPath = new Map(
+    data.map((item) => [
+      item.path,
+      item.error === null && item.signedUrl ? item.signedUrl : null,
+    ]),
+  );
+
+  return photos.map((photo) => ({
+    ...photo,
+    file_url: null,
+    signed_url: signedUrlByPath.get(photo.file_path) ?? null,
+  }));
+}
+
+export async function getJobPhotoFileSignedUrl(
+  client: CrmClient,
+  photo: Pick<JobPhotoRow, "file_path">,
+) {
+  const { data, error } = await client.storage
+    .from(JOB_PHOTO_STORAGE_BUCKET)
+    .createSignedUrl(photo.file_path, JOB_PHOTO_SIGNED_URL_TTL_SECONDS);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data.signedUrl) {
+    throw new Error("Supabase did not return a temporary photo URL.");
+  }
+
+  return data.signedUrl;
+}
 
 function describeCrmLoadError(error: unknown) {
   if (error instanceof Error) {
@@ -964,6 +1156,14 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["company_workflow_settings", companyWorkflowSettings],
   ]);
 
+  const hydratedJobPhotos = await hydrateJobPhotoSignedUrls(
+    client,
+    requireRows(
+      "job_photos",
+      jobPhotos as CrmListResult<JobPhotoRow>,
+    ),
+  );
+
   return {
     companies: requireRows("companies", companies),
     properties: normalizePropertyRows(optionalRows("properties", properties)),
@@ -998,7 +1198,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     jobNotes: requireRows("job_notes", jobNotes),
     jobMaterials: requireRows("job_materials", jobMaterials),
     scheduleEvents: requireRows("schedule_events", scheduleEvents),
-    jobPhotos: requireRows("job_photos", jobPhotos),
+    jobPhotos: hydratedJobPhotos,
     invoices: requireRows("invoices", invoices),
     invoiceLineItems: requireRows("invoice_line_items", invoiceLineItems),
     materialOrders: requireRows("material_orders", materialOrders),
@@ -2141,6 +2341,237 @@ function safeStorageName(fileName: string) {
   return fileName.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 }
 
+function safeJobPhotoStorageName(fileName: string) {
+  const sanitized = safeStorageName(fileName)
+    .replace(/^\.+/, "")
+    .slice(0, 120);
+
+  return sanitized || "photo";
+}
+
+function normalizeNullablePhotoValue(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+const jobPhotoUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function normalizeJobPhotoUuid(
+  value: string | null | undefined,
+  label: string,
+) {
+  const normalized = normalizeNullablePhotoValue(value)?.toLowerCase() ?? null;
+
+  if (normalized && !jobPhotoUuidPattern.test(normalized)) {
+    throw new Error(`${label} must be a valid UUID.`);
+  }
+
+  return normalized;
+}
+
+function normalizeJobPhotoTakenAt(value: string | null | undefined) {
+  const candidate = normalizeNullablePhotoValue(value);
+
+  if (!candidate) {
+    return null;
+  }
+
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T.+)?$/.exec(candidate);
+  const dateValue = match?.[1] ?? "";
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    throw new Error("Photo date must be a valid calendar date.");
+  }
+
+  if (candidate.length > 10 && Number.isNaN(Date.parse(candidate))) {
+    throw new Error("Photo date must be a valid calendar date.");
+  }
+
+  const parsedDate = new Date(`${dateValue}T00:00:00.000Z`);
+
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dateValue) {
+    throw new Error("Photo date must be a valid calendar date.");
+  }
+
+  return dateValue;
+}
+
+function normalizeJobPhotoInput(input: JobPhotoInput) {
+  const companyId = normalizeJobPhotoUuid(input.company_id, "Photo company");
+  const sortOrder = input.sort_order ?? 0;
+
+  if (!companyId) {
+    throw new Error("Choose a company before uploading a photo.");
+  }
+
+  if (!Number.isInteger(sortOrder)) {
+    throw new Error("Photo sort order must be a whole number.");
+  }
+
+  return {
+    company_id: companyId,
+    customer_id: normalizeJobPhotoUuid(input.customer_id, "Photo customer"),
+    property_id: normalizeJobPhotoUuid(input.property_id, "Photo property"),
+    job_id: normalizeJobPhotoUuid(input.job_id, "Photo job"),
+    estimate_id: normalizeJobPhotoUuid(input.estimate_id, "Photo estimate"),
+    inspection_id: normalizeJobPhotoUuid(input.inspection_id, "Photo inspection"),
+    caption: normalizeNullablePhotoValue(input.caption),
+    label: normalizeNullablePhotoValue(input.label),
+    taken_at: normalizeJobPhotoTakenAt(input.taken_at),
+    is_customer_visible: input.is_customer_visible ?? false,
+    sort_order: sortOrder,
+  };
+}
+
+function getJobPhotoPathRelation(input: ReturnType<typeof normalizeJobPhotoInput>) {
+  if (input.inspection_id) {
+    return { kind: "inspection", id: input.inspection_id } as const;
+  }
+
+  if (input.job_id) {
+    return { kind: "job", id: input.job_id } as const;
+  }
+
+  if (input.property_id) {
+    return { kind: "property", id: input.property_id } as const;
+  }
+
+  if (input.customer_id) {
+    return { kind: "customer", id: input.customer_id } as const;
+  }
+
+  if (input.estimate_id) {
+    return { kind: "estimate", id: input.estimate_id } as const;
+  }
+
+  return { kind: "company", id: input.company_id } as const;
+}
+
+function jobPhotoRegistrationMatches(
+  photo: JobPhotoRow,
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+) {
+  return (
+    photo.company_id === input.company_id &&
+    photo.customer_id === input.customer_id &&
+    (photo.property_id ?? null) === input.property_id &&
+    photo.job_id === input.job_id &&
+    photo.estimate_id === input.estimate_id &&
+    photo.inspection_id === input.inspection_id &&
+    photo.caption === input.caption &&
+    photo.label === input.label &&
+    photo.taken_at === input.taken_at &&
+    photo.is_customer_visible === input.is_customer_visible &&
+    photo.sort_order === input.sort_order &&
+    photo.file_path === attempt.filePath &&
+    photo.file_url === null &&
+    photo.upload_operation_key === attempt.operationKey &&
+    photo.upload_request_fingerprint === attempt.requestFingerprint
+  );
+}
+
+function getPhotoCrypto() {
+  if (!globalThis.crypto?.subtle || !globalThis.crypto.randomUUID) {
+    throw new Error("Secure photo upload is unavailable in this browser.");
+  }
+
+  return globalThis.crypto;
+}
+
+async function sha256Hex(value: ArrayBuffer | string) {
+  const bytes =
+    typeof value === "string" ? new TextEncoder().encode(value) : value;
+  const digest = await getPhotoCrypto().subtle.digest("SHA-256", bytes);
+
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export function validateJobPhotoFile(file: File | null): asserts file is File {
+  if (!file) {
+    throw new Error("Choose a photo to upload.");
+  }
+
+  if (!file.type.toLowerCase().startsWith("image/")) {
+    throw new Error("Choose an image file to upload.");
+  }
+
+  if (file.size <= 0) {
+    throw new Error("Choose a non-empty image file to upload.");
+  }
+
+  if (file.size > MAX_JOB_PHOTO_BYTES) {
+    throw new Error("Choose an image that is 25 MB or smaller.");
+  }
+}
+
+export async function prepareJobPhotoUploadAttempt(
+  input: JobPhotoInput,
+  file: File | null,
+  operationKey?: string,
+  recoveryLeaseToken?: string,
+): Promise<JobPhotoUploadAttempt> {
+  validateJobPhotoFile(file);
+
+  const normalizedInput = normalizeJobPhotoInput(input);
+  const stableOperationKey = (
+    operationKey ?? getPhotoCrypto().randomUUID()
+  ).trim().toLowerCase();
+
+  if (!jobPhotoUuidPattern.test(stableOperationKey)) {
+    throw new Error("Photo upload operation key must be a valid UUID.");
+  }
+  const ownedRecoveryLeaseToken = await getJobPhotoRecoveryLeaseToken();
+  const requestedRecoveryLeaseToken = recoveryLeaseToken
+    ?.trim()
+    .toLowerCase();
+
+  if (
+    requestedRecoveryLeaseToken &&
+    requestedRecoveryLeaseToken !== ownedRecoveryLeaseToken
+  ) {
+    throw new Error(
+      "Photo upload recovery belongs to a different browser tab.",
+    );
+  }
+
+  const stableRecoveryLeaseToken = ownedRecoveryLeaseToken;
+
+  if (!jobPhotoUuidPattern.test(stableRecoveryLeaseToken)) {
+    throw new Error("Photo upload recovery lease token must be a valid UUID.");
+  }
+  const relation = getJobPhotoPathRelation(normalizedInput);
+  const safeFileName = safeJobPhotoStorageName(file.name);
+  const filePath = [
+    normalizedInput.company_id,
+    relation.kind,
+    relation.id,
+    `${stableOperationKey}-${safeFileName}`,
+  ].join("/");
+  const fileSha256 = await sha256Hex(await file.arrayBuffer());
+  const requestFingerprint = await sha256Hex(
+    JSON.stringify({
+      version: 1,
+      ...normalizedInput,
+      file_name: safeFileName,
+      file_size_bytes: file.size,
+      mime_type: file.type.trim().toLowerCase(),
+      file_sha256: fileSha256,
+    }),
+  );
+
+  return {
+    operationKey: stableOperationKey,
+    requestFingerprint,
+    filePath,
+    recoveryLeaseToken: stableRecoveryLeaseToken,
+    takenAt: normalizedInput.taken_at,
+  };
+}
+
 function randomStorageId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -2263,80 +2694,582 @@ function inputRequiresDocumentStorageSchema(input: Partial<DocumentInput>) {
   );
 }
 
-export async function createJobPhoto(
-  client: CrmClient,
-  input: JobPhotoInput,
-  file: File | null,
-) {
-  const now = new Date().toISOString();
-
-
-
-  if (!file) {
-    throw new Error("Choose a photo to upload.");
-  }
-
-  const relationId =
-    input.inspection_id ??
-    input.job_id ??
-    input.customer_id ??
-    input.estimate_id ??
-    "general";
-  const filePath = `${relationId}/${crypto.randomUUID()}-${safeStorageName(file.name)}`;
-  const { error: uploadError } = await client.storage
-    .from("job-photos")
-    .upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: false,
-    });
-
-  if (uploadError) {
-    throw uploadError;
-  }
-
-  const { data: publicUrl } = client.storage.from("job-photos").getPublicUrl(filePath);
-  const photoPayload: JobPhotoInput & {
-    file_path: string;
-    file_url: string;
-  } = {
-    company_id: input.company_id,
-    customer_id: input.customer_id ?? null,
-    ...(input.property_id !== undefined ? { property_id: input.property_id ?? null } : {}),
-    job_id: input.job_id ?? null,
-    estimate_id: input.estimate_id ?? null,
-    caption: input.caption ?? null,
-    taken_at: input.taken_at ?? null,
-    file_path: filePath,
-    file_url: publicUrl.publicUrl,
+function buildJobPhotoUploadRpcArgs(
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+): JobPhotoUploadRpcArgs {
+  return {
+    target_company_id: input.company_id,
+    target_upload_operation_key: attempt.operationKey,
+    target_upload_request_fingerprint: attempt.requestFingerprint,
+    target_file_path: attempt.filePath,
+    target_recovery_lease_token: attempt.recoveryLeaseToken,
+    target_customer_id: input.customer_id,
+    target_property_id: input.property_id,
+    target_job_id: input.job_id,
+    target_estimate_id: input.estimate_id,
+    target_inspection_id: input.inspection_id,
+    target_caption: input.caption,
+    target_label: input.label,
+    target_taken_at: input.taken_at,
+    target_is_customer_visible: input.is_customer_visible,
+    target_sort_order: input.sort_order,
   };
+}
 
-  if (input.inspection_id) {
-    photoPayload.inspection_id = input.inspection_id;
-
-    if (input.label) {
-      photoPayload.label = input.label;
-    }
-
-    if (typeof input.is_customer_visible === "boolean") {
-      photoPayload.is_customer_visible = input.is_customer_visible;
-    }
-
-    if (typeof input.sort_order === "number") {
-      photoPayload.sort_order = input.sort_order;
-    }
+function requireExactJobPhotoUploadOperation(
+  operation: JobPhotoUploadOperationRecord | null,
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+) {
+  if (
+    !operation ||
+    operation.company_id !== input.company_id ||
+    operation.upload_operation_key !== attempt.operationKey ||
+    operation.upload_request_fingerprint !== attempt.requestFingerprint ||
+    operation.file_path !== attempt.filePath ||
+    operation.recovery_lease_token !== attempt.recoveryLeaseToken ||
+    !["reserved", "canceling", "committed", "aborted"].includes(
+      operation.state,
+    )
+  ) {
+    throw new Error(
+      "Secure photo upload state could not be verified. Retry this upload without changing the file or details.",
+    );
   }
 
-  const { data, error } = await client
-    .from("job_photos")
-    .insert(photoPayload)
-    .select("*")
-    .single();
+  return operation;
+}
+
+async function tryRegisterJobPhoto(
+  client: CrmClient,
+  rpcArgs: JobPhotoUploadRpcArgs,
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+) {
+  try {
+    const { data, error } = await client.rpc(
+      "wtos_register_job_photo",
+      rpcArgs,
+    );
+    const registeredPhoto = data as JobPhotoRow | null;
+
+    if (
+      error ||
+      !registeredPhoto ||
+      !jobPhotoRegistrationMatches(registeredPhoto, input, attempt)
+    ) {
+      return null;
+    }
+
+    return registeredPhoto;
+  } catch {
+    return null;
+  }
+}
+
+async function recoverCommittedJobPhoto(
+  client: CrmClient,
+  rpcArgs: JobPhotoUploadRpcArgs,
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+) {
+  const registeredPhoto = await tryRegisterJobPhoto(
+    client,
+    rpcArgs,
+    input,
+    attempt,
+  );
+
+  if (registeredPhoto) {
+    return registeredPhoto;
+  }
+
+  try {
+    const { data, error } = await client
+      .from("job_photos")
+      .select("*")
+      .eq("company_id", input.company_id)
+      .eq("upload_operation_key", attempt.operationKey)
+      .maybeSingle();
+    const recoveredPhoto = data as JobPhotoRow | null;
+
+    if (
+      !error &&
+      recoveredPhoto &&
+      jobPhotoRegistrationMatches(recoveredPhoto, input, attempt)
+    ) {
+      return recoveredPhoto;
+    }
+  } catch {
+    // A committed reservation is never rolled back; retry keeps its identity.
+  }
+
+  throw new Error(
+    "Committed photo registration could not be confirmed. Retry this upload without changing the file or details.",
+  );
+}
+
+async function cancelJobPhotoUploadAttempt(
+  client: CrmClient,
+  rpcArgs: JobPhotoUploadRpcArgs,
+  input: ReturnType<typeof normalizeJobPhotoInput>,
+  attempt: JobPhotoUploadAttempt,
+) {
+  let cancellationResult:
+    | Awaited<ReturnType<typeof client.rpc<"wtos_cancel_job_photo_upload">>>
+    | undefined;
+
+  try {
+    cancellationResult = await client.rpc(
+      "wtos_cancel_job_photo_upload",
+      rpcArgs,
+    );
+  } catch {
+    throw new Error(
+      "Photo upload cancellation could not be started. Retry this upload without changing the file or details.",
+    );
+  }
+
+  if (cancellationResult.error) {
+    throw new Error(
+      "Photo upload cancellation could not be started. Retry this upload without changing the file or details.",
+    );
+  }
+
+  const cancellation = requireExactJobPhotoUploadOperation(
+    cancellationResult.data as JobPhotoUploadOperationRecord | null,
+    input,
+    attempt,
+  );
+
+  if (cancellation.state === "committed") {
+    return recoverCommittedJobPhoto(client, rpcArgs, input, attempt);
+  }
+
+  if (cancellation.state === "aborted") {
+    throw new JobPhotoUploadAttemptAbortedError();
+  }
+
+  if (cancellation.state !== "canceling") {
+    throw new Error(
+      "Photo upload cancellation did not enter a safe cleanup state. Retry this upload without changing the file or details.",
+    );
+  }
+
+  let exactCleanupFailed = false;
+
+  try {
+    const { error } = await client.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .remove([attempt.filePath]);
+    exactCleanupFailed = Boolean(error);
+  } catch {
+    exactCleanupFailed = true;
+  }
+
+  let confirmationResult:
+    | Awaited<
+        ReturnType<typeof client.rpc<"wtos_confirm_job_photo_upload_abort">>
+      >
+    | undefined;
+
+  try {
+    confirmationResult = await client.rpc(
+      "wtos_confirm_job_photo_upload_abort",
+      rpcArgs,
+    );
+  } catch {
+    throw new Error(
+      exactCleanupFailed
+        ? "Photo upload cancellation and exact cleanup could not be confirmed. Retry this upload without changing the file or details."
+        : "Photo upload cancellation could not be confirmed. Retry this upload without changing the file or details.",
+    );
+  }
+
+  if (confirmationResult.error) {
+    throw new Error(
+      exactCleanupFailed
+        ? "Photo upload cancellation and exact cleanup could not be confirmed. Retry this upload without changing the file or details."
+        : "Photo upload cancellation could not be confirmed. Retry this upload without changing the file or details.",
+    );
+  }
+
+  const confirmation = requireExactJobPhotoUploadOperation(
+    confirmationResult.data as JobPhotoUploadOperationRecord | null,
+    input,
+    attempt,
+  );
+
+  if (confirmation.state === "committed") {
+    return recoverCommittedJobPhoto(client, rpcArgs, input, attempt);
+  }
+
+  if (confirmation.state === "aborted") {
+    throw new JobPhotoUploadAttemptAbortedError();
+  }
+
+  throw new Error(
+    exactCleanupFailed
+      ? "Photo upload cancellation and exact cleanup remain incomplete. Retry this upload without changing the file or details."
+      : "Photo upload cancellation remains incomplete. Retry this upload without changing the file or details.",
+  );
+}
+
+function getJobPhotoPostgresErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+}
+
+export function isJobPhotoRecoverySchemaUnavailable(error: unknown) {
+  const code = getJobPhotoPostgresErrorCode(error);
+  const message =
+    typeof error === "object" && error && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : "";
+
+  return (
+    ["42P01", "42703", "42883", "PGRST202", "PGRST204"].includes(code) ||
+    message.includes("Could not find the function") ||
+    message.includes("schema cache")
+  );
+}
+
+export async function heartbeatJobPhotoUploadAttempt(
+  client: CrmClient,
+  upload: ActiveJobPhotoUpload,
+) {
+  const ownedRecoveryLeaseToken = await getJobPhotoRecoveryLeaseToken();
+
+  if (upload.attempt.recoveryLeaseToken !== ownedRecoveryLeaseToken) {
+    throw new Error("Photo upload recovery belongs to a different browser tab.");
+  }
+
+  const normalizedInput = normalizeJobPhotoInput(upload.input);
+  const rpcArgs = buildJobPhotoUploadRpcArgs(
+    normalizedInput,
+    upload.attempt,
+  );
+  const { data, error } = await client.rpc(
+    "wtos_begin_job_photo_upload",
+    rpcArgs,
+  );
 
   if (error) {
     throw error;
   }
 
-  return data;
+  return requireExactJobPhotoUploadOperation(
+    data as JobPhotoUploadOperationRecord | null,
+    normalizedInput,
+    upload.attempt,
+  );
+}
+
+export async function listMyJobPhotoUploadRecoveries(client: CrmClient) {
+  const { data, error } = await client.rpc(
+    "wtos_list_my_job_photo_upload_recoveries",
+    {},
+  );
+
+  if (error) {
+    throw error;
+  }
+
+  const recoveries = (data ?? []) as JobPhotoUploadRecoveryListRecord[];
+
+  if (
+    recoveries.some(
+      (recovery) =>
+        !jobPhotoUuidPattern.test(recovery.company_id) ||
+        !jobPhotoUuidPattern.test(recovery.upload_operation_key) ||
+        !["reserved", "canceling"].includes(recovery.state),
+    )
+  ) {
+    throw new Error("Secure photo recovery returned an invalid operation.");
+  }
+
+  return recoveries;
+}
+
+function getJobPhotoRecoveryClaim(
+  data:
+    | JobPhotoUploadRecoveryClaimRecord
+    | JobPhotoUploadRecoveryClaimRecord[]
+    | null,
+) {
+  return Array.isArray(data) ? (data[0] ?? null) : data;
+}
+
+function isExpectedJobPhotoRecoveryPath(
+  filePath: string,
+  companyId: string,
+  operationKey: string,
+) {
+  const parts = filePath.split("/");
+
+  return (
+    parts.length === 4 &&
+    parts[0] === companyId &&
+    ["inspection", "job", "property", "customer", "estimate", "company"].includes(
+      parts[1] ?? "",
+    ) &&
+    jobPhotoUuidPattern.test(parts[2] ?? "") &&
+    (parts[3] ?? "").startsWith(`${operationKey}-`)
+  );
+}
+
+export async function settleJobPhotoUploadRecovery(
+  client: CrmClient,
+  recovery: Pick<
+    JobPhotoUploadRecoveryListRecord,
+    "company_id" | "upload_operation_key"
+  >,
+  recoveryLeaseToken?: string,
+): Promise<JobPhotoRecoverySettlement> {
+  const ownedRecoveryLeaseToken = await getJobPhotoRecoveryLeaseToken();
+
+  if (
+    recoveryLeaseToken &&
+    recoveryLeaseToken !== ownedRecoveryLeaseToken
+  ) {
+    throw new Error("Photo upload recovery belongs to a different browser tab.");
+  }
+
+  const stableRecoveryLeaseToken = ownedRecoveryLeaseToken;
+  const claimArgs = {
+    target_company_id: recovery.company_id,
+    target_upload_operation_key: recovery.upload_operation_key,
+    target_recovery_lease_token: stableRecoveryLeaseToken,
+  };
+  let claimResult:
+    | Awaited<
+        ReturnType<
+          typeof client.rpc<"wtos_claim_job_photo_upload_recovery">
+        >
+      >
+    | undefined;
+
+  try {
+    claimResult = await client.rpc(
+      "wtos_claim_job_photo_upload_recovery",
+      claimArgs,
+    );
+  } catch (error) {
+    if (getJobPhotoPostgresErrorCode(error) === "55P03") {
+      return { status: "active_elsewhere" };
+    }
+
+    throw error;
+  }
+
+  if (claimResult.error) {
+    if (getJobPhotoPostgresErrorCode(claimResult.error) === "55P03") {
+      return { status: "active_elsewhere" };
+    }
+
+    throw claimResult.error;
+  }
+
+  const claim = getJobPhotoRecoveryClaim(
+    claimResult.data as
+      | JobPhotoUploadRecoveryClaimRecord
+      | JobPhotoUploadRecoveryClaimRecord[]
+      | null,
+  );
+
+  if (claim?.state === "committed" || claim?.state === "aborted") {
+    return { status: claim.state };
+  }
+
+  if (
+    claim?.state !== "canceling" ||
+    !claim.file_path ||
+    !isExpectedJobPhotoRecoveryPath(
+      claim.file_path,
+      recovery.company_id,
+      recovery.upload_operation_key,
+    )
+  ) {
+    throw new Error("Secure photo recovery could not verify its exact object path.");
+  }
+
+  let exactCleanupFailed = false;
+
+  try {
+    const { error: cleanupError } = await client.storage
+      .from(JOB_PHOTO_STORAGE_BUCKET)
+      .remove([claim.file_path]);
+    exactCleanupFailed = Boolean(cleanupError);
+  } catch {
+    exactCleanupFailed = true;
+  }
+
+  let confirmationResult:
+    | Awaited<
+        ReturnType<
+          typeof client.rpc<"wtos_confirm_job_photo_upload_recovery_abort">
+        >
+      >
+    | undefined;
+
+  try {
+    confirmationResult = await client.rpc(
+      "wtos_confirm_job_photo_upload_recovery_abort",
+      claimArgs,
+    );
+  } catch (error) {
+    throw exactCleanupFailed
+      ? new Error(
+          "Interrupted photo cleanup and recovery confirmation remain pending.",
+        )
+      : error;
+  }
+
+  const { data: confirmation, error: confirmationError } = confirmationResult;
+
+  if (confirmationError) {
+    throw exactCleanupFailed
+      ? new Error(
+          "Interrupted photo cleanup and recovery confirmation remain pending.",
+        )
+      : confirmationError;
+  }
+
+  if (confirmation !== "committed" && confirmation !== "aborted") {
+    throw new Error("Secure photo recovery did not reach a terminal state.");
+  }
+
+  return { status: confirmation };
+}
+
+async function hydrateRegisteredJobPhoto(
+  client: CrmClient,
+  photo: JobPhotoRow,
+) {
+  const [hydratedPhoto] = await hydrateJobPhotoSignedUrls(client, [photo]);
+  return hydratedPhoto;
+}
+
+export async function createJobPhoto(
+  client: CrmClient,
+  input: JobPhotoInput,
+  file: File | null,
+  uploadAttempt?: JobPhotoUploadAttempt,
+) {
+  validateJobPhotoFile(file);
+
+  const normalizedInput = normalizeJobPhotoInput(input);
+  const preparedAttempt = await prepareJobPhotoUploadAttempt(
+    normalizedInput,
+    file,
+    uploadAttempt?.operationKey,
+    uploadAttempt?.recoveryLeaseToken,
+  );
+
+  if (
+    uploadAttempt &&
+    (uploadAttempt.filePath !== preparedAttempt.filePath ||
+      uploadAttempt.requestFingerprint !== preparedAttempt.requestFingerprint)
+  ) {
+    throw new Error(
+      "Photo upload details changed. Start a new upload attempt before retrying.",
+    );
+  }
+
+  const attempt = uploadAttempt ?? preparedAttempt;
+  const rpcArgs = buildJobPhotoUploadRpcArgs(normalizedInput, attempt);
+  const { error: schemaReadinessError } = await client
+    .from("job_photos")
+    .select("upload_operation_key, upload_request_fingerprint")
+    .limit(0);
+
+  if (schemaReadinessError) {
+    throw new Error(
+      "Secure photo storage is not ready yet. Retry after the approved database migration is available.",
+    );
+  }
+
+  let reservationResult:
+    | Awaited<ReturnType<typeof client.rpc<"wtos_begin_job_photo_upload">>>
+    | undefined;
+
+  try {
+    reservationResult = await client.rpc(
+      "wtos_begin_job_photo_upload",
+      rpcArgs,
+    );
+  } catch {
+    throw new Error(
+      "Secure photo upload reservation could not be confirmed. Retry this upload without changing the file or details.",
+    );
+  }
+
+  if (reservationResult.error) {
+    throw new Error(
+      "Secure photo upload reservation could not be confirmed. Retry this upload without changing the file or details.",
+    );
+  }
+
+  const reservation = requireExactJobPhotoUploadOperation(
+    reservationResult.data as JobPhotoUploadOperationRecord | null,
+    normalizedInput,
+    attempt,
+  );
+
+  if (reservation.state === "committed") {
+    return hydrateRegisteredJobPhoto(
+      client,
+      await recoverCommittedJobPhoto(client, rpcArgs, normalizedInput, attempt),
+    );
+  }
+
+  if (reservation.state === "canceling") {
+    return hydrateRegisteredJobPhoto(
+      client,
+      await cancelJobPhotoUploadAttempt(
+        client,
+        rpcArgs,
+        normalizedInput,
+        attempt,
+      ),
+    );
+  }
+
+  if (reservation.state === "aborted") {
+    throw new JobPhotoUploadAttemptAbortedError();
+  }
+
+  try {
+    await client.storage.from(JOB_PHOTO_STORAGE_BUCKET).upload(attempt.filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+    });
+  } catch {
+    // Registration and durable cancellation below resolve ambiguous transport results.
+  }
+
+  const registeredPhoto = await tryRegisterJobPhoto(
+    client,
+    rpcArgs,
+    normalizedInput,
+    attempt,
+  );
+
+  if (registeredPhoto) {
+    return hydrateRegisteredJobPhoto(client, registeredPhoto);
+  }
+
+  return hydrateRegisteredJobPhoto(
+    client,
+    await cancelJobPhotoUploadAttempt(
+      client,
+      rpcArgs,
+      normalizedInput,
+      attempt,
+    ),
+  );
 }
 
 function buildInvoicePayload(

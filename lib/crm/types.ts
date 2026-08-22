@@ -1202,7 +1202,7 @@ export type ScheduleEventRecord = {
   updated_at: string;
 };
 
-export type JobPhotoRecord = {
+export type JobPhotoRow = {
   id: string;
   company_id: string;
   customer_id: string | null;
@@ -1213,12 +1213,77 @@ export type JobPhotoRecord = {
   caption: string | null;
   label: string | null;
   file_path: string;
-  file_url: string;
+  file_url: string | null;
+  upload_operation_key: string;
+  upload_request_fingerprint: string;
   taken_at: string | null;
   is_customer_visible: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
+};
+
+export type JobPhotoRecord = JobPhotoRow & {
+  /** Short-lived, in-memory Storage access. Never persisted to job_photos. */
+  signed_url: string | null;
+};
+
+export type JobPhotoUploadOperationState =
+  | "reserved"
+  | "canceling"
+  | "committed"
+  | "aborted";
+
+export type JobPhotoUploadOperationRecord = {
+  id: string;
+  company_id: string;
+  upload_operation_key: string;
+  upload_request_fingerprint: string;
+  file_path: string;
+  registration_digest: string;
+  uploader_user_id: string;
+  recovery_lease_token: string;
+  recovery_lease_expires_at: string;
+  state: JobPhotoUploadOperationState;
+  reserved_at: string;
+  canceling_at: string | null;
+  committed_at: string | null;
+  aborted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobPhotoUploadRpcArgs = {
+  target_company_id: string;
+  target_upload_operation_key: string;
+  target_upload_request_fingerprint: string;
+  target_file_path: string;
+  target_recovery_lease_token: string;
+  target_customer_id?: string | null;
+  target_property_id?: string | null;
+  target_job_id?: string | null;
+  target_estimate_id?: string | null;
+  target_inspection_id?: string | null;
+  target_caption?: string | null;
+  target_label?: string | null;
+  target_taken_at?: string | null;
+  target_is_customer_visible?: boolean;
+  target_sort_order?: number;
+  target_uploader_user_id?: string | null;
+};
+
+export type JobPhotoUploadRecoveryListRecord = {
+  uploader_user_id: string;
+  company_id: string;
+  upload_operation_key: string;
+  state: "reserved" | "canceling";
+  lease_expires_at: string;
+};
+
+export type JobPhotoUploadRecoveryClaimRecord = {
+  state: JobPhotoUploadOperationState;
+  file_path: string | null;
+  lease_expires_at: string | null;
 };
 
 export type InvoiceRecord = {
@@ -4015,7 +4080,9 @@ export type ScheduleEventInsert = ScheduleEventInput & {
 export type JobPhotoInsert = JobPhotoInput & {
   id?: string;
   file_path: string;
-  file_url: string;
+  file_url?: null;
+  upload_operation_key: string;
+  upload_request_fingerprint: string;
   created_at?: string;
   updated_at?: string;
 };
@@ -4490,8 +4557,33 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["schedule_events"]["Insert"]>;
         Relationships: [];
       };
+      job_photo_upload_operations: {
+        Row: JobPhotoUploadOperationRecord;
+        Insert: {
+          id?: string;
+          company_id: string;
+          upload_operation_key: string;
+          upload_request_fingerprint: string;
+          file_path: string;
+          registration_digest: string;
+          uploader_user_id: string;
+          recovery_lease_token: string;
+          recovery_lease_expires_at: string;
+          state?: JobPhotoUploadOperationState;
+          reserved_at?: string;
+          canceling_at?: string | null;
+          committed_at?: string | null;
+          aborted_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["job_photo_upload_operations"]["Insert"]
+        >;
+        Relationships: [];
+      };
       job_photos: {
-        Row: JobPhotoRecord;
+        Row: JobPhotoRow;
         Insert: JobPhotoInsert;
         Update: Partial<Database["public"]["Tables"]["job_photos"]["Insert"]>;
         Relationships: [];
@@ -4897,6 +4989,44 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_begin_job_photo_upload: {
+        Args: JobPhotoUploadRpcArgs;
+        Returns: JobPhotoUploadOperationRecord;
+      };
+      wtos_cancel_job_photo_upload: {
+        Args: JobPhotoUploadRpcArgs;
+        Returns: JobPhotoUploadOperationRecord;
+      };
+      wtos_confirm_job_photo_upload_abort: {
+        Args: JobPhotoUploadRpcArgs;
+        Returns: JobPhotoUploadOperationRecord;
+      };
+      wtos_register_job_photo: {
+        Args: JobPhotoUploadRpcArgs;
+        Returns: JobPhotoRow;
+      };
+      wtos_list_my_job_photo_upload_recoveries: {
+        Args: { target_uploader_user_id?: string | null };
+        Returns: JobPhotoUploadRecoveryListRecord[];
+      };
+      wtos_claim_job_photo_upload_recovery: {
+        Args: {
+          target_company_id: string;
+          target_upload_operation_key: string;
+          target_recovery_lease_token: string;
+          target_uploader_user_id?: string | null;
+        };
+        Returns: JobPhotoUploadRecoveryClaimRecord[];
+      };
+      wtos_confirm_job_photo_upload_recovery_abort: {
+        Args: {
+          target_company_id: string;
+          target_upload_operation_key: string;
+          target_recovery_lease_token: string;
+          target_uploader_user_id?: string | null;
+        };
+        Returns: JobPhotoUploadOperationState;
+      };
       wtos_create_accountable_lead: {
         Args: { accountability_request: CreateAccountableLeadRequest };
         Returns: CreateAccountableLeadResult;

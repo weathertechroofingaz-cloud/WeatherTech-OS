@@ -417,7 +417,7 @@ assert(
   !harness.includes("document.cookie") &&
     !harness.includes("localStorage") &&
     !harness.includes("sessionStorage"),
-  "Harness does not inspect cookies or browser session storage",
+  "Harness never inspects cookies or browser storage, including the application's private recovery-token storage",
 );
 assert(
   runner.indexOf("await assertNoRegressionMarkerResidue(") < firstCleanupIndex,
@@ -499,6 +499,380 @@ assert(
     harness.includes('"crm_identity_reconciliation_events",\n    "id",\n    reconciliationEventIds') &&
     harness.includes("residueVerified: true"),
   "Cleanup verifies run residue across direct, child, reconciliation, accountability, marketing, property, and generated office-task records",
+);
+assert(
+  harness.includes("async function removeRegressionJobPhotoObjects") &&
+    harness.includes("async function listRegressionJobPhotoObjects") &&
+    harness.includes("async function findJobPhotoUploadOperationsForCleanup") &&
+    harness.includes("findJobPhotosForCleanup(env, {") &&
+    harness.includes("...discoveredJobPhotoStoragePaths") &&
+    harness.includes("assertExactRegressionJobPhotoPath") &&
+    harness.includes("removeRegressionJobPhotoObjects(env, jobPhotoStoragePaths)") &&
+    harness.includes('deleteByIds(env, "job_photos", "id", jobPhotoIds)') &&
+    harness.includes('"job_photo_upload_operations",\n    "id",\n    jobPhotoUploadOperationIds') &&
+    harness.indexOf("removeRegressionJobPhotoObjects(env, jobPhotoStoragePaths)") <
+      harness.indexOf('deleteByIds(env, "job_photos", "id", jobPhotoIds)') &&
+    harness.indexOf('deleteByIds(env, "job_photos", "id", jobPhotoIds)') <
+      harness.indexOf('"job_photo_upload_operations",\n    "id",\n    jobPhotoUploadOperationIds') &&
+    harness.includes("assertRegressionJobPhotoObjectsRemoved(env, jobPhotoStoragePaths)"),
+  "Browser cleanup validates and removes exact private job-photo objects before exact metadata, then proves zero object residue",
+);
+assert(
+  harness.includes("async function seedRegressionJobPhoto(") &&
+    harness.includes("async function createRegressionOwnerClient(env)") &&
+    harness.includes("target_recovery_lease_token: recoveryLeaseToken") &&
+    harness.includes('"wtos_begin_job_photo_upload"') &&
+    harness.indexOf('"wtos_begin_job_photo_upload"') <
+      harness.indexOf("await uploadRegressionJobPhotoObject(client, filePath)") &&
+    harness.includes('"wtos_register_job_photo"') &&
+    harness.includes('client.rpc("wtos_cancel_job_photo_upload", rpcArgs)') &&
+    harness.includes(".remove([filePath])") &&
+    harness.includes('client.rpc("wtos_confirm_job_photo_upload_abort", rpcArgs)') &&
+    !harness.includes('restRequest(env, "job_photos", {\n      method: "POST"'),
+  "Browser fixtures authenticate the synthetic owner, reserve before exact private upload, register through the least-privilege RPC, and durably cancel exact failures",
+);
+assert(
+  harness.includes("async function seedInterruptedRegressionJobPhoto(") &&
+    harness.includes("async function readCommittedUiJobPhotoUploadOperation(") &&
+    harness.includes(
+      "job_photo_upload_operations?select=id,company_id,upload_operation_key,file_path,recovery_lease_token,state",
+    ) &&
+    harness.includes("async function waitForInterruptedRegressionJobPhotoAbort(") &&
+    harness.includes("async function assertIndependentTabJobPhotoRecoveryWaiting(") &&
+    harness.includes("async function assertInterruptedRegressionJobPhotoReserved(") &&
+    harness.includes('getAttribute("data-state") === "waiting"') &&
+    harness.includes('operations[0].state !== "reserved"') &&
+    harness.includes("operations[0].id !== interruptedUpload.operationId") &&
+    harness.includes("object.data !== true") &&
+    harness.includes("if (errors.length || warnings.length)") &&
+    harness.includes("Independent-tab recovery waiting emitted ${errors.length} error(s) and ${warnings.length} warning(s).") &&
+    harness.includes("await independentTab.close().catch(() => undefined)") &&
+    harness.includes(
+      'const primaryRecoveryParkingPath = "/__wtos_job_photo_recovery_park__"',
+    ) &&
+    harness.includes("inert primary-tab job-photo recovery parking route") &&
+    harness.includes('document.querySelector("main.wt-app-shell") === null') &&
+    harness.includes(
+      "document.querySelector('[data-testid=\"job-photo-recovery-status\"]') === null",
+    ) &&
+    harness.includes("same-token reload interrupted-photo recovery") &&
+    harness.includes("same-token internal-navigation interrupted-photo recovery") &&
+    harness.includes('[data-testid="job-photo-recovery-status"]') &&
+    harness.includes('operations[0].state === "aborted"') &&
+    harness.includes("metadata.length === 0") &&
+    harness.includes("object.data === false") &&
+    harness.includes("[400, 404].includes(Number(object.error.status))"),
+  "Browser coverage derives the non-PII token from the exact committed row, proves an independent tab waits without mutation, and proves same-token reload/internal-navigation recovery converges to an idle zero-object, zero-metadata abort",
+);
+const securePhotoRecoverySequence = harness.slice(
+  harness.indexOf("const committedUiOperation = await readCommittedUiJobPhotoUploadOperation("),
+  harness.indexOf("const internalNavigationRecovery ="),
+);
+assert(
+  securePhotoRecoverySequence.indexOf(
+    "const committedUiOperation = await readCommittedUiJobPhotoUploadOperation(",
+  ) < securePhotoRecoverySequence.indexOf(
+    "await tab.goto(new URL(primaryRecoveryParkingPath, baseUrl).toString())",
+  ) &&
+    securePhotoRecoverySequence.indexOf(
+      "await tab.goto(new URL(primaryRecoveryParkingPath, baseUrl).toString())",
+    ) <
+      securePhotoRecoverySequence.indexOf("const reloadRecovery = await seedInterruptedRegressionJobPhoto(") &&
+    securePhotoRecoverySequence.indexOf("const reloadRecovery = await seedInterruptedRegressionJobPhoto(") <
+      securePhotoRecoverySequence.indexOf("await assertIndependentTabJobPhotoRecoveryWaiting(") &&
+    securePhotoRecoverySequence.indexOf("await assertIndependentTabJobPhotoRecoveryWaiting(") <
+      securePhotoRecoverySequence.indexOf("await tab.goto(baseUrl)") &&
+    securePhotoRecoverySequence.indexOf("await tab.goto(baseUrl)") <
+      securePhotoRecoverySequence.indexOf("await waitForInterruptedRegressionJobPhotoAbort("),
+  "Browser recovery reads the committed token service-side, proves its primary tab is parked on an inert same-origin 404 before seeding, proves a waiting independent tab cannot mutate it, then returns the primary tab for same-token cleanup",
+);
+assert(
+  harness.includes('enabledGroups.has("job-photos")') &&
+    harness.includes("async function testSecureJobPhotoWorkflow(") &&
+    harness.includes("async function waitForJobPhotoRelationOptionState(") &&
+    harness.includes("persistedPhotoCustomers.length !== 1") &&
+    harness.includes("secure photo initial WeatherTech relation options") &&
+    harness.includes("secure job-photo workspace after relation refresh") &&
+    harness.includes("after one hard reload. Last state:") &&
+    harness.includes("secure photo IHC relation isolation") &&
+    harness.includes("secure photo returned WeatherTech relation options") &&
+    harness.includes('[data-testid="job-photo-company-select"]') &&
+    harness.includes('[data-testid="job-photo-company-filter"]') &&
+    harness.includes("The Photos upload form exposed WeatherTech relations inside the IHC scope") &&
+    harness.includes("Photo uploaded securely.") &&
+    harness.includes('[data-testid="job-photo-upload-lock"]') &&
+    harness.includes("committed Photos upload releases its frozen upload identity") &&
+    harness.includes("assertPrivateJobPhotoSignedUrl(") &&
+    harness.includes("async function assertSignedJobPhotoFixtureResponse(") &&
+    harness.includes('response.status !== 200') &&
+    harness.includes('contentType !== "image/png"') &&
+    harness.includes("!body.equals(JOB_PHOTO_TEST_PNG)") &&
+    harness.includes("image.complete && image.naturalWidth > 0") &&
+    !harness.includes("image instanceof HTMLImageElement") &&
+    harness.includes('await tab.clipboard.writeText("")') &&
+    harness.includes("await tab.clipboard.readText()") &&
+    harness.includes("const visiblePhotoTabsBeforeOpen = new Set(") &&
+    harness.includes("await browser.user.openTabs()") &&
+    harness.includes("!visiblePhotoTabsBeforeOpen.has(entry.providerTabId)") &&
+    harness.includes("openedPhotoProviderTabId = opened.providerTabId") &&
+    harness.includes("openedPhotoTab = await browser.user.claimTab(opened)") &&
+    harness.includes("await openedPhotoTab.url()") &&
+    harness.includes("=== opened.url ? true : null") &&
+    harness.includes('"temporary job-photo claimed URL", 15000') &&
+    !harness.includes("await openedPhotoTab.playwright.waitForURL(opened.url") &&
+    !harness.includes("await openedPhotoTab.playwright.waitForLoadState") &&
+    harness.includes("if (openedPhotoTab)") &&
+    !harness.includes("if (openedPhotoTab && openedPhotoProviderTabId)") &&
+    harness.includes(
+      "The temporary job-photo tab is missing its exact provider identity.",
+    ) &&
+    harness.includes("const openedPhotoControlledTabId = openedPhotoTab.id") &&
+    harness.includes("attempt <= 3") &&
+    harness.includes("setTimeout(resolve, 250)") &&
+    harness.includes("entry.id === openedPhotoControlledTabId") &&
+    harness.includes(
+      "openedPhotoTab = await browser.tabs.get(openedPhotoControlledTabId)",
+    ) &&
+    harness.includes("entry.providerTabId === openedPhotoProviderTabId") &&
+    harness.includes('"temporary job-photo tab cleanup"') &&
+    harness.includes("ERR_ABORTED (-3) loading 'about:blank'") &&
+    harness.includes("Unable to close the temporary job-photo tab safely.") &&
+    harness.includes(
+      "Unable to close the exact controlled temporary job-photo tab safely.",
+    ) &&
+    harness.includes(
+      "Unable to reacquire the exact controlled temporary job-photo tab safely.",
+    ) &&
+    !harness.includes("window.__wtosCopiedPhotoUrl") &&
+    !harness.includes("window.__wtosOpenedPhoto") &&
+    harness.includes("Secure job-photo reload duplicated or persisted a durable URL") &&
+    harness.includes("independentTabRecoveryWaiting: true") &&
+    harness.includes("internalNavigationRecovery: true") &&
+    harness.includes("reloadRecovery: true") &&
+    harness.includes('[data-testid="customer-360-photos"]'),
+  "Targeted signed-in job-photo coverage proves upload relation isolation, private preview/copy/open with exact-URL-polled, bounded, exact-identity tab cleanup, reload persistence, and Customer 360 visibility",
+);
+const fieldOperationsWorkflowSource = harness.slice(
+  harness.indexOf("async function testFieldOperationsWorkspace"),
+  harness.indexOf("async function assertIndependentTabJobPhotoRecoveryWaiting"),
+);
+const fieldOperationsReadinessSource = harness.slice(
+  harness.indexOf("async function readFieldOperationsReadinessState"),
+  harness.indexOf("async function testFieldOperationsWorkspace"),
+);
+assert(
+  fieldOperationsReadinessSource.includes("exactJobCardCount") &&
+    fieldOperationsReadinessSource.includes("exactInspectionCardCount") &&
+    fieldOperationsReadinessSource.includes("companyFilterValue === \"all\"") &&
+    fieldOperationsReadinessSource.includes("data-company-id") &&
+    fieldOperationsReadinessSource.includes("data-assignment-kind") &&
+    fieldOperationsReadinessSource.includes("selectedTitle") &&
+    fieldOperationsReadinessSource.includes("formState") &&
+    fieldOperationsReadinessSource.includes("liveError") &&
+    fieldOperationsWorkflowSource.includes("const fieldSeedProof =") &&
+    fieldOperationsWorkflowSource.includes("persistedJobs.length !== 1") &&
+    fieldOperationsWorkflowSource.includes("persistedInspections.length !== 1") &&
+    fieldOperationsWorkflowSource.includes("Date.parse(persistedJob?.scheduled_start") &&
+    fieldOperationsWorkflowSource.includes("Date.parse(persistedInspection?.scheduled_start") &&
+    fieldOperationsWorkflowSource.includes("attempt <= 2") &&
+    fieldOperationsWorkflowSource.includes("waitForFieldOperationsAssignmentReadiness(") &&
+    fieldOperationsWorkflowSource.includes(
+      "assignments did not settle after two bounded reload attempts",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      '[data-testid="field-assignment-card"][data-company-id="${company.id}"][data-assignment-kind="job"]',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'exactCard?.getAttribute("aria-pressed") === "true"',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      '"exact Field Operations job selection and forms"',
+    ),
+  "Field Operations proves exact persisted assignments, permits only two reload/open/select-all settlement attempts, selects the exact job card, and preserves structured terminal diagnostics",
+);
+assert(
+  fieldOperationsWorkflowSource.includes("const fieldIssueDetails =") &&
+    fieldOperationsWorkflowSource.includes("await clickEnabledUntilPersisted({") &&
+    fieldOperationsWorkflowSource.includes(
+      "locator: tab.playwright.locator('[data-testid=\"field-issue-submit\"]')",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "findJobNoteContaining(env, seededJob.id, fieldIssueDetails)",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'errorPrefix: "Field issue submission was refused"',
+    ),
+  "Field Operations retries only its exact enabled issue submit until the run-specific note persists and surfaces a visible application error immediately",
+);
+assert(
+  fieldOperationsWorkflowSource.includes(
+    'document.body.innerText.includes("Field status saved as Work Started.")',
+  ) &&
+    fieldOperationsWorkflowSource.includes(
+      'document.querySelector(\'[data-testid="field-save-status"]\')?.disabled === false',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      '"field work started UI settlement before checklist action"',
+    ) &&
+    fieldOperationsWorkflowSource.includes("const seededChecklistTask =") &&
+    fieldOperationsWorkflowSource.includes(
+      "seededChecklistTask.status !== \"todo\"",
+    ) &&
+    fieldOperationsWorkflowSource.includes("await clickEnabledUntilPersisted({") &&
+    fieldOperationsWorkflowSource.includes(
+      "locator: seededChecklistRow.locator('[data-testid=\"field-checklist-complete\"]')",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'persistenceLabel: "exact field checklist completion persistence"',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'errorPrefix: "Field checklist completion was refused"',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "task.id !== seededChecklistTask.id",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'const completedChecklistDescriptionMarker = "Field checklist - complete";',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "task.description?.includes(completedChecklistDescriptionMarker)",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "completedTask.description?.includes(completedChecklistDescriptionMarker)",
+    ) &&
+    !fieldOperationsWorkflowSource.includes("Field checklist - Complete") &&
+    fieldOperationsWorkflowSource.indexOf(
+      "field work started UI settlement before checklist action",
+    ) < fieldOperationsWorkflowSource.indexOf("const seededChecklistTask =") &&
+    fieldOperationsWorkflowSource.indexOf("const seededChecklistTask =") <
+      fieldOperationsWorkflowSource.indexOf("const completedTask ="),
+  "Field checklist coverage waits for Work Started UI settlement, re-resolves the exact seeded task UUID, and retries only until that same task persists done with its structured description while surfacing live errors",
+);
+const fieldMaterialPersistenceHelper = harness.slice(
+  harness.indexOf("async function clickFieldMaterialUntilPersisted"),
+  harness.indexOf("async function withAcceptedConfirm"),
+);
+assert(
+  fieldOperationsWorkflowSource.includes("const fieldMaterialName =") &&
+    fieldOperationsWorkflowSource.includes("await clickFieldMaterialUntilPersisted({") &&
+    fieldOperationsWorkflowSource.includes(
+      "locator: tab.playwright.locator('[data-testid=\"field-material-submit\"]')",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "findJobMaterialsByName(env, seededJob.id, fieldMaterialName)",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "`Field material issue - Materials missing\\nMaterial: 1 each ${fieldMaterialName}`",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'errorPrefix: "Field material submission was refused"',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      'materialIssueResult.material.notes !== "Materials missing"',
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "materialIssueNoteId: materialIssueResult.note.id",
+    ) &&
+    !fieldOperationsWorkflowSource.includes(
+      "materialIssueNoteId: materialIssueNote.id",
+    ) &&
+    fieldMaterialPersistenceHelper.includes("if (materials.length > 1)") &&
+    fieldMaterialPersistenceHelper.includes(
+      "const actionHasPersisted = Boolean(lastMaterial || lastNote)",
+    ) &&
+    fieldMaterialPersistenceHelper.includes("!actionHasPersisted") &&
+    fieldMaterialPersistenceHelper.includes("lastMaterial && lastNote") &&
+    fieldMaterialPersistenceHelper.includes("visibleError?.trim()"),
+  "Field material submission retries the exact control only before any durable effect, then requires exactly one material row plus its structured office note and fails visible errors immediately",
+);
+const submitActivationHelper = harness.slice(
+  harness.indexOf("async function activateSubmitButtonByText"),
+  harness.indexOf("function toDateTimeLocalValue"),
+);
+assert(
+  submitActivationHelper.includes("await strategy();\n      return;") &&
+    submitActivationHelper.includes("if (errors.length === 3)"),
+  "Submit activation fallbacks stop after the first successful strategy and report only when every bounded strategy fails",
+);
+assert(
+  harness.includes("Field photo uploaded securely.") &&
+    harness.includes(
+      "tab.playwright.locator('[data-testid=\"field-photo-category-select\"]'),\n      \"During-work photos\"",
+    ) &&
+    harness.includes('fieldPhoto.label !== "During-work photos"') &&
+    harness.includes('[data-testid="field-photo-upload-lock"]') &&
+    harness.includes("committed field photo releases its frozen upload identity") &&
+    harness.includes("Field photo violated the secure company/path contract") &&
+    harness.includes("Inspection photo uploaded and finding added.") &&
+    harness.includes('[data-testid="inspection-photo-upload-lock"]') &&
+    harness.includes("committed inspection photo releases its frozen upload identity") &&
+    harness.includes("Inspection photo did not preserve its secure link/finding contract") &&
+    harness.includes("Customer Portal photo preview"),
+  "Full browser coverage exercises the canonical During-work photos Field Operations category plus secure inspection and customer-visible portal photo surfaces",
+);
+const fileChooserHelper = harness.slice(
+  harness.indexOf("function isTransientFileChooserInteractionError"),
+  harness.indexOf("async function checkUnique"),
+);
+assert(
+  fileChooserHelper.includes("if (!isAbsolute(path))") &&
+    fileChooserHelper.includes("const expectedFileName = basename(path)") &&
+    fileChooserHelper.includes("attempt <= 3") &&
+    fileChooserHelper.includes("waitForUniqueLocator(locator") &&
+    fileChooserHelper.includes("const inputLocator =") &&
+    fileChooserHelper.includes("uploadControlTagName === \"INPUT\"") &&
+    fileChooserHelper.includes("locator.locator('input[type=\"file\"]')") &&
+    fileChooserHelper.includes("isReadySingleFileInputState") &&
+    fileChooserHelper.includes('state.tagName === "INPUT"') &&
+    fileChooserHelper.includes('state.type === "file"') &&
+    fileChooserHelper.includes("state.disabled === false") &&
+    fileChooserHelper.includes("state.multiple === false") &&
+    fileChooserHelper.includes('scrollIntoView({ block: "center", behavior: "auto" })') &&
+    fileChooserHelper.includes('waitForEvent("filechooser", {') &&
+    fileChooserHelper.indexOf("attempt <= 3") <
+      fileChooserHelper.indexOf('waitForEvent("filechooser", {') &&
+    fileChooserHelper.includes("const clickPromise = locator.click") &&
+    fileChooserHelper.includes("await Promise.allSettled([") &&
+    fileChooserHelper.includes(
+      '!isTransientFileChooserInteractionError(clickResult.reason)',
+    ) &&
+    fileChooserHelper.includes(
+      "/^(?:Error: )?Timed out after \\d+ms waiting for file chooser\\.?$/",
+    ) &&
+    fileChooserHelper.includes(
+      'message.includes("Unable to translate Input.dispatchMouseEvent")',
+    ) &&
+    fileChooserHelper.includes(
+      "/^No element found at point .+ waiting on click selector .+$/",
+    ) &&
+    fileChooserHelper.includes(
+      "attemptErrors.every(isTransientFileChooserInteractionError)",
+    ) &&
+    fileChooserHelper.includes("waitForTimeout(300)") &&
+    fileChooserHelper.includes("setFiles(path, { timeoutMs: 10000 })") &&
+    fileChooserHelper.includes(
+      'String(input.value).replace(/^.*[\\\\/]/, "")',
+    ) &&
+    fileChooserHelper.includes("state?.multiple === false") &&
+    fileChooserHelper.includes(
+      "state.selectedFileName === expectedFileName",
+    ) &&
+    fileChooserHelper.includes("selectedState.multiple !== false") &&
+    fileChooserHelper.includes(
+      "selectedState.selectedFileName !== expectedFileName",
+    ) &&
+    !fileChooserHelper.includes("input.files") &&
+    fileChooserHelper.includes("lastInputState") &&
+    fileChooserHelper.includes("lastTransientErrors") &&
+    !fileChooserHelper.includes("setInputFiles") &&
+    (harness.match(/waitForEvent\("filechooser"/g) ?? []).length === 1 &&
+    fieldOperationsWorkflowSource.includes(
+      "'xpath=//*[@data-testid=\"field-photo-file-input\"]/ancestor::label[1]'",
+    ) &&
+    fieldOperationsWorkflowSource.includes(
+      "invalidPhotoPath,\n      \"field invalid photo chooser\"",
+    ),
+  "Browser file uploads use at most three fresh chooser-only attempts with exact transient handling, safe input diagnostics, and selected basename proof",
 );
 assert(
   harness.includes('"lead_accountability_events",\n      "operation_key",\n      runMarker') &&
@@ -682,13 +1056,26 @@ assert(
   "Owner-assignment browser polling reports the live error notification immediately instead of hiding it behind a persistence timeout",
 );
 assert(
-  accountabilityWorkflow.indexOf(
-    'await clickCompanyScope(tab, "All companies");',
-  ) > accountabilityWorkflow.indexOf("browser structured lost outcome persistence") &&
+  accountabilityWorkflow.includes(
+    "lead_accountability?select=outcome,lost_reason_code,lost_reason_notes,record_version",
+  ) &&
+    accountabilityWorkflow.includes(
+      "const lostOutcome = await clickEnabledUntilPersisted({",
+    ) &&
+    accountabilityWorkflow.includes(
+      "panelText.includes(`lost · version ${expected.recordVersion}`)",
+    ) &&
+    accountabilityWorkflow.includes("ownerButton?.disabled === false") &&
+    accountabilityWorkflow.includes("Lost outcome and reason recorded.") &&
     accountabilityWorkflow.indexOf(
-      'await clickCompanyScope(tab, "All companies");',
+      "browser structured lost outcome persistence",
     ) < accountabilityWorkflow.indexOf(
-      'await clickNav(tab, "Marketing Accountability");',
+      "lost accountability UI and snapshot settlement before Marketing navigation",
+    ) &&
+    accountabilityWorkflow.indexOf(
+      "lost accountability UI and snapshot settlement before Marketing navigation",
+    ) < accountabilityWorkflow.indexOf(
+      "await enterMarketingAccountabilityWorkspace(tab, companies);",
     ) &&
     accountabilityWorkflow.indexOf(
       'await clickCompanyScope(tab, "WeatherTech Roofing LLC");',
@@ -704,7 +1091,7 @@ assert(
         '"marketing dashboard and company-keyed forms IHC isolation"',
       ),
     ) < accountabilityWorkflow.indexOf('await clickNav(tab, "Customers");'),
-  "Accountability browser coverage loads All companies before Marketing so the IHC filter exists, then restores WeatherTech before Customer 360",
+  "Accountability browser coverage waits for the exact lost record version and idle UI before bounded All-companies Marketing entry, then restores WeatherTech before Customer 360",
 );
 assert(
   crmApp.includes(
@@ -814,8 +1201,37 @@ assert(
     ) &&
     estimatesWorkflowSource.includes(
       'errorPrefix: "Estimate creation was refused"',
-    ),
-  "Estimate browser coverage retries only while the submit remains enabled, stops on exact persistence, and surfaces the live UI error",
+    ) &&
+    estimatesWorkflowSource.includes(
+      'button[aria-label="Dismiss error notification"]',
+    ) &&
+    estimatesWorkflowSource.includes(
+      '"missing-customer estimate validation dismissal"',
+    ) &&
+    estimatesWorkflowSource.includes(
+      '"valid estimate associations and idle submit after negative validation"',
+    ) &&
+    estimatesWorkflowSource.includes(
+      "companySelect?.value === expected.companyId",
+    ) &&
+    estimatesWorkflowSource.includes(
+      "customerSelect?.value === expected.customerId",
+    ) &&
+    estimatesWorkflowSource.includes(
+      "selectedCustomer?.textContent?.trim() === expected.customerName",
+    ) &&
+    estimatesWorkflowSource.includes("leadSelect?.value === expected.leadId") &&
+    estimatesWorkflowSource.includes("submit?.disabled === false") &&
+    estimatesWorkflowSource.includes("!visibleError") &&
+    estimatesWorkflowSource.indexOf(
+      "missing-customer estimate validation dismissal",
+    ) < estimatesWorkflowSource.indexOf(
+      "valid estimate associations and idle submit after negative validation",
+    ) &&
+    estimatesWorkflowSource.indexOf(
+      "valid estimate associations and idle submit after negative validation",
+    ) < estimatesWorkflowSource.indexOf("const savedEstimate ="),
+  "Estimate browser coverage dismisses the expected negative alert, proves exact valid associations and an idle submit, then retries only until exact persistence while surfacing new live errors",
 );
 const leadIntakeWorkspaceSource = harness.slice(
   harness.indexOf("async function testLeadIntakeWorkspace"),
@@ -849,8 +1265,36 @@ assert(
     ),
   "CRM identity browser fixtures insert invariant-safe new leads, record exact audited contact events, and refetch fresh contacted versions before review",
 );
+const customersWorkflowSource = harness.slice(
+  harness.indexOf("async function testCustomersWorkflow"),
+  harness.indexOf("async function testEstimatesWorkflow"),
+);
+assert(
+  customersWorkflowSource.includes(
+    '"updated customer snapshot and idle UI before duplicate protection"',
+  ) &&
+    customersWorkflowSource.includes(
+      'profileSection?.querySelector("h3")?.textContent?.trim() === expected.name',
+    ) &&
+    customersWorkflowSource.includes("sectionText.includes(expected.contact)") &&
+    customersWorkflowSource.includes("sectionText.includes(expected.phone)") &&
+    customersWorkflowSource.includes("sectionText.includes(expected.email)") &&
+    customersWorkflowSource.includes("sectionText.includes(expected.address)") &&
+    customersWorkflowSource.includes("saveButton?.disabled === false") &&
+    customersWorkflowSource.includes("Customer updated.") &&
+    customersWorkflowSource.indexOf(
+      "updated customer snapshot and idle UI before duplicate protection",
+    ) < customersWorkflowSource.indexOf('"duplicate customer company"') &&
+    customersWorkflowSource.indexOf('"duplicate customer company"') <
+      customersWorkflowSource.indexOf('"duplicate customer protection"'),
+  "Customer duplicate coverage waits for the exact refreshed profile, normalized identity fields, success notice, and idle save control before exercising duplicate detection",
+);
 const websiteMarketingWorkflowSource = harness.slice(
   harness.indexOf("async function testWebsiteMarketingFoundation"),
+  harness.indexOf("function phoenixYearMonth"),
+);
+const marketingEntryHelperSource = harness.slice(
+  harness.indexOf("async function enterMarketingAccountabilityWorkspace"),
   harness.indexOf("function phoenixYearMonth"),
 );
 assert(
@@ -869,6 +1313,24 @@ assert(
     !websiteMarketingWorkflowSource.includes("read-only operating view"),
   "Website & Marketing browser coverage waits on the current accountability-plus-provider foundation instead of retired pre-sprint copy",
 );
+assert(
+  marketingEntryHelperSource.includes("attempt <= 2") &&
+    marketingEntryHelperSource.includes('await clickCompanyScope(tab, "All companies")') &&
+    marketingEntryHelperSource.includes('await clickNav(tab, "Marketing Accountability")') &&
+    marketingEntryHelperSource.includes('header button[aria-pressed="true"]') &&
+    marketingEntryHelperSource.includes('nav button[aria-current="page"]') &&
+    marketingEntryHelperSource.includes('[data-testid="website-marketing-foundation"]') &&
+    marketingEntryHelperSource.includes('[data-testid="marketing-accountability-workspace"]') &&
+    marketingEntryHelperSource.includes('[data-testid="marketing-accountability-company-filter"]') &&
+    marketingEntryHelperSource.includes("companies.weatherTech.id, companies.ihc.id") &&
+    marketingEntryHelperSource.includes("selectedHeaderScopes") &&
+    marketingEntryHelperSource.includes("hasShell") &&
+    marketingEntryHelperSource.includes("isLoading") &&
+    marketingEntryHelperSource.includes("isPreparing") &&
+    marketingEntryHelperSource.includes("activeNav") &&
+    marketingEntryHelperSource.includes("visibleError"),
+  "Marketing Accountability entry permits only two exact All-companies navigation attempts and requires settled scope, active nav, both workspaces, both company options, and structured terminal diagnostics",
+);
 const inspectionsWorkflowSource = harness.slice(
   harness.indexOf("async function testInspectionsWorkflow"),
   harness.indexOf("async function runUiMutationTests"),
@@ -883,6 +1345,63 @@ assert(
     ) < inspectionsWorkflowSource.indexOf('"new inspection form"') &&
     inspectionsWorkflowSource.includes("Create site inspection"),
   "Inspections browser coverage first proves the workspace, then explicitly opens and waits for the new-inspection form regardless of existing records",
+);
+assert(
+  inspectionsWorkflowSource.includes(
+    'const inspectionPhotoSubmitSelector =\n      \'[data-testid="inspection-photo-submit"]\';',
+  ) &&
+    inspectionsWorkflowSource.includes(
+      'scrollSelectorIntoView(\n      tab,\n      inspectionPhotoSubmitSelector,',
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'button.scrollIntoView({ block: "center", behavior: "auto" })',
+    ) &&
+    inspectionsWorkflowSource.includes(
+      '"upload secure inspection photo",\n      { retryTransientClick: true }',
+    ),
+  "Inspection photo coverage centers the exact submit control and retries only transient click translation failures",
+);
+assert(
+  inspectionsWorkflowSource.includes("attempt <= 2") &&
+    inspectionsWorkflowSource.includes("const inspectionBeforeAttempt =") &&
+    inspectionsWorkflowSource.includes(
+      "inspectionBeforeAttempt?.id !== savedInspection.id",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'inspectionBeforeAttempt.status === "canceled"',
+    ) &&
+    inspectionsWorkflowSource.includes("cancelConfirmSelector") &&
+    inspectionsWorkflowSource.includes("lastCancelState.dialogCount !== 1") &&
+    inspectionsWorkflowSource.includes("lastCancelState.buttonCount !== 1") &&
+    inspectionsWorkflowSource.includes("lastCancelState.buttonInDialog") &&
+    inspectionsWorkflowSource.includes("await clickVisibleDomButtonByText(") &&
+    inspectionsWorkflowSource.includes('"Confirm cancel"') &&
+    inspectionsWorkflowSource.includes(
+      "expectedActivationTimeout",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      "error.message.startsWith(expectedActivationTimeout)",
+    ) &&
+    inspectionsWorkflowSource.includes("lastCancelActivationError") &&
+    inspectionsWorkflowSource.includes("lastCancelState.buttonEnabled") &&
+    inspectionsWorkflowSource.includes(
+      'lastCancelState.buttonText !== "Confirm cancel"',
+    ) &&
+    inspectionsWorkflowSource.includes("lastCancelState.errorText") &&
+    inspectionsWorkflowSource.includes(
+      "`inspection canceled persistence attempt ${attempt}`",
+    ) &&
+    inspectionsWorkflowSource.includes("expectedId: savedInspection.id") &&
+    inspectionsWorkflowSource.includes("hasSavingButton") &&
+    inspectionsWorkflowSource.includes("noticeText") &&
+    inspectionsWorkflowSource.includes("errorText") &&
+    inspectionsWorkflowSource.indexOf("if (!canceledInspection)") <
+      inspectionsWorkflowSource.indexOf(
+        'document.body.innerText.includes("Inspection canceled.")',
+      ) &&
+    inspectionsWorkflowSource.includes('"canceled inspections filter"') &&
+    inspectionsWorkflowSource.includes('"inspection restored persistence"'),
+  "Inspection cancellation performs at most two exact dialog-scoped visible-coordinate activations, pre-reads and preserves the exact row identity, retries only from a safe dialog state, and retains notice/filter/restore proof with terminal diagnostics",
 );
 for (const testId of [
   "marketing-accountability-workspace",

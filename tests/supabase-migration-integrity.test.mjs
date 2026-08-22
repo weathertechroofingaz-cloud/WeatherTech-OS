@@ -180,6 +180,14 @@ const expectedMigrations = [
     "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
     "8c976c8cd21f123e5abca4e5987e4a67301091a108044698ed610e99faea2250",
   ],
+  [
+    "20260818030913_secure_company_scoped_job_photos.sql",
+    "eb886e55277c87893d9aaed6affc54f43680235dd6f35e3230d84b47150ed0e3",
+  ],
+  [
+    "20260822054433_job_photo_storage_rollback_retry_correction.sql",
+    "74a3a130c17e0e8a84f9a1b5dcc544b0c8ea348a98b0f287cc10ca6e7aeeafdb",
+  ],
 ];
 
 const files = fs
@@ -298,6 +306,12 @@ const leadAccountabilityStaleErrorHardeningIndex = files.indexOf(
 const leadAccountabilityIdempotencyIntegrityHardeningIndex = files.indexOf(
   "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
 );
+const secureCompanyScopedJobPhotosIndex = files.indexOf(
+  "20260818030913_secure_company_scoped_job_photos.sql",
+);
+const jobPhotoStorageRollbackRetryCorrectionIndex = files.indexOf(
+  "20260822054433_job_photo_storage_rollback_retry_correction.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -401,6 +415,8 @@ if (
   leadAttributionAccountabilityIndex === -1 ||
   leadAccountabilityStaleErrorHardeningIndex === -1 ||
   leadAccountabilityIdempotencyIntegrityHardeningIndex === -1 ||
+  secureCompanyScopedJobPhotosIndex === -1 ||
+  jobPhotoStorageRollbackRetryCorrectionIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -420,12 +436,16 @@ if (
     mightyApesYelpAuditLockPrivilegeIndex < leadAttributionAccountabilityIndex &&
     leadAttributionAccountabilityIndex < leadAccountabilityStaleErrorHardeningIndex &&
     leadAccountabilityStaleErrorHardeningIndex <
-      leadAccountabilityIdempotencyIntegrityHardeningIndex
+      leadAccountabilityIdempotencyIntegrityHardeningIndex &&
+    leadAccountabilityIdempotencyIntegrityHardeningIndex <
+      secureCompanyScopedJobPhotosIndex &&
+    secureCompanyScopedJobPhotosIndex <
+      jobPhotoStorageRollbackRetryCorrectionIndex
   ) ||
-  leadAccountabilityIdempotencyIntegrityHardeningIndex !== files.length - 1
+  jobPhotoStorageRollbackRetryCorrectionIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, with stale-error then idempotency/integrity hardening last.",
+    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, whose hardening migrations must precede secure company-scoped job photos and its correction last.",
   );
 }
 
@@ -442,6 +462,147 @@ for (const file of files) {
 
   if (sha256 !== expectedHash) {
     failures.push(`${file} SQL hash changed: expected ${expectedHash}, received ${sha256}.`);
+  }
+}
+
+const secureCompanyScopedJobPhotosMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260818030913_secure_company_scoped_job_photos.sql",
+  ),
+  "utf8",
+);
+const jobPhotoStorageRollbackRetryCorrectionMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260822054433_job_photo_storage_rollback_retry_correction.sql",
+  ),
+  "utf8",
+);
+const normalizedJobPhotoStorageRollbackRetryCorrection =
+  jobPhotoStorageRollbackRetryCorrectionMigration
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+if (
+  !normalizedJobPhotoStorageRollbackRetryCorrection.startsWith("begin;") ||
+  !normalizedJobPhotoStorageRollbackRetryCorrection.endsWith("commit;")
+) {
+  failures.push(
+    "Job-photo Storage rollback/retry correction must execute as one transaction.",
+  );
+}
+
+if (
+  /\b(?:create|alter|drop)\s+table\b/i.test(
+    jobPhotoStorageRollbackRetryCorrectionMigration,
+  ) ||
+  /\b(?:add|drop|alter)\s+column\b/i.test(
+    jobPhotoStorageRollbackRetryCorrectionMigration,
+  ) ||
+  /\b(?:insert\s+into|update|delete\s+from|truncate)\s+(?:public\.|storage\.)/i.test(
+    jobPhotoStorageRollbackRetryCorrectionMigration,
+  )
+) {
+  failures.push(
+    "Job-photo Storage rollback/retry correction must not change schema or mutate business/Storage data.",
+  );
+}
+
+for (const correctionContract of [
+  'create policy "wtos users select own rollback job photo deletes" on storage.objects for select to authenticated',
+  "bucket_id = 'job-photos'",
+  "storage.allow_any_operation( array[ 'storage.object.delete', 'storage.object.delete_many' ] )",
+  "public.wtos_can_rollback_job_photo_object(name, owner_id)",
+]) {
+  if (!normalizedJobPhotoStorageRollbackRetryCorrection.includes(correctionContract)) {
+    failures.push(
+      `Job-photo Storage rollback/retry correction must retain ${correctionContract}.`,
+    );
+  }
+}
+
+if (
+  normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+    "storage.object.list",
+  ) ||
+  normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+    "storage.object.get",
+  ) ||
+  normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+    "object.get_authenticated",
+  )
+) {
+  failures.push(
+    "Job-photo rollback SELECT policy must not authorize ordinary list/read/download operations.",
+  );
+}
+
+for (const wrapperName of [
+  "wtos_begin_job_photo_upload",
+  "wtos_confirm_job_photo_upload_abort",
+  "wtos_claim_job_photo_upload_recovery",
+  "wtos_confirm_job_photo_upload_recovery_abort",
+  "wtos_expire_job_photo_upload_recovery_lease",
+]) {
+  if (
+    !normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+      `rename to ${wrapperName}_phase1_base`,
+    ) ||
+    !normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+      `revoke all on function public.${wrapperName}_phase1_base`,
+    ) ||
+    !normalizedJobPhotoStorageRollbackRetryCorrection.includes(
+      `create function public.${wrapperName}`,
+    )
+  ) {
+    failures.push(
+      `Job-photo correction must preserve ${wrapperName} under a revoked private base and recreate its public wrapper.`,
+    );
+  }
+}
+
+if (
+  (jobPhotoStorageRollbackRetryCorrectionMigration.match(
+    /when\s+serialization_failure\s+then/gi,
+  ) ?? []).length !== 5 ||
+  (jobPhotoStorageRollbackRetryCorrectionMigration.match(
+    /errcode\s*=\s*'P0001'/gi,
+  ) ?? []).length !== 5 ||
+  (jobPhotoStorageRollbackRetryCorrectionMigration.match(/^\s*raise;\s*$/gim) ?? [])
+    .length !== 5 ||
+  /errcode\s*=\s*'40001'/i.test(
+    jobPhotoStorageRollbackRetryCorrectionMigration,
+  ) ||
+  /when\s+others/i.test(jobPhotoStorageRollbackRetryCorrectionMigration)
+) {
+  failures.push(
+    "Job-photo wrappers must translate only exact semantic 40001 messages to P0001 and bare-rethrow genuine serialization failures.",
+  );
+}
+
+if (
+  /pg_catalog\.substring\([^)]*\bfrom\b/i.test(
+    secureCompanyScopedJobPhotosMigration,
+  ) ||
+  /pg_catalog\.(?:coalesce|nullif|trim|overlay|position|extract)\b/i.test(
+    secureCompanyScopedJobPhotosMigration,
+  )
+) {
+  failures.push(
+    "Secure job-photo SQL must not schema-qualify PostgreSQL special-expression syntax.",
+  );
+}
+
+for (const parserSafeSubstring of [
+  "pg_catalog.substring(object_filename, 37, 1)",
+  "pg_catalog.substring(object_filename, 1, 36)::uuid",
+]) {
+  if (!secureCompanyScopedJobPhotosMigration.includes(parserSafeSubstring)) {
+    failures.push(
+      `Secure job-photo SQL must retain parser-safe ${parserSafeSubstring}.`,
+    );
   }
 }
 
@@ -2807,6 +2968,9 @@ console.log(
 );
 console.log(
   "Verified Lead Attribution & Marketing Accountability Phase 1 additive schema, immutable non-PII ledger, fixed-search-path RPCs, strict company isolation, first-touch locks, lifecycle chronology, optimistic concurrency, Phoenix reporting, no-backfill contract, and narrow synthetic cleanup privileges.",
+);
+console.log(
+  "Verified secure company-scoped job photos and its rollback/retry correction are the final registered migrations with exact approved SQL hashes.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

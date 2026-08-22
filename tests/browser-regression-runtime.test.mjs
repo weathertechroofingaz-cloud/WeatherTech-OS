@@ -114,6 +114,14 @@ assertEqual(
   "The focused lead-accountability group is allowed without changing full-run defaults",
 );
 assertEqual(
+  resolveBrowserRegressionGroups({
+    groups: ["job-photos"],
+    fullRun: false,
+  }).groups[0],
+  "job-photos",
+  "The focused private job-photo group is allowed without changing full-run defaults",
+);
+assertEqual(
   DEFAULT_BROWSER_REGRESSION_GROUPS.length,
   24,
   "The reconciliation scenario does not increase the established full-run group count",
@@ -366,7 +374,7 @@ assert(
   !harness.includes("document.cookie") &&
     !harness.includes("localStorage") &&
     !harness.includes("sessionStorage"),
-  "Authentication does not inspect browser cookies or session storage",
+  "Authentication and recovery coverage never inspect cookies or browser storage",
 );
 assert(
   harness.includes("assertionCount: results.length") &&

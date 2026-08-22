@@ -115,6 +115,292 @@ assert.match(source, /command: "lifecycle-probe"/);
 assert.match(source, /const id = randomUUID\(\)/);
 assert.match(source, /restDeleteExactId\(config, fetchImpl, "notifications", id\)/);
 assert.match(source, /exactIdCleanupVerified: true/);
+assert.match(
+  source,
+  /jobPhotoStorageLifecycleProbe\(config, fetchImpl, companies\)/,
+  "Hosted lifecycle executes the private job-photo security probe on the guarded regression target",
+);
+assert.match(
+  source,
+  /property_address: "123 TEST Job Photo Regression Way, Phoenix, AZ"/,
+  "Hosted lifecycle supplies the required synthetic job property address before secure photo validation",
+);
+assert.match(
+  source,
+  /jobPhotoBucket\.public !== false/,
+  "Hosted lifecycle refuses a public job-photos bucket",
+);
+for (const expectedBoundary of [
+  "WeatherTech-to-IHC upload",
+  "IHC-to-WeatherTech upload",
+  "Anonymous job-photo upload",
+  "WeatherTech-to-IHC private download",
+  "IHC-to-WeatherTech private download",
+  "WeatherTech-to-IHC signed URL",
+  "IHC-to-WeatherTech signed URL",
+  "WeatherTech-to-IHC registered private update",
+  "IHC-to-WeatherTech registered private update",
+  "Anonymous registered private update",
+  "WeatherTech-to-IHC metadata registration",
+  "IHC-to-WeatherTech metadata registration",
+]) {
+  assert.match(
+    source,
+    new RegExp(expectedBoundary),
+    `Hosted lifecycle proves company isolation at ${expectedBoundary}`,
+  );
+}
+assert.match(
+  source,
+  /Private job photo remained retrievable through a durable public URL/,
+  "Hosted lifecycle proves durable public object retrieval is denied",
+);
+assert.match(
+  source,
+  /Exact WeatherTech registration retry created duplicate metadata/,
+  "Hosted lifecycle proves exact metadata retries converge",
+);
+assert.match(
+  source,
+  /Concurrent identical registration did not converge to one URL-free metadata row/,
+  "Hosted lifecycle proves concurrent identical RPC retries converge to one URL-free row",
+);
+assert.match(
+  source,
+  /WeatherTech pre-registration private download/,
+  "Hosted lifecycle proves an uploaded object remains unreadable before exact metadata registration",
+);
+assert.match(
+  source,
+  /WeatherTech pre-registration signed URL/,
+  "Hosted lifecycle proves an uploaded object cannot be signed before exact metadata registration",
+);
+assert.match(
+  source,
+  /An unregistered job-photo object was visible in an authorized list/,
+  "Hosted lifecycle proves an uploaded object remains unlistable before exact metadata registration",
+);
+assert.match(
+  source,
+  /Authorized job-photo signed URL did not preserve the requested short expiry bound/,
+  "Hosted lifecycle validates signed-token expiry against the requested short TTL without waiting for expiry",
+);
+assert.match(
+  source,
+  /A refused registered-object update altered private photo bytes/,
+  "Hosted lifecycle proves registered photo bytes remain immutable after own-company and cross-company update attempts",
+);
+assert.match(
+  source,
+  /\.remove\(\[ihcPath\]\)/,
+  "Hosted lifecycle attempts WeatherTech-to-IHC delete and verifies the object remains",
+);
+assert.match(
+  source,
+  /\.remove\(\[weatherTechPath\]\)/,
+  "Hosted lifecycle attempts IHC-to-WeatherTech delete and verifies the object remains",
+);
+assert.match(
+  source,
+  /Cancel before delayed-late upload/,
+  "Hosted lifecycle durably tombstones an upload before exercising delayed transport",
+);
+assert.match(
+  source,
+  /Delayed-late Storage upload after cancellation/,
+  "Hosted lifecycle proves delayed Storage INSERT is denied after cancellation wins",
+);
+assert.match(
+  source,
+  /Concurrent upload-cancel race left object or metadata residue/,
+  "Hosted lifecycle races upload against cancel and requires a fully aborted zero-residue result",
+);
+assert.match(
+  source,
+  /Register-cancel race reached invalid state/,
+  "Hosted lifecycle races register against cancel and accepts only committed or canceling terminal paths",
+);
+assert.match(
+  source,
+  /Aborted register-cancel race left an orphan or dangling metadata row/,
+  "Hosted lifecycle proves the canceled registration race cannot leave an orphan or dangling row",
+);
+assert.match(
+  source,
+  /Aborted operation exact retry changed durable identity/,
+  "Hosted lifecycle proves exact retries converge on one terminal aborted reservation",
+);
+assert.match(
+  source,
+  /Changed-fingerprint aborted reservation replay/,
+  "Hosted lifecycle refuses a changed payload after terminal abort",
+);
+assert.match(
+  source,
+  /Revoked uploader exact reservation replay/,
+  "Hosted lifecycle allows only the immutable uploader to recover an existing reservation after role revocation",
+);
+for (const revokedBoundary of [
+  "Revoked uploader new reservation",
+  "Revoked uploader new Storage upload",
+  "Revoked uploader unregistered object read",
+  "Revoked uploader unregistered object signed URL",
+  "Revoked uploader metadata registration",
+  "Revoked uploader cancellation of another operation",
+  "Revoked uploader cross-company cancellation",
+  "Revoked original-uploader recovery",
+]) {
+  assert.match(
+    source,
+    new RegExp(revokedBoundary),
+    `Hosted lifecycle covers revoked-role boundary: ${revokedBoundary}`,
+  );
+}
+assert.match(
+  source,
+  /Revoked original uploader did not finish an exact zero-object abort/,
+  "Hosted lifecycle proves revoked-role recovery can only clean its own unregistered object",
+);
+assert.match(
+  source,
+  /Revoked uploader removed another user's or company's registered object/,
+  "Hosted lifecycle proves recovery authority cannot delete another uploader's or company's registered object",
+);
+assert.match(
+  source,
+  /target_recovery_lease_token: recoveryLeaseToken/,
+  "Hosted lifecycle binds every durable upload operation to an explicit browser recovery lease token",
+);
+assert.match(
+  source,
+  /Heartbeat active WeatherTech upload reservation/,
+  "Hosted lifecycle heartbeats a live upload by replaying the exact operation and recovery token",
+);
+for (const leaseBoundary of [
+  "Different-token active reservation heartbeat",
+  "Different-token active recovery claim",
+  "Prior-token heartbeat after lease recovery rotation",
+]) {
+  assert.match(
+    source,
+    new RegExp(leaseBoundary),
+    `Hosted lifecycle requires PostgreSQL 55P03 at active lease boundary: ${leaseBoundary}`,
+  );
+}
+assert.match(
+  source,
+  /List WeatherTech upload recoveries without PII/,
+  "Hosted lifecycle lists only the current uploader's recoverable operations",
+);
+assert.match(
+  source,
+  /JSON\.stringify\(recoveryListKeys\)[\s\S]*?"company_id",[\s\S]*?"lease_expires_at",[\s\S]*?"state",[\s\S]*?"upload_operation_key",[\s\S]*?"uploader_user_id"/,
+  "Hosted lifecycle permits only the five non-PII recovery-list fields",
+);
+for (const expiryBoundary of [
+  "Authenticated recovery lease expiry",
+  "Service-role recovery lease expiry with wrong uploader",
+  "Service-role exact recovery lease expiry",
+  "Service-role expiry of terminal recovery lease",
+]) {
+  assert.match(
+    source,
+    new RegExp(expiryBoundary),
+    `Hosted lifecycle covers exact service-role lease-expiry boundary: ${expiryBoundary}`,
+  );
+}
+assert.ok(
+  source.indexOf("Service-role exact recovery lease expiry") <
+      source.indexOf("Claim expired interrupted upload") &&
+    source.indexOf("Claim expired interrupted upload") <
+      source.indexOf("Promptly refuse claimed interrupted upload abort with residue") &&
+    source.indexOf("Promptly refuse claimed interrupted upload abort with residue") <
+      source.indexOf("Remove exact claimed interrupted upload object") &&
+    source.indexOf("Remove exact claimed interrupted upload object") <
+      source.indexOf("Confirm claimed interrupted upload abort"),
+  "Hosted lifecycle expires an exact lease, claims recovery, proves prompt residue refusal, removes the exact object, then confirms abort",
+);
+assert.match(
+  source,
+  /Expired-lease recovery did not converge to an idempotent, unlisted, zero-object abort/,
+  "Hosted lifecycle proves claimed recovery reaches an idempotent terminal state with no object or list residue",
+);
+assert.match(
+  source,
+  /const JOB_PHOTO_NONRETRYABLE_REFUSAL_MAX_MS = 10_000/,
+  "Hosted lifecycle bounds deterministic residue refusal latency well below the PostgREST serialization retry window",
+);
+assert.match(
+  source,
+  /const requirePromptJobPhotoResidueRefusal = async \([\s\S]*?const startedAt = Date\.now\(\)[\s\S]*?requireSupabaseErrorCode\(await operation\(\), "P0001", label\)[\s\S]*?Date\.now\(\) - startedAt[\s\S]*?JOB_PHOTO_NONRETRYABLE_REFUSAL_MAX_MS/,
+  "Hosted lifecycle requires exact non-retryable P0001 residue semantics and a prompt response",
+);
+assert.match(
+  source,
+  /const removeExactStorageObject = async \([\s\S]*?\.remove\(\[path\]\)[\s\S]*?removedObjects\.length !== 1[\s\S]*?removedObjects\[0\]\?\.name !== path[\s\S]*?await objectExists\(path\)/,
+  "Hosted lifecycle accepts no empty or wrong-path Storage removal and proves service-role absence before confirmation",
+);
+assert.match(
+  source,
+  /const objectExists = async \(path\) => \{[\s\S]*?serviceClient\.storage\.from\(JOB_PHOTO_BUCKET\)\.exists\(path\)[\s\S]*?result\.data === true && !result\.error[\s\S]*?result\.data === false[\s\S]*?\[400, 404\]\.includes\(Number\(result\.error\.status\)\)[\s\S]*?if \(result\.error\)[\s\S]*?did not return a recognized boolean result/,
+  "Privileged object existence accepts only exact success or the Storage SDK's explicit missing-object response and fails closed otherwise",
+);
+const ordinaryCancellationSource = source.slice(
+  source.indexOf("const cancelRemoveAndConfirmAbort"),
+  source.indexOf("const buildScenario"),
+);
+assert.ok(
+  ordinaryCancellationSource.indexOf(
+    "const hasExactObjectResidue = await objectExists(path)",
+  ) < ordinaryCancellationSource.indexOf("requirePromptJobPhotoResidueRefusal(") &&
+    ordinaryCancellationSource.includes(
+      '() => client.rpc("wtos_confirm_job_photo_upload_abort", args)',
+    ) &&
+    ordinaryCancellationSource.indexOf("requirePromptJobPhotoResidueRefusal(") <
+      ordinaryCancellationSource.indexOf("removeExactStorageObject(") &&
+    ordinaryCancellationSource.indexOf("removeExactStorageObject(") <
+      ordinaryCancellationSource.indexOf("retryExactSupabaseRpc("),
+  "Ordinary cancellation proves exact residue refusal, removes and verifies the object, then confirms terminal abort",
+);
+assert.match(
+  source,
+  /requirePromptJobPhotoResidueRefusal\(\s*\(\) =>\s*weatherTechIdentity\.client\.rpc\(\s*"wtos_confirm_job_photo_upload_recovery_abort",\s*recoveryClaimArgs,[\s\S]*?removeExactStorageObject\(\s*weatherTechIdentity\.client,\s*interruptedRecovery\.path,[\s\S]*?retryExactSupabaseRpc\(\s*\(\) =>\s*weatherTechIdentity\.client\.rpc\(\s*"wtos_confirm_job_photo_upload_recovery_abort"/,
+  "Recovery cancellation proves exact P0001 residue refusal before exact removal and terminal confirmation",
+);
+assert.match(
+  source,
+  /async function retryExactSupabaseRpc\([\s\S]*?maxAttempts = 3[\s\S]*?readConvergedResult[\s\S]*?setTimeout\(resolve, attempt \* 250\)/,
+  "Hosted lifecycle bounds idempotent confirmation transport retries to three attempts with stable backoff",
+);
+assert.ok(
+  source.indexOf("const convergedResult = await readConvergedResult()") <
+      source.indexOf("setTimeout(resolve, attempt * 250)") &&
+    source.includes('"wtos_begin_job_photo_upload",\n                args') &&
+    source.includes('"wtos_claim_job_photo_upload_recovery",\n              recoveryClaimArgs'),
+  "Hosted confirmation retry reads the exact durable operation or recovery state before sending duplicate confirmation traffic",
+);
+assert.match(
+  source,
+  /Remove exact job-photo lifecycle objects before metadata/,
+  "Hosted lifecycle removes exact Storage objects before exact metadata cleanup",
+);
+assert.ok(
+  source.indexOf("Remove exact job-photo lifecycle objects before metadata") <
+      source.indexOf("Delete exact job-photo lifecycle metadata after Storage cleanup") &&
+    source.indexOf("Delete exact job-photo lifecycle metadata after Storage cleanup") <
+      source.indexOf("Delete exact job-photo upload operations after metadata cleanup"),
+  "Hosted lifecycle cleanup removes Storage objects, metadata, then durable operation rows in dependency order",
+);
+assert.match(
+  source,
+  /Exact job-photo lifecycle cleanup left an upload operation behind/,
+  "Hosted lifecycle independently proves zero durable upload-operation residue",
+);
+assert.match(
+  source,
+  /customerDocumentContract\(customerDocumentBucketBefore\)/,
+  "Hosted lifecycle proves the customer-documents bucket contract is unchanged",
+);
 assert.match(source, /auth\/v1\/logout\?scope=local/);
 assert.match(
   source,
@@ -130,6 +416,11 @@ assert.match(
   source,
   /\["lead_accountability_events", "operation_key"\]/,
   "Lead-accountability operation markers participate in zero-residue verification",
+);
+assert.match(
+  source,
+  /\["job_photo_upload_operations", "file_path", "\*"\]/,
+  "The isolated regression project requires zero durable job-photo upload operations",
 );
 assert.match(
   source,

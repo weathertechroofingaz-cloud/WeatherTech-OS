@@ -178,7 +178,8 @@ jobs:
           {
             echo '### Non-production lifecycle'
             echo
-            echo 'The approved isolated Supabase target passed identity, synthetic-owner, provider-isolation, exact-ID write/read/delete, and zero-residue verification.'
+            echo 'The approved isolated Supabase target passed identity, synthetic-user, provider-isolation, exact-ID notification lifecycle, private job-photo isolation/idempotency/reservation-cancellation races, recovery-lease arbitration, and zero-residue verification.'
+            echo 'Job-photo cleanup removed only captured exact Storage paths before their exact metadata and durable operation rows.'
             echo 'No Stripe or external-provider operation was performed.'
             echo 'This lifecycle probe is not the 24-group Codex Browser pass.'
           } >> "$GITHUB_STEP_SUMMARY"

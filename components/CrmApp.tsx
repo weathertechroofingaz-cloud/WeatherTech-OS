@@ -1,7 +1,6 @@
 "use client";
 
 import type { SupabaseClient, User } from "@supabase/supabase-js";
-import Image from "next/image";
 import StripeInvoicePayment from "./StripeInvoicePayment";
 import StripeInvoiceRefund from "./StripeInvoiceRefund";
 import {
@@ -80,6 +79,14 @@ import {
   createJobAssignment,
   createJob,
   createJobPhoto,
+  getJobPhotoFileSignedUrl,
+  getJobPhotoRecoveryLeaseToken,
+  heartbeatJobPhotoUploadAttempt,
+  isJobPhotoUploadAttemptAbortedError,
+  isJobPhotoRecoverySchemaUnavailable,
+  listMyJobPhotoUploadRecoveries,
+  prepareJobPhotoUploadAttempt,
+  settleJobPhotoUploadRecovery,
   createJobTask,
   deleteJobTask,
   createAccountableLead,
@@ -126,6 +133,8 @@ import {
   upsertMarketingCampaign,
   upsertMarketingSpend,
   upsertCalendarEventSync,
+  type ActiveJobPhotoUpload,
+  type JobPhotoUploadAttempt,
 } from "../lib/crm/repository";
 import {
   attributionSourceLabels,
@@ -470,6 +479,7 @@ import type {
   JobMaterialInput,
   JobNoteInput,
   JobNoteRecord,
+  JobPhotoInput,
   JobPhotoRecord,
   JobRecord,
   JobStatus,
@@ -6131,6 +6141,49 @@ function AuthPoint({ label }: { label: string }) {
   );
 }
 
+type JobPhotoRecoveryUiState =
+  | "idle"
+  | "active"
+  | "checking"
+  | "recovering"
+  | "waiting"
+  | "blocked"
+  | "unavailable"
+  | "error";
+
+const JOB_PHOTO_RECOVERY_POLL_INTERVAL_MS = 30_000;
+
+function getActiveJobPhotoUploadKey(
+  upload: Pick<ActiveJobPhotoUpload, "attempt">,
+) {
+  const canonicalCompanyId = upload.attempt.filePath.split("/", 1)[0] ?? "";
+  return getJobPhotoUploadIdentityKey(
+    canonicalCompanyId,
+    upload.attempt.operationKey,
+  );
+}
+
+function getJobPhotoUploadIdentityKey(
+  companyId: string,
+  operationKey: string,
+) {
+  return `${companyId.trim().toLowerCase()}:${operationKey
+    .trim()
+    .toLowerCase()}`;
+}
+
+type JobPhotoUploadLifecycleProps = {
+  onJobPhotoUploadActive: (upload: ActiveJobPhotoUpload) => void;
+  onJobPhotoUploadInactive: (
+    companyId: string,
+    operationKey: string,
+  ) => void;
+  onJobPhotoUploadSettled: (
+    companyId: string,
+    operationKey: string,
+  ) => void;
+};
+
 type CrmWorkspaceProps = {
   client: CrmClient;
   isDemoMode: boolean;
@@ -6182,6 +6235,181 @@ function CrmWorkspace({
   const [recentCommandPaletteIds, setRecentCommandPaletteIds] = useState<string[]>(
     readCommandPaletteRecentIds,
   );
+  const activeJobPhotoUploadsRef = useRef(
+    new Map<string, ActiveJobPhotoUpload>(),
+  );
+  const jobPhotoRecoveryCycleInFlightRef = useRef(false);
+  const jobPhotoRecoveryLeaseTokenRef = useRef<string | null>(null);
+  const jobPhotoRecoveryNoticeRef = useRef(onNotice);
+  const jobPhotoRecoveryReloadRef = useRef(onScrollPreservingReload);
+  const [jobPhotoRecoveryState, setJobPhotoRecoveryState] =
+    useState<JobPhotoRecoveryUiState>("idle");
+  const [jobPhotoRecoveryScanVersion, setJobPhotoRecoveryScanVersion] =
+    useState(0);
+  const markJobPhotoUploadActive = useCallback(
+    (upload: ActiveJobPhotoUpload) => {
+      activeJobPhotoUploadsRef.current.set(
+        getActiveJobPhotoUploadKey(upload),
+        upload,
+      );
+      setJobPhotoRecoveryState("active");
+    },
+    [],
+  );
+  const markJobPhotoUploadInactive = useCallback(
+    (companyId: string, operationKey: string) => {
+      activeJobPhotoUploadsRef.current.delete(
+        getJobPhotoUploadIdentityKey(companyId, operationKey),
+      );
+      setJobPhotoRecoveryScanVersion((current) => current + 1);
+    },
+    [],
+  );
+  const markJobPhotoUploadSettled = useCallback(
+    (companyId: string, operationKey: string) => {
+      activeJobPhotoUploadsRef.current.delete(
+        getJobPhotoUploadIdentityKey(companyId, operationKey),
+      );
+      setJobPhotoRecoveryScanVersion((current) => current + 1);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    jobPhotoRecoveryNoticeRef.current = onNotice;
+    jobPhotoRecoveryReloadRef.current = onScrollPreservingReload;
+  }, [onNotice, onScrollPreservingReload]);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setJobPhotoRecoveryState("idle");
+      return;
+    }
+
+    let isDisposed = false;
+
+    const runJobPhotoRecoveryCycle = async () => {
+      if (jobPhotoRecoveryCycleInFlightRef.current || isDisposed) {
+        return;
+      }
+
+      jobPhotoRecoveryCycleInFlightRef.current = true;
+      let recoveredInterruptedUpload = false;
+      let recoveredCommittedUpload = false;
+      let activeElsewhere = false;
+      let cycleError: unknown = null;
+
+      try {
+        try {
+          jobPhotoRecoveryLeaseTokenRef.current ??=
+            await getJobPhotoRecoveryLeaseToken();
+        } catch {
+          setJobPhotoRecoveryState("blocked");
+          return;
+        }
+        const recoveryLeaseToken = jobPhotoRecoveryLeaseTokenRef.current;
+        const activeUploads = Array.from(
+          activeJobPhotoUploadsRef.current.values(),
+        );
+
+        if (!activeUploads.length) {
+          setJobPhotoRecoveryState("checking");
+        }
+
+        for (const upload of activeUploads) {
+          try {
+            await heartbeatJobPhotoUploadAttempt(client, upload);
+          } catch (currentError) {
+            if (isJobPhotoRecoverySchemaUnavailable(currentError)) {
+              setJobPhotoRecoveryState("unavailable");
+              return;
+            }
+
+            cycleError ??= currentError;
+          }
+        }
+
+        let recoveries;
+
+        try {
+          recoveries = await listMyJobPhotoUploadRecoveries(client);
+        } catch (currentError) {
+          if (isJobPhotoRecoverySchemaUnavailable(currentError)) {
+            setJobPhotoRecoveryState("unavailable");
+            return;
+          }
+
+          throw currentError;
+        }
+
+        for (const recovery of recoveries) {
+          const recoveryKey = getJobPhotoUploadIdentityKey(
+            recovery.company_id,
+            recovery.upload_operation_key,
+          );
+
+          if (activeJobPhotoUploadsRef.current.has(recoveryKey)) {
+            continue;
+          }
+
+          setJobPhotoRecoveryState("recovering");
+
+          try {
+            const result = await settleJobPhotoUploadRecovery(
+              client,
+              recovery,
+              recoveryLeaseToken,
+            );
+
+            if (result.status === "active_elsewhere") {
+              activeElsewhere = true;
+            } else if (result.status === "aborted") {
+              recoveredInterruptedUpload = true;
+            } else {
+              recoveredCommittedUpload = true;
+            }
+          } catch (currentError) {
+            cycleError ??= currentError;
+          }
+        }
+
+        if (recoveredCommittedUpload) {
+          await jobPhotoRecoveryReloadRef.current();
+        }
+
+        if (recoveredInterruptedUpload) {
+          jobPhotoRecoveryNoticeRef.current(
+            "An interrupted secure photo upload was cleaned up safely.",
+          );
+        }
+
+        if (cycleError) {
+          setJobPhotoRecoveryState("error");
+        } else if (activeElsewhere) {
+          setJobPhotoRecoveryState("waiting");
+        } else if (activeJobPhotoUploadsRef.current.size) {
+          setJobPhotoRecoveryState("active");
+        } else {
+          setJobPhotoRecoveryState("idle");
+        }
+      } catch {
+        setJobPhotoRecoveryState("error");
+      } finally {
+        jobPhotoRecoveryCycleInFlightRef.current = false;
+      }
+    };
+
+    void runJobPhotoRecoveryCycle();
+    const recoveryInterval = window.setInterval(
+      () => void runJobPhotoRecoveryCycle(),
+      JOB_PHOTO_RECOVERY_POLL_INTERVAL_MS,
+    );
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(recoveryInterval);
+    };
+  }, [client, isDemoMode, jobPhotoRecoveryScanVersion]);
   const companyMap = useMemo(
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
@@ -6450,6 +6678,32 @@ function CrmWorkspace({
 
           {notice ? <Message tone="success" message={notice} /> : null}
           {error ? <Message tone="error" message={error} /> : null}
+          <div
+            data-testid="job-photo-recovery-status"
+            data-state={jobPhotoRecoveryState}
+            aria-live="polite"
+            className={
+              jobPhotoRecoveryState === "waiting"
+                ? "rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-900"
+                : jobPhotoRecoveryState === "recovering"
+                  ? "rounded-lg border border-sky-300 bg-sky-50 p-3 text-sm font-semibold text-sky-900"
+                  : jobPhotoRecoveryState === "error"
+                  ? "rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-900"
+                  : jobPhotoRecoveryState === "blocked"
+                    ? "rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-900"
+                    : "hidden"
+            }
+          >
+            {jobPhotoRecoveryState === "waiting"
+              ? "A secure photo upload is active in another tab. WeatherTech OS will recover it automatically if that tab closes."
+              : jobPhotoRecoveryState === "recovering"
+                ? "Safely recovering an interrupted photo upload."
+                : jobPhotoRecoveryState === "error"
+                  ? "Secure photo recovery is still pending. Keep this workspace open while WeatherTech OS retries."
+                  : jobPhotoRecoveryState === "blocked"
+                    ? "This browser cannot establish safe photo-recovery ownership, so secure photo uploads are blocked."
+                  : ""}
+          </div>
 
           {view === "dashboard" ? (
             <DashboardView
@@ -6492,6 +6746,9 @@ function CrmWorkspace({
               onViewChange={onViewChange}
               onNotice={onNotice}
               onError={onError}
+              onJobPhotoUploadActive={markJobPhotoUploadActive}
+              onJobPhotoUploadInactive={markJobPhotoUploadInactive}
+              onJobPhotoUploadSettled={markJobPhotoUploadSettled}
             />
           ) : null}
 
@@ -6612,6 +6869,9 @@ function CrmWorkspace({
               onNotice={onNotice}
               onError={onError}
               onViewChange={onViewChange}
+              onJobPhotoUploadActive={markJobPhotoUploadActive}
+              onJobPhotoUploadInactive={markJobPhotoUploadInactive}
+              onJobPhotoUploadSettled={markJobPhotoUploadSettled}
             />
           ) : null}
 
@@ -6634,6 +6894,9 @@ function CrmWorkspace({
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
+              onJobPhotoUploadActive={markJobPhotoUploadActive}
+              onJobPhotoUploadInactive={markJobPhotoUploadInactive}
+              onJobPhotoUploadSettled={markJobPhotoUploadSettled}
             />
           ) : null}
 
@@ -22723,10 +22986,19 @@ function getCustomerWarrantyStatus(related: CustomerRelatedRecords) {
   };
 }
 
+function hasSignedJobPhotoUrl(
+  photo: JobPhotoRecord,
+): photo is JobPhotoRecord & { signed_url: string } {
+  return Boolean(photo.signed_url);
+}
+
 function getCustomerPrimaryPhoto(related: CustomerRelatedRecords) {
   return (
-    related.photos.find((photo) => photo.is_customer_visible) ??
-    related.photos[0] ??
+    related.photos.find(
+      (photo): photo is JobPhotoRecord & { signed_url: string } =>
+        photo.is_customer_visible && Boolean(photo.signed_url),
+    ) ??
+    related.photos.find(hasSignedJobPhotoUrl) ??
     null
   );
 }
@@ -24337,12 +24609,14 @@ function CustomerProfilePanel({
           </div>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
             {primaryPhoto ? (
-              <Image
-                src={primaryPhoto.file_url}
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={primaryPhoto.signed_url}
                 alt={primaryPhoto.caption ?? primaryPhoto.label ?? "Customer property photo"}
                 width={640}
                 height={176}
-                unoptimized
+                loading="lazy"
+                decoding="async"
                 className="h-44 w-full object-cover"
               />
             ) : (
@@ -24693,17 +24967,19 @@ function CustomerProfilePanel({
         ) : null}
 
         {activeSection === "photos" ? (
-          <RelatedList
-            title="Photos"
-            emptyLabel="No photos linked yet."
-            items={related.photos.map((photo) => ({
-              id: photo.id,
-              title: photo.caption ?? photo.label ?? "Job photo",
-              meta: `${photo.is_customer_visible ? "Customer visible" : "Internal"} - ${formatDate(
-                photo.taken_at ?? photo.created_at,
-              )}`,
-            }))}
-          />
+          <div data-testid="customer-360-photos">
+            <RelatedList
+              title="Photos"
+              emptyLabel="No photos linked yet."
+              items={related.photos.map((photo) => ({
+                id: photo.id,
+                title: photo.caption ?? photo.label ?? "Job photo",
+                meta: `${photo.is_customer_visible ? "Customer visible" : "Internal"} - ${formatDate(
+                  photo.taken_at ?? photo.created_at,
+                )}`,
+              }))}
+            />
+          </div>
         ) : null}
 
         {activeSection === "documents" ? (
@@ -25208,13 +25484,19 @@ function CustomerPropertiesSection({
         >
           <div className="grid gap-0 xl:grid-cols-[260px_minmax(0,1fr)]">
             <div className="bg-slate-100">
-              {property.photos[0] ? (
-                <Image
-                  src={property.photos[0].file_url}
-                  alt={property.photos[0].caption ?? property.photos[0].label ?? "Property photo"}
+              {property.photos.some(hasSignedJobPhotoUrl) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={property.photos.find(hasSignedJobPhotoUrl)!.signed_url}
+                  alt={
+                    property.photos.find(hasSignedJobPhotoUrl)?.caption ??
+                    property.photos.find(hasSignedJobPhotoUrl)?.label ??
+                    "Property photo"
+                  }
                   width={360}
                   height={360}
-                  unoptimized
+                  loading="lazy"
+                  decoding="async"
                   className="h-56 w-full object-cover xl:h-full"
                 />
               ) : (
@@ -32309,9 +32591,10 @@ function JobsView({
                     {selectedJobPhotos.slice(0, 4).map((photo) => (
                       <a
                         key={photo.id}
-                        href={photo.file_url}
+                        href={photo.signed_url ?? undefined}
                         target="_blank"
                         rel="noreferrer"
+                        aria-disabled={!photo.signed_url}
                         className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-3 hover:bg-slate-50"
                       >
                         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-500">
@@ -33100,7 +33383,7 @@ type CalendarViewProps = {
   onError: (message: string) => void;
 };
 
-type InspectionsViewProps = {
+type InspectionsViewProps = JobPhotoUploadLifecycleProps & {
   client: CrmClient;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
@@ -33342,6 +33625,9 @@ function InspectionsView({
   onNotice,
   onError,
   onViewChange,
+  onJobPhotoUploadActive,
+  onJobPhotoUploadInactive,
+  onJobPhotoUploadSettled,
 }: InspectionsViewProps) {
   const [selectedInspectionId, setSelectedInspectionId] = useState(
     snapshot.inspections[0]?.id ?? "new",
@@ -33362,6 +33648,34 @@ function InspectionsView({
   const [sortBy, setSortBy] = useState<InspectionSort>("scheduled_asc");
   const [workspaceTab, setWorkspaceTab] = useState<InspectionWorkspaceTab>("overview");
   const [savingAction, setSavingAction] = useState<string | null>(null);
+  const inspectionPhotoUploadInFlightRef = useRef(false);
+  const inspectionPhotoUploadMountedRef = useRef(true);
+  const inspectionPhotoUploadAttemptRef = useRef<JobPhotoUploadAttempt | null>(null);
+  const inspectionPhotoUploadRequestRef = useRef<{
+    input: JobPhotoInput;
+    file: File;
+    createFindingFromPhoto: boolean;
+    findingCategory: string;
+  } | null>(null);
+  const [hasUnresolvedInspectionPhotoUploadAttempt, setHasUnresolvedInspectionPhotoUploadAttempt] =
+    useState(false);
+
+  useEffect(() => {
+    inspectionPhotoUploadMountedRef.current = true;
+
+    return () => {
+      inspectionPhotoUploadMountedRef.current = false;
+      const attempt = inspectionPhotoUploadAttemptRef.current;
+      const request = inspectionPhotoUploadRequestRef.current;
+
+      if (attempt && request && !inspectionPhotoUploadInFlightRef.current) {
+        onJobPhotoUploadInactive(
+          request.input.company_id,
+          attempt.operationKey,
+        );
+      }
+    };
+  }, [onJobPhotoUploadInactive]);
   const [recordManagementAction, setRecordManagementAction] =
     useState<InspectionRecordManagementAction | null>(null);
   const selectedInspection =
@@ -33415,6 +33729,7 @@ function InspectionsView({
     completed: snapshot.inspections.filter((inspection) => inspection.status === "completed").length,
     canceled: snapshot.inspections.filter((inspection) => inspection.status === "canceled").length,
   };
+
   const filteredInspections = snapshot.inspections
     .filter((inspection) => {
       const query = inspectionSearch.toLowerCase();
@@ -33522,16 +33837,31 @@ function InspectionsView({
   } = usePagination(filteredInspections, 8);
 
   useEffect(() => {
-    if (selectedInspectionId === "new") {
+    if (
+      selectedInspectionId === "new" ||
+      hasUnresolvedInspectionPhotoUploadAttempt
+    ) {
       return;
     }
 
     if (!snapshot.inspections.some((inspection) => inspection.id === selectedInspectionId)) {
       setSelectedInspectionId(snapshot.inspections[0]?.id ?? "new");
     }
-  }, [selectedInspectionId, snapshot.inspections]);
+  }, [
+    hasUnresolvedInspectionPhotoUploadAttempt,
+    selectedInspectionId,
+    snapshot.inspections,
+  ]);
 
   const selectInspection = (inspectionId: string) => {
+    if (
+      hasUnresolvedInspectionPhotoUploadAttempt &&
+      inspectionId !== selectedInspectionId
+    ) {
+      onError("Retry the unchanged photo upload before selecting another inspection.");
+      return;
+    }
+
     updateUiPreservingScrollPosition(() => {
       setSelectedInspectionId(inspectionId);
       setWorkspaceTab("overview");
@@ -34075,7 +34405,11 @@ function InspectionsView({
   const handleUploadInspectionPhoto = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!selectedInspection || savingAction) {
+    if (
+      !selectedInspection ||
+      savingAction ||
+      inspectionPhotoUploadInFlightRef.current
+    ) {
       return;
     }
 
@@ -34086,43 +34420,77 @@ function InspectionsView({
 
     const form = event.currentTarget;
     const formData = new FormData(form);
-    const file = formData.get("photo");
+    const retainedRequest = inspectionPhotoUploadRequestRef.current;
+    const formFile = formData.get("photo");
+    const file = retainedRequest?.file ?? formFile;
 
     if (!(file instanceof File) || file.size === 0) {
       onError("Choose a photo before uploading.");
       return;
     }
 
+    inspectionPhotoUploadInFlightRef.current = true;
+
     try {
       setSavingAction("upload-photo");
-      const photoLabel = getOptionalFormString(formData, "label");
-      const photoCaption = getOptionalFormString(formData, "caption");
-      const isCustomerVisible = formData.get("is_customer_visible") === "on";
+      const photoLabel = retainedRequest?.input.label ??
+        getOptionalFormString(formData, "label");
+      const photoCaption = retainedRequest?.input.caption ??
+        getOptionalFormString(formData, "caption");
+      const isCustomerVisible = retainedRequest?.input.is_customer_visible ??
+        formData.get("is_customer_visible") === "on";
+      const photoInput: JobPhotoInput = retainedRequest?.input ?? {
+        company_id: selectedInspection.company_id,
+        customer_id: selectedInspection.customer_id,
+        property_id: selectedInspection.property_id,
+        job_id: selectedInspection.job_id,
+        estimate_id: selectedInspection.estimate_id,
+        inspection_id: selectedInspection.id,
+        label: photoLabel,
+        caption: photoCaption,
+        is_customer_visible: isCustomerVisible,
+        taken_at:
+          inspectionPhotoUploadAttemptRef.current?.takenAt ?? todayIsoDate(),
+      };
+      const createFindingFromPhoto =
+        retainedRequest?.createFindingFromPhoto ??
+        formData.get("create_finding_from_photo") === "on";
+      const findingCategory =
+        retainedRequest?.findingCategory ??
+        getFormString(
+          formData,
+          "photo_finding_category",
+          getInspectionFindingCategories(selectedInspection)[0] ??
+            "Photo observation",
+        );
+      const uploadAttempt =
+        inspectionPhotoUploadAttemptRef.current ??
+        (await prepareJobPhotoUploadAttempt(photoInput, file));
+
+      if (!inspectionPhotoUploadMountedRef.current) {
+        return;
+      }
+
+      inspectionPhotoUploadAttemptRef.current = uploadAttempt;
+      inspectionPhotoUploadRequestRef.current = retainedRequest ?? {
+        input: photoInput,
+        file,
+        createFindingFromPhoto,
+        findingCategory,
+      };
+      setHasUnresolvedInspectionPhotoUploadAttempt(true);
+      onJobPhotoUploadActive({ input: photoInput, attempt: uploadAttempt });
       const savedPhoto = await createJobPhoto(
         client,
-        {
-          company_id: selectedInspection.company_id,
-          customer_id: selectedInspection.customer_id,
-          job_id: selectedInspection.job_id,
-          estimate_id: selectedInspection.estimate_id,
-          inspection_id: selectedInspection.id,
-          label: photoLabel,
-          caption: photoCaption,
-          is_customer_visible: isCustomerVisible,
-          taken_at: new Date().toISOString(),
-        },
+        photoInput,
         file,
+        uploadAttempt,
       );
-      const createFindingFromPhoto = formData.get("create_finding_from_photo") === "on";
       const photoFinding: InspectionFinding | null = createFindingFromPhoto
         ? {
-            id: crypto.randomUUID(),
+            id: uploadAttempt.operationKey,
             area: photoLabel ?? "Photo",
-            category: getFormString(
-              formData,
-              "photo_finding_category",
-              getInspectionFindingCategories(selectedInspection)[0] ?? "Photo observation",
-            ),
+            category: findingCategory,
             observation:
               photoCaption ?? photoLabel ?? "Photo documented during inspection.",
             severity: "moderate",
@@ -34168,20 +34536,49 @@ function InspectionsView({
         findings: nextFindings,
         activity: nextActivity,
       });
-      form.reset();
       await onReload();
+      onJobPhotoUploadSettled(photoInput.company_id, uploadAttempt.operationKey);
+      inspectionPhotoUploadAttemptRef.current = null;
+      inspectionPhotoUploadRequestRef.current = null;
+      setHasUnresolvedInspectionPhotoUploadAttempt(false);
+      form.reset();
       onNotice(
         photoFinding ? "Inspection photo uploaded and finding added." : "Inspection photo uploaded.",
       );
     } catch (currentError) {
+      if (isJobPhotoUploadAttemptAbortedError(currentError)) {
+        const abortedAttempt = inspectionPhotoUploadAttemptRef.current;
+        const abortedRequest = inspectionPhotoUploadRequestRef.current;
+
+        if (abortedAttempt && abortedRequest) {
+          onJobPhotoUploadSettled(
+            abortedRequest.input.company_id,
+            abortedAttempt.operationKey,
+          );
+        }
+        inspectionPhotoUploadAttemptRef.current = null;
+        inspectionPhotoUploadRequestRef.current = null;
+        setHasUnresolvedInspectionPhotoUploadAttempt(false);
+      } else if (!inspectionPhotoUploadMountedRef.current) {
+        const interruptedAttempt = inspectionPhotoUploadAttemptRef.current;
+        const interruptedRequest = inspectionPhotoUploadRequestRef.current;
+
+        if (interruptedAttempt && interruptedRequest) {
+          onJobPhotoUploadInactive(
+            interruptedRequest.input.company_id,
+            interruptedAttempt.operationKey,
+          );
+        }
+      }
       logCaughtError("[CRM] Unable to upload inspection photo", currentError);
       onError(
         getCaughtErrorMessage(
           currentError,
-          "Unable to upload inspection photo. Confirm migration 0019 has been applied.",
+          "Unable to upload inspection photo.",
         ),
       );
     } finally {
+      inspectionPhotoUploadInFlightRef.current = false;
       setSavingAction(null);
     }
   };
@@ -34344,7 +34741,8 @@ function InspectionsView({
               <button
                 type="button"
                 onClick={() => selectInspection("new")}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                disabled={hasUnresolvedInspectionPhotoUploadAttempt}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Plus className="h-4 w-4" />
                 New inspection
@@ -34518,7 +34916,10 @@ function InspectionsView({
                   key={inspection.id}
                   type="button"
                   onClick={() => selectInspection(inspection.id)}
-                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_150px_150px_160px] xl:items-center ${
+                  disabled={
+                    hasUnresolvedInspectionPhotoUploadAttempt && !isSelected
+                  }
+                  className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 xl:grid-cols-[minmax(0,1fr)_150px_150px_160px] xl:items-center ${
                     isSelected ? "bg-sky-50" : isCanceled ? "bg-amber-50/50" : "bg-white"
                   }`}
                 >
@@ -35274,7 +35675,11 @@ function InspectionsView({
                     </button>
                   </form>
 
-                  <form onSubmit={handleUploadInspectionPhoto} className="grid gap-3 rounded-lg border border-slate-200 p-4">
+                  <form
+                    onSubmit={handleUploadInspectionPhoto}
+                    data-testid="inspection-photo-upload-form"
+                    className="grid gap-3 rounded-lg border border-slate-200 p-4"
+                  >
                     <div>
                       <h4 className="font-bold text-slate-950">Upload inspection photo</h4>
                       <p className="mt-1 text-sm text-slate-500">
@@ -35282,13 +35687,13 @@ function InspectionsView({
                         require a second data-entry pass.
                       </p>
                     </div>
-                    <input required name="photo" type="file" accept="image/*" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                    <input required name="photo" type="file" accept="image/*" disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} data-testid="inspection-photo-file-input" className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <input name="label" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Label, such as roof section" />
-                      <input name="caption" className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Caption" />
+                      <input name="label" disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Label, such as roof section" />
+                      <input name="caption" disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Caption" />
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <select name="photo_finding_category" className="rounded-md border border-slate-300 px-3 py-2 text-sm">
+                      <select name="photo_finding_category" disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} className="rounded-md border border-slate-300 px-3 py-2 text-sm">
                         {getInspectionFindingCategories(selectedInspection).map((category) => (
                           <option key={category} value={category}>
                             {category}
@@ -35296,22 +35701,32 @@ function InspectionsView({
                         ))}
                       </select>
                       <label className="flex min-h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                        <input name="create_finding_from_photo" type="checkbox" defaultChecked />
+                        <input name="create_finding_from_photo" type="checkbox" defaultChecked disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} />
                         Also save as finding
                       </label>
                     </div>
                     <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input name="is_customer_visible" type="checkbox" />
+                      <input name="is_customer_visible" type="checkbox" disabled={savingAction !== null || hasUnresolvedInspectionPhotoUploadAttempt} />
                       Customer-visible if included in an optional report
                     </label>
                     <button
                       type="submit"
+                      data-testid="inspection-photo-submit"
                       disabled={savingAction !== null || selectedInspectionIsCanceled}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                     >
                       <Upload className="h-4 w-4" />
                       Upload photo
                     </button>
+                    {hasUnresolvedInspectionPhotoUploadAttempt ? (
+                      <p
+                        data-testid="inspection-photo-upload-lock"
+                        className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm font-semibold text-amber-900"
+                      >
+                        Retry this unchanged upload before editing its file,
+                        inspection, finding, or visibility.
+                      </p>
+                    ) : null}
                   </form>
 
                   <div className="grid gap-3">
@@ -36024,7 +36439,7 @@ function CalendarView({
   );
 }
 
-type PhotosViewProps = {
+type PhotosViewProps = JobPhotoUploadLifecycleProps & {
   client: CrmClient;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
@@ -36040,10 +36455,42 @@ function PhotosView({
   onReload,
   onNotice,
   onError,
+  onJobPhotoUploadActive,
+  onJobPhotoUploadInactive,
+  onJobPhotoUploadSettled,
 }: PhotosViewProps) {
   const [file, setFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadCompanyId, setUploadCompanyId] = useState(
+    snapshot.companies[0]?.id ?? "",
+  );
+  const uploadInFlightRef = useRef(false);
+  const uploadMountedRef = useRef(true);
+  const uploadAttemptRef = useRef<JobPhotoUploadAttempt | null>(null);
+  const uploadRequestRef = useRef<{
+    input: JobPhotoInput;
+    file: File;
+  } | null>(null);
+  const [hasUnresolvedPhotoUploadAttempt, setHasUnresolvedPhotoUploadAttempt] =
+    useState(false);
+
+  useEffect(() => {
+    uploadMountedRef.current = true;
+
+    return () => {
+      uploadMountedRef.current = false;
+      const attempt = uploadAttemptRef.current;
+      const request = uploadRequestRef.current;
+
+      if (attempt && request && !uploadInFlightRef.current) {
+        onJobPhotoUploadInactive(
+          request.input.company_id,
+          attempt.operationKey,
+        );
+      }
+    };
+  }, [onJobPhotoUploadInactive]);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
   const [relationFilter, setRelationFilter] = useState<
@@ -36080,6 +36527,7 @@ function PhotosView({
       (relationFilter === "inspection" && Boolean(photo.inspection_id)) ||
       (relationFilter === "unassigned" &&
         !photo.job_id &&
+        !photo.property_id &&
         !photo.customer_id &&
         !photo.estimate_id &&
         !photo.inspection_id);
@@ -36112,6 +36560,21 @@ function PhotosView({
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
 
+  useEffect(() => {
+    if (hasUnresolvedPhotoUploadAttempt) {
+      return;
+    }
+
+    if (
+      uploadCompanyId &&
+      snapshot.companies.some((company) => company.id === uploadCompanyId)
+    ) {
+      return;
+    }
+
+    setUploadCompanyId(snapshot.companies[0]?.id ?? "");
+  }, [hasUnresolvedPhotoUploadAttempt, snapshot.companies, uploadCompanyId]);
+
   const getPhotoTargetLabel = (photo: JobPhotoRecord) => {
     const job = photo.job_id
       ? snapshot.jobs.find((item) => item.id === photo.job_id)
@@ -36135,47 +36598,107 @@ function PhotosView({
     );
   };
 
-  const copyPhotoUrl = async (url: string) => {
+  const copyPhotoUrl = async (photo: JobPhotoRecord) => {
     try {
-      await navigator.clipboard.writeText(url);
-      onNotice("Photo URL copied.");
+      const signedUrl = await getJobPhotoFileSignedUrl(client, photo);
+      await navigator.clipboard.writeText(signedUrl);
+      onNotice("Temporary photo link copied.");
     } catch {
-      onError("Unable to copy photo URL.");
+      onError("Unable to copy a temporary photo link.");
+    }
+  };
+
+  const openPhoto = async (photo: JobPhotoRecord) => {
+    try {
+      const signedUrl = await getJobPhotoFileSignedUrl(client, photo);
+      window.open(signedUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      onError("Unable to open the photo securely.");
     }
   };
 
   const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (isUploading) {
+    if (isUploading || uploadInFlightRef.current) {
       return;
     }
 
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const retainedRequest = uploadRequestRef.current;
+    const photoInput: JobPhotoInput = retainedRequest?.input ?? {
+      company_id: getFormString(formData, "company_id", uploadCompanyId),
+      customer_id: getOptionalRelation(formData, "customer_id"),
+      job_id: getOptionalRelation(formData, "job_id"),
+      estimate_id: getOptionalRelation(formData, "estimate_id"),
+      inspection_id: getOptionalRelation(formData, "inspection_id"),
+      label: getOptionalFormString(formData, "label"),
+      caption: getOptionalFormString(formData, "caption"),
+      taken_at: getOptionalFormString(formData, "taken_at"),
+    };
+    const uploadFile = retainedRequest?.file ?? file;
+
+    if (!uploadFile) {
+      onError("Choose a photo before uploading.");
+      return;
+    }
+
+    uploadInFlightRef.current = true;
 
     try {
       setIsUploading(true);
-      await createJobPhoto(
-        client,
-        {
-          company_id: getFormString(formData, "company_id", snapshot.companies[0]?.id),
-          customer_id: getOptionalRelation(formData, "customer_id"),
-          job_id: getOptionalRelation(formData, "job_id"),
-          estimate_id: getOptionalRelation(formData, "estimate_id"),
-          inspection_id: getOptionalRelation(formData, "inspection_id"),
-          label: getOptionalFormString(formData, "label"),
-          caption: getOptionalFormString(formData, "caption"),
-          taken_at: getOptionalFormString(formData, "taken_at"),
-        },
-        file,
-      );
+      const uploadAttempt =
+        uploadAttemptRef.current ??
+        (await prepareJobPhotoUploadAttempt(photoInput, uploadFile));
+
+      if (!uploadMountedRef.current) {
+        return;
+      }
+
+      uploadAttemptRef.current = uploadAttempt;
+      uploadRequestRef.current = retainedRequest ?? {
+        input: photoInput,
+        file: uploadFile,
+      };
+      setHasUnresolvedPhotoUploadAttempt(true);
+      onJobPhotoUploadActive({ input: photoInput, attempt: uploadAttempt });
+      await createJobPhoto(client, photoInput, uploadFile, uploadAttempt);
+      await onReload();
+      onJobPhotoUploadSettled(photoInput.company_id, uploadAttempt.operationKey);
+      uploadAttemptRef.current = null;
+      uploadRequestRef.current = null;
+      setHasUnresolvedPhotoUploadAttempt(false);
       form.reset();
       setFile(null);
-      await onReload();
-      onNotice("Photo uploaded.");
+      onNotice("Photo uploaded securely.");
     } catch (currentError) {
+      if (isJobPhotoUploadAttemptAbortedError(currentError)) {
+        const abortedAttempt = uploadAttemptRef.current;
+        const abortedRequest = uploadRequestRef.current;
+
+        if (abortedAttempt && abortedRequest) {
+          onJobPhotoUploadSettled(
+            abortedRequest.input.company_id,
+            abortedAttempt.operationKey,
+          );
+        }
+        uploadAttemptRef.current = null;
+        uploadRequestRef.current = null;
+        setHasUnresolvedPhotoUploadAttempt(false);
+      } else if (!uploadMountedRef.current) {
+        const interruptedAttempt = uploadAttemptRef.current;
+        const interruptedRequest = uploadRequestRef.current;
+
+        if (interruptedAttempt && interruptedRequest) {
+          onJobPhotoUploadInactive(
+            interruptedRequest.input.company_id,
+            interruptedAttempt.operationKey,
+          );
+        }
+      }
       onError(getCaughtErrorMessage(currentError, "Unable to upload photo."));
     } finally {
+      uploadInFlightRef.current = false;
       setIsUploading(false);
     }
   };
@@ -36212,6 +36735,7 @@ function PhotosView({
             <select
               value={companyFilter}
               onChange={(event) => setCompanyFilter(event.target.value)}
+              data-testid="job-photo-company-filter"
               className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
             >
               <option value="all">All companies</option>
@@ -36223,6 +36747,7 @@ function PhotosView({
             </select>
             <select
               value={relationFilter}
+              data-testid="job-photo-relation-filter"
               onChange={(event) =>
                 setRelationFilter(
                   event.target.value as
@@ -36249,13 +36774,17 @@ function PhotosView({
           {pagedPhotos.map((photo) => (
             <article
               key={photo.id}
+              data-testid="job-photo-card"
+              data-photo-id={photo.id}
               className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
             >
-              {photo.file_url ? (
+              {photo.signed_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={photo.file_url}
+                  src={photo.signed_url}
                   alt={photo.caption ?? "Job photo"}
+                  data-testid="job-photo-image"
+                  data-photo-id={photo.id}
                   className="h-44 w-full object-cover"
                 />
               ) : (
@@ -36275,7 +36804,9 @@ function PhotosView({
                   </div>
                   <Badge
                     label={
-                      photo.job_id
+                      photo.inspection_id
+                        ? "Inspection"
+                        : photo.job_id
                         ? "Job"
                         : photo.customer_id
                           ? "Customer"
@@ -36294,15 +36825,19 @@ function PhotosView({
                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => void copyPhotoUrl(photo.file_url)}
+                    onClick={() => void copyPhotoUrl(photo)}
+                    data-testid="job-photo-copy-link"
+                    data-photo-id={photo.id}
                     className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     <Copy className="h-4 w-4" />
-                    Copy URL
+                    Copy temporary link
                   </button>
                   <button
                     type="button"
-                    onClick={() => window.open(photo.file_url, "_blank", "noopener,noreferrer")}
+                    onClick={() => void openPhoto(photo)}
+                    data-testid="job-photo-open"
+                    data-photo-id={photo.id}
                     className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                   >
                     <Camera className="h-4 w-4" />
@@ -36324,7 +36859,11 @@ function PhotosView({
 
       <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-lg font-bold text-slate-950">Upload photo</h3>
-        <form onSubmit={handleUpload} className="mt-4 grid gap-3">
+        <form
+          onSubmit={handleUpload}
+          data-testid="job-photo-upload-form"
+          className="mt-4 grid gap-3"
+        >
           <label className="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm font-semibold text-slate-600">
             {filePreviewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -36348,12 +36887,18 @@ function PhotosView({
               required
               type="file"
               accept="image/*"
+              disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+              data-testid="job-photo-file-input"
               className="sr-only"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
             />
           </label>
           <select
             name="company_id"
+            value={uploadCompanyId}
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+            data-testid="job-photo-company-select"
+            onChange={(event) => setUploadCompanyId(event.target.value)}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             {snapshot.companies.map((company) => (
@@ -36365,73 +36910,105 @@ function PhotosView({
           <div className="grid gap-3 sm:grid-cols-2">
             <select
               name="job_id"
+              disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+              data-testid="job-photo-job-select"
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="none">No job</option>
-              {snapshot.jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.title}
-                </option>
-              ))}
+              {snapshot.jobs
+                .filter((job) => job.company_id === uploadCompanyId)
+                .map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.title}
+                  </option>
+                ))}
             </select>
             <select
               name="customer_id"
+              disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+              data-testid="job-photo-customer-select"
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="none">No customer</option>
-              {snapshot.customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.display_name}
-                </option>
-              ))}
+              {snapshot.customers
+                .filter((customer) => customer.company_id === uploadCompanyId)
+                .map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.display_name}
+                  </option>
+                ))}
             </select>
           </div>
           <select
             name="estimate_id"
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+            data-testid="job-photo-estimate-select"
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="none">No estimate</option>
-            {snapshot.estimates.map((estimate) => (
-              <option key={estimate.id} value={estimate.id}>
-                {estimate.title}
-              </option>
-            ))}
+            {snapshot.estimates
+              .filter((estimate) => estimate.company_id === uploadCompanyId)
+              .map((estimate) => (
+                <option key={estimate.id} value={estimate.id}>
+                  {estimate.title}
+                </option>
+              ))}
           </select>
           <select
             name="inspection_id"
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+            data-testid="job-photo-inspection-select"
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="none">No inspection</option>
-            {snapshot.inspections.map((inspection) => (
-              <option key={inspection.id} value={inspection.id}>
-                {inspection.title}
-              </option>
-            ))}
+            {snapshot.inspections
+              .filter((inspection) => inspection.company_id === uploadCompanyId)
+              .map((inspection) => (
+                <option key={inspection.id} value={inspection.id}>
+                  {inspection.title}
+                </option>
+              ))}
           </select>
           <input
             name="label"
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             placeholder="Label"
           />
           <input
             name="caption"
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
+            data-testid="job-photo-caption-input"
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             placeholder="Caption"
           />
           <input
             name="taken_at"
             type="date"
+            disabled={isUploading || hasUnresolvedPhotoUploadAttempt}
             defaultValue={todayIsoDate()}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           />
           <button
             type="submit"
-            disabled={isUploading || !file}
+            data-testid="job-photo-submit"
+            disabled={
+              isUploading || (!file && !hasUnresolvedPhotoUploadAttempt)
+            }
             className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Upload className="h-4 w-4" />
             {isUploading ? "Uploading" : "Upload photo"}
           </button>
+          {hasUnresolvedPhotoUploadAttempt ? (
+            <p
+              data-testid="job-photo-upload-lock"
+              className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm font-semibold text-amber-900"
+            >
+              Retry this unchanged upload before editing its file, company,
+              linked record, caption, or date.
+            </p>
+          ) : null}
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
             Photos are uploaded to the Supabase `job-photos` storage bucket and
             indexed in the CRM for job, customer, and estimate galleries.
@@ -40882,10 +41459,10 @@ function CustomerPortalView({
                 className="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950"
                 data-testid="customer-portal-photo-card"
               >
-                {photo.file_url ? (
+                {photo.signed_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={photo.file_url}
+                    src={photo.signed_url}
                     alt={photo.caption ?? "Project photo"}
                     className="h-44 w-full object-cover"
                   />

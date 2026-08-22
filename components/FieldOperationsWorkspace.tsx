@@ -20,6 +20,7 @@ import {
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -29,7 +30,11 @@ import {
   addJobNote,
   createDailyLog,
   createJobPhoto,
+  isJobPhotoUploadAttemptAbortedError,
+  prepareJobPhotoUploadAttempt,
   createJobTask,
+  type ActiveJobPhotoUpload,
+  type JobPhotoUploadAttempt,
   updateInspection,
   updateJob,
   updateJobTask,
@@ -53,6 +58,7 @@ import type {
   Database,
   JobMaterialRecord,
   JobNoteRecord,
+  JobPhotoInput,
   JobPhotoRecord,
   JobStatus,
   JobTaskRecord,
@@ -80,6 +86,15 @@ type FieldOperationsWorkspaceProps = {
   onViewChange: (view: FieldOperationsTargetView) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  onJobPhotoUploadActive: (upload: ActiveJobPhotoUpload) => void;
+  onJobPhotoUploadInactive: (
+    companyId: string,
+    operationKey: string,
+  ) => void;
+  onJobPhotoUploadSettled: (
+    companyId: string,
+    operationKey: string,
+  ) => void;
 };
 
 type ChecklistAction =
@@ -146,6 +161,9 @@ export function FieldOperationsWorkspace({
   onViewChange,
   onNotice,
   onError,
+  onJobPhotoUploadActive,
+  onJobPhotoUploadInactive,
+  onJobPhotoUploadSettled,
 }: FieldOperationsWorkspaceProps) {
   const fieldData = useMemo(() => buildFieldOperationsSnapshot(snapshot), [snapshot]);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(
@@ -169,6 +187,35 @@ export function FieldOperationsWorkspace({
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoCaption, setPhotoCaption] = useState("");
   const [photoCategory, setPhotoCategory] = useState(photoCategories[0]);
+  const photoUploadInFlightRef = useRef(false);
+  const photoUploadMountedRef = useRef(true);
+  const photoUploadAttemptRef = useRef<JobPhotoUploadAttempt | null>(null);
+  const photoUploadRequestRef = useRef<{
+    input: JobPhotoInput;
+    file: File;
+    assignment: FieldAssignment;
+    caption: string;
+    category: string;
+  } | null>(null);
+  const [hasUnresolvedPhotoUploadAttempt, setHasUnresolvedPhotoUploadAttempt] =
+    useState(false);
+
+  useEffect(() => {
+    photoUploadMountedRef.current = true;
+
+    return () => {
+      photoUploadMountedRef.current = false;
+      const attempt = photoUploadAttemptRef.current;
+      const request = photoUploadRequestRef.current;
+
+      if (attempt && request && !photoUploadInFlightRef.current) {
+        onJobPhotoUploadInactive(
+          request.input.company_id,
+          attempt.operationKey,
+        );
+      }
+    };
+  }, [onJobPhotoUploadInactive]);
   const [uploadState, setUploadState] = useState<FieldUploadState>("ready");
   const [lastUploadError, setLastUploadError] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -271,10 +318,14 @@ export function FieldOperationsWorkspace({
   );
 
   useEffect(() => {
+    if (hasUnresolvedPhotoUploadAttempt) {
+      return;
+    }
+
     if (!visibleAssignments.some((assignment) => assignment.id === selectedAssignmentId)) {
       setSelectedAssignmentId(visibleAssignments[0]?.id ?? "");
     }
-  }, [selectedAssignmentId, visibleAssignments]);
+  }, [hasUnresolvedPhotoUploadAttempt, selectedAssignmentId, visibleAssignments]);
 
   useEffect(() => {
     if (selectedAssignmentCurrentStatus) {
@@ -509,75 +560,137 @@ export function FieldOperationsWorkspace({
   };
 
   const uploadSelectedPhoto = async () => {
-    if (!selectedAssignment || !photoFile) {
+    if (busyAction !== null || photoUploadInFlightRef.current) {
+      return;
+    }
+
+    const retainedRequest = photoUploadRequestRef.current;
+    const uploadAssignment = retainedRequest?.assignment ?? selectedAssignment;
+    const uploadFile = retainedRequest?.file ?? photoFile;
+
+    if (!uploadAssignment || !uploadFile) {
       onError("Choose a photo before uploading.");
       return;
     }
 
-    if (!photoFile.type.startsWith("image/")) {
+    if (!uploadFile.type.startsWith("image/")) {
       setUploadState("failed");
       setLastUploadError("Choose an image file from the camera or photo library.");
       onError("Choose an image file from the camera or photo library.");
       return;
     }
 
-    if (photoFile.size > maxFieldPhotoBytes) {
+    if (uploadFile.size > maxFieldPhotoBytes) {
       setUploadState("failed");
       setLastUploadError("Field photos must be 25 MB or smaller.");
       onError("Field photos must be 25 MB or smaller.");
       return;
     }
 
-    await runFieldAction(
-      "photo",
-      async () => {
-        setUploadState("uploading");
-        setLastUploadError("");
+    const photoInput: JobPhotoInput = retainedRequest?.input ?? {
+      company_id: uploadAssignment.companyId,
+      customer_id: uploadAssignment.customerId,
+      property_id: uploadAssignment.propertyId,
+      job_id:
+        uploadAssignment.kind === "job"
+          ? uploadAssignment.sourceRecordId
+          : null,
+      inspection_id:
+        uploadAssignment.kind === "inspection"
+          ? uploadAssignment.sourceRecordId
+          : null,
+      label: photoCategory,
+      caption: photoCaption.trim() || photoCategory,
+      taken_at:
+        photoUploadAttemptRef.current?.takenAt ??
+        new Date().toISOString().slice(0, 10),
+      is_customer_visible: false,
+    };
 
-        try {
-          if (isDemoMode) {
-            saveDemoPhoto(selectedAssignment, photoFile, photoCaption, photoCategory);
-          } else if (client) {
-            await createJobPhoto(
-              client,
-              {
-                company_id: selectedAssignment.companyId,
-                customer_id: selectedAssignment.customerId,
-                property_id: selectedAssignment.propertyId,
-                job_id:
-                  selectedAssignment.kind === "job"
-                    ? selectedAssignment.sourceRecordId
-                    : null,
-                inspection_id:
-                  selectedAssignment.kind === "inspection"
-                    ? selectedAssignment.sourceRecordId
-                    : null,
-                label: photoCategory,
-                caption: photoCaption || photoCategory,
-                taken_at: new Date().toISOString(),
-                is_customer_visible: false,
-              },
-              photoFile,
-            );
-          } else {
-            throw new Error("Live CRM client is unavailable.");
-          }
+    photoUploadInFlightRef.current = true;
 
-          setUploadState("uploaded");
-          setPhotoFile(null);
-          setPhotoCaption("");
-        } catch (currentError) {
-          const message =
-            currentError instanceof Error
-              ? currentError.message
-              : "Unable to upload field photo.";
-          setUploadState("failed");
-          setLastUploadError(message);
-          throw currentError;
+    try {
+      setBusyAction("photo");
+      setLastFailedAction(null);
+      setUploadState("uploading");
+      setLastUploadError("");
+      const uploadAttempt =
+        photoUploadAttemptRef.current ??
+        (await prepareJobPhotoUploadAttempt(photoInput, uploadFile));
+
+      if (!photoUploadMountedRef.current) {
+        return;
+      }
+
+      photoUploadAttemptRef.current = uploadAttempt;
+      photoUploadRequestRef.current = retainedRequest ?? {
+        input: photoInput,
+        file: uploadFile,
+        assignment: uploadAssignment,
+        caption: photoCaption,
+        category: photoCategory,
+      };
+      setHasUnresolvedPhotoUploadAttempt(true);
+      onJobPhotoUploadActive({ input: photoInput, attempt: uploadAttempt });
+
+      if (isDemoMode) {
+        saveDemoPhoto(
+          uploadAssignment,
+          retainedRequest?.caption ?? photoCaption,
+          retainedRequest?.category ?? photoCategory,
+          uploadAttempt,
+        );
+      } else if (client) {
+        await createJobPhoto(client, photoInput, uploadFile, uploadAttempt);
+      } else {
+        throw new Error("Live CRM client is unavailable.");
+      }
+
+      await onReload();
+      onJobPhotoUploadSettled(photoInput.company_id, uploadAttempt.operationKey);
+      photoUploadAttemptRef.current = null;
+      photoUploadRequestRef.current = null;
+      setHasUnresolvedPhotoUploadAttempt(false);
+      setUploadState("uploaded");
+      setPhotoFile(null);
+      setPhotoCaption("");
+      onNotice("Field photo uploaded securely.");
+    } catch (currentError) {
+      if (isJobPhotoUploadAttemptAbortedError(currentError)) {
+        const abortedAttempt = photoUploadAttemptRef.current;
+        const abortedRequest = photoUploadRequestRef.current;
+
+        if (abortedAttempt && abortedRequest) {
+          onJobPhotoUploadSettled(
+            abortedRequest.input.company_id,
+            abortedAttempt.operationKey,
+          );
         }
-      },
-      "Field photo uploaded.",
-    );
+        photoUploadAttemptRef.current = null;
+        photoUploadRequestRef.current = null;
+        setHasUnresolvedPhotoUploadAttempt(false);
+      } else if (!photoUploadMountedRef.current) {
+        const interruptedAttempt = photoUploadAttemptRef.current;
+        const interruptedRequest = photoUploadRequestRef.current;
+
+        if (interruptedAttempt && interruptedRequest) {
+          onJobPhotoUploadInactive(
+            interruptedRequest.input.company_id,
+            interruptedAttempt.operationKey,
+          );
+        }
+      }
+      const message =
+        currentError instanceof Error
+          ? currentError.message
+          : "Unable to upload field photo.";
+      setUploadState("failed");
+      setLastUploadError(message);
+      onError(message);
+    } finally {
+      photoUploadInFlightRef.current = false;
+      setBusyAction(null);
+    }
   };
 
   const saveJobStatus = async (
@@ -859,13 +972,13 @@ export function FieldOperationsWorkspace({
 
   const saveDemoPhoto = (
     assignment: FieldAssignment,
-    file: File,
     caption: string,
     category: string,
+    uploadAttempt: JobPhotoUploadAttempt,
   ) => {
     const now = new Date().toISOString();
     const photo: JobPhotoRecord = {
-      id: `demo-field-photo-${Date.now()}`,
+      id: uploadAttempt.operationKey,
       company_id: assignment.companyId,
       customer_id: assignment.customerId,
       property_id: assignment.propertyId,
@@ -873,10 +986,13 @@ export function FieldOperationsWorkspace({
       estimate_id: null,
       inspection_id: assignment.kind === "inspection" ? assignment.sourceRecordId : null,
       label: category,
-      caption: caption || category,
-      taken_at: now,
-      file_path: `${assignment.sourceRecordId}/${file.name}`,
-      file_url: "",
+      caption: caption.trim() || category,
+      taken_at: uploadAttempt.takenAt,
+      file_path: uploadAttempt.filePath,
+      file_url: null,
+      signed_url: null,
+      upload_operation_key: uploadAttempt.operationKey,
+      upload_request_fingerprint: uploadAttempt.requestFingerprint,
       is_customer_visible: false,
       sort_order: 0,
       created_at: now,
@@ -885,7 +1001,13 @@ export function FieldOperationsWorkspace({
 
     onDemoSnapshotChange((currentSnapshot) => ({
       ...currentSnapshot,
-      jobPhotos: [photo, ...currentSnapshot.jobPhotos],
+      jobPhotos: currentSnapshot.jobPhotos.some(
+        (currentPhoto) =>
+          currentPhoto.company_id === photo.company_id &&
+          currentPhoto.upload_operation_key === photo.upload_operation_key,
+      )
+        ? currentSnapshot.jobPhotos
+        : [photo, ...currentSnapshot.jobPhotos],
     }));
   };
 
@@ -960,8 +1082,9 @@ export function FieldOperationsWorkspace({
             <select
               data-testid="field-company-filter"
               value={companyFilter}
+              disabled={hasUnresolvedPhotoUploadAttempt}
               onChange={(event) => setCompanyFilter(event.target.value)}
-              className="min-h-11 rounded-xl border border-wt-border bg-wt-surface px-3 py-2 text-sm font-semibold normal-case text-wt-ink focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              className="min-h-11 rounded-xl border border-wt-border bg-wt-surface px-3 py-2 text-sm font-semibold normal-case text-wt-ink focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="all">All permitted companies</option>
               {snapshot.companies.map((company) => (
@@ -1019,8 +1142,12 @@ export function FieldOperationsWorkspace({
                 data-company-id={assignment.companyId}
                 data-assignment-kind={assignment.kind}
                 aria-pressed={selectedAssignment?.id === assignment.id}
+                disabled={
+                  hasUnresolvedPhotoUploadAttempt &&
+                  assignment.id !== selectedAssignmentId
+                }
                 onClick={() => setSelectedAssignmentId(assignment.id)}
-                className={`grid min-h-24 w-full min-w-0 gap-2 rounded-xl border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-orange-300 ${
+                className={`grid min-h-24 w-full min-w-0 gap-2 rounded-xl border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-orange-300 disabled:cursor-not-allowed disabled:opacity-60 ${
                   selectedAssignment?.id === assignment.id
                     ? "border-orange-300 bg-orange-50 shadow-sm"
                     : "border-wt-border bg-wt-surface-muted hover:border-orange-200 hover:bg-amber-50"
@@ -1262,6 +1389,9 @@ export function FieldOperationsWorkspace({
                         data-testid="field-photo-file-input"
                         type="file"
                         accept="image/*"
+                        disabled={
+                          busyAction !== null || hasUnresolvedPhotoUploadAttempt
+                        }
                         className="sr-only"
                         onChange={(event) => {
                           setPhotoFile(event.target.files?.[0] ?? null);
@@ -1271,7 +1401,11 @@ export function FieldOperationsWorkspace({
                       />
                     </label>
                     <select
+                      data-testid="field-photo-category-select"
                       value={photoCategory}
+                      disabled={
+                        busyAction !== null || hasUnresolvedPhotoUploadAttempt
+                      }
                       onChange={(event) => setPhotoCategory(event.target.value)}
                       className="min-h-11 rounded-lg border border-wt-border bg-wt-surface px-3 py-2 text-sm font-semibold text-wt-ink"
                     >
@@ -1280,19 +1414,33 @@ export function FieldOperationsWorkspace({
                       ))}
                     </select>
                     <input
+                      data-testid="field-photo-caption-input"
                       value={photoCaption}
+                      disabled={
+                        busyAction !== null || hasUnresolvedPhotoUploadAttempt
+                      }
                       onChange={(event) => setPhotoCaption(event.target.value)}
                       className="min-h-11 rounded-lg border border-wt-border bg-wt-surface px-3 py-2 text-sm text-wt-ink"
                       placeholder="Caption"
                     />
                     <button
                       type="submit"
+                      data-testid="field-photo-submit"
                       disabled={!photoFile || busyAction !== null}
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       <Camera className="h-4 w-4" />
                       {busyAction === "photo" ? "Uploading" : "Upload photo"}
                     </button>
+                    {hasUnresolvedPhotoUploadAttempt ? (
+                      <p
+                        data-testid="field-photo-upload-lock"
+                        className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm font-semibold text-amber-900"
+                      >
+                        Retry this unchanged upload before editing its file, target,
+                        category, or caption.
+                      </p>
+                    ) : null}
                     <p data-testid="field-photo-upload-state" className="text-sm font-semibold text-wt-muted">
                       Upload state: {uploadStateLabel(uploadState)}
                     </p>

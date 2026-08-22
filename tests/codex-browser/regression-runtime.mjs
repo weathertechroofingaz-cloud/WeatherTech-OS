@@ -50,6 +50,7 @@ const TARGETED_BROWSER_REGRESSION_GROUPS = Object.freeze([
   "crm-inbox",
   "crm-reconciliation",
   "crm-accountability",
+  "job-photos",
 ]);
 
 const KNOWN_BROWSER_REGRESSION_GROUPS = new Set([
