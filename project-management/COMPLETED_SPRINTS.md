@@ -4,6 +4,34 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Secure Company-Scoped Job Photos & Field Upload Reliability Phase 1
+
+- Implementation commit: `b4f5519afc1dd3d5d688f90167a994a8de447c0d`
+- CI lifecycle correction: `34b9c6b12c17fafea97eda0d5fd9680fb2d7e450`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, pushed, deployed, both approved Production migrations applied, and read-only Production validated without creating a Production photo or business record.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `36/36 pass`; focused job-photo security: `227 assertions pass`
+  - Storage hardening, upload readiness/retry, migration integrity for 50 migrations, regression bootstrap, browser isolation/runtime, type-check, lint, Production build, dependency audit with zero vulnerabilities, secret scan, protected-file checks, and `git diff --check`: `pass`
+  - Hosted isolated lifecycle: `pass`, including exact-path delete response and object-absence proof, prompt nonretryable semantic errors, preserved genuine serialization handling, concurrency/recovery boundaries, and zero residue
+  - Affected current-byte Browser shard: `4/4 pass`; definitive run `20260822093206385`: all `24/24` groups and `31/31` assertions passed with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue
+  - GitHub Actions run `32566363585`: repository-only job `97015445738` and protected isolated-Supabase lifecycle job `97015702640` both `success`. The preceding run failed before lifecycle bootstrap because that job lacked dependency installation; the narrow correction added locked `npm ci` plus a regression guard, after which the exact-SHA run passed.
+  - GitHub Production deployment record `6035568791`, created by `vercel[bot]`, completed successfully for exact SHA `34b9c6b12c17fafea97eda0d5fd9680fb2d7e450`; canonical `/api/health` returned HTTP 200 with that SHA.
+- Database:
+  - `20260818030913_secure_company_scoped_job_photos.sql` — SHA-256 `eb886e55277c87893d9aaed6affc54f43680235dd6f35e3230d84b47150ed0e3`
+  - `20260822054433_job_photo_storage_rollback_retry_correction.sql` — SHA-256 `74a3a130c17e0e8a84f9a1b5dcc544b0c8ea348a98b0f287cc10ca6e7aeeafdb`
+  - The exact additive chain was applied through the normal linked workflow. Local, regression, and Production ledgers match all `50/50` committed migrations.
+  - Production `job-photos` is private with a 25 MiB limit and `image/*` allowlist. Registered reads require company-scoped metadata; uploads require an exact live reservation; rollback deletion is restricted to the immutable original uploader and exact canceling operation; authenticated object update remains denied.
+  - Production retained zero `job_photos` metadata rows and zero `job_photo_upload_operations` rows. All job-photo functions retain fixed empty search paths, private base functions remain unexposed, and the correction admits delete preselection only for `storage.object.delete` and `storage.object.delete_many` while preserving genuine serialization failures.
+- Notes:
+  - App metadata stores only the private object path and never a durable public or signed URL. Authorized short-lived signed preview/copy/open behavior was proven in the isolated hosted and Browser suites at the released code/schema contract; Production had no registered photo on which to create a read-only positive signed-link proof.
+  - The original Production orphan remains the only object, with canonical row fingerprint SHA-256 `2e28713e7265081888c5796f7a9372c41c1135da1eed41827c9035b731db8060` unchanged. Public and anonymous HEAD requests were denied; a service-role HEAD positive control succeeded without downloading bytes or exposing the path.
+  - `customer-documents` remained private with zero objects. The ten development test leads/intakes, provider rows and activation flags, and unrelated business data remained unchanged. No synthetic Production upload, provider write, customer message, or next-sprint work occurred.
+  - `/api/readiness` remains truthfully HTTP 503 because the pre-existing provider/owner safety gate is unchanged; this sprint does not claim broad Production activation.
+  - Preserved `supabase/migrations/0026_property_intelligence_foundation.sql` at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and `.env.local` at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+
 ### Lead Attribution & Marketing Accountability Phase 1 — Verified Origin, Funnel & Manual Spend
 
 - Implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6`

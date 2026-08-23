@@ -190,6 +190,14 @@ Do not add a conditional job that reports success when secrets or browser capabi
 - GitHub Actions run `32073345029` completed successfully; repository-only job `95521143325` and protected isolated-Supabase lifecycle job `95521700791` passed. CI still does not claim to execute the proprietary in-app Browser suite.
 - Read-only Production verification after applying the same exact migrations found all five new tables empty, all ten existing test leads/intake records unchanged and unbackfilled, the original 72-table/277-row fingerprint unchanged, and no provider/gate change. No synthetic Production data was created.
 
+### Secure Company-Scoped Job Photos Extension
+
+- Implementation commit `b4f5519afc1dd3d5d688f90167a994a8de447c0d` and narrow CI lifecycle correction `34b9c6b12c17fafea97eda0d5fd9680fb2d7e450` extended the approved target to the exact `50/50` migration ledger.
+- The hosted lifecycle proved private company-scoped upload/read isolation, URL-free metadata, deterministic reservation/idempotency, delayed and concurrent cancellation races, lease recovery, exact rollback deletion, prompt semantic errors without retry amplification, preserved genuine serialization handling, and zero residue.
+- Definitive Browser run `20260822093206385` passed all `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and independent zero-residue verification. It covered Photos, Inspection, Field Operations, Customer 360, signed preview/copy/open/reload, company switching, and recovery across navigation/reload.
+- GitHub Actions run `32566363585` passed both jobs at the exact correction SHA. CI uses protected regression credentials and provider gates false; it does not claim to execute the proprietary in-app Browser suite.
+- Production read-only verification after applying the same two migrations found the bucket private and constrained, zero photo metadata/upload-operation rows, the original orphan unchanged and inaccessible to ordinary clients, `customer-documents` unchanged, and no provider/test-data/gate mutation.
+
 ## Emergency Troubleshooting
 
 - **Target rejected:** compare the URL hostname, expected project reference, credential identity, linked production reference, rendered public-origin marker, and rendered demo-fallback marker. Never weaken the check.

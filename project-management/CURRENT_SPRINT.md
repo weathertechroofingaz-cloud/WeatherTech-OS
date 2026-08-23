@@ -4,7 +4,7 @@ This file is the source of truth for the active WeatherTech OS sprint. Codex mus
 
 ## Approval Status
 
-Approved
+Completed
 
 The owner explicitly approved this exact sprint in the Codex task on 2026-08-17 and, on 2026-08-21, approved the second narrowly scoped additive correction migration required by the unchanged hosted lifecycle. These approvals authorize the two immutable additive job-photo migrations, application hardening, isolated validation, direct `main` release, Production migration application, read-only Production verification, and governance closeout described below. They do not authorize another sprint, a third migration, or any excluded provider, environment, integration, or Production-data change.
 
@@ -93,14 +93,15 @@ Joe Harris
 - Dry-run the linked migration chain and require exactly the two expected migrations in order with no seeds, roles, vault work, or unrelated pending entry; apply them once, then perform read-only catalog/data/storage/provider/health verification.
 - Record the immutable implementation commit in completed governance with at most one documentation-only closeout commit. Do not begin another sprint.
 
-## Planned Commit Messages
+## Release Commits
 
-- Implementation: `fix: secure company-scoped job photos`
-- Documentation closeout, if required: `docs: close secure job photos sprint`
+- Implementation: `b4f5519afc1dd3d5d688f90167a994a8de447c0d` — `feat: secure company-scoped job photos`
+- Narrow CI lifecycle correction: `34b9c6b12c17fafea97eda0d5fd9680fb2d7e450` — `fix: install lifecycle dependencies in CI`
+- Documentation closeout: `docs: close secure job photos sprint`; use Git history for its immutable hash.
 
 ## Final Status
 
-Implementation and validation in progress. Both approved migrations have been applied only to the isolated regression project for hosted validation; Production remains unapplied. No deployment, provider/environment change, Production business-data mutation, or Production orphan-object mutation has occurred for this sprint yet.
+Completed on 2026-08-22. The implementation and narrow CI correction are pushed to `main`, GitHub Actions run `32566363585` passed both jobs, Vercel Production and canonical `/api/health` are healthy at exact SHA `34b9c6b12c17fafea97eda0d5fd9680fb2d7e450`, and the complete isolated Browser suite passed all 24 groups and 31 assertions with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue. The linked regression and Production ledgers match all `50/50` migrations after applying `20260818030913_secure_company_scoped_job_photos.sql` and `20260822054433_job_photo_storage_rollback_retry_correction.sql` in order. Production `job-photos` is private with its 25 MiB/image-only boundary, exact scoped policies, zero metadata rows, and zero upload-operation rows. The original single orphan remains byte-for-byte unchanged and is denied to public and anonymous retrieval; `customer-documents`, provider state, ten development test leads/intakes, protected migration `0026`, and `.env.local` remain unchanged. `/api/readiness` truthfully remains HTTP 503 under the pre-existing provider/owner gate. No synthetic Production photo or business record was created, no provider was activated, and no subsequent sprint was selected or started.
 
 ## Notes
 
