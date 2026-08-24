@@ -9,6 +9,7 @@ import type {
   InspectionRecord,
   ScheduleEventRecord,
 } from "../crm/types";
+import { PROPOSAL_SIGNING_LINK_PLACEHOLDER } from "../proposal-signing/constants";
 
 export type GoogleWorkspaceEmailDraftKind =
   | "estimate_delivery"
@@ -20,6 +21,31 @@ export type GoogleWorkspaceEmailDraftKind =
 export type GoogleWorkspaceEmailDraftPlan =
   | { ok: true; input: EmailMessageInput }
   | { ok: false; error: string };
+
+export const PROPOSAL_SIGNATURE_EMAIL_DRAFT_TYPE =
+  "proposal_signature_request" as const;
+
+export type ProposalSignatureEmailDraftOptions = {
+  companyId: string;
+  companyName: string;
+  customerId: string;
+  customerName: string;
+  recipientEmail: string;
+  leadId: string | null;
+  propertyId: string | null;
+  estimateId: string;
+  proposalRevisionId: string;
+  proposalNumber: string;
+  revisionNumber: number;
+  acceptedTotal: number;
+  revisionSha256: string;
+  termsSha256: string;
+  documentId: string;
+  documentSha256: string;
+  signingRequestId: string;
+  integrationConnectionId: string;
+  fromEmail: string;
+};
 
 type EmailDraftOptions = {
   snapshot: CrmSnapshot;
@@ -73,9 +99,20 @@ function getProposalDocumentId(
   snapshot: CrmSnapshot,
   proposal: EstimateProposalRevisionRecord,
 ) {
+  const finalizedDocumentId = (
+    proposal as EstimateProposalRevisionRecord & {
+      finalized_document_id?: string | null;
+    }
+  ).finalized_document_id;
+
+  if (!finalizedDocumentId) {
+    return null;
+  }
+
   return (
     snapshot.documents.find(
       (document) =>
+        document.id === finalizedDocumentId &&
         document.company_id === proposal.company_id &&
         document.estimate_id === proposal.estimate_id &&
         document.category === "proposal" &&
@@ -210,7 +247,7 @@ export function buildGoogleWorkspaceEmailDraft(
     attachmentCount = 1;
   } else if (proposal) {
     subject = `${proposal.proposal_number} proposal from ${company.name}`;
-    body = `Hi ${contactName},\n\nYour proposal, ${proposal.title}, is ready for review. The current proposal total is ${formatMoney(proposal.accepted_total || proposal.base_total)}. A PDF copy is attached. Please reply with any questions or when you are ready to approve the proposal.\n\nThank you,\n${company.name}`;
+    body = `Hi ${contactName},\n\nYour proposal, ${proposal.title}, is ready for review. The finalized proposal total is ${formatMoney(proposal.accepted_total || proposal.base_total)}. The exact finalized PDF is attached. This review email does not request or record an electronic signature; use the secure proposal signature workflow when you are ready to accept.\n\nThank you,\n${company.name}`;
     estimateId = proposal.estimate_id;
     propertyId = proposal.property_id;
     documentId = getProposalDocumentId(snapshot, proposal);
@@ -267,7 +304,122 @@ export function buildGoogleWorkspaceEmailDraft(
         proposalNumber: proposal?.proposal_number ?? null,
         inspectionId: inspection?.id ?? null,
         scheduleEventId: scheduleEvent?.id ?? inspection?.schedule_event_id ?? null,
-        attachmentPolicy: attachmentCount ? "estimate_pdf" : "none",
+        attachmentPolicy:
+          kind === "proposal_delivery"
+            ? "exact_proposal_pdf"
+            : attachmentCount
+              ? "estimate_pdf"
+              : "none",
+      },
+    },
+  };
+}
+
+/**
+ * Creates a token-free, owner-reviewable Gmail draft for one exact immutable
+ * proposal revision. The raw bearer token is minted only inside the approved
+ * send request and substituted into this fixed placeholder in memory.
+ */
+export function buildProposalSignatureEmailDraft(
+  options: ProposalSignatureEmailDraftOptions,
+): GoogleWorkspaceEmailDraftPlan {
+  const companyId = options.companyId.trim();
+  const customerId = options.customerId.trim();
+  const recipientEmail = options.recipientEmail.trim().toLowerCase();
+  const documentSha256 = options.documentSha256.trim().toLowerCase();
+  const revisionSha256 = options.revisionSha256.trim().toLowerCase();
+  const termsSha256 = options.termsSha256.trim().toLowerCase();
+
+  if (
+    !companyId ||
+    !customerId ||
+    !recipientEmail ||
+    !options.proposalRevisionId.trim() ||
+    !options.documentId.trim() ||
+    !options.signingRequestId.trim() ||
+    !options.integrationConnectionId.trim() ||
+    !options.fromEmail.trim()
+  ) {
+    return {
+      ok: false,
+      error:
+        "An exact proposal revision, document, customer, signing request, and connected mailbox are required.",
+    };
+  }
+
+  if (
+    !/^[a-f0-9]{64}$/.test(documentSha256) ||
+    !/^[a-f0-9]{64}$/.test(revisionSha256) ||
+    !/^[a-f0-9]{64}$/.test(termsSha256)
+  ) {
+    return {
+      ok: false,
+      error: "The finalized proposal is missing valid immutable SHA-256 evidence.",
+    };
+  }
+
+  if (!/^\d+$/.test(String(options.revisionNumber)) || options.revisionNumber < 1) {
+    return { ok: false, error: "The proposal revision number is invalid." };
+  }
+
+  const contactName = options.customerName.trim() || "there";
+  const companyName = options.companyName.trim() || "WeatherTech OS";
+  const proposalNumber = options.proposalNumber.trim();
+  const subject = `${proposalNumber} electronic signature request from ${companyName}`;
+  const body = [
+    `Hi ${contactName},`,
+    "",
+    `Please review and electronically sign proposal ${proposalNumber}, revision ${options.revisionNumber}. The attached PDF is the exact finalized proposal revision covered by this request, with an accepted total of ${formatMoney(options.acceptedTotal)}.`,
+    "",
+    "Secure review and signature link:",
+    PROPOSAL_SIGNING_LINK_PLACEHOLDER,
+    "",
+    "The secure page will ask you to confirm your identity, selected options, accepted total, proposal terms, and electronic-record disclosure before signing. This link is intended only for the addressed customer.",
+    "For security, this signing link expires 14 days after this email is sent.",
+    "",
+    `Thank you,`,
+    companyName,
+  ].join("\n");
+
+  return {
+    ok: true,
+    input: {
+      company_id: companyId,
+      customer_id: customerId,
+      lead_id: options.leadId,
+      property_id: options.propertyId,
+      estimate_id: options.estimateId,
+      document_id: options.documentId,
+      integration_connection_id: options.integrationConnectionId,
+      category: "estimate",
+      status: "draft",
+      direction: "outbound",
+      from_email: options.fromEmail.trim().toLowerCase(),
+      to_email: recipientEmail,
+      to_emails: [recipientEmail],
+      subject,
+      body,
+      message_preview: body.replace(/\s+/g, " ").trim().slice(0, 500),
+      has_attachments: true,
+      attachment_count: 1,
+      sync_status: "local",
+      metadata: {
+        draftType: PROPOSAL_SIGNATURE_EMAIL_DRAFT_TYPE,
+        approvalState: "draft",
+        requiresOwnerApproval: true,
+        generatedBy: "weathertech_proposal_signature",
+        attachmentPolicy: "exact_proposal_pdf",
+        signingLinkPlaceholder: PROPOSAL_SIGNING_LINK_PLACEHOLDER,
+        proposalSigningRequestId: options.signingRequestId,
+        proposalRevisionId: options.proposalRevisionId,
+        proposalNumber,
+        proposalRevisionNumber: options.revisionNumber,
+        proposalAcceptedTotal: options.acceptedTotal,
+        proposalRevisionSha256: revisionSha256,
+        proposalTermsSha256: termsSha256,
+        proposalDocumentId: options.documentId,
+        proposalDocumentSha256: documentSha256,
+        immutableCustomerArtifact: true,
       },
     },
   };

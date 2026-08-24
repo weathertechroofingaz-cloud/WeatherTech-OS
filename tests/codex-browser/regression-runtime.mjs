@@ -51,6 +51,7 @@ const TARGETED_BROWSER_REGRESSION_GROUPS = Object.freeze([
   "crm-reconciliation",
   "crm-accountability",
   "job-photos",
+  "proposal-signing",
 ]);
 
 const KNOWN_BROWSER_REGRESSION_GROUPS = new Set([
@@ -314,10 +315,17 @@ export function resolveBrowserRegressionGroups({
     const nonDefaultGroups = normalizedGroups.filter(
       (group) => !DEFAULT_BROWSER_REGRESSION_GROUPS.includes(group),
     );
+    const canonicalOrderMatches = normalizedGroups.every(
+      (group, index) => group === DEFAULT_BROWSER_REGRESSION_GROUPS[index],
+    );
 
-    if (missingDefaults.length > 0 || nonDefaultGroups.length > 0) {
+    if (
+      missingDefaults.length > 0 ||
+      nonDefaultGroups.length > 0 ||
+      !canonicalOrderMatches
+    ) {
       throw new Error(
-        `A full browser regression run must include every default group exactly once. Missing: ${missingDefaults.join(", ") || "none"}. Non-default: ${nonDefaultGroups.join(", ") || "none"}.`,
+        `A full browser regression run must include every default group exactly once in canonical order. Missing: ${missingDefaults.join(", ") || "none"}. Non-default: ${nonDefaultGroups.join(", ") || "none"}.`,
       );
     }
   }
@@ -326,6 +334,53 @@ export function resolveBrowserRegressionGroups({
     groups: normalizedGroups,
     fullRun,
   };
+}
+
+function assertBrowserRegressionSession(session) {
+  if (
+    !session ||
+    typeof session.next !== "function" ||
+    typeof session.return !== "function"
+  ) {
+    throw new Error(
+      "Browser regression session must be an async iterator with next() and return().",
+    );
+  }
+}
+
+function assertBrowserRegressionSessionStep(step) {
+  if (!step || typeof step !== "object" || typeof step.done !== "boolean") {
+    throw new Error("Browser regression session returned an invalid iterator step.");
+  }
+}
+
+export async function drainBrowserRegressionSession(session) {
+  assertBrowserRegressionSession(session);
+
+  let step = await session.next();
+  assertBrowserRegressionSessionStep(step);
+
+  while (!step.done) {
+    step = await session.next();
+    assertBrowserRegressionSessionStep(step);
+  }
+
+  return step.value;
+}
+
+export async function abortBrowserRegressionSession(session) {
+  assertBrowserRegressionSession(session);
+
+  const step = await session.return();
+  assertBrowserRegressionSessionStep(step);
+
+  if (!step.done) {
+    throw new Error(
+      "Browser regression session abort did not reach its terminal cleanup boundary.",
+    );
+  }
+
+  return step.value;
 }
 
 export function getBrowserRegressionAuthCredentials(environment = {}) {

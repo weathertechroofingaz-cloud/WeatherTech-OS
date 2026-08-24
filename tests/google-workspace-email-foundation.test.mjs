@@ -568,7 +568,11 @@ try {
 
   let retryPhase = "first";
   let retryPostCount = 0;
-  const ambiguousFixture = { ...sendFixture, id: "email-message-ambiguous" };
+  const ambiguousFixture = {
+    ...sendFixture,
+    id: "email-message-ambiguous",
+    gmail_thread_id: null,
+  };
   const ambiguousIdempotencyKey =
     serverClient.createGmailIdempotencyKey(ambiguousFixture);
   const ambiguousFetch = async (url) => {
@@ -611,10 +615,32 @@ try {
     fetchImpl: ambiguousFetch,
   });
   assertEqual(ambiguousFirstAttempt.sent, false, "An ambiguous provider failure stays failed");
+  assertEqual(
+    ambiguousFirstAttempt.status,
+    "provider_outcome_unknown",
+    "A provider timeout remains outcome-unknown instead of becoming resendable",
+  );
+  const unresolvedReconciliation = await serverClient.sendGmailEmail({
+    message: ambiguousFixture,
+    accessToken: "access-token",
+    reconciliationOnly: true,
+    fetchImpl: ambiguousFetch,
+  });
+  assertEqual(
+    unresolvedReconciliation.status,
+    "provider_outcome_unknown",
+    "Reconciliation without provider evidence remains safely outcome-unknown",
+  );
+  assertEqual(
+    retryPostCount,
+    1,
+    "Outcome-unknown reconciliation never issues another Gmail POST",
+  );
   retryPhase = "retry";
   const ambiguousRetry = await serverClient.sendGmailEmail({
     message: ambiguousFixture,
     accessToken: "access-token",
+    reconciliationOnly: true,
     fetchImpl: ambiguousFetch,
   });
   assertEqual(ambiguousRetry.sent, true, "An owner retry reconciles a provider-confirmed send");
@@ -624,6 +650,37 @@ try {
     "Retry reconciliation prevents a second customer email",
   );
   assertEqual(retryPostCount, 1, "The owner retry does not issue a second Gmail POST");
+  assertEqual(
+    ambiguousRetry.gmailThreadId,
+    "thread-after-timeout",
+    "A new-thread send reconciles the exact provider-generated Gmail thread identity",
+  );
+
+  let stoppedPreSendPostCount = 0;
+  const stoppedPreSend = await serverClient.sendGmailEmail({
+    message: { ...sendFixture, id: "email-message-pre-send-claim-failure" },
+    accessToken: "access-token",
+    beforeProviderSend: async () => false,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/users/me/messages/send")) {
+        stoppedPreSendPostCount += 1;
+      }
+      return new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assertEqual(
+    stoppedPreSend.status,
+    "pre_send_stopped",
+    "A failed durable provider-attempt checkpoint stops before Gmail",
+  );
+  assertEqual(
+    stoppedPreSendPostCount,
+    0,
+    "A failed durable provider-attempt checkpoint cannot call Gmail",
+  );
 
   let refreshRequestBody = "";
   const refreshed = await serverClient.refreshGoogleAccessToken({
@@ -715,6 +772,7 @@ try {
     join(cwd, "app/api/integrations/google-workspace/send/route.ts"),
     "utf8",
   );
+  const crmAppSource = readFileSync(join(cwd, "components/CrmApp.tsx"), "utf8");
   const oauthStartRouteSource = readFileSync(
     join(cwd, "app/api/integrations/google-workspace/oauth/start/route.ts"),
     "utf8",
@@ -729,6 +787,36 @@ try {
       sendRouteSource.includes('sync_status: "syncing"') &&
       sendRouteSource.includes("No duplicate send was attempted"),
     "Send route atomically claims a queued approval before calling Gmail",
+  );
+  assert(
+    sendRouteSource.includes('GMAIL_DELIVERY_STATE_PRE_SEND = "claimed_pre_send"') &&
+      sendRouteSource.includes(
+        'GMAIL_DELIVERY_STATE_UNKNOWN = "provider_outcome_unknown"',
+      ) &&
+      sendRouteSource.includes(
+        'GMAIL_DELIVERY_STATE_CONFIRMED = "provider_confirmed"',
+      ) &&
+      sendRouteSource.includes("recoverStalePreSendClaim") &&
+      sendRouteSource.includes("reconciliationOnly: recoveringUnknownProviderOutcome") &&
+      sendRouteSource.includes("gmailConfirmedMessageId") &&
+      sendRouteSource.includes("approvedGmailThreadId") &&
+      sendRouteSource.includes(
+        "initialDeliveryState === GMAIL_DELIVERY_STATE_CONFIRMED",
+      ) &&
+      sendRouteSource.includes('"failed_after_provider_send"'),
+    "Send route durably separates safe pre-send recovery, outcome-only reconciliation, and provider-confirmed persistence",
+  );
+  assert(
+    sendRouteSource.includes("message.estimate_id && !signatureMetadata"),
+    "Native proposal signature delivery cannot downgrade an approved estimate back to sent",
+  );
+  assert(
+    crmAppSource.includes('"sent_activation_deferred"') &&
+      crmAppSource.includes('"failed_after_provider_send"') &&
+      crmAppSource.includes('"provider_outcome_unknown"') &&
+      crmAppSource.includes("result.signatureActivationDeferred") &&
+      crmAppSource.includes("result.message ?? result.result?.message"),
+    "Gmail UI reads the top-level delivery contract and distinguishes every post-provider state",
   );
   assert(
     sendRouteSource.includes('.select("user_id, company_id, role")') &&

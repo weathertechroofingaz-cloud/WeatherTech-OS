@@ -14,6 +14,8 @@ import {
   BROWSER_REGRESSION_TEST_USER_EMAIL,
   BROWSER_REGRESSION_TEST_USER_PASSWORD,
   DEFAULT_BROWSER_REGRESSION_GROUPS,
+  abortBrowserRegressionSession,
+  drainBrowserRegressionSession,
   getBrowserRegressionAuthCredentials,
   loadBrowserRegressionEnvironment,
   parseRegressionEnvironment,
@@ -93,6 +95,11 @@ assertEqual(
   "A full run resolves every default group",
 );
 assertEqual(
+  JSON.stringify(fullSelection.groups),
+  JSON.stringify(DEFAULT_BROWSER_REGRESSION_GROUPS),
+  "A full run resolves the exact canonical default group order",
+);
+assertEqual(
   resolveBrowserRegressionGroups({ groups: ["dashboard"], fullRun: false }).groups[0],
   "dashboard",
   "A known targeted group is allowed",
@@ -145,6 +152,56 @@ assertThrows(
   () => resolveBrowserRegressionGroups({ groups: ["dashboard"], fullRun: true }),
   "must include every default group",
   "A partial group list cannot be labeled a full run",
+);
+assertThrows(
+  () =>
+    resolveBrowserRegressionGroups({
+      groups: [...DEFAULT_BROWSER_REGRESSION_GROUPS].reverse(),
+      fullRun: true,
+    }),
+  "canonical order",
+  "A reordered complete group list cannot be labeled a full run",
+);
+
+let drainedCheckpointCount = 0;
+const drainedResult = await drainBrowserRegressionSession(
+  (async function* createDrainFixture() {
+    drainedCheckpointCount += 1;
+    yield { kind: "record", completedAssertionCount: 1 };
+    drainedCheckpointCount += 1;
+    yield { kind: "record", completedAssertionCount: 2 };
+    return { ok: true, fullRun: true };
+  })(),
+);
+assertEqual(
+  drainedCheckpointCount,
+  2,
+  "The compatibility wrapper fully awaits every resumable checkpoint",
+);
+assert(
+  drainedResult.ok === true && drainedResult.fullRun === true,
+  "The compatibility wrapper returns the generator's canonical terminal result",
+);
+
+let abortCleanupCount = 0;
+const abortFixture = (async function* createAbortFixture() {
+  try {
+    yield { kind: "record", completedAssertionCount: 1 };
+    yield { kind: "record", completedAssertionCount: 2 };
+  } finally {
+    abortCleanupCount += 1;
+  }
+})();
+const firstAbortCheckpoint = await abortFixture.next();
+assert(
+  firstAbortCheckpoint.done === false,
+  "A resumable session reaches a suspended checkpoint before abort",
+);
+await abortBrowserRegressionSession(abortFixture);
+assertEqual(
+  abortCleanupCount,
+  1,
+  "An explicitly awaited session abort executes its cleanup boundary exactly once",
 );
 
 const authCredentials = getBrowserRegressionAuthCredentials(parsedEnvironment);
@@ -330,6 +387,13 @@ const regressionSafety = readFileSync(
 );
 const runnerStart = harness.indexOf("export async function runWeatherTechOsRegression");
 const runner = harness.slice(runnerStart);
+const resumableRunnerStart = harness.indexOf(
+  "export async function* createWeatherTechOsRegressionSession",
+);
+const resumableRunner = harness.slice(resumableRunnerStart);
+const yieldedRecordCount = [
+  ...resumableRunner.matchAll(/yield await record\(/g),
+].length;
 
 assert(
   runner.includes("runtimeEnv = null") &&
@@ -337,6 +401,21 @@ assert(
     runner.includes("resolvedRuntimeEnv[BROWSER_REGRESSION_REMOTE_WRITE_FLAG]") &&
     runner.includes("resolvedRuntimeEnv[BROWSER_REGRESSION_EXPECTED_PROJECT_REF]"),
   "The runner accepts an explicit non-secret runtime authorization object and forwards it to target validation",
+);
+assert(
+  runner.includes("return drainBrowserRegressionSession(") &&
+    runner.includes("createWeatherTechOsRegressionSession(options)") &&
+    resumableRunnerStart >= 0 &&
+    yieldedRecordCount > 0 &&
+    !/(^|\n)\s*await record\(/.test(resumableRunner),
+  "The legacy runner drains one resumable session and every outer assertion yields a fully awaited checkpoint",
+);
+assert(
+  resumableRunner.lastIndexOf("yield await record(") <
+    resumableRunner.indexOf('progress("cleanup:after:start")') &&
+    resumableRunner.indexOf('progress("cleanup:after:start")') <
+      resumableRunner.indexOf('progress("browser:tab:closed")'),
+  "Run-level cleanup and tab closure remain after the final resumable assertion checkpoint",
 );
 assert(
   harness.includes('getAttribute("data-wtos-crm-demo-fallback"') &&

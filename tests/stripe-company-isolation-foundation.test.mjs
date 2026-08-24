@@ -1307,13 +1307,22 @@ try {
     "utf8",
   );
   assert(
-    crmApp.includes('const [selectedInvoiceId, setSelectedInvoiceId] = useState("new")') &&
+    crmApp.includes("const [selectedInvoiceId, setSelectedInvoiceId] = useState(") &&
+      crmApp.includes('focusedInvoiceId ?? "new"') &&
+      crmApp.includes("const FINANCIAL_INVOICE_PAGE_SIZE = 8") &&
+      crmApp.includes(
+        "usePagination(filteredInvoices, FINANCIAL_INVOICE_PAGE_SIZE)",
+      ) &&
       crmApp.includes("const selectedInvoiceIsVisible =") &&
       crmApp.includes("pagedInvoices.some") &&
+      crmApp.includes("const focusedInvoiceIndex = buildFinancialOperationsSummary(") &&
+      crmApp.includes(
+        "Math.floor(focusedInvoiceIndex / FINANCIAL_INVOICE_PAGE_SIZE) + 1",
+      ) &&
       crmApp.includes("const selectedInvoice = selectedInvoiceIsVisible") &&
       crmApp.includes('selectedInvoiceId !== "new"') &&
       crmApp.includes('setSelectedInvoiceId("new")'),
-    "Invoices require explicit visible selection and clear hidden Stripe actions after filtering",
+    "Invoices open exact focused records on their real page and clear hidden Stripe actions after filtering or pagination",
   );
   for (const requiredRefundControl of [
     "isStripeClientRefundEligible",

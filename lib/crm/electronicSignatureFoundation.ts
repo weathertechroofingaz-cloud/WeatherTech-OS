@@ -28,6 +28,8 @@ export type ElectronicSignatureLifecycleEvent =
   | "signature_completed"
   | "signature_declined"
   | "signature_expired"
+  | "signature_revoked"
+  | "signature_superseded"
   | "sync_failed"
   | "configuration_required";
 
@@ -544,6 +546,12 @@ export function buildElectronicSignatureStatusEvent({
     signed: { event: "signature_completed", label: "Signature completed" },
     declined: { event: "signature_declined", label: "Signature declined" },
     expired: { event: "signature_expired", label: "Signature expired" },
+    failed: { event: "sync_failed", label: "Signature failed" },
+    revoked: { event: "signature_revoked", label: "Signature revoked" },
+    superseded: {
+      event: "signature_superseded",
+      label: "Signature superseded",
+    },
     sync_failed: { event: "sync_failed", label: "Signature sync failed" },
     configuration_required: {
       event: "configuration_required",

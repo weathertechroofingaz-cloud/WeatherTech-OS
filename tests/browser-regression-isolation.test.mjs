@@ -388,6 +388,38 @@ assertRegressionCleanupSafe({
 
 const runnerStart = harness.indexOf("export async function runWeatherTechOsRegression");
 const runner = harness.slice(runnerStart);
+const companyScopeHelper = harness.slice(
+  harness.indexOf("async function clickCompanyScope"),
+  harness.indexOf("async function selectTestJob"),
+);
+const viewportResetHelper = harness.slice(
+  harness.indexOf("async function resetRegressionViewportForRecord"),
+  runnerStart,
+);
+const recordHelper = runner.slice(
+  runner.indexOf("const record = async"),
+  runner.indexOf("let cleanup = { before: null, after: null }"),
+);
+const executiveWorkspaceHelper = harness.slice(
+  harness.indexOf("async function testExecutiveIntelligenceWorkspace"),
+  harness.indexOf("async function testAiToolsOperatingBrain"),
+);
+const aiWorkspaceHelper = harness.slice(
+  harness.indexOf("async function testAiToolsOperatingBrain"),
+  harness.indexOf("async function testFinancialOperationsWorkspace"),
+);
+const websiteMarketingEntryHelper = harness.slice(
+  harness.indexOf("async function testWebsiteMarketingFoundation"),
+  harness.indexOf("async function enterMarketingAccountabilityWorkspace"),
+);
+const estimatesWorkflowHelper = harness.slice(
+  harness.indexOf("async function testEstimatesWorkflow"),
+  harness.indexOf("async function testQuickActionsDoNotOverlap"),
+);
+const estimatePostRefreshQueryHelper = estimatesWorkflowHelper.slice(
+  estimatesWorkflowHelper.indexOf("const queryValue = (key) =>"),
+  estimatesWorkflowHelper.indexOf("const normalizedText = (value) =>"),
+);
 const targetGuardIndex = runner.indexOf("const target = assertBrowserRegressionTarget(");
 const serverSafetyMarkerIndex = runner.indexOf(
   "await assertServerApplicationSafetyMarkers(baseUrl, target)",
@@ -397,6 +429,117 @@ const publicTargetMarkerIndex = runner.indexOf(
 );
 const firstDatabaseReadIndex = runner.indexOf("await detectLeadNameColumn(env)");
 const firstCleanupIndex = runner.indexOf("await cleanupTestRecords(env, runId");
+
+assert(
+  companyScopeHelper.includes('.getAttribute("aria-pressed"') &&
+    companyScopeHelper.includes('ariaPressed === "true"') &&
+    !companyScopeHelper.includes("innerText") &&
+    !companyScopeHelper.includes("targetName"),
+  "Company-scope selection verifies aria-pressed on the exact clicked control without relying on hidden responsive label text",
+);
+assert(
+  viewportResetHelper.includes("Promise.race") &&
+    viewportResetHelper.includes('await browser.capabilities.get("viewport")') &&
+    viewportResetHelper.includes("await viewport.set(LAPTOP_VIEWPORT)") &&
+    viewportResetHelper.includes("setTimeout(") &&
+    viewportResetHelper.includes("clearTimeout(timeoutId)"),
+  "Each record has a bounded laptop viewport restoration boundary",
+);
+assert(
+  recordHelper.includes("finally {") &&
+    recordHelper.includes(
+      "await resetRegressionViewportForRecord(browser, progress, name)",
+    ) &&
+    recordHelper.includes("viewport-reset:failed") &&
+    recordHelper.includes("new AggregateError(") &&
+    recordHelper.includes("throw combinedError"),
+  "Record isolation restores laptop width after pass or failure and aborts instead of continuing when restoration is unknown",
+);
+for (const [label, helperSource, navigation, scope] of [
+  [
+    "Executive Intelligence",
+    executiveWorkspaceHelper,
+    'await clickNav(tab, "Analytics")',
+    'await clickCompanyScope(tab, "All companies")',
+  ],
+  [
+    "AI Tools",
+    aiWorkspaceHelper,
+    'await clickNav(tab, "AI Tools")',
+    'await clickCompanyScope(tab, "All companies")',
+  ],
+  [
+    "Website Marketing",
+    websiteMarketingEntryHelper,
+    'await clickNav(tab, "Marketing Accountability")',
+    'await clickCompanyScope(tab, "All companies")',
+  ],
+]) {
+  assert(
+    helperSource.indexOf(navigation) >= 0 &&
+      helperSource.indexOf(navigation) < helperSource.indexOf(scope),
+    `${label} clears exact-record focus by navigating before changing company scope`,
+  );
+}
+assert(
+  estimatesWorkflowHelper.includes(
+    "Finalize an immutable customer-safe revision before requesting an electronic signature.",
+  ) &&
+    estimatesWorkflowHelper.includes(
+      "Finalize the exact revision and private PDF before preparing customer delivery.",
+    ) &&
+    estimatesWorkflowHelper.includes(
+      "The customer electronically signs the exact immutable finalized proposal",
+    ) &&
+    estimatesWorkflowHelper.includes(
+      '!proposalText.includes("Signature provider not connected")',
+    ),
+  "Estimate Browser readiness proves the native exact-proposal signature workflow and rejects retired provider-disconnected copy",
+);
+assert(
+  estimatesWorkflowHelper.includes("Last PII-free post-refresh state:") &&
+    estimatesWorkflowHelper.includes("viewQueryMatches") &&
+    estimatesWorkflowHelper.includes("estimateFocusMatches") &&
+    estimatesWorkflowHelper.includes("selectedEstimateWorkspacePresent") &&
+    estimatesWorkflowHelper.includes("approvalLabelApproved") &&
+    estimatesWorkflowHelper.includes("conversionLabelBlocked") &&
+    estimatesWorkflowHelper.includes("transientRefusalAbsent") &&
+    estimatesWorkflowHelper.includes("visibleAlerts: alertDiagnostics") &&
+    estimatesWorkflowHelper.includes('safeText: text === expectedRefusal ? text : `[redacted:${text.length}]`'),
+  "Estimate refresh preserves exact deep-link and proposal-gate proof with PII-free clause diagnostics",
+);
+assert(
+  estimatePostRefreshQueryHelper.includes('const [rawKey] = part.split("=")') &&
+    estimatePostRefreshQueryHelper.includes("rawKey === key") &&
+    !estimatePostRefreshQueryHelper.includes("encodeURIComponent") &&
+    !estimatePostRefreshQueryHelper.includes("decodeURIComponent") &&
+    !estimatePostRefreshQueryHelper.includes("URLSearchParams") &&
+    !estimatePostRefreshQueryHelper.includes("new URL("),
+  "Estimate post-refresh diagnostics parse raw view and UUID query pairs without unavailable evaluator globals or DOM constructors",
+);
+assert(
+  websiteMarketingEntryHelper.includes(
+    'await clickVisibleDomButtonByText(\n    tab,\n    "Provider setup",',
+  ) &&
+    websiteMarketingEntryHelper.includes(
+      'await clickVisibleDomButtonByText(\n    tab,\n    "Open lead intake",',
+    ) &&
+    !websiteMarketingEntryHelper.includes(
+      'button[contains(normalize-space(.), "Provider setup")]',
+    ) &&
+    !websiteMarketingEntryHelper.includes(
+      'button[contains(normalize-space(.), "Open lead intake")]',
+    ),
+  "Website Marketing quick actions use the established scroll-safe visible-button boundary",
+);
+assert(
+  crmApp.includes(
+    "const focusedJobAlreadySelected = selectedJobId === focusedJob.id",
+  ) &&
+    crmApp.includes("if (!focusedJobAlreadySelected) {") &&
+    crmApp.includes("[focusedJobId, selectedJobId, snapshot.jobs]"),
+  "Selecting an already visible job cannot expand the filtered list underneath its in-flight builder scroll",
+);
 
 assert(targetGuardIndex >= 0, "Harness invokes the target guard");
 assert(
@@ -1233,6 +1376,20 @@ assert(
     ) < estimatesWorkflowSource.indexOf("const savedEstimate ="),
   "Estimate browser coverage dismisses the expected negative alert, proves exact valid associations and an idle submit, then retries only until exact persistence while surfacing new live errors",
 );
+assert(
+  estimatesWorkflowSource.includes(
+    "async () => (await countEstimateLineItems(env, savedEstimate.id)) >= 2",
+  ) &&
+    estimatesWorkflowSource.includes(
+      '"created estimate line-item persistence"',
+    ) &&
+    estimatesWorkflowSource.indexOf(
+      '"created estimate line-item persistence"',
+    ) < estimatesWorkflowSource.indexOf(
+      "const lineItemCount = await countEstimateLineItems(env, savedEstimate.id)",
+    ),
+  "Estimate browser coverage waits for the child line-item inserts to settle before asserting their final count",
+);
 const leadIntakeWorkspaceSource = harness.slice(
   harness.indexOf("async function testLeadIntakeWorkspace"),
   harness.indexOf("async function testIdentityReconciliationWorkflow"),
@@ -1335,6 +1492,19 @@ const inspectionsWorkflowSource = harness.slice(
   harness.indexOf("async function testInspectionsWorkflow"),
   harness.indexOf("async function runUiMutationTests"),
 );
+const jobsWorkspaceFiltersSource = harness.slice(
+  harness.indexOf("async function testJobsWorkspaceFiltersAndSections"),
+  harness.indexOf("async function findInspectionByTitle"),
+);
+assert(
+  jobsWorkspaceFiltersSource.includes(
+    'await clickVisibleDomButtonByText(\n    tab,\n    "Clear filters",\n    "Clear jobs workspace filters",',
+  ) &&
+    !jobsWorkspaceFiltersSource.includes(
+      'clickUnique(tab.playwright.getByRole("button", { name: "Clear filters" })',
+    ),
+  "Jobs workspace clear-filter coverage uses the established scroll-safe visible-button boundary",
+);
 assert(
   inspectionsWorkflowSource.indexOf('[data-testid="inspections-search"]') <
     inspectionsWorkflowSource.indexOf(
@@ -1360,6 +1530,32 @@ assert(
       '"upload secure inspection photo",\n      { retryTransientClick: true }',
     ),
   "Inspection photo coverage centers the exact submit control and retries only transient click translation failures",
+);
+assert(
+  inspectionsWorkflowSource.includes(
+    'await scrollTextIntoView(tab, "Create estimate draft");',
+  ) &&
+    inspectionsWorkflowSource.includes(
+      "const inspectionEstimateSubmit = tab.playwright.locator(",
+    ) &&
+    inspectionsWorkflowSource.includes("await clickEnabledUntilPersisted({") &&
+    inspectionsWorkflowSource.includes(
+      "locator: inspectionEstimateSubmit",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'clickLabel: "Create estimate draft"',
+    ) &&
+    inspectionsWorkflowSource.includes(
+      "persistenceLabel: `inspection estimate ${estimateTitle}`",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      "readPersisted: () => findEstimateByTitle(env, estimateTitle)",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'errorPrefix: "Inspection estimate creation was refused"',
+    ) &&
+    inspectionsWorkflowSource.includes("timeoutMs: 30000"),
+  "Inspection estimate coverage keeps the submit scroll-safe and retries only an enabled action until the exact titled estimate persists or a visible error surfaces",
 );
 assert(
   inspectionsWorkflowSource.includes("attempt <= 2") &&

@@ -96,7 +96,6 @@ import {
   createPayment,
   createRoutePlan,
   createScheduleEvent,
-  createSignature,
   createScope,
   createScopeTemplate,
   createTimeEntry,
@@ -167,14 +166,23 @@ import {
 } from "../lib/crm/companyScope";
 import { calculateEstimateTotals, calculateLineItemTotal } from "../lib/crm/estimates";
 import {
-  buildDepositInvoiceDraftFromProposal,
-  buildProposalDocumentDraft,
   buildProposalWorkspaceModel,
+  calculateProposalOptionTotal,
   formatProposalMoney,
+  getProposalBranding,
   proposalCanConvertToJob,
   scrubCustomerFacingText,
   type ProposalWorkspaceModel,
 } from "../lib/crm/proposals";
+import {
+  convertProposalToSoldJob,
+  createProposalDepositInvoice,
+  finalizeProposalForElectronicSignature,
+  prepareProposalElectronicSignatureRequest,
+  queueProposalSignatureEmail,
+  reconcileProposalElectronicSignatureReceipt,
+  revokeProposalElectronicSignatureRequest,
+} from "../lib/crm/proposalOperations";
 import {
   answerAiCommand,
   buildAiWorkspaceModel,
@@ -334,7 +342,6 @@ import {
   type GoogleWorkspaceEmailDraftKind,
 } from "../lib/googleWorkspace/emailDrafts";
 import {
-  buildJobInputFromEstimate,
   getJobDisplayAddress,
   getJobDisplayBusiness,
   getJobDisplayLocation,
@@ -454,6 +461,7 @@ import type {
   EstimateLineItemCategory,
   EstimateLineItemInput,
   EstimateLineItemRecord,
+  EstimateProposalAcceptanceRecord,
   EstimateRecord,
   EstimateStatus,
   InspectionActivityItem,
@@ -519,6 +527,7 @@ import type {
   PaintingAreaType,
   PipelineStage,
   PropertyRecord,
+  ProposalDepositType,
   ScheduleEventInput,
   ScheduleEventRecord,
   ScheduleEventStatus,
@@ -697,6 +706,110 @@ type WorkspaceView =
   | "integrations"
   | "productionReadiness"
   | "settings";
+
+type WorkspaceRecordFocus =
+  | { type: "estimate"; id: string }
+  | { type: "invoice"; id: string }
+  | { type: "job"; id: string };
+
+type WorkspaceViewChange = (
+  view: WorkspaceView,
+  focus?: WorkspaceRecordFocus | null,
+) => void;
+
+const workspaceViews = new Set<WorkspaceView>([
+  "dashboard",
+  "operations",
+  "fieldOperations",
+  "inbox",
+  "leadIntake",
+  "salesPipeline",
+  "leads",
+  "customers",
+  "estimates",
+  "scopes",
+  "jobs",
+  "inspections",
+  "calendar",
+  "photos",
+  "invoices",
+  "orders",
+  "ai",
+  "weather",
+  "marketing",
+  "customerPortal",
+  "employeePortal",
+  "routes",
+  "changeOrders",
+  "documents",
+  "analytics",
+  "notifications",
+  "integrations",
+  "productionReadiness",
+  "settings",
+]);
+
+const workspaceFocusQueryKeys = ["estimate", "invoice", "job"] as const;
+
+function readWorkspaceLocation(): {
+  view: WorkspaceView;
+  focus: WorkspaceRecordFocus | null;
+} {
+  if (typeof window === "undefined") {
+    return { view: "dashboard", focus: null };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const requestedView = params.get("view") as WorkspaceView | null;
+  const view = requestedView && workspaceViews.has(requestedView)
+    ? requestedView
+    : "dashboard";
+  const focusType = view === "estimates"
+    ? "estimate"
+    : view === "invoices"
+      ? "invoice"
+      : view === "jobs"
+        ? "job"
+        : null;
+  const focusId = focusType ? params.get(focusType)?.trim() : null;
+
+  return {
+    view,
+    focus:
+      focusType && focusId && /^[a-z0-9][a-z0-9_-]{0,79}$/i.test(focusId)
+        ? { type: focusType, id: focusId }
+        : null,
+  };
+}
+
+function writeWorkspaceLocation(
+  view: WorkspaceView,
+  focus: WorkspaceRecordFocus | null,
+  mode: "push" | "replace" = "push",
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", view);
+  for (const key of workspaceFocusQueryKeys) {
+    url.searchParams.delete(key);
+  }
+  if (focus) {
+    url.searchParams.set(focus.type, focus.id);
+  }
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) {
+    return;
+  }
+  window.history[mode === "replace" ? "replaceState" : "pushState"](
+    { wtosView: view, wtosFocus: focus },
+    "",
+    nextUrl,
+  );
+}
 
 type NavigationItem = {
   view: WorkspaceView;
@@ -1254,6 +1367,9 @@ const signatureStatuses: { value: SignatureStatus; label: string }[] = [
   { value: "signed", label: "Signed" },
   { value: "declined", label: "Declined" },
   { value: "expired", label: "Expired" },
+  { value: "failed", label: "Failed" },
+  { value: "revoked", label: "Revoked" },
+  { value: "superseded", label: "Superseded" },
 ];
 
 const documentCategories: { value: DocumentCategory; label: string }[] = [
@@ -2180,53 +2296,102 @@ function findPotentialEstimateJob(
   snapshot: CrmSnapshot,
   estimate: EstimateRecord,
 ) {
-  const estimateAddress = getEstimateHandoffAddress(snapshot, estimate);
-  const estimateTitle = normalizeCrmLookup(estimate.title);
-
-  return (
-    snapshot.jobs.find((job) => {
-      if (job.company_id !== estimate.company_id || job.estimate_id !== null) {
+  const candidates = snapshot.jobs.filter((job) => {
+      if (
+        job.company_id !== estimate.company_id ||
+        (job.estimate_id !== null && job.estimate_id !== estimate.id) ||
+        job.status !== "draft" ||
+        job.proposal_revision_id !== null ||
+        job.proposal_acceptance_id !== null ||
+        job.conversion_operation_key !== null
+      ) {
         return false;
       }
 
-      const sameCustomer = Boolean(
-        estimate.customer_id && job.customer_id === estimate.customer_id,
+      const conflictingCustomer = Boolean(
+        job.customer_id && job.customer_id !== estimate.customer_id,
       );
-      const sameLead = Boolean(estimate.lead_id && job.lead_id === estimate.lead_id);
-      const sameTitle =
-        estimateTitle !== "" && normalizeCrmLookup(job.title) === estimateTitle;
-      const sameAddress =
-        crmAddressesLikelyMatch(estimateAddress, job.property_address) ||
-        crmAddressesLikelyMatch(estimateAddress, job.address) ||
-        crmAddressesLikelyMatch(estimateAddress, job.location);
+      const conflictingLead = Boolean(job.lead_id && job.lead_id !== estimate.lead_id);
+      const conflictingProperty = Boolean(
+        job.property_id && job.property_id !== estimate.property_id,
+      );
 
-      return (sameCustomer || sameLead || sameAddress) && (sameTitle || sameAddress);
-    }) ?? null
+      if (conflictingCustomer || conflictingLead || conflictingProperty) {
+        return false;
+      }
+
+      if (job.estimate_id === estimate.id) {
+        return true;
+      }
+
+      const allAvailableIdentitiesMatch = [
+        !estimate.customer_id || job.customer_id === estimate.customer_id,
+        !estimate.lead_id || job.lead_id === estimate.lead_id,
+        !estimate.property_id || job.property_id === estimate.property_id,
+      ].every(Boolean);
+      const hasStableIdentity = Boolean(
+        estimate.customer_id || estimate.lead_id || estimate.property_id,
+      );
+      const normalizedEstimateTitle = estimate.title.trim().toLowerCase();
+      const normalizedEstimateAddress = getEstimateHandoffAddress(
+        snapshot,
+        estimate,
+      )
+        ?.trim()
+        .toLowerCase();
+      const normalizedJobAddresses = [
+        job.address,
+        job.property_address,
+        job.location,
+      ]
+        .map((value) => value?.trim().toLowerCase())
+        .filter(Boolean);
+      const projectIdentityMatches = Boolean(
+        (normalizedEstimateTitle &&
+          job.title.trim().toLowerCase() === normalizedEstimateTitle) ||
+          (normalizedEstimateAddress &&
+            normalizedJobAddresses.includes(normalizedEstimateAddress)),
+      );
+
+      return (
+        job.service_type === estimate.service_type &&
+        hasStableIdentity &&
+        allAvailableIdentitiesMatch &&
+        projectIdentityMatches
+      );
+    });
+
+  const exactEstimateCandidates = candidates.filter(
+    (job) => job.estimate_id === estimate.id,
   );
+  const preferredCandidates = exactEstimateCandidates.length
+    ? exactEstimateCandidates
+    : candidates.filter((job) => job.estimate_id === null);
+
+  return preferredCandidates.length === 1 ? preferredCandidates[0] : null;
 }
 
-function buildJobEstimateLinkInput(
+function findExactProposalSoldJob(
+  snapshot: CrmSnapshot,
   estimate: EstimateRecord,
-  job: JobRecord,
-  linkedScope: ScopeRecord | null,
-): Partial<JobInput> {
-  return {
-    estimate_id: estimate.id,
-    scope_id: job.scope_id ?? linkedScope?.id ?? null,
-    customer_id: job.customer_id ?? estimate.customer_id,
-    lead_id: job.lead_id ?? estimate.lead_id,
-    business: job.business ?? estimate.business,
-    location: job.location ?? estimate.location,
-    service_type: job.service_type ?? estimate.service_type,
-    property_address:
-      job.property_address ?? estimate.location ?? job.address ?? "Address to confirm",
-    scope_of_work:
-      job.scope_of_work ??
-      estimate.scope_of_work ??
-      linkedScope?.scope_body ??
-      null,
-    total: job.total > 0 ? job.total : estimate.total,
-  };
+  proposalRevisionId: string | null,
+  acceptanceId: string | null,
+) {
+  if (!proposalRevisionId || !acceptanceId) {
+    return null;
+  }
+
+  return (
+    snapshot.jobs.find(
+      (job) =>
+        job.company_id === estimate.company_id &&
+        job.customer_id === estimate.customer_id &&
+        job.estimate_id === estimate.id &&
+        job.proposal_revision_id === proposalRevisionId &&
+        job.proposal_acceptance_id === acceptanceId &&
+        job.conversion_operation_key === acceptanceId,
+    ) ?? null
+  );
 }
 
 function getEstimateRelatedInspection(
@@ -2376,7 +2541,7 @@ function signatureStatusTone(status: SignatureStatus): "blue" | "green" | "amber
 }
 
 function isActiveSignatureRequest(signature: SignatureRecord) {
-  return signature.status !== "declined" && signature.status !== "expired";
+  return ["pending", "sent", "viewed"].includes(signature.status);
 }
 
 function documentCategoryLabel(category: DocumentCategory) {
@@ -5606,13 +5771,16 @@ export function CrmApp() {
     [],
   );
 
+  const [initialWorkspaceLocation] = useState(readWorkspaceLocation);
   const [client] = useState<SupabaseClient<Database> | null>(() =>
     getSupabaseBrowserClient(),
   );
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(client === null);
   const [snapshot, setSnapshot] = useState<CrmSnapshot | null>(null);
-  const [view, setView] = useState<WorkspaceView>("dashboard");
+  const [view, setView] = useState<WorkspaceView>(initialWorkspaceLocation.view);
+  const [workspaceRecordFocus, setWorkspaceRecordFocus] =
+    useState<WorkspaceRecordFocus | null>(initialWorkspaceLocation.focus);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -5630,6 +5798,19 @@ export function CrmApp() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("weathertech-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const handleHistoryNavigation = () => {
+      const location = readWorkspaceLocation();
+      setView(location.view);
+      setWorkspaceRecordFocus(location.focus);
+      setNotice("");
+      setError("");
+    };
+
+    window.addEventListener("popstate", handleHistoryNavigation);
+    return () => window.removeEventListener("popstate", handleHistoryNavigation);
+  }, []);
 
   const handleThemeChange = (nextTheme: ThemeMode) => {
     setTheme(nextTheme);
@@ -5767,8 +5948,10 @@ export function CrmApp() {
     setNotice("");
   }, []);
 
-  const handleWorkspaceViewChange = useCallback((nextView: WorkspaceView) => {
+  const handleWorkspaceViewChange = useCallback<WorkspaceViewChange>((nextView, focus = null) => {
     setView(nextView);
+    setWorkspaceRecordFocus(focus);
+    writeWorkspaceLocation(nextView, focus);
     setNotice("");
     setError("");
   }, []);
@@ -5781,6 +5964,8 @@ export function CrmApp() {
     await client.auth.signOut();
     setNotice("Signed out.");
     setView("dashboard");
+    setWorkspaceRecordFocus(null);
+    writeWorkspaceLocation("dashboard", null, "replace");
   };
 
   const handleDemoSnapshotChange = useCallback(
@@ -5846,6 +6031,7 @@ export function CrmApp() {
       snapshot={snapshot}
       user={user}
       view={view}
+      workspaceRecordFocus={workspaceRecordFocus}
       theme={theme}
       onViewChange={handleWorkspaceViewChange}
       onThemeChange={handleThemeChange}
@@ -6192,8 +6378,9 @@ type CrmWorkspaceProps = {
   snapshot: CrmSnapshot;
   user: User | null;
   view: WorkspaceView;
+  workspaceRecordFocus: WorkspaceRecordFocus | null;
   theme: ThemeMode;
-  onViewChange: (view: WorkspaceView) => void;
+  onViewChange: WorkspaceViewChange;
   onThemeChange: (theme: ThemeMode) => void;
   onReload: () => Promise<void>;
   onScrollPreservingReload: () => Promise<void>;
@@ -6211,6 +6398,7 @@ function CrmWorkspace({
   snapshot,
   user,
   view,
+  workspaceRecordFocus,
   theme,
   onViewChange,
   onThemeChange,
@@ -6414,11 +6602,52 @@ function CrmWorkspace({
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
   );
+  const focusedRecordCompanyId = useMemo(() => {
+    if (!workspaceRecordFocus) {
+      return null;
+    }
+
+    if (workspaceRecordFocus.type === "estimate") {
+      return snapshot.estimates.find(
+        (estimate) => estimate.id === workspaceRecordFocus.id,
+      )?.company_id ?? null;
+    }
+
+    if (workspaceRecordFocus.type === "invoice") {
+      return snapshot.invoices.find(
+        (invoice) => invoice.id === workspaceRecordFocus.id,
+      )?.company_id ?? null;
+    }
+
+    return snapshot.jobs.find((job) => job.id === workspaceRecordFocus.id)
+      ?.company_id ?? null;
+  }, [snapshot.estimates, snapshot.invoices, snapshot.jobs, workspaceRecordFocus]);
+
+  useEffect(() => {
+    if (focusedRecordCompanyId && selectedCompanyId !== focusedRecordCompanyId) {
+      setSelectedCompanyId(focusedRecordCompanyId);
+    }
+  }, [focusedRecordCompanyId, selectedCompanyId]);
+  useEffect(() => {
+    if (workspaceRecordFocus && !focusedRecordCompanyId) {
+      onViewChange(view, null);
+      onError(
+        `The requested ${workspaceRecordFocus.type} is unavailable in the current owner workspace.`,
+      );
+    }
+  }, [focusedRecordCompanyId, onError, onViewChange, view, workspaceRecordFocus]);
   const activeCompany =
     selectedCompanyId === "all" ? null : companyMap.get(selectedCompanyId) ?? null;
   const scopedSnapshot = useMemo(
     () => scopeCrmSnapshotByCompany(snapshot, selectedCompanyId),
     [selectedCompanyId, snapshot],
+  );
+  const recordFocusedSnapshot = useMemo(
+    () =>
+      focusedRecordCompanyId
+        ? scopeCrmSnapshotByCompany(snapshot, focusedRecordCompanyId)
+        : scopedSnapshot,
+    [focusedRecordCompanyId, scopedSnapshot, snapshot],
   );
   const commandPaletteItems = useMemo(
     () => buildCommandPaletteItems(scopedSnapshot, companyMap),
@@ -6825,12 +7054,18 @@ function CrmWorkspace({
           {view === "estimates" ? (
             <EstimatesView
               client={client}
-              snapshot={scopedSnapshot}
+              isDemoMode={isDemoMode}
+              snapshot={recordFocusedSnapshot}
               companyMap={companyMap}
               onReload={onScrollPreservingReload}
               onNotice={onNotice}
               onError={onError}
               onViewChange={onViewChange}
+              focusedEstimateId={
+                workspaceRecordFocus?.type === "estimate"
+                  ? workspaceRecordFocus.id
+                  : null
+              }
             />
           ) : null}
 
@@ -6849,7 +7084,7 @@ function CrmWorkspace({
             <JobsView
               client={client}
               isDemoMode={isDemoMode}
-              snapshot={scopedSnapshot}
+              snapshot={recordFocusedSnapshot}
               companyMap={companyMap}
               onViewChange={onViewChange}
               onReload={onReload}
@@ -6857,6 +7092,11 @@ function CrmWorkspace({
               onDemoSnapshotChange={onDemoSnapshotChange}
               onNotice={onNotice}
               onError={onError}
+              focusedJobId={
+                workspaceRecordFocus?.type === "job"
+                  ? workspaceRecordFocus.id
+                  : null
+              }
             />
           ) : null}
 
@@ -6904,12 +7144,18 @@ function CrmWorkspace({
             <InvoicesView
               client={client}
               isDemoMode={isDemoMode}
-              snapshot={scopedSnapshot}
+              snapshot={recordFocusedSnapshot}
               companyMap={companyMap}
               userId={user?.id ?? null}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
+              onViewChange={onViewChange}
+              focusedInvoiceId={
+                workspaceRecordFocus?.type === "invoice"
+                  ? workspaceRecordFocus.id
+                  : null
+              }
             />
           ) : null}
 
@@ -7870,7 +8116,19 @@ function buildDailyWorkflowActions(
     });
 
   sortByNewest(snapshot.estimates).forEach((estimate) => {
-    const linkedJob = snapshot.jobs.find((job) => job.estimate_id === estimate.id) ?? null;
+    const acceptedRevision = snapshot.proposalRevisions
+      .filter(
+        (revision) =>
+          revision.estimate_id === estimate.id &&
+          Boolean(revision.accepted_acceptance_id),
+      )
+      .sort((left, right) => right.revision_number - left.revision_number)[0] ?? null;
+    const linkedJob = findExactProposalSoldJob(
+      snapshot,
+      estimate,
+      acceptedRevision?.id ?? null,
+      acceptedRevision?.accepted_acceptance_id ?? null,
+    );
     const activeSignature = snapshot.signatures.find((signature) => {
       if (!isActiveSignatureRequest(signature)) {
         return false;
@@ -7922,9 +8180,11 @@ function buildDailyWorkflowActions(
     } else if (estimate.status === "approved" && !linkedJob) {
       addAction({
         id: `estimate-convert-job-${estimate.id}`,
-        stage: "Customer Approves -> Convert to Job",
-        title: "Convert to job",
-        detail: `${estimate.title} is approved and ready for production handoff.`,
+        stage: "Finalize Proposal -> Electronic Signature -> Deposit -> Sold Job",
+        title: "Complete proposal acceptance",
+        detail: acceptedRevision
+          ? `${estimate.title} has customer acceptance; complete any required posted deposit and the exact sold-job handoff.`
+          : `${estimate.title} is internally approved but still requires a finalized proposal, customer electronic signature, and any required posted deposit.`,
         meta: `${companyLabel(estimate.company_id)} · ${customerLabelForEstimate(estimate)} · ${formatMoney(estimate.total)}`,
         companyId: estimate.company_id,
         customerId: estimate.customer_id,
@@ -7932,8 +8192,8 @@ function buildDailyWorkflowActions(
         estimateId: estimate.id,
         view: "estimates",
         icon: CalendarClock,
-        tone: "green",
-        actionLabel: "Open Handoff",
+        tone: "amber",
+        actionLabel: "Open Proposal",
         sortOrder: 60,
         updatedAt: estimate.updated_at,
       });
@@ -26140,40 +26400,66 @@ function CustomerCreateForm({
 
 type EstimatesViewProps = {
   client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
-  onViewChange: (view: WorkspaceView) => void;
+  onViewChange: WorkspaceViewChange;
+  focusedEstimateId: string | null;
 };
 
 function EstimatesView({
   client,
+  isDemoMode,
   snapshot,
   companyMap,
   onReload,
   onNotice,
   onError,
   onViewChange,
+  focusedEstimateId,
 }: EstimatesViewProps) {
   const [selectedEstimateId, setSelectedEstimateId] = useState(
-    snapshot.estimates[0]?.id ?? "new",
+    focusedEstimateId ?? snapshot.estimates[0]?.id ?? "new",
   );
   const [estimateDraftVersion, setEstimateDraftVersion] = useState(0);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | "all">("all");
   const [isApprovingEstimate, setIsApprovingEstimate] = useState(false);
   const [isConvertingEstimate, setIsConvertingEstimate] = useState(false);
+  const [isFinalizingProposal, setIsFinalizingProposal] = useState(false);
+  const [isPreparingProposalSignature, setIsPreparingProposalSignature] =
+    useState(false);
+  const [isRevokingProposalSignature, setIsRevokingProposalSignature] =
+    useState(false);
+  const [isReconcilingProposalReceipt, setIsReconcilingProposalReceipt] =
+    useState(false);
+  const [isRevisingProposal, setIsRevisingProposal] = useState(false);
   const [proposalSelectedOptionIds, setProposalSelectedOptionIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [proposalDepositType, setProposalDepositType] = useState<
+    Exclude<ProposalDepositType, "custom_schedule">
+  >("percent");
+  const [proposalDepositValue, setProposalDepositValue] = useState(10);
   const [createdEstimateFingerprints, setCreatedEstimateFingerprints] = useState<Set<string>>(
     () => new Set(),
   );
 
   const selectedEstimate =
     snapshot.estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
+  useEffect(() => {
+    if (
+      focusedEstimateId &&
+      snapshot.estimates.some((estimate) => estimate.id === focusedEstimateId)
+    ) {
+      setSearch("");
+      setStatusFilter("all");
+      setSelectedEstimateId(focusedEstimateId);
+    }
+  }, [focusedEstimateId, snapshot.estimates]);
   const unifiedInboxItems = useMemo(
     () => buildUnifiedInboxItems(snapshot, companyMap),
     [snapshot, companyMap],
@@ -26202,18 +26488,16 @@ function EstimatesView({
     setPage: setEstimatePage,
     pagedItems: pagedEstimates,
   } = usePagination(filteredEstimates);
-  const selectedEstimateJob = selectedEstimate
+  const selectedEstimateRelatedJob = selectedEstimate
     ? snapshot.jobs.find((job) => job.estimate_id === selectedEstimate.id) ?? null
     : null;
   const selectedEstimatePotentialJob =
-    selectedEstimate && selectedEstimateJob === null
-      ? findPotentialEstimateJob(snapshot, selectedEstimate)
-      : null;
+    selectedEstimate ? findPotentialEstimateJob(snapshot, selectedEstimate) : null;
   const selectedEstimateScope = selectedEstimate
     ? snapshot.scopes.find((scope) => scope.estimate_id === selectedEstimate.id) ?? null
     : null;
   const selectedEstimateInspection = selectedEstimate
-    ? getEstimateRelatedInspection(snapshot, selectedEstimate, selectedEstimateJob)
+    ? getEstimateRelatedInspection(snapshot, selectedEstimate, selectedEstimateRelatedJob)
     : null;
   const selectedEstimatePhotos = useMemo(
     () =>
@@ -26221,15 +26505,34 @@ function EstimatesView({
         ? getEstimateRelatedPhotos(
             snapshot,
             selectedEstimate,
-            selectedEstimateJob,
+            selectedEstimateRelatedJob,
             selectedEstimateInspection,
           )
         : [],
-    [selectedEstimate, selectedEstimateInspection, selectedEstimateJob, snapshot],
+    [
+      selectedEstimate,
+      selectedEstimateInspection,
+      selectedEstimateRelatedJob,
+      snapshot,
+    ],
   );
   const selectedEstimateCompany = selectedEstimate
     ? companyMap.get(selectedEstimate.company_id)
     : undefined;
+  const selectedPersistedProposalRevision = selectedEstimate
+    ? snapshot.proposalRevisions
+        .filter((revision) => revision.estimate_id === selectedEstimate.id)
+        .sort((left, right) => right.revision_number - left.revision_number)[0] ?? null
+    : null;
+  const selectedProposalEstimateId = selectedEstimate?.id ?? null;
+  const selectedPersistedProposalRevisionId =
+    selectedPersistedProposalRevision?.id ?? null;
+  const selectedPersistedProposalImmutableAfter =
+    selectedPersistedProposalRevision?.immutable_after_at ?? null;
+  const proposalChoicesAreEditable = Boolean(
+    selectedEstimate &&
+      (!selectedPersistedProposalRevision?.immutable_after_at || isRevisingProposal),
+  );
   const selectedProposalModel = useMemo(
     () =>
       selectedEstimate
@@ -26241,11 +26544,22 @@ function EstimatesView({
             scope: selectedEstimateScope,
             inspection: selectedEstimateInspection,
             photos: selectedEstimatePhotos,
-            selectedOptionIds: proposalSelectedOptionIds,
+            selectedOptionIds: proposalChoicesAreEditable
+              ? proposalSelectedOptionIds
+              : undefined,
+            depositType: proposalChoicesAreEditable
+              ? proposalDepositType
+              : undefined,
+            depositValue: proposalChoicesAreEditable
+              ? proposalDepositValue
+              : undefined,
           })
         : null,
     [
       proposalSelectedOptionIds,
+      proposalChoicesAreEditable,
+      proposalDepositType,
+      proposalDepositValue,
       selectedEstimate,
       selectedEstimateCompany,
       selectedEstimateInspection,
@@ -26255,6 +26569,51 @@ function EstimatesView({
       snapshot,
     ],
   );
+  useEffect(() => {
+    const revisionId = selectedPersistedProposalRevisionId;
+    const proposalBrand = getProposalBranding(selectedEstimateCompany);
+    const persistedDepositType = selectedPersistedProposalRevision?.deposit_type;
+    const nextDepositType =
+      persistedDepositType === "none" ||
+      persistedDepositType === "fixed" ||
+      persistedDepositType === "percent"
+        ? persistedDepositType
+        : proposalBrand.defaultDepositType === "custom_schedule"
+          ? "none"
+          : proposalBrand.defaultDepositType;
+    const nextDepositValue =
+      nextDepositType === "none"
+        ? 0
+        : selectedPersistedProposalRevision?.deposit_value ??
+          proposalBrand.defaultDepositValue;
+    const persistedSelectedIds = revisionId
+      ? snapshot.proposalOptions
+          .filter(
+            (option) =>
+              option.proposal_revision_id === revisionId && option.selected,
+          )
+          .map((option) => option.id)
+      : [];
+
+    setProposalSelectedOptionIds(new Set(persistedSelectedIds));
+    setProposalDepositType(nextDepositType);
+    setProposalDepositValue(nextDepositValue);
+    setIsRevisingProposal(
+      Boolean(
+        selectedProposalEstimateId &&
+          (!selectedPersistedProposalRevisionId ||
+            !selectedPersistedProposalImmutableAfter),
+      ),
+    );
+  }, [
+    selectedProposalEstimateId,
+    selectedPersistedProposalImmutableAfter,
+    selectedPersistedProposalRevisionId,
+    selectedPersistedProposalRevision?.deposit_type,
+    selectedPersistedProposalRevision?.deposit_value,
+    selectedEstimateCompany,
+    snapshot.proposalOptions,
+  ]);
   const selectedEstimateCommunications = selectedEstimate
     ? unifiedInboxItems.filter(
         (item) =>
@@ -26268,21 +26627,131 @@ function EstimatesView({
   const selectedEstimateDocuments = selectedEstimate
     ? snapshot.documents.filter((document) => document.estimate_id === selectedEstimate.id)
     : [];
-  const selectedEstimateDocumentIds = new Set(
-    selectedEstimateDocuments.map((document) => document.id),
-  );
-  const selectedEstimateSignatures = snapshot.signatures.filter(
-    (signature) =>
-      signature.document_id !== null && selectedEstimateDocumentIds.has(signature.document_id),
-  );
   const selectedProposalDepositInvoice =
     selectedEstimate && selectedProposalModel
       ? snapshot.invoices.find(
           (invoice) =>
+            invoice.company_id === selectedEstimate.company_id &&
+            invoice.customer_id === selectedEstimate.customer_id &&
+            invoice.proposal_revision_id === selectedProposalModel.revision?.id &&
+            invoice.proposal_acceptance_id ===
+              selectedProposalModel.revision?.accepted_acceptance_id &&
             invoice.estimate_id === selectedEstimate.id &&
-            invoice.invoice_number === `DEP-${selectedProposalModel.proposalNumber}`,
+            invoice.invoice_purpose === "proposal_deposit" &&
+            invoice.total === selectedProposalModel.financials.depositAmount,
         ) ?? null
       : null;
+  const selectedProposalRevision = selectedProposalModel?.revision ?? null;
+  const selectedProposalDocument = selectedProposalRevision?.finalized_document_id
+    ? snapshot.documents.find(
+        (document) =>
+          document.id === selectedProposalRevision.finalized_document_id &&
+          document.proposal_revision_id === selectedProposalRevision.id &&
+          document.company_id === selectedProposalRevision.company_id &&
+          document.category === "proposal" &&
+          document.storage_bucket === "customer-documents" &&
+          Boolean(document.content_sha256),
+      ) ?? null
+    : null;
+  const selectedProposalAcceptance = selectedProposalRevision
+    ? snapshot.proposalAcceptances.find(
+        (acceptance) =>
+          acceptance.id === selectedProposalRevision.accepted_acceptance_id &&
+          acceptance.proposal_revision_id === selectedProposalRevision.id &&
+          acceptance.company_id === selectedProposalRevision.company_id &&
+          acceptance.customer_id === selectedProposalRevision.customer_id &&
+          acceptance.signature_id === selectedProposalRevision.accepted_signature_id &&
+          acceptance.proposal_document_id === selectedProposalRevision.finalized_document_id &&
+          acceptance.acceptance_method === "native_electronic" &&
+          acceptance.signature_status === "signed" &&
+          acceptance.terms_accepted &&
+          acceptance.electronic_records_consented === true &&
+          acceptance.signature_intent_acknowledged === true &&
+          acceptance.signature_method === "typed_name" &&
+          acceptance.proposal_revision_sha256 === selectedProposalRevision.revision_sha256 &&
+          acceptance.proposal_document_sha256 === selectedProposalDocument?.content_sha256 &&
+          acceptance.terms_sha256 === selectedProposalRevision.terms_sha256 &&
+          Boolean(
+            acceptance.signing_request_id &&
+              acceptance.acceptance_operation_key &&
+              acceptance.consent_sha256 &&
+              acceptance.evidence_sha256,
+          ),
+      ) ?? null
+    : null;
+  const selectedProposalAcceptedSignature =
+    selectedProposalRevision?.accepted_signature_id && selectedProposalAcceptance
+      ? snapshot.signatures.find(
+          (signature) =>
+            signature.id === selectedProposalRevision.accepted_signature_id &&
+            signature.id === selectedProposalAcceptance.signature_id &&
+            signature.proposal_revision_id === selectedProposalRevision.id &&
+            signature.acceptance_id === selectedProposalAcceptance.id &&
+            signature.document_id === selectedProposalRevision.finalized_document_id &&
+            signature.company_id === selectedProposalRevision.company_id &&
+            signature.status === "signed" &&
+            signature.signature_method === "typed_name" &&
+            signature.evidence_sha256 === selectedProposalAcceptance.evidence_sha256,
+        ) ?? null
+      : null;
+  const selectedProposalHasRegisteredReceipt = Boolean(
+    selectedProposalRevision?.signed_document_id &&
+      selectedProposalAcceptedSignature?.signed_document_id ===
+        selectedProposalRevision.signed_document_id &&
+      snapshot.documents.some(
+        (document) =>
+          document.id === selectedProposalRevision.signed_document_id &&
+          document.proposal_revision_id === selectedProposalRevision.id &&
+          document.company_id === selectedProposalRevision.company_id &&
+          document.category === "signed_proposal" &&
+          document.storage_bucket === "customer-documents" &&
+          Boolean(document.content_sha256),
+      ),
+  );
+  const selectedEstimateSoldJob = selectedEstimate
+    ? findExactProposalSoldJob(
+        snapshot,
+        selectedEstimate,
+        selectedProposalRevision?.id ?? null,
+        selectedProposalAcceptance?.id ?? null,
+      )
+    : null;
+  const selectedProposalSignature = selectedProposalModel?.revision?.finalized_document_id
+    ? snapshot.signatures.find(
+        (signature) =>
+          signature.document_id === selectedProposalModel.revision?.finalized_document_id &&
+          isActiveSignatureRequest(signature),
+      ) ?? null
+    : null;
+  const selectedProposalPostedDepositTotal = selectedProposalDepositInvoice
+    ? snapshot.payments
+        .filter(
+          (payment) =>
+            payment.invoice_id === selectedProposalDepositInvoice.id &&
+            payment.company_id === selectedProposalDepositInvoice.company_id &&
+            payment.customer_id === selectedProposalDepositInvoice.customer_id &&
+            payment.status === "posted",
+        )
+        .reduce((total, payment) => total + payment.amount, 0)
+    : 0;
+  const selectedProposalHasSufficientPostedDeposit = Boolean(
+    selectedProposalModel &&
+      (selectedProposalModel.revision?.requires_deposit_before_job === false ||
+        selectedProposalModel.financials.depositAmount <= 0 ||
+        (selectedProposalDepositInvoice?.status !== "void" &&
+          selectedProposalPostedDepositTotal + 0.005 >=
+            selectedProposalModel.financials.depositAmount)),
+  );
+  const selectedProposalConversionReadiness =
+    selectedEstimate && selectedProposalModel
+      ? proposalCanConvertToJob({
+          estimate: selectedEstimate,
+          model: selectedProposalModel,
+          hasSignedAcceptance:
+            selectedProposalAcceptance !== null && selectedProposalHasRegisteredReceipt,
+          hasSufficientPostedDeposit: selectedProposalHasSufficientPostedDeposit,
+        })
+      : { ready: false, reason: "Select an estimate to review sold-job readiness." };
   const isCreatingEstimate = selectedEstimateId === "new" || selectedEstimate === null;
   const workflowActions = useMemo(
     () => buildDailyWorkflowActions(snapshot, companyMap),
@@ -26302,6 +26771,7 @@ function EstimatesView({
       setProposalSelectedOptionIds(new Set());
       setEstimateDraftVersion((version) => version + 1);
     });
+    onViewChange("estimates", null);
   };
 
   const handleSelectEstimate = (estimateId: string) => {
@@ -26309,6 +26779,7 @@ function EstimatesView({
       setSelectedEstimateId(estimateId);
       setProposalSelectedOptionIds(new Set());
     });
+    onViewChange("estimates", { type: "estimate", id: estimateId });
   };
 
   const handleSaveEstimate = async (
@@ -26381,6 +26852,7 @@ function EstimatesView({
       updateUiPreservingScrollPosition(() =>
         setSelectedEstimateId(savedEstimate.id),
       );
+      onViewChange("estimates", { type: "estimate", id: savedEstimate.id });
       await onReload();
       onNotice(
         selectedEstimate
@@ -26408,7 +26880,7 @@ function EstimatesView({
     }
 
     const approved = window.confirm(
-      "Approve this estimate and mark it ready for production handoff?",
+      "Approve this estimate pricing internally so its proposal can be finalized? Customer electronic signature and any required deposit will still be required before the sold-job handoff.",
     );
 
     if (!approved) {
@@ -26421,7 +26893,7 @@ function EstimatesView({
     try {
       await updateEstimateStatus(client, estimate.id, "approved");
       await onReload();
-      onNotice("Estimate approved.");
+      onNotice("Estimate approved internally. Finalize the exact proposal before customer delivery.");
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to approve estimate."));
     } finally {
@@ -26434,22 +26906,52 @@ function EstimatesView({
       return;
     }
 
-    if (estimate.status !== "approved") {
-      onError("Approve the estimate before creating the job handoff.");
+    if (isDemoMode) {
+      onError(
+        "Native proposal acceptance and sold-job conversion require the secure live workspace; demo mode cannot record a customer signature.",
+      );
       return;
     }
 
-    if (selectedEstimateJob) {
-      onNotice(`Existing linked job opened: ${selectedEstimateJob.title}`);
-      onViewChange("jobs");
+    if (selectedEstimateSoldJob) {
+      onViewChange("jobs", { type: "job", id: selectedEstimateSoldJob.id });
+      onNotice(`Existing sold job opened: ${selectedEstimateSoldJob.title}`);
+      return;
+    }
+
+    if (!selectedProposalModel?.revision) {
+      onError("Finalize the customer proposal before creating a sold job.");
+      return;
+    }
+
+    if (!selectedProposalConversionReadiness.ready) {
+      onError(selectedProposalConversionReadiness.reason);
+      return;
+    }
+
+    if (!selectedProposalAcceptance) {
+      onError("The exact finalized proposal does not have a valid customer acceptance.");
       return;
     }
 
     const potentialJob = findPotentialEstimateJob(snapshot, estimate);
+    const sameEstimateJobs = snapshot.jobs.filter(
+      (job) =>
+        job.company_id === estimate.company_id && job.estimate_id === estimate.id,
+    );
+    if (
+      sameEstimateJobs.length > 0 &&
+      (sameEstimateJobs.length !== 1 || potentialJob?.id !== sameEstimateJobs[0]?.id)
+    ) {
+      onError(
+        "A job already references this estimate but is not the one eligible unbound draft. Review that job before sold-job conversion; WeatherTech OS will not create or attach a second job automatically.",
+      );
+      return;
+    }
     const confirmed = window.confirm(
       potentialJob
-        ? `Link this estimate to the matching job "${potentialJob.title}"?`
-        : "Create a draft job from this approved estimate?",
+        ? `The exact proposal is electronically signed and its deposit gate is satisfied. Link it to the matching job "${potentialJob.title}" as the sold job?`
+        : "The exact proposal is electronically signed and its deposit gate is satisfied. Create the linked sold job?",
     );
 
     if (!confirmed) {
@@ -26460,23 +26962,18 @@ function EstimatesView({
     setIsConvertingEstimate(true);
 
     try {
-      const job = potentialJob
-        ? await updateJob(
-            client,
-            potentialJob.id,
-            buildJobEstimateLinkInput(estimate, potentialJob, selectedEstimateScope),
-          )
-        : await createJob(
-            client,
-            buildJobInputFromEstimate(
-              snapshot,
-              estimate,
-              selectedEstimateScope?.id ?? null,
-            ),
-          );
+      const job = await convertProposalToSoldJob(client, {
+        companyId: estimate.company_id,
+        proposalRevisionId: selectedProposalModel.revision.id,
+        acceptanceId: selectedProposalAcceptance.id,
+        existingJobId: potentialJob?.id ?? null,
+      });
       await onReload();
+      onViewChange("jobs", { type: "job", id: job.id });
       onNotice(
-        potentialJob ? `Matching job linked: ${job.title}` : `Draft job created: ${job.title}`,
+        potentialJob
+          ? `Matching sold job linked: ${job.title}`
+          : `Sold job created: ${job.title}`,
       );
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to convert estimate to job."));
@@ -26502,41 +26999,89 @@ function EstimatesView({
     }
   };
 
-  const handleSaveProposalDocument = async (estimate: EstimateRecord) => {
-    if (!selectedProposalModel) {
-      onError("Select an estimate before saving a proposal packet.");
+  const handleFinalizeProposal = async (estimate: EstimateRecord) => {
+    if (isFinalizingProposal) {
       return;
     }
 
-    const existingProposal = snapshot.documents.find(
-      (document) =>
-        document.estimate_id === estimate.id &&
-        document.category === "proposal" &&
-        document.title === `${estimate.title} - Proposal Packet`,
+    if (isDemoMode) {
+      onError(
+        "Immutable proposal finalization and customer electronic signatures require the secure live workspace.",
+      );
+      return;
+    }
+
+    if (!selectedProposalModel) {
+      onError("Select an estimate before finalizing a proposal.");
+      return;
+    }
+
+    if (estimate.status !== "approved") {
+      onError("Approve the estimate internally before finalizing its customer proposal.");
+      return;
+    }
+
+    if (!estimate.customer_id) {
+      onError("Link an exact same-company customer before finalizing the proposal.");
+      return;
+    }
+
+    if (!selectedLineItems.length) {
+      onError("Add priced line items before finalizing the proposal.");
+      return;
+    }
+
+    if (selectedProposalSignature) {
+      onError(
+        "Revoke the active customer signing link before starting or finalizing a replacement proposal revision.",
+      );
+      return;
+    }
+
+    const finalizedDepositType = selectedProposalModel.depositRule.type;
+    const finalizedDepositValue = selectedProposalModel.depositRule.value;
+    if (
+      finalizedDepositType === "custom_schedule" ||
+      !Number.isFinite(finalizedDepositValue) ||
+      finalizedDepositValue < 0 ||
+      (finalizedDepositType !== "none" && finalizedDepositValue <= 0) ||
+      (finalizedDepositType === "percent" && finalizedDepositValue > 100)
+    ) {
+      onError(
+        "Choose no deposit, or enter a positive fixed/percentage deposit no greater than 100 percent.",
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      selectedProposalModel.revision?.immutable_after_at
+        ? "Finalize these customer-visible choices as a new immutable proposal revision? The existing finalized revision will remain preserved."
+        : "Finalize this exact customer-safe proposal and private PDF? Later changes will require a new revision.",
     );
 
-    if (existingProposal) {
-      onNotice("Proposal packet already exists. Open Documents to review or revise it.");
+    if (!confirmed) {
       return;
     }
 
+    onError("");
+    setIsFinalizingProposal(true);
+
     try {
-      await createDocument(
-        client,
-        buildProposalDocumentDraft({
-          snapshot,
-          estimate,
-          lineItems: selectedLineItems,
-          company: selectedEstimateCompany,
-          scope: selectedEstimateScope,
-          inspection: selectedEstimateInspection,
-          photos: selectedEstimatePhotos,
-        }),
-      );
+      const result = await finalizeProposalForElectronicSignature({
+        estimateId: estimate.id,
+        selectedOptionIds: proposalSelectedOptionIds,
+        depositType: finalizedDepositType,
+        depositValue: finalizedDepositValue,
+      });
       await onReload();
-      onNotice("Customer-safe proposal packet saved to Documents.");
+      setIsRevisingProposal(false);
+      onNotice(
+        `${result.proposalNumber} revision ${result.revisionNumber} is finalized with its immutable private PDF.`,
+      );
     } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to save proposal packet."));
+      onError(getCaughtErrorMessage(currentError, "Unable to finalize the proposal."));
+    } finally {
+      setIsFinalizingProposal(false);
     }
   };
 
@@ -26546,25 +27091,62 @@ function EstimatesView({
       return;
     }
 
+    if (isDemoMode) {
+      onError(
+        "Proposal-linked deposit invoices require the secure live workspace; demo mode cannot satisfy the sold-job deposit gate.",
+      );
+      return;
+    }
+
+    const revision = selectedProposalModel.revision;
+
+    if (!revision?.immutable_after_at || !revision.finalized_document_id) {
+      onError("Finalize the exact proposal before creating its deposit invoice.");
+      return;
+    }
+
+    if (!selectedProposalAcceptance) {
+      onError("The intended customer must electronically sign before the deposit invoice is created.");
+      return;
+    }
+
+    if (!selectedProposalHasRegisteredReceipt) {
+      onError(
+        "Recover and register the immutable electronic-signature receipt before creating the deposit invoice.",
+      );
+      return;
+    }
+
     if (selectedProposalModel.financials.depositAmount <= 0) {
       onError("This proposal does not require a deposit.");
       return;
     }
 
     if (selectedProposalDepositInvoice) {
+      onViewChange("invoices", {
+        type: "invoice",
+        id: selectedProposalDepositInvoice.id,
+      });
       onNotice("Existing deposit invoice opened.");
-      onViewChange("invoices");
       return;
     }
 
     try {
-      const draft = buildDepositInvoiceDraftFromProposal({
-        estimate,
-        model: selectedProposalModel,
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 7);
+      const result = await createProposalDepositInvoice(client, {
+        companyId: estimate.company_id,
+        proposalRevisionId: revision.id,
+        acceptanceId: selectedProposalAcceptance.id,
+        dueDate: dueDate.toISOString().slice(0, 10),
       });
-      await createInvoice(client, draft.input, draft.lineItems);
       await onReload();
-      onNotice("Deposit invoice draft created. Online payment collection remains disabled.");
+      onViewChange("invoices", { type: "invoice", id: result.invoiceId });
+      onNotice(
+        result.created
+          ? "Exact proposal deposit invoice created. Record the customer's posted manual payment before sold-job conversion."
+          : "The exact proposal deposit invoice already exists and is ready for posted-payment recording.",
+      );
     } catch (currentError) {
       onError(getCaughtErrorMessage(currentError, "Unable to create deposit invoice."));
     }
@@ -26621,68 +27203,146 @@ function EstimatesView({
     }
   };
 
-  const handleRequestEstimateSignature = async (estimate: EstimateRecord) => {
-    const existingDocument =
-      snapshot.documents.find(
-        (document) =>
-          document.estimate_id === estimate.id && document.category === "estimate",
-      ) ?? null;
-    const document =
-      existingDocument ??
-      (() => {
-        const documentDraft = buildGeneratedDocumentDraft(
-          snapshot,
-          `estimate:${estimate.id}`,
-        );
-        return documentDraft;
-      })();
-
-    if (!document) {
-      onError("Generate or save the estimate packet before requesting a signature.");
+  const handlePrepareProposalSignature = async (estimate: EstimateRecord) => {
+    if (isPreparingProposalSignature) {
       return;
     }
 
-    try {
-      const savedDocument =
-        "id" in document ? document : await createDocument(client, document);
-      const existingSignature = snapshot.signatures.find(
-        (signature) =>
-          signature.document_id === savedDocument.id && isActiveSignatureRequest(signature),
+    if (isDemoMode) {
+      onError(
+        "Customer electronic-signature delivery requires the secure live workspace; demo mode sends nothing.",
       );
+      return;
+    }
 
-      if (existingSignature) {
-        onNotice("This estimate packet already has an active signature request.");
-        return;
-      }
+    const revision = selectedProposalModel?.revision;
 
-      const association = getAssociationSummary(snapshot, {
-        customerId: estimate.customer_id,
-        leadId: estimate.lead_id,
-        estimateId: estimate.id,
+    if (isRevisingProposal) {
+      onError("Finalize the revised proposal choices before preparing customer delivery.");
+      return;
+    }
+
+    if (!revision?.immutable_after_at || !revision.finalized_document_id) {
+      onError("Finalize the exact proposal revision before preparing its signature email.");
+      return;
+    }
+
+    if (selectedProposalModel?.sourceDriftDetected) {
+      onError(
+        "Source records changed after finalization. Start and finalize a new proposal revision before preparing customer delivery.",
+      );
+      return;
+    }
+
+    if (selectedProposalAcceptance) {
+      onNotice("This exact proposal revision is already electronically signed.");
+      return;
+    }
+
+    const customer = estimate.customer_id
+      ? snapshot.customers.find((item) => item.id === estimate.customer_id) ?? null
+      : null;
+
+    if (!customer?.email?.trim()) {
+      onError("Add the intended customer's email before preparing a signature request.");
+      return;
+    }
+
+    onError("");
+    setIsPreparingProposalSignature(true);
+
+    try {
+      const result = await prepareProposalElectronicSignatureRequest({
+        proposalRevisionId: revision.id,
       });
-      const customer = estimate.customer_id
-        ? snapshot.customers.find((item) => item.id === estimate.customer_id)
-        : null;
-      const lead = estimate.lead_id
-        ? snapshot.leads.find((item) => item.id === estimate.lead_id)
-        : null;
-
-      await createSignature(client, {
-        company_id: estimate.company_id,
-        customer_id: estimate.customer_id,
-        document_id: savedDocument.id,
-        signer_name:
-          association.name && association.name !== "Unassigned"
-            ? association.name
-            : "Customer signer",
-        signer_email: customer?.email ?? lead?.email ?? null,
-        status: "pending",
-      });
-
       await onReload();
-      onNotice("Customer signature requested for the estimate packet.");
+      onNotice(
+        result.deliveryStatus === "prepared"
+          ? "Electronic-signature email prepared for owner approval. Nothing was sent. Open Integrations to review and explicitly approve Gmail delivery."
+          : "Electronic-signature delivery status updated.",
+      );
     } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to request customer signature."));
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to prepare the customer electronic-signature email.",
+        ),
+      );
+    } finally {
+      setIsPreparingProposalSignature(false);
+    }
+  };
+
+  const handleRevokeProposalSignature = async (estimate: EstimateRecord) => {
+    if (isRevokingProposalSignature) {
+      return;
+    }
+
+    const revision = selectedProposalModel?.revision;
+    if (!revision || !selectedProposalSignature || selectedProposalAcceptance) {
+      onError("No active unsigned customer signing link exists for this proposal revision.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Revoke the active signing link for ${estimate.title}? The customer will no longer be able to use that exact link.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    onError("");
+    setIsRevokingProposalSignature(true);
+    try {
+      await revokeProposalElectronicSignatureRequest({
+        proposalRevisionId: revision.id,
+      });
+      await onReload();
+      onNotice("Customer signing link revoked. The prior link can no longer be used.");
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to revoke the customer signing link.",
+        ),
+      );
+    } finally {
+      setIsRevokingProposalSignature(false);
+    }
+  };
+
+  const handleReconcileProposalReceipt = async () => {
+    if (isReconcilingProposalReceipt) {
+      return;
+    }
+
+    const revision = selectedProposalModel?.revision;
+    if (
+      !revision ||
+      !selectedProposalAcceptance ||
+      revision.signed_document_id
+    ) {
+      onError("No incomplete electronic-signature receipt exists for this proposal revision.");
+      return;
+    }
+
+    onError("");
+    setIsReconcilingProposalReceipt(true);
+    try {
+      await reconcileProposalElectronicSignatureReceipt({
+        proposalRevisionId: revision.id,
+      });
+      await onReload();
+      onNotice("Electronic-signature receipt recovered and registered securely.");
+    } catch (currentError) {
+      onError(
+        getCaughtErrorMessage(
+          currentError,
+          "Unable to reconcile the electronic-signature receipt.",
+        ),
+      );
+    } finally {
+      setIsReconcilingProposalReceipt(false);
     }
   };
 
@@ -26836,6 +27496,30 @@ function EstimatesView({
             estimate={selectedEstimate}
             model={selectedProposalModel}
             depositInvoice={selectedProposalDepositInvoice}
+            signedAcceptance={selectedProposalAcceptance}
+            hasRegisteredReceipt={selectedProposalHasRegisteredReceipt}
+            activeSignature={selectedProposalSignature}
+            postedDepositTotal={selectedProposalPostedDepositTotal}
+            hasSufficientPostedDeposit={selectedProposalHasSufficientPostedDeposit}
+            isFinalizing={isFinalizingProposal}
+            isPreparingSignature={isPreparingProposalSignature}
+            isRevokingSignature={isRevokingProposalSignature}
+            isReconcilingReceipt={isReconcilingProposalReceipt}
+            isRevising={isRevisingProposal}
+            choicesAreEditable={proposalChoicesAreEditable}
+            depositType={selectedProposalModel?.depositRule.type ?? proposalDepositType}
+            depositValue={selectedProposalModel?.depositRule.value ?? proposalDepositValue}
+            onDepositTypeChange={(nextType) => {
+              setProposalDepositType(nextType);
+              setProposalDepositValue((current) =>
+                nextType === "none"
+                  ? 0
+                  : current > 0
+                    ? current
+                    : selectedProposalModel?.brand.defaultDepositValue ?? 0,
+              );
+            }}
+            onDepositValueChange={setProposalDepositValue}
             onToggleOption={(optionId) =>
               setProposalSelectedOptionIds((current) => {
                 const next = new Set(current);
@@ -26849,10 +27533,43 @@ function EstimatesView({
                 return next;
               })
             }
-            onSaveProposalDocument={handleSaveProposalDocument}
+            onStartRevision={() => {
+              if (selectedProposalAcceptance) {
+                onError(
+                  "An electronically accepted proposal cannot be replaced. Continue the exact deposit and sold-job workflow from the signed revision.",
+                );
+                return;
+              }
+              if (selectedProposalSignature) {
+                onError(
+                  "Revoke the active customer signing link before starting a replacement proposal revision.",
+                );
+                return;
+              }
+              setProposalSelectedOptionIds(
+                new Set(
+                  selectedProposalModel?.options
+                    .filter((option) => option.selected)
+                    .map((option) => option.id) ?? [],
+                ),
+              );
+              setIsRevisingProposal(true);
+            }}
+            onFinalizeProposal={handleFinalizeProposal}
+            onPrepareSignature={handlePrepareProposalSignature}
+            onRevokeSignature={handleRevokeProposalSignature}
+            onReconcileReceipt={handleReconcileProposalReceipt}
             onCreateDepositInvoice={handleCreateProposalDepositInvoice}
             onOpenDocuments={() => onViewChange("documents")}
-            onOpenInvoices={() => onViewChange("invoices")}
+            onOpenInvoices={() =>
+              selectedProposalDepositInvoice
+                ? onViewChange("invoices", {
+                    type: "invoice",
+                    id: selectedProposalDepositInvoice.id,
+                  })
+                : onViewChange("invoices")
+            }
+            onOpenIntegrations={() => onViewChange("integrations")}
           />
           <EstimatePdfPreview
             estimate={selectedEstimate}
@@ -26863,21 +27580,28 @@ function EstimatesView({
           <EstimateWorkflowPanel
             snapshot={snapshot}
             estimate={selectedEstimate}
-            linkedJob={selectedEstimateJob}
+            linkedJob={selectedEstimateSoldJob}
             potentialJob={selectedEstimatePotentialJob}
             linkedScope={selectedEstimateScope}
             linkedInspection={selectedEstimateInspection}
             photos={selectedEstimatePhotos}
             communications={selectedEstimateCommunications}
             documents={selectedEstimateDocuments}
-            signatures={selectedEstimateSignatures}
+            proposalSignature={selectedProposalSignature}
+            signedAcceptance={selectedProposalAcceptance}
+            proposalSourceDriftDetected={
+              selectedProposalModel?.sourceDriftDetected ?? false
+            }
+            conversionReadiness={selectedProposalConversionReadiness}
             isApproving={isApprovingEstimate}
             isConverting={isConvertingEstimate}
+            isPreparingSignature={isPreparingProposalSignature}
             onApproveEstimate={handleApproveEstimate}
             onConvertEstimateToJob={handleConvertEstimateToJob}
             onSaveDocument={handleSaveEstimateDocument}
             onGenerateScope={handleGenerateScopeFromEstimate}
-            onRequestSignature={handleRequestEstimateSignature}
+            onPrepareSignature={handlePrepareProposalSignature}
+            onOpenIntegrations={() => onViewChange("integrations")}
           />
         </aside>
       </div>
@@ -28045,20 +28769,62 @@ function ProposalBuilderPanel({
   estimate,
   model,
   depositInvoice,
+  signedAcceptance,
+  hasRegisteredReceipt,
+  activeSignature,
+  postedDepositTotal,
+  hasSufficientPostedDeposit,
+  isFinalizing,
+  isPreparingSignature,
+  isRevokingSignature,
+  isReconcilingReceipt,
+  isRevising,
+  choicesAreEditable,
+  depositType,
+  depositValue,
+  onDepositTypeChange,
+  onDepositValueChange,
   onToggleOption,
-  onSaveProposalDocument,
+  onStartRevision,
+  onFinalizeProposal,
+  onPrepareSignature,
+  onRevokeSignature,
+  onReconcileReceipt,
   onCreateDepositInvoice,
   onOpenDocuments,
   onOpenInvoices,
+  onOpenIntegrations,
 }: {
   estimate: EstimateRecord | null;
   model: ProposalWorkspaceModel | null;
   depositInvoice: InvoiceRecord | null;
+  signedAcceptance: EstimateProposalAcceptanceRecord | null;
+  hasRegisteredReceipt: boolean;
+  activeSignature: SignatureRecord | null;
+  postedDepositTotal: number;
+  hasSufficientPostedDeposit: boolean;
+  isFinalizing: boolean;
+  isPreparingSignature: boolean;
+  isRevokingSignature: boolean;
+  isReconcilingReceipt: boolean;
+  isRevising: boolean;
+  choicesAreEditable: boolean;
+  depositType: ProposalDepositType;
+  depositValue: number;
+  onDepositTypeChange: (
+    depositType: Exclude<ProposalDepositType, "custom_schedule">,
+  ) => void;
+  onDepositValueChange: (depositValue: number) => void;
   onToggleOption: (optionId: string) => void;
-  onSaveProposalDocument: (estimate: EstimateRecord) => Promise<void>;
+  onStartRevision: () => void;
+  onFinalizeProposal: (estimate: EstimateRecord) => Promise<void>;
+  onPrepareSignature: (estimate: EstimateRecord) => Promise<void>;
+  onRevokeSignature: (estimate: EstimateRecord) => Promise<void>;
+  onReconcileReceipt: () => Promise<void>;
   onCreateDepositInvoice: (estimate: EstimateRecord) => Promise<void>;
   onOpenDocuments: () => void;
   onOpenInvoices: () => void;
+  onOpenIntegrations: () => void;
 }) {
   if (!estimate || !model) {
     return (
@@ -28075,9 +28841,12 @@ function ProposalBuilderPanel({
   const conversionReadiness = proposalCanConvertToJob({
     estimate,
     model,
-    hasSignedAcceptance: model.revision?.signature_status === "signed",
-    hasDepositInvoice: depositInvoice !== null,
+    hasSignedAcceptance: signedAcceptance !== null && hasRegisteredReceipt,
+    hasSufficientPostedDeposit,
   });
+  const isFinalized = Boolean(
+    model.revision?.immutable_after_at && model.revision.finalized_document_id,
+  );
 
   return (
     <section
@@ -28100,6 +28869,113 @@ function ProposalBuilderPanel({
           <Badge label={model.brand.companyName} tone={model.brand.shortName === "IHC" ? "amber" : "blue"} />
           <Badge label="Customer-safe" tone="green" />
         </div>
+      </div>
+
+      <div
+        data-testid="proposal-customer-identity"
+        className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3"
+      >
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Finalized for
+          </p>
+          <p className="mt-1 font-bold text-slate-950">{model.customerName}</p>
+        </div>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Exact property
+          </p>
+          <p className="mt-1 font-bold text-slate-950">{model.propertyAddress}</p>
+        </div>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Exact proposal
+          </p>
+          <p className="mt-1 font-bold text-slate-950">{model.title}</p>
+        </div>
+      </div>
+
+      {model.sourceDriftDetected ? (
+        <div
+          data-testid="proposal-source-drift-warning"
+          className="mt-4 rounded-lg border border-rose-300 bg-rose-50 p-4"
+        >
+          <p className="text-sm font-black text-rose-950">
+            Finalized proposal source changed
+          </p>
+          <p className="mt-1 text-sm text-rose-800">
+            {signedAcceptance
+              ? "This panel continues to show the exact signed proposal. Its immutable evidence still governs the deposit and sold-job handoff; review current-record differences before any later customer communication."
+              : "This panel continues to show the exact immutable customer proposal. Revoke any active signing link, then start and finalize a new revision before customer delivery."}
+          </p>
+        </div>
+      ) : null}
+
+      <div
+        data-testid="proposal-deposit-rule"
+        className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-black text-slate-950">Deposit before sold job</p>
+            <p className="mt-1 text-sm text-slate-600">
+              Choose the exact customer deposit rule before finalization. The rule and
+              resulting amount are frozen into the immutable proposal.
+            </p>
+          </div>
+          <Badge
+            label={choicesAreEditable ? "Owner selection" : "Finalized rule locked"}
+            tone={choicesAreEditable ? "blue" : "green"}
+          />
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1 text-sm font-bold text-slate-700">
+            Deposit rule
+            <select
+              data-testid="proposal-deposit-type"
+              value={depositType}
+              disabled={!choicesAreEditable}
+              onChange={(event) =>
+                onDepositTypeChange(
+                  event.target.value as Exclude<
+                    ProposalDepositType,
+                    "custom_schedule"
+                  >,
+                )
+              }
+              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100"
+            >
+              <option value="none">No deposit required</option>
+              <option value="percent">Percentage of accepted total</option>
+              <option value="fixed">Fixed dollar amount</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-sm font-bold text-slate-700">
+            {depositType === "percent" ? "Deposit percent" : "Deposit amount"}
+            <input
+              data-testid="proposal-deposit-value"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              max={depositType === "percent" ? 100 : undefined}
+              step="0.001"
+              value={depositType === "none" ? 0 : depositValue}
+              disabled={!choicesAreEditable || depositType === "none"}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value);
+                onDepositValueChange(Number.isFinite(nextValue) ? nextValue : 0);
+              }}
+              className="min-h-11 rounded-md border border-slate-300 px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100"
+            />
+          </label>
+        </div>
+        <p className="mt-3 text-sm font-semibold text-slate-700">
+          {depositType === "none"
+            ? "No deposit is required after electronic signature."
+            : depositType === "percent"
+              ? `${depositValue}% requires ${formatProposalMoney(model.financials.depositAmount)} after electronic signature.`
+              : `${formatProposalMoney(depositValue)} fixed deposit requires ${formatProposalMoney(model.financials.depositAmount)} after electronic signature.`}
+        </p>
       </div>
 
       <div
@@ -28155,62 +29031,183 @@ function ProposalBuilderPanel({
         ))}
       </div>
 
+      <div
+        data-testid="proposal-line-items-list"
+        className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-slate-950">Base proposal line items</p>
+            <p className="mt-1 text-sm text-slate-600">
+              These exact customer-visible items are included in the proposal packet.
+            </p>
+          </div>
+          <Badge
+            label={`${model.lineItems.length} item${model.lineItems.length === 1 ? "" : "s"}`}
+            tone={model.lineItems.length ? "blue" : "amber"}
+          />
+        </div>
+        <div className="mt-3 space-y-2">
+          {model.lineItems.map((item) => (
+            <div
+              key={item.id}
+              className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-950">{item.name}</p>
+                  {item.description ? (
+                    <p className="mt-1 whitespace-pre-line text-slate-600">
+                      {item.description}
+                    </p>
+                  ) : null}
+                  <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    {item.quantity} {item.unit}
+                  </p>
+                </div>
+                <p className="font-bold text-slate-950">
+                  {formatProposalMoney(item.total)}
+                </p>
+              </div>
+            </div>
+          ))}
+          {!model.lineItems.length ? (
+            <EmptyState label="No customer-visible line items are available." />
+          ) : null}
+        </div>
+      </div>
+
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-black text-slate-950">Optional upgrades and alternatives</p>
             <p className="mt-1 text-sm text-slate-600">
-              Base total stays unchanged until a customer intentionally selects an option.
+              Your choices below are frozen into the finalized proposal for the customer to
+              review and accept; the customer does not change them while signing.
             </p>
           </div>
           <Badge
-            label={`${model.options.length} configured`}
+            label={
+              isFinalized && !isRevising
+                ? "Finalized choices locked"
+                : `${model.options.length} configured`
+            }
             tone={model.options.length ? "blue" : "amber"}
           />
         </div>
         <div className="mt-3 space-y-2" data-testid="proposal-options-list">
-          {model.options.map((option) => (
-            <label
-              key={option.id}
-              className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm transition hover:border-sky-200 hover:bg-sky-50"
-            >
-              <input
-                type="checkbox"
-                checked={option.selected}
-                onChange={() => onToggleOption(option.id)}
-                className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block font-bold text-slate-950">{option.name}</span>
-                <span className="mt-1 block text-slate-500">
-                  {option.description || option.scopeDetails || "Customer-selectable option"}
+          {model.options.map((option) => {
+            const optionTotal = calculateProposalOptionTotal(option);
+            const netAdjustment =
+              option.priceEffectType === "replace_base_amount"
+                ? optionTotal - option.baseReplacementAmount
+                : option.priceEffectType === "full_alternate_total"
+                  ? optionTotal - model.financials.baseTotal
+                  : optionTotal;
+            const priceEffectLabel =
+              option.priceEffectType === "replace_base_amount"
+                ? `Replaces ${formatProposalMoney(option.baseReplacementAmount)} of base scope · net ${formatProposalMoney(netAdjustment)}`
+                : option.priceEffectType === "full_alternate_total"
+                  ? `Full alternate total · net ${formatProposalMoney(netAdjustment)} versus base`
+                  : `Adds ${formatProposalMoney(netAdjustment)}`;
+
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm transition hover:border-sky-200 hover:bg-sky-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={option.selected}
+                  disabled={!choicesAreEditable}
+                  onChange={() => onToggleOption(option.id)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-bold text-slate-950">{option.name}</span>
+                  {option.description ? (
+                    <span className="mt-1 block text-slate-600">{option.description}</span>
+                  ) : null}
+                  {option.scopeDetails ? (
+                    <span className="mt-1 block text-slate-600">
+                      <span className="font-bold text-slate-700">Scope:</span>{" "}
+                      {option.scopeDetails}
+                    </span>
+                  ) : null}
+                  {option.warrantyEffect ? (
+                    <span className="mt-1 block text-slate-600">
+                      <span className="font-bold text-slate-700">Warranty:</span>{" "}
+                      {option.warrantyEffect}
+                    </span>
+                  ) : null}
+                  {option.customerNotes ? (
+                    <span className="mt-1 block text-slate-600">
+                      <span className="font-bold text-slate-700">Customer note:</span>{" "}
+                      {option.customerNotes}
+                    </span>
+                  ) : null}
+                  <span className="mt-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                    {option.quantity} {option.unit} × {formatProposalMoney(option.price)} ·{" "}
+                    {priceEffectLabel}
+                  </span>
                 </span>
-              </span>
-              <span className="font-bold text-slate-950">
-                {formatProposalMoney(option.price)}
-              </span>
-            </label>
-          ))}
+                <span className="font-bold text-slate-950">
+                  {formatProposalMoney(optionTotal)}
+                </span>
+              </label>
+            );
+          })}
           {!model.options.length ? (
             <EmptyState label="No saved upgrade or alternative options are configured for this proposal yet." />
           ) : null}
         </div>
+        {isFinalized && !isRevising ? (
+          <button
+            data-testid="proposal-start-revision-button"
+            type="button"
+            onClick={onStartRevision}
+            disabled={
+              Boolean(signedAcceptance) ||
+              Boolean(activeSignature) ||
+              isPreparingSignature
+            }
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {activeSignature
+              ? "Revoke existing link first"
+              : "Start a new proposal revision"}
+          </button>
+        ) : null}
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         <div className="rounded-lg border border-slate-200 p-4">
           <p className="text-sm font-black text-slate-950">Signature readiness</p>
           <p className="mt-1 text-sm text-slate-600">
-            DocuSign / Dropbox Sign architecture is ready, but live signature sending is disabled.
+            {signedAcceptance
+              ? `Electronically signed by ${signedAcceptance.signer_name} on ${formatDateTime(signedAcceptance.accepted_at)}.`
+              : model.sourceDriftDetected
+                ? "Source records changed after finalization. A new immutable revision is required before delivery."
+              : isFinalized
+                ? "Prepare a Gmail draft for owner approval. Nothing is sent until the owner explicitly approves delivery."
+                : "Finalize the exact revision and private PDF before preparing customer delivery."}
           </p>
-          <Badge label={model.revision?.signature_status ?? "not_configured"} tone="amber" />
+          <Badge
+            label={signedAcceptance ? "electronically signed" : model.revision?.signature_status ?? "not finalized"}
+            tone={signedAcceptance ? "green" : "amber"}
+          />
         </div>
         <div className="rounded-lg border border-slate-200 p-4">
           <p className="text-sm font-black text-slate-950">Payment readiness</p>
           <p className="mt-1 text-sm text-slate-600">
-            Deposit schedule is calculated, but online payment collection is not connected.
+            {model.financials.depositAmount <= 0 || model.revision?.requires_deposit_before_job === false
+              ? "This finalized proposal does not require a deposit before sold-job conversion."
+              : `${formatProposalMoney(postedDepositTotal)} of ${formatProposalMoney(model.financials.depositAmount)} is recorded as posted against the exact deposit invoice.`}
           </p>
-          <Badge label={model.revision?.payment_status ?? "online_payments_disabled"} tone="amber" />
+          <Badge
+            label={hasSufficientPostedDeposit ? "deposit gate satisfied" : model.revision?.payment_status ?? "deposit pending"}
+            tone={hasSufficientPostedDeposit ? "green" : "amber"}
+          />
         </div>
         <div className="rounded-lg border border-slate-200 p-4">
           <p className="text-sm font-black text-slate-950">QuickBooks readiness</p>
@@ -28254,21 +29251,107 @@ function ProposalBuilderPanel({
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <button
+          data-testid="proposal-finalize-button"
           type="button"
-          onClick={() => void onSaveProposalDocument(estimate)}
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-800"
+          onClick={() => void onFinalizeProposal(estimate)}
+          disabled={
+            isFinalizing ||
+            isPreparingSignature ||
+            estimate.status !== "approved" ||
+            model.readiness.some((item) => item.state === "blocked") ||
+            (isFinalized && !isRevising)
+          }
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           <FileText className="h-4 w-4" />
-          Save proposal packet
+          {isFinalizing
+            ? "Finalizing proposal..."
+            : isFinalized && isRevising
+              ? "Finalize revised proposal"
+              : isFinalized
+                ? "Exact proposal finalized"
+                : "Finalize exact proposal"}
         </button>
+        <button
+          data-testid="proposal-prepare-signature-button"
+          type="button"
+          onClick={() => void onPrepareSignature(estimate)}
+          disabled={
+            !isFinalized ||
+            isRevising ||
+            Boolean(signedAcceptance) ||
+            Boolean(activeSignature) ||
+            model.sourceDriftDetected ||
+            isPreparingSignature ||
+            isFinalizing
+          }
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Mail className="h-4 w-4" />
+          {signedAcceptance
+            ? "Customer signature complete"
+            : activeSignature
+              ? "Revoke existing link first"
+            : model.sourceDriftDetected
+              ? "Finalize changed source first"
+            : isPreparingSignature
+              ? "Preparing owner review..."
+              : "Prepare signature email"}
+        </button>
+        {activeSignature && !signedAcceptance ? (
+          <button
+            data-testid="proposal-revoke-signature-button"
+            type="button"
+            onClick={() => void onRevokeSignature(estimate)}
+            disabled={isRevokingSignature || isPreparingSignature || isFinalizing}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <X className="h-4 w-4" />
+            {isRevokingSignature ? "Revoking signing link..." : "Revoke signing link"}
+          </button>
+        ) : null}
+        {signedAcceptance && !model.revision?.signed_document_id ? (
+          <button
+            data-testid="proposal-reconcile-receipt-button"
+            type="button"
+            onClick={() => void onReconcileReceipt()}
+            disabled={isReconcilingReceipt || isPreparingSignature || isFinalizing}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCcw className="h-4 w-4" />
+            {isReconcilingReceipt
+              ? "Recovering signed receipt..."
+              : "Recover signed receipt"}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => void onCreateDepositInvoice(estimate)}
-          disabled={depositInvoice !== null || model.financials.depositAmount <= 0}
+          disabled={
+            depositInvoice !== null ||
+            model.financials.depositAmount <= 0 ||
+            !isFinalized ||
+            !signedAcceptance ||
+            !hasRegisteredReceipt
+          }
           className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <ReceiptText className="h-4 w-4" />
-          {depositInvoice ? "Deposit invoice exists" : "Create deposit invoice"}
+          {depositInvoice
+            ? "Deposit invoice exists"
+            : !signedAcceptance
+              ? "Signature required before deposit"
+              : !hasRegisteredReceipt
+                ? "Signed receipt required before deposit"
+              : "Create exact deposit invoice"}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenIntegrations}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+        >
+          <Mail className="h-4 w-4" />
+          Review Gmail approvals
         </button>
         <button
           type="button"
@@ -28478,12 +29561,14 @@ function EstimatePdfPreview({
               Customer acceptance
             </p>
             <p className="mt-2 text-sm text-slate-600">
-              Signature authorizes the selected scope, line items, totals, and company terms.
+              The customer electronically signs the exact immutable finalized proposal, selected options, accepted total, terms, and electronic-record disclosure through the secure sign-only link.
             </p>
           </div>
-          <div className="grid gap-3 text-sm text-slate-600">
-            <div className="border-b border-slate-300 pb-2">Signature</div>
-            <div className="border-b border-slate-300 pb-2">Date</div>
+          <div className="grid gap-2 text-sm text-slate-600">
+            <p className="font-semibold text-slate-900">Audit evidence</p>
+            <p>
+              Signer identity, consent, accepted choices and total, timestamp, document digest, and privacy-preserving request evidence are retained with the signed revision.
+            </p>
           </div>
         </div>
       </div>
@@ -28501,14 +29586,19 @@ function EstimateWorkflowPanel({
   photos,
   communications,
   documents,
-  signatures,
+  proposalSignature,
+  signedAcceptance,
+  proposalSourceDriftDetected,
+  conversionReadiness,
   isApproving,
   isConverting,
+  isPreparingSignature,
   onApproveEstimate,
   onConvertEstimateToJob,
   onSaveDocument,
   onGenerateScope,
-  onRequestSignature,
+  onPrepareSignature,
+  onOpenIntegrations,
 }: {
   snapshot: CrmSnapshot;
   estimate: EstimateRecord | null;
@@ -28519,14 +29609,19 @@ function EstimateWorkflowPanel({
   photos: JobPhotoRecord[];
   communications: UnifiedInboxItem[];
   documents: DocumentRecord[];
-  signatures: SignatureRecord[];
+  proposalSignature: SignatureRecord | null;
+  signedAcceptance: EstimateProposalAcceptanceRecord | null;
+  proposalSourceDriftDetected: boolean;
+  conversionReadiness: { ready: boolean; reason: string };
   isApproving: boolean;
   isConverting: boolean;
+  isPreparingSignature: boolean;
   onApproveEstimate: (estimate: EstimateRecord) => Promise<void>;
   onConvertEstimateToJob: (estimate: EstimateRecord) => Promise<void>;
   onSaveDocument: (estimate: EstimateRecord) => Promise<void>;
   onGenerateScope: (estimate: EstimateRecord) => Promise<void>;
-  onRequestSignature: (estimate: EstimateRecord) => Promise<void>;
+  onPrepareSignature: (estimate: EstimateRecord) => Promise<void>;
+  onOpenIntegrations: () => void;
 }) {
   if (!estimate) {
     return (
@@ -28548,14 +29643,14 @@ function EstimateWorkflowPanel({
   const hasEstimateDocument = documents.some(
     (document) => document.category === "estimate",
   );
-  const activeSignature = signatures.find(isActiveSignatureRequest);
+  const activeSignature = proposalSignature;
   const isTerminalEstimate =
     estimate.status === "declined" ||
     estimate.status === "rejected" ||
     estimate.status === "expired";
   const canApprove =
     estimate.status !== "approved" && !isTerminalEstimate && linkedJob === null;
-  const canConvert = estimate.status === "approved" && linkedJob === null;
+  const canConvert = conversionReadiness.ready && linkedJob === null;
   const approvalLabel =
     estimate.status === "approved"
       ? "Approved"
@@ -28570,14 +29665,14 @@ function EstimateWorkflowPanel({
     ? "Job linked"
     : potentialJob
       ? "Matching job found"
-      : estimate.status === "approved"
-        ? "Ready for draft job"
-        : "Waiting on approval";
+      : conversionReadiness.ready
+        ? "Ready for sold job"
+        : "Waiting on proposal gates";
   const conversionTone = linkedJob
     ? "green"
     : potentialJob
       ? "amber"
-      : estimate.status === "approved"
+      : conversionReadiness.ready
         ? "blue"
         : "amber";
   const lifecycleItems = [
@@ -28597,20 +29692,22 @@ function EstimateWorkflowPanel({
     {
       label: "Viewed",
       detail: activeSignature
-        ? "Signature request is available for customer review"
-        : "View tracking is not connected yet",
-      state: activeSignature ? "complete" : "pending",
+        ? activeSignature.viewed_at
+          ? `Customer viewed the finalized proposal ${formatDateTime(activeSignature.viewed_at)}`
+          : "The signing request is active but has not been viewed"
+        : "No customer signing request has been delivered",
+      state: activeSignature?.viewed_at ? "complete" : "pending",
     },
     {
       label: "Approved",
       detail:
-        estimate.status === "approved"
-          ? `Approved ${formatDateTime(estimate.updated_at)}`
+        signedAcceptance
+          ? `Electronically signed by ${signedAcceptance.signer_name} on ${formatDateTime(signedAcceptance.accepted_at)}`
           : isTerminalEstimate
             ? approvalLabel
-            : "Needs explicit approval before handoff",
+            : "Needs the intended customer's electronic signature before handoff",
       state:
-        estimate.status === "approved"
+        signedAcceptance
           ? "complete"
           : isTerminalEstimate
             ? "blocked"
@@ -28649,10 +29746,12 @@ function EstimateWorkflowPanel({
     },
     {
       label: "Signature",
-      value: activeSignature
-        ? `${activeSignature.signer_name} - ${activeSignature.status}`
-        : "No active request",
-      ready: activeSignature?.status === "signed",
+      value: signedAcceptance
+        ? `${signedAcceptance.signer_name} - electronically signed`
+        : activeSignature
+          ? `${activeSignature.signer_name} - ${activeSignature.status}`
+          : "No active request",
+      ready: signedAcceptance !== null,
     },
     {
       label: "Inspection",
@@ -28721,13 +29820,13 @@ function EstimateWorkflowPanel({
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-sm font-bold text-slate-950">Customer approval</p>
+            <p className="text-sm font-bold text-slate-950">Internal pricing approval</p>
             <p className="mt-1 text-sm text-slate-600">
               {estimate.status === "approved"
-                ? `Approved on ${formatDateTime(estimate.updated_at)}.`
+                ? `Approved internally on ${formatDateTime(estimate.updated_at)}. Customer electronic acceptance remains separate.`
                 : isTerminalEstimate
                   ? `${approvalLabel} estimates should be revised before handoff.`
-                  : "Approval is explicit. Drafts and sent estimates are not production-ready until approved."}
+                  : "Owner approval freezes the intended pricing for proposal finalization; it does not substitute for customer signature."}
             </p>
           </div>
           <button
@@ -28742,7 +29841,7 @@ function EstimateWorkflowPanel({
               ? "Approved"
               : isApproving
                 ? "Approving..."
-                : "Approve estimate"}
+                : "Approve internally"}
           </button>
         </div>
         <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
@@ -28808,12 +29907,14 @@ function EstimateWorkflowPanel({
             </div>
           ))}
         </div>
-        {activeSignature ? (
+        {signedAcceptance ?? activeSignature ? (
           <p className="mt-3 text-sm font-semibold text-slate-700">
-            Signature: {activeSignature.signer_name} · {activeSignature.status}
-            {activeSignature.signed_at
-              ? ` · signed ${formatDateTime(activeSignature.signed_at)}`
-              : ""}
+            Signature: {signedAcceptance?.signer_name ?? activeSignature?.signer_name} · {signedAcceptance ? "electronically signed" : activeSignature?.status}
+            {signedAcceptance?.accepted_at
+              ? ` · signed ${formatDateTime(signedAcceptance.accepted_at)}`
+              : activeSignature?.signed_at
+                ? ` · signed ${formatDateTime(activeSignature.signed_at)}`
+                : ""}
           </p>
         ) : null}
       </div>
@@ -28916,12 +30017,33 @@ function EstimateWorkflowPanel({
         <button
           data-testid="estimate-request-signature-button"
           type="button"
-          onClick={() => void onRequestSignature(estimate)}
-          disabled={activeSignature?.status === "signed"}
+          onClick={() => void onPrepareSignature(estimate)}
+          disabled={
+            Boolean(signedAcceptance) ||
+            Boolean(activeSignature) ||
+            proposalSourceDriftDetected ||
+            isPreparingSignature
+          }
           className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <Save className="h-4 w-4" />
-          {activeSignature ? "Signature requested" : "Request signature"}
+          <Mail className="h-4 w-4" />
+          {signedAcceptance
+            ? "Electronic signature complete"
+            : isPreparingSignature
+              ? "Preparing owner review..."
+            : activeSignature
+                ? "Revoke existing link first"
+                : proposalSourceDriftDetected
+                  ? "Finalize changed source first"
+                : "Prepare signature email"}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenIntegrations}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <Mail className="h-4 w-4" />
+          Review Gmail approvals
         </button>
         <button
           type="button"
@@ -28936,10 +30058,10 @@ function EstimateWorkflowPanel({
             : isConverting
               ? "Converting..."
               : potentialJob
-                ? "Link matching job"
-            : estimate.status === "approved"
-              ? "Convert to draft job"
-              : "Needs approval"}
+                ? "Link matching sold job"
+                : conversionReadiness.ready
+                  ? "Create sold job"
+                  : "Proposal gates incomplete"}
         </button>
       </div>
     </section>
@@ -29733,12 +30855,13 @@ type JobsViewProps = {
   isDemoMode: boolean;
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
-  onViewChange: (view: WorkspaceView) => void;
+  onViewChange: WorkspaceViewChange;
   onReload: () => Promise<void>;
   onScrollPreservingReload: () => Promise<void>;
   onDemoSnapshotChange: (updater: (snapshot: CrmSnapshot) => CrmSnapshot) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  focusedJobId: string | null;
 };
 
 function JobsView({
@@ -29752,8 +30875,11 @@ function JobsView({
   onDemoSnapshotChange,
   onNotice,
   onError,
+  focusedJobId,
 }: JobsViewProps) {
-  const [selectedJobId, setSelectedJobId] = useState(snapshot.jobs[0]?.id ?? "new");
+  const [selectedJobId, setSelectedJobId] = useState(
+    focusedJobId ?? snapshot.jobs[0]?.id ?? "new",
+  );
   const [jobDraftVersion, setJobDraftVersion] = useState(0);
   const [jobFormCompanyId, setJobFormCompanyId] = useState(
     snapshot.jobs[0]?.company_id ?? snapshot.companies[0]?.id ?? "",
@@ -29801,6 +30927,29 @@ function JobsView({
   const productionKpis = calculateProductionKpis(snapshot);
   const selectedJob =
     snapshot.jobs.find((job) => job.id === selectedJobId) ?? null;
+  useEffect(() => {
+    const focusedJob = focusedJobId
+      ? snapshot.jobs.find((job) => job.id === focusedJobId) ?? null
+      : null;
+
+    if (!focusedJob) {
+      return;
+    }
+
+    const focusedJobAlreadySelected = selectedJobId === focusedJob.id;
+
+    if (!focusedJobAlreadySelected) {
+      setSearch("");
+      setStatusFilter("all");
+      setCompanyFilter("all");
+      setServiceFilter("all");
+      setCrewFilter("all");
+      setScheduleFilter("all");
+    }
+    setSelectedJobId(focusedJob.id);
+    setJobFormCompanyId(focusedJob.company_id);
+    setJobFormServiceType(focusedJob.service_type);
+  }, [focusedJobId, selectedJobId, snapshot.jobs]);
   const jobFormCompany =
     snapshot.companies.find((company) => company.id === jobFormCompanyId) ??
     companyMap.get(jobFormCompanyId) ??
@@ -30124,6 +31273,7 @@ function JobsView({
     setEditingTaskId(null);
     setProductionAction(null);
     setJobDraftVersion((version) => version + 1);
+    onViewChange("jobs", null);
     focusJobBuilder();
   };
 
@@ -30134,6 +31284,7 @@ function JobsView({
     setWorkspaceTab("overview");
     setEditingTaskId(null);
     setProductionAction(null);
+    onViewChange("jobs", { type: "job", id: job.id });
     focusJobBuilder();
   };
 
@@ -30537,6 +31688,7 @@ function JobsView({
           ? await updateJob(client, selectedJob.id, input)
           : await createJob(client, input);
       setSelectedJobId(savedJob.id);
+      onViewChange("jobs", { type: "job", id: savedJob.id });
       if (!isDemoMode) {
         await onReload();
       }
@@ -37019,6 +38171,8 @@ function PhotosView({
   );
 }
 
+const FINANCIAL_INVOICE_PAGE_SIZE = 8;
+
 type InvoicesViewProps = {
   client: CrmClient;
   isDemoMode: boolean;
@@ -37028,6 +38182,8 @@ type InvoicesViewProps = {
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  onViewChange: WorkspaceViewChange;
+  focusedInvoiceId: string | null;
 };
 
 function InvoicesView({
@@ -37039,8 +38195,12 @@ function InvoicesView({
   onReload,
   onNotice,
   onError,
+  onViewChange,
+  focusedInvoiceId,
 }: InvoicesViewProps) {
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState("new");
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState(
+    focusedInvoiceId ?? "new",
+  );
   const [companyFilter, setCompanyFilter] = useState<CompanyScopeId>("all");
   const [statusFilter, setStatusFilter] = useState<
     FinancialInvoiceWorkflowStatus | "all"
@@ -37079,7 +38239,7 @@ function InvoicesView({
     pageCount: invoicePageCount,
     setPage: setInvoicePage,
     pagedItems: pagedInvoices,
-  } = usePagination(filteredInvoices);
+  } = usePagination(filteredInvoices, FINANCIAL_INVOICE_PAGE_SIZE);
   const selectedInvoiceIsVisible =
     selectedInvoiceRecord !== null &&
     pagedInvoices.some((summary) => summary.invoice.id === selectedInvoiceRecord.id);
@@ -37099,6 +38259,31 @@ function InvoicesView({
       setDraftPreset(null);
     }
   }, [selectedInvoiceId, selectedInvoiceIsVisible]);
+  useEffect(() => {
+    const focusedInvoice = focusedInvoiceId
+      ? snapshot.invoices.find((invoice) => invoice.id === focusedInvoiceId) ?? null
+      : null;
+
+    if (!focusedInvoice) {
+      return;
+    }
+
+    setCompanyFilter("all");
+    setStatusFilter("all");
+    setSearch("");
+    const focusedInvoiceIndex = buildFinancialOperationsSummary(
+      snapshot,
+    ).invoiceSummaries.findIndex(
+      (summary) => summary.invoice.id === focusedInvoice.id,
+    );
+    setInvoicePage(
+      focusedInvoiceIndex >= 0
+        ? Math.floor(focusedInvoiceIndex / FINANCIAL_INVOICE_PAGE_SIZE) + 1
+        : 1,
+    );
+    setDraftPreset(null);
+    setSelectedInvoiceId(focusedInvoice.id);
+  }, [focusedInvoiceId, setInvoicePage, snapshot]);
   const handleSaveInvoice = async (
     input: InvoiceInput,
     lineItems: InvoiceLineItemInput[],
@@ -37109,6 +38294,7 @@ function InvoicesView({
         : await createInvoice(client, input, lineItems);
       setSelectedInvoiceId(savedInvoice.id);
       setDraftPreset(null);
+      onViewChange("invoices", { type: "invoice", id: savedInvoice.id });
       await onReload();
       onNotice(selectedInvoice ? "Invoice updated." : "Invoice created.");
     } catch (currentError) {
@@ -37132,6 +38318,7 @@ function InvoicesView({
   ) => {
     setSelectedInvoiceId("new");
     setDraftPreset({ key, ...preset });
+    onViewChange("invoices", null);
   };
 
   return (
@@ -37191,7 +38378,11 @@ function InvoicesView({
               </select>
               <button
                 type="button"
-                onClick={() => setSelectedInvoiceId("new")}
+                onClick={() => {
+                  setSelectedInvoiceId("new");
+                  setDraftPreset(null);
+                  onViewChange("invoices", null);
+                }}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700"
               >
                 <Plus className="h-4 w-4" />
@@ -37235,6 +38426,7 @@ function InvoicesView({
             onSelect={(item) => {
               if (item.source === "invoice") {
                 setSelectedInvoiceId(item.sourceId);
+                onViewChange("invoices", { type: "invoice", id: item.sourceId });
               } else if (item.source === "estimate") {
                 const estimate = snapshot.estimates.find((record) => record.id === item.sourceId);
                 if (estimate) {
@@ -37276,7 +38468,13 @@ function InvoicesView({
             <button
               key={summary.invoice.id}
               type="button"
-              onClick={() => setSelectedInvoiceId(summary.invoice.id)}
+              onClick={() => {
+                setSelectedInvoiceId(summary.invoice.id);
+                onViewChange("invoices", {
+                  type: "invoice",
+                  id: summary.invoice.id,
+                });
+              }}
               className={`grid w-full gap-3 px-5 py-4 text-left transition hover:bg-slate-50 xl:grid-cols-[130px_1fr_120px_130px] xl:items-center ${
                 selectedInvoice?.id === summary.invoice.id ? "bg-sky-50" : "bg-white"
               }`}
@@ -41223,10 +42421,10 @@ function CustomerPortalView({
                       Approval readiness
                     </p>
                     <p className="mt-2 text-lg font-black text-amber-950 dark:text-amber-50">
-                      Signature provider not connected
+                      Native sign-only delivery
                     </p>
                     <p className="mt-1 text-sm text-amber-800 dark:text-amber-100">
-                      The office will send approval instructions when provider setup is active.
+                      This is an internal owner preview. Customers receive a narrow secure link to the exact finalized proposal after explicit Gmail approval.
                     </p>
                   </div>
                 </div>
@@ -42609,26 +43807,6 @@ function ChangeOrdersView({
     }
   };
 
-  const requestSignature = async (changeOrder: ChangeOrderRecord) => {
-    try {
-      await createSignature(client, {
-        company_id: changeOrder.company_id,
-        customer_id: changeOrder.customer_id,
-        change_order_id: changeOrder.id,
-        signer_name:
-          getCustomerName(snapshot, changeOrder.customer_id) ?? "Customer signer",
-        signer_email:
-          snapshot.customers.find((customer) => customer.id === changeOrder.customer_id)
-            ?.email ?? null,
-        status: "pending",
-      });
-      await onReload();
-      onNotice("Signature requested.");
-    } catch (currentError) {
-      onError(getCaughtErrorMessage(currentError, "Unable to request signature."));
-    }
-  };
-
   return (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_460px]">
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -42731,12 +43909,16 @@ function ChangeOrdersView({
             <button type="submit" disabled={isSaving} className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300">
               {isSaving ? "Saving" : selected ? "Save change order" : "Create change order"}
             </button>
-            {selected ? (
-              <button type="button" onClick={() => void requestSignature(selected)} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                Request signature
-              </button>
-            ) : null}
           </div>
+          {selected ? (
+            <p
+              data-testid="change-order-signature-delivery-status"
+              className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"
+            >
+              Customer electronic-signature delivery is available only for finalized proposals.
+              No change-order signing request is sent from this workspace.
+            </p>
+          ) : null}
         </form>
       </aside>
     </div>
@@ -43145,6 +44327,13 @@ function DocumentsAndSignaturesView({
   };
 
   const signDocument = async (signature: SignatureRecord, form: HTMLFormElement) => {
+    if (signature.proposal_revision_id) {
+      onError(
+        "Proposal signatures can be completed only by the intended customer through the secure sign-only link.",
+      );
+      return;
+    }
+
     const formData = new FormData(form);
 
     try {
@@ -43164,6 +44353,13 @@ function DocumentsAndSignaturesView({
     signature: SignatureRecord,
     status: SignatureStatus,
   ) => {
+    if (signature.proposal_revision_id) {
+      onError(
+        "Proposal signature state is controlled by the customer signing session and cannot be marked manually.",
+      );
+      return;
+    }
+
     const now = new Date().toISOString();
     const timestampUpdates: Partial<SignatureInput> = {
       ...(status === "sent" ? { sent_at: now } : {}),
@@ -43751,41 +44947,49 @@ function DocumentsAndSignaturesView({
                     tone={signatureStatusTone(signature.status)}
                   />
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {signatureStatuses
-                    .filter((status) => status.value !== "signed")
-                    .map((status) => (
-                      <button
-                        key={status.value}
-                        type="button"
-                        disabled={signature.status === status.value}
-                        onClick={() =>
-                          void handleUpdateSignatureStatus(signature, status.value)
-                        }
-                        className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {status.label}
-                      </button>
-                    ))}
-                </div>
-                {signature.status !== "signed" ? (
-                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <input
-                      name="signature_data"
-                      className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-                      placeholder="Type signature"
-                    />
-                    <button
-                      type="submit"
-                      className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                    >
-                      Sign
-                    </button>
+                {signature.proposal_revision_id ? (
+                  <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+                    This proposal signature is customer-controlled and bound to an immutable revision. Review its delivery and audit state from the proposal workspace; internal users cannot type or mark it signed.
                   </div>
                 ) : (
-                  <p className="mt-3 text-sm font-semibold text-emerald-700">
-                    Signed {signature.signed_at ? formatDateTime(signature.signed_at) : ""}
-                  </p>
+                  <>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {signatureStatuses
+                        .filter((status) => status.value !== "signed")
+                        .map((status) => (
+                          <button
+                            key={status.value}
+                            type="button"
+                            disabled={signature.status === status.value}
+                            onClick={() =>
+                              void handleUpdateSignatureStatus(signature, status.value)
+                            }
+                            className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {status.label}
+                          </button>
+                        ))}
+                    </div>
+                    {signature.status !== "signed" ? (
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                        <input
+                          name="signature_data"
+                          className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                          placeholder="Type signature"
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                        >
+                          Sign
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm font-semibold text-emerald-700">
+                        Signed {signature.signed_at ? formatDateTime(signature.signed_at) : ""}
+                      </p>
+                    )}
+                  </>
                 )}
               </form>
             ))}
@@ -46695,12 +47899,56 @@ type GoogleWorkspaceReadinessResult = {
 type GmailSendApiResult = {
   ok: boolean;
   sent: boolean;
+  deliveryStatus?:
+    | "sent"
+    | "sent_activation_deferred"
+    | "failed_after_provider_send"
+    | "provider_outcome_unknown"
+    | "provider_outcome_abandoned"
+    | "source_changed"
+    | "failed";
+  signatureActivationDeferred?: boolean;
+  message?: string;
   result?: {
     status: string;
     message: string;
     sent?: boolean;
   };
 };
+
+type ProposalSigningDeliveryStatus =
+  | "sent"
+  | "sent_activation_deferred"
+  | "failed_after_provider_send"
+  | "provider_outcome_unknown"
+  | "provider_outcome_abandoned"
+  | "failed_before_send";
+
+function getProposalSigningDeliveryStatus(message: EmailMessageRecord) {
+  const value = message.metadata?.proposalSigningDeliveryStatus;
+  return typeof value === "string" &&
+    [
+      "sent",
+      "sent_activation_deferred",
+      "failed_after_provider_send",
+      "provider_outcome_unknown",
+      "provider_outcome_abandoned",
+      "failed_before_send",
+    ].includes(value)
+    ? (value as ProposalSigningDeliveryStatus)
+    : null;
+}
+
+function proposalSigningDeliveryStatusLabel(status: ProposalSigningDeliveryStatus) {
+  if (status === "sent") return "Signature link active";
+  if (status === "sent_activation_deferred") return "Email sent · activation deferred";
+  if (status === "failed_after_provider_send") return "Email sent · reconcile only";
+  if (status === "provider_outcome_unknown") return "Delivery outcome unknown";
+  if (status === "provider_outcome_abandoned") {
+    return "Unknown attempt abandoned · prior delivery unknown";
+  }
+  return "Signature delivery failed";
+}
 
 function formatOptionalDateTime(value: string | null | undefined) {
   if (!value) {
@@ -48658,21 +49906,29 @@ function IntegrationsView({
     };
     const pendingPayloadHash = createGmailOutboundPayloadFingerprint(queuedMessage);
     try {
-      await updateEmailMessage(client, message.id, {
-        integration_connection_id: gmailConnection.id,
-        from_email: gmailConnection.account_email,
-        status: "queued",
-        queued_at: submittedAt,
-        sync_status: "queued",
-        metadata: {
-          ...(message.metadata ?? {}),
-          approvalState: "pending_owner_approval",
-          submittedForApprovalAt: submittedAt,
-          requiresOwnerApproval: true,
+      if (message.metadata?.draftType === "proposal_signature_request") {
+        await queueProposalSignatureEmail(client, {
+          companyId: message.company_id,
+          emailMessageId: message.id,
           pendingPayloadHash,
-        },
-        last_error: null,
-      });
+        });
+      } else {
+        await updateEmailMessage(client, message.id, {
+          integration_connection_id: gmailConnection.id,
+          from_email: gmailConnection.account_email,
+          status: "queued",
+          queued_at: submittedAt,
+          sync_status: "queued",
+          metadata: {
+            ...(message.metadata ?? {}),
+            approvalState: "pending_owner_approval",
+            submittedForApprovalAt: submittedAt,
+            requiresOwnerApproval: true,
+            pendingPayloadHash,
+          },
+          last_error: null,
+        });
+      }
       onNotice("Email submitted for owner approval. Nothing was sent.");
       await onReload();
     } catch (error) {
@@ -48697,10 +49953,37 @@ function IntegrationsView({
       });
       const result = (await response.json()) as GmailSendApiResult;
 
-      if (response.ok && result.sent) {
+      if (result.deliveryStatus === "sent" && response.ok && result.sent) {
         onNotice("Owner approval recorded. Gmail confirmed the email was sent.");
+      } else if (
+        result.deliveryStatus === "sent_activation_deferred" &&
+        response.ok &&
+        result.sent &&
+        result.signatureActivationDeferred
+      ) {
+        onNotice(
+          result.message ??
+            "Gmail confirmed delivery. Signing activation is safely deferred and will reconcile from the exact sent-message evidence.",
+        );
+      } else if (result.deliveryStatus === "failed_after_provider_send") {
+        onError(
+          result.message ??
+            "Gmail sent the email, but WeatherTech OS could not finish post-send processing. Do not resend; reconcile the existing delivery.",
+        );
+      } else if (result.deliveryStatus === "provider_outcome_unknown") {
+        onError(
+          result.message ??
+            "Gmail delivery is not yet confirmed. WeatherTech OS will reconcile the existing attempt and will not resend it.",
+        );
+      } else if (result.deliveryStatus === "source_changed") {
+        onError(
+          result.message ??
+            "Proposal source records changed after finalization. No email was sent; finalize a new revision before customer delivery.",
+        );
       } else {
-        onError(result.result?.message ?? "Gmail send is not available yet.");
+        onError(
+          result.message ?? result.result?.message ?? "Gmail send is not available yet.",
+        );
       }
 
       await onReload();
@@ -48709,6 +49992,167 @@ function IntegrationsView({
     } finally {
       setSendingGmailMessageId(null);
       setPendingGmailApprovalMessageId(null);
+    }
+  };
+
+  const reconcileProposalSignatureDelivery = async (message: EmailMessageRecord) => {
+    const proposalRevisionId =
+      typeof message.metadata?.proposalRevisionId === "string"
+        ? message.metadata.proposalRevisionId
+        : null;
+    if (!proposalRevisionId) {
+      onError("The exact proposal revision is missing from this delivery record.");
+      return;
+    }
+
+    setSendingGmailMessageId(message.id);
+    try {
+      const response = await fetch("/api/proposals/signature-requests", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          proposalRevisionId,
+          action: "reconcile_delivery",
+        }),
+      });
+      const result = (await response.json()) as GmailSendApiResult;
+      if (response.ok && result.ok && result.deliveryStatus === "sent") {
+        onNotice(
+          result.message ??
+            "The existing Gmail delivery is reconciled and the customer signing link is active. No email was resent.",
+        );
+      } else {
+        onError(
+          result.message ??
+            "The existing Gmail delivery could not be reconciled. No email was resent.",
+        );
+      }
+      await onReload();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "The existing Gmail delivery could not be reconciled. No email was resent.",
+      );
+    } finally {
+      setSendingGmailMessageId(null);
+    }
+  };
+
+  const cancelUnsentProposalSignatureDraft = async (
+    message: EmailMessageRecord,
+  ) => {
+    const proposalRevisionId =
+      typeof message.metadata?.proposalRevisionId === "string"
+        ? message.metadata.proposalRevisionId
+        : null;
+    if (!proposalRevisionId) {
+      onError("The exact proposal revision is missing from this unsent draft.");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Cancel this unsent signature email? WeatherTech OS will prove that no provider attempt exists before allowing a fresh draft.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setSendingGmailMessageId(message.id);
+    try {
+      const response = await fetch("/api/proposals/signature-requests", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          proposalRevisionId,
+          action: "cancel_unsent",
+        }),
+      });
+      const result = (await response.json()) as GmailSendApiResult;
+      if (response.ok && result.ok && result.sent === false) {
+        onNotice(
+          result.message ??
+            "Unsent signature email canceled. Nothing was delivered.",
+        );
+      } else {
+        onError(
+          result.message ??
+            "The signature email could not be proven unsent and was not canceled.",
+        );
+      }
+      await onReload();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "The unsent signature email could not be canceled.",
+      );
+    } finally {
+      setSendingGmailMessageId(null);
+    }
+  };
+
+  const abandonUnknownProposalSignatureDelivery = async (
+    message: EmailMessageRecord,
+  ) => {
+    const proposalRevisionId =
+      typeof message.metadata?.proposalRevisionId === "string"
+        ? message.metadata.proposalRevisionId
+        : null;
+    if (!proposalRevisionId) {
+      onError("The exact proposal revision is missing from this unknown delivery.");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Abandon this unresolved Gmail attempt? Continue only after revoking its customer signing link. Prior delivery will remain recorded as unknown, the old link will stay invalid, and this action will not send another email.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setSendingGmailMessageId(message.id);
+    try {
+      const response = await fetch("/api/proposals/signature-requests", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          proposalRevisionId,
+          action: "abandon_unknown",
+        }),
+      });
+      const result = (await response.json()) as GmailSendApiResult;
+      if (
+        response.ok &&
+        result.ok &&
+        result.deliveryStatus === "provider_outcome_abandoned"
+      ) {
+        onNotice(
+          result.message ??
+            "Unknown Gmail attempt abandoned after link revocation. Prior delivery remains unknown and no email was sent by this action.",
+        );
+      } else {
+        onError(
+          result.message ??
+            "The unknown Gmail attempt could not be abandoned safely. Revoke its signing link first and do not resend.",
+        );
+      }
+      await onReload();
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "The unknown Gmail attempt could not be abandoned safely.",
+      );
+    } finally {
+      setSendingGmailMessageId(null);
     }
   };
 
@@ -49367,7 +50811,52 @@ function IntegrationsView({
               <p className="text-sm font-bold text-slate-950">Gmail activity</p>
             </div>
             <div className="divide-y divide-slate-200">
-              {gmailCompanyMessages.map((message) => (
+              {gmailCompanyMessages.map((message) => {
+                const gmailDeliveryState =
+                  typeof message.metadata?.gmailDeliveryState === "string"
+                    ? message.metadata.gmailDeliveryState
+                    : null;
+                const reconcilesExistingDelivery =
+                  gmailDeliveryState === "provider_outcome_unknown" ||
+                  gmailDeliveryState === "provider_confirmed";
+                const nativeProposalSignatureDraft =
+                  message.metadata?.draftType === "proposal_signature_request";
+                const failedNativeProposalSignatureDraft = Boolean(
+                  nativeProposalSignatureDraft && message.status === "failed",
+                );
+                const proposalSigningDeliveryStatus =
+                  getProposalSigningDeliveryStatus(message);
+                const canReconcileSignatureActivation = Boolean(
+                  nativeProposalSignatureDraft &&
+                    message.status === "sent" &&
+                    (proposalSigningDeliveryStatus === "sent_activation_deferred" ||
+                      proposalSigningDeliveryStatus === "failed_after_provider_send"),
+                );
+                const canCancelUnsentSignatureDraft = Boolean(
+                  nativeProposalSignatureDraft &&
+                    !gmailDeliveryState &&
+                    ((message.status === "draft" && message.sync_status === "local") ||
+                      (message.status === "queued" &&
+                        message.sync_status === "queued")),
+                );
+                const hasActiveSigningLink = Boolean(
+                  nativeProposalSignatureDraft &&
+                    snapshot.signatures.some(
+                      (signature) =>
+                        signature.document_id === message.document_id &&
+                        isActiveSignatureRequest(signature),
+                    ),
+                );
+                const canAbandonUnknownSignatureDelivery = Boolean(
+                  nativeProposalSignatureDraft &&
+                    gmailDeliveryState === "provider_outcome_unknown" &&
+                    message.status === "queued" &&
+                    message.sync_status === "syncing" &&
+                    !message.gmail_message_id &&
+                    !hasActiveSigningLink,
+                );
+
+                return (
                 <article
                   key={message.id}
                   className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto]"
@@ -49392,6 +50881,18 @@ function IntegrationsView({
                       />
                       {message.sync_status ? (
                         <Badge label={message.sync_status} tone="blue" />
+                      ) : null}
+                      {proposalSigningDeliveryStatus ? (
+                        <Badge
+                          label={proposalSigningDeliveryStatusLabel(
+                            proposalSigningDeliveryStatus,
+                          )}
+                          tone={
+                            proposalSigningDeliveryStatus === "sent"
+                              ? "green"
+                              : "amber"
+                          }
+                        />
                       ) : null}
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
@@ -49419,7 +50920,8 @@ function IntegrationsView({
                   <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                     {message.direction !== "inbound" &&
                     message.status !== "queued" &&
-                    message.status !== "sent" ? (
+                    message.status !== "sent" &&
+                    !failedNativeProposalSignatureDraft ? (
                       <button
                         type="button"
                         onClick={() => void queueEmailMessage(message)}
@@ -49427,6 +50929,47 @@ function IntegrationsView({
                       >
                         <Mail className="h-4 w-4" />
                         Submit for owner approval
+                      </button>
+                    ) : null}
+                    {canReconcileSignatureActivation ? (
+                      <button
+                        type="button"
+                        onClick={() => void reconcileProposalSignatureDelivery(message)}
+                        disabled={sendingGmailMessageId === message.id}
+                        className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:opacity-60"
+                      >
+                        <RefreshCcw className="h-4 w-4" />
+                        {sendingGmailMessageId === message.id
+                          ? "Reconciling activation"
+                          : "Reconcile activation only"}
+                      </button>
+                    ) : null}
+                    {canCancelUnsentSignatureDraft ? (
+                      <button
+                        type="button"
+                        onClick={() => void cancelUnsentProposalSignatureDraft(message)}
+                        disabled={sendingGmailMessageId === message.id}
+                        className="inline-flex items-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 transition hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        <X className="h-4 w-4" />
+                        {sendingGmailMessageId === message.id
+                          ? "Canceling unsent draft"
+                          : "Cancel unsent signature draft"}
+                      </button>
+                    ) : null}
+                    {canAbandonUnknownSignatureDelivery ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void abandonUnknownProposalSignatureDelivery(message)
+                        }
+                        disabled={sendingGmailMessageId === message.id}
+                        className="inline-flex items-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 transition hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        <X className="h-4 w-4" />
+                        {sendingGmailMessageId === message.id
+                          ? "Abandoning unknown attempt"
+                          : "Abandon unknown attempt"}
                       </button>
                     ) : null}
                     {message.direction !== "inbound" && message.status === "queued" ? (
@@ -49437,23 +50980,36 @@ function IntegrationsView({
                         className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                       >
                         <CheckCircle2 className="h-4 w-4" />
-                        {sendingGmailMessageId === message.id ? "Sending" : "Approve & send"}
+                        {sendingGmailMessageId === message.id
+                          ? reconcilesExistingDelivery
+                            ? "Reconciling"
+                            : "Sending"
+                          : reconcilesExistingDelivery
+                            ? "Reconcile delivery"
+                            : "Approve & send"}
                       </button>
                     ) : null}
                   </div>
                   {pendingGmailApprovalMessageId === message.id ? (
                     <div
                       role="alertdialog"
-                      aria-label="Approve Gmail email delivery"
+                      aria-label={
+                        reconcilesExistingDelivery
+                          ? "Reconcile Gmail email delivery"
+                          : "Approve Gmail email delivery"
+                      }
                       className="rounded-lg border border-amber-200 bg-amber-50 p-4 lg:col-span-2"
                       data-testid="gmail-owner-approval-dialog"
                     >
                       <p className="font-bold text-amber-950">
-                        Approve and send this customer email?
+                        {reconcilesExistingDelivery
+                          ? "Reconcile this existing Gmail delivery?"
+                          : "Approve and send this customer email?"}
                       </p>
                       <p className="mt-1 text-sm text-amber-900">
-                        This is the owner approval gate. Gmail delivery, HTML formatting,
-                        and any listed attachments will begin only after confirmation.
+                        {reconcilesExistingDelivery
+                          ? "WeatherTech OS will look only for the existing provider attempt and will not send another customer email."
+                          : "This is the owner approval gate. Gmail delivery, HTML formatting, and any listed attachments will begin only after confirmation."}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
@@ -49471,14 +51027,19 @@ function IntegrationsView({
                           data-testid="gmail-confirm-owner-send"
                         >
                           {sendingGmailMessageId === message.id
-                            ? "Sending"
-                            : "Confirm owner approval & send"}
+                            ? reconcilesExistingDelivery
+                              ? "Reconciling"
+                              : "Sending"
+                            : reconcilesExistingDelivery
+                              ? "Confirm reconciliation only"
+                              : "Confirm owner approval & send"}
                         </button>
                       </div>
                     </div>
                   ) : null}
                 </article>
-              ))}
+                );
+              })}
               {!gmailCompanyMessages.length ? (
                 <div className="p-4">
                   <EmptyState label="No Gmail drafts or queued sends yet." />
