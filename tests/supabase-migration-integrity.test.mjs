@@ -188,6 +188,10 @@ const expectedMigrations = [
     "20260822054433_job_photo_storage_rollback_retry_correction.sql",
     "74a3a130c17e0e8a84f9a1b5dcc544b0c8ea348a98b0f287cc10ca6e7aeeafdb",
   ],
+  [
+    "20260824044610_native_proposal_esign_sold_job_gate.sql",
+    "703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7",
+  ],
 ];
 
 const files = fs
@@ -312,6 +316,9 @@ const secureCompanyScopedJobPhotosIndex = files.indexOf(
 const jobPhotoStorageRollbackRetryCorrectionIndex = files.indexOf(
   "20260822054433_job_photo_storage_rollback_retry_correction.sql",
 );
+const nativeProposalEsignSoldJobGateIndex = files.indexOf(
+  "20260824044610_native_proposal_esign_sold_job_gate.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -417,6 +424,7 @@ if (
   leadAccountabilityIdempotencyIntegrityHardeningIndex === -1 ||
   secureCompanyScopedJobPhotosIndex === -1 ||
   jobPhotoStorageRollbackRetryCorrectionIndex === -1 ||
+  nativeProposalEsignSoldJobGateIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -440,12 +448,13 @@ if (
     leadAccountabilityIdempotencyIntegrityHardeningIndex <
       secureCompanyScopedJobPhotosIndex &&
     secureCompanyScopedJobPhotosIndex <
-      jobPhotoStorageRollbackRetryCorrectionIndex
+      jobPhotoStorageRollbackRetryCorrectionIndex &&
+    jobPhotoStorageRollbackRetryCorrectionIndex < nativeProposalEsignSoldJobGateIndex
   ) ||
-  jobPhotoStorageRollbackRetryCorrectionIndex !== files.length - 1
+  nativeProposalEsignSoldJobGateIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, whose hardening migrations must precede secure company-scoped job photos and its correction last.",
+    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, job-photo hardening, and the final native proposal e-sign/sold-job gate migration.",
   );
 }
 
@@ -2970,7 +2979,7 @@ console.log(
   "Verified Lead Attribution & Marketing Accountability Phase 1 additive schema, immutable non-PII ledger, fixed-search-path RPCs, strict company isolation, first-touch locks, lifecycle chronology, optimistic concurrency, Phoenix reporting, no-backfill contract, and narrow synthetic cleanup privileges.",
 );
 console.log(
-  "Verified secure company-scoped job photos and its rollback/retry correction are the final registered migrations with exact approved SQL hashes.",
+  "Verified secure company-scoped job photos and its rollback/retry correction precede the final registered native proposal e-sign/sold-job gate migration, all with exact approved SQL hashes.",
 );
 console.log(
   "Verified 0027 Gmail Workspace schema, service-only credentials, company-scoped metadata, duplicate prevention, and transactional wrapper.",

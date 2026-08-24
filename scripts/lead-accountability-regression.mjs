@@ -176,6 +176,178 @@ async function callRpc(client, name, argumentName, request) {
   return data;
 }
 
+async function readSyntheticProposalCleanupGraph(service, proposalRevisionId) {
+  const [acceptances, requests, signatures, documents, invoices, jobs] =
+    await Promise.all([
+      requireRows(
+        service
+          .from("estimate_proposal_acceptances")
+          .select("id")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal acceptances",
+      ),
+      requireRows(
+        service
+          .from("proposal_signing_requests")
+          .select("id,delivery_email_message_id")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal signing requests",
+      ),
+      requireRows(
+        service
+          .from("signatures")
+          .select("id")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal signatures",
+      ),
+      requireRows(
+        service
+          .from("documents")
+          .select("id,storage_bucket,storage_path")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal documents",
+      ),
+      requireRows(
+        service
+          .from("invoices")
+          .select("id")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal invoices",
+      ),
+      requireRows(
+        service
+          .from("jobs")
+          .select("id")
+          .eq("proposal_revision_id", proposalRevisionId),
+        "Discover exact synthetic proposal jobs",
+      ),
+    ]);
+  const deliveryEmailIds = [
+    ...new Set(requests.map((row) => row.delivery_email_message_id).filter(Boolean)),
+  ];
+  const [deliveryEmails, metadataEmails] = await Promise.all([
+    deliveryEmailIds.length
+      ? requireRows(
+          service.from("email_messages").select("id").in("id", deliveryEmailIds),
+          "Discover exact synthetic proposal delivery emails",
+        )
+      : [],
+    requireRows(
+      service
+        .from("email_messages")
+        .select("id")
+        .contains("metadata", {
+          draftType: "proposal_signature_request",
+          proposalRevisionId,
+        }),
+      "Discover exact synthetic proposal metadata emails",
+    ),
+  ]);
+
+  return {
+    acceptances,
+    requests,
+    signatures,
+    documents,
+    invoices,
+    jobs,
+    emails: [
+      ...new Map(
+        [...deliveryEmails, ...metadataEmails].map((row) => [row.id, row]),
+      ).values(),
+    ],
+  };
+}
+
+async function removeSyntheticProposalDocumentObjects(
+  service,
+  companyId,
+  documents,
+) {
+  const paths = documents.map((document) => {
+    requireCondition(
+      document.storage_bucket === "customer-documents" &&
+        typeof document.storage_path === "string" &&
+        document.storage_path.startsWith(`${companyId}/`),
+      "Synthetic proposal cleanup refused an unexpected Storage scope.",
+    );
+    return document.storage_path;
+  });
+  if (paths.length) {
+    const { error } = await service.storage.from("customer-documents").remove(paths);
+    if (error) {
+      throw new Error(`Exact synthetic proposal Storage cleanup failed: ${error.message}`);
+    }
+  }
+  for (const path of paths) {
+    const { data, error } = await service.storage
+      .from("customer-documents")
+      .download(path);
+    requireCondition(
+      !data && Boolean(error),
+      `Synthetic proposal Storage residue remains at exact path ${path}.`,
+    );
+  }
+}
+
+async function cleanupSyntheticProposalRevision({
+  service,
+  ownerUserId,
+  marker,
+  proposalRevisionId,
+}) {
+  const revisions = await requireRows(
+    service
+      .from("estimate_proposal_revisions")
+      .select("id,company_id")
+      .eq("id", proposalRevisionId),
+    "Discover exact synthetic proposal revision",
+  );
+  requireCondition(
+    revisions.length <= 1,
+    "Exact synthetic proposal cleanup found duplicate revision identity.",
+  );
+  if (!revisions.length) return;
+
+  const companyId = revisions[0].company_id;
+  const graph = await readSyntheticProposalCleanupGraph(
+    service,
+    proposalRevisionId,
+  );
+  await removeSyntheticProposalDocumentObjects(
+    service,
+    companyId,
+    graph.documents,
+  );
+  const cleaned = await callRpc(
+    service,
+    "wtos_cleanup_synthetic_proposal_fixture",
+    "cleanup_request",
+    {
+      operationKey: randomUUID(),
+      regressionOwnerUserId: ownerUserId,
+      companyId,
+      marker,
+      proposalRevisionId,
+      acceptanceIds: graph.acceptances.map((row) => row.id).sort(),
+      signingRequestIds: graph.requests.map((row) => row.id).sort(),
+      signatureIds: graph.signatures.map((row) => row.id).sort(),
+      documentIds: graph.documents.map((row) => row.id).sort(),
+      emailMessageIds: graph.emails.map((row) => row.id).sort(),
+      invoiceIds: graph.invoices.map((row) => row.id).sort(),
+      jobIds: graph.jobs.map((row) => row.id).sort(),
+    },
+  );
+  requireCondition(
+    cleaned.ok === true &&
+      cleaned.status === "cleaned" &&
+      cleaned.proposalRevisionId === proposalRevisionId &&
+      cleaned.storageResidueCount === 0 &&
+      cleaned.databaseResidueCount === 0,
+    "Exact synthetic proposal cleanup did not prove zero residue.",
+  );
+}
+
 async function expectRejected(callback, label, expectedCode, expectedMessage) {
   try {
     await callback();
@@ -2682,8 +2854,16 @@ export async function runLeadAccountabilityRegression({
           );
         }
 
-        await deleteExactIds(service, "estimate_proposal_acceptances", ids.estimate_proposal_acceptances);
-        await deleteExactIds(service, "estimate_proposal_revisions", ids.estimate_proposal_revisions);
+        for (const proposalRevisionId of [
+          ...new Set(ids.estimate_proposal_revisions.filter(Boolean)),
+        ]) {
+          await cleanupSyntheticProposalRevision({
+            service,
+            ownerUserId,
+            marker,
+            proposalRevisionId,
+          });
+        }
         await deleteExactIds(service, "inspections", ids.inspections);
         await deleteExactIds(service, "schedule_events", ids.schedule_events);
         await deleteExactIds(service, "estimates", ids.estimates);

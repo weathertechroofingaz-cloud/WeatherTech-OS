@@ -10,6 +10,9 @@ import {
 } from "./foundation";
 import { googleWorkspaceEnvVars } from "../crm/integrations";
 import { getGoogleCalendarConfigCheckResult } from "./calendar";
+import { PROPOSAL_SIGNING_LINK_PLACEHOLDER } from "../proposal-signing/constants";
+import { calculateProposalSigningOptionTotal } from "../proposal-signing/pricing";
+import { buildDeterministicUnicodeTextPdf } from "../pdf/deterministicUnicodePdf";
 import type {
   CompanyRecord,
   CrmSnapshot,
@@ -151,6 +154,8 @@ export type GmailSendResult = {
     | "missing_message"
     | "configuration_missing"
     | "idempotency_check_failed"
+    | "pre_send_stopped"
+    | "provider_outcome_unknown"
     | "failed"
     | "sent"
     | "reconciled";
@@ -161,6 +166,7 @@ export type GmailSendResult = {
   duplicatePrevented: boolean;
   reconciled: boolean;
   idempotencyKey: string | null;
+  providerOutcomeKnown: boolean;
   error?: string;
 };
 
@@ -177,6 +183,50 @@ export type GmailOutboundAttachment = {
   fileName: string;
   mimeType: string;
   content: Buffer;
+};
+
+export type FinalizedProposalPdfSource = {
+  proposalNumber: string;
+  revisionNumber: number;
+  title: string;
+  companyName: string;
+  customerName: string;
+  propertyAddress: string;
+  issueDate: string;
+  sections: Array<{ title: string; body: string }>;
+  lineItems: Array<{
+    name: string;
+    description: string | null;
+    quantity: number;
+    unit: string;
+    total: number;
+  }>;
+  options: Array<{
+    name: string;
+    description: string | null;
+    selected: boolean;
+    quantity: number;
+    unit: string;
+    price: number;
+    priceEffectType: "additive" | "replace_base_amount" | "full_alternate_total";
+    baseReplacementAmount: number;
+    scopeDetails: string | null;
+    warrantyEffect: string | null;
+    customerNotes: string | null;
+  }>;
+  baseSubtotal: number;
+  discountTotal: number;
+  taxTotal: number;
+  feeTotal: number;
+  baseTotal: number;
+  selectedUpgradesTotal: number;
+  acceptedTotal: number;
+  depositRequired: boolean;
+  depositType: "none" | "fixed" | "percent" | "custom_schedule";
+  depositValue: number;
+  depositAmount: number;
+  remainingBalance: number;
+  terms: string;
 };
 
 export type GmailOwnerApprovalCheck = {
@@ -936,6 +986,159 @@ function safePdfFileName(value: string) {
   return `${normalized || "estimate"}.pdf`;
 }
 
+function safeProposalPdfFileName(proposalNumber: string, revisionNumber: number) {
+  const normalized = proposalNumber
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\.{2,}/g, ".")
+    .replace(/^[-._]+|[-._]+$/g, "")
+    .slice(0, 64);
+  const revision = Number.isInteger(revisionNumber) && revisionNumber > 0
+    ? revisionNumber
+    : 1;
+  return `${normalized || "proposal"}-revision-${revision}.pdf`;
+}
+
+export function hashProposalDocumentContent(content: Buffer) {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+export function materializeProposalSignatureEmail({
+  message,
+  signingUrl,
+}: {
+  message: EmailMessageRecord;
+  signingUrl: string;
+}) {
+  const placeholderCount = message.body.split(PROPOSAL_SIGNING_LINK_PLACEHOLDER).length - 1;
+  if (placeholderCount !== 1) {
+    throw new Error(
+      "The approved signature email must contain exactly one secure signing-link placeholder.",
+    );
+  }
+
+  const body = message.body.replace(PROPOSAL_SIGNING_LINK_PLACEHOLDER, signingUrl);
+  return {
+    ...message,
+    body,
+    message_preview: body.replace(/\s+/g, " ").trim().slice(0, 500),
+  } satisfies EmailMessageRecord;
+}
+
+/**
+ * Builds the immutable customer artifact from an explicit, customer-safe model.
+ * Deliberately has no internal-notes or estimate-notes input surface.
+ */
+export function buildFinalizedProposalPdfAttachment(
+  proposal: FinalizedProposalPdfSource,
+): GmailOutboundAttachment {
+  const money = (value: number) => `$${Number(value).toFixed(2)}`;
+  const signedMoney = (value: number) =>
+    `${value < 0 ? "-" : "+"}${money(Math.abs(value))}`;
+  const optionTotal = (
+    option: FinalizedProposalPdfSource["options"][number],
+  ) => calculateProposalSigningOptionTotal(option);
+  const describeOptionPricingEffect = (
+    option: FinalizedProposalPdfSource["options"][number],
+  ) => {
+    const roundedOptionTotal = optionTotal(option);
+    if (option.priceEffectType === "replace_base_amount") {
+      return `Pricing effect: Replaces ${money(option.baseReplacementAmount)} of the base proposal. Net adjustment: ${signedMoney(roundedOptionTotal - option.baseReplacementAmount)}.`;
+    }
+    if (option.priceEffectType === "full_alternate_total") {
+      return `Pricing effect: Sets the full alternate total to ${money(roundedOptionTotal)}, replacing the ${money(proposal.baseTotal)} base total. Net adjustment: ${signedMoney(roundedOptionTotal - proposal.baseTotal)}.`;
+    }
+    return `Pricing effect: Adds the option total to the base proposal. Net adjustment: ${signedMoney(roundedOptionTotal)}.`;
+  };
+  const depositTerms =
+    proposal.depositType === "fixed"
+      ? `Deposit terms: Fixed amount of ${money(proposal.depositValue)}`
+      : proposal.depositType === "percent"
+        ? `Deposit terms: ${proposal.depositValue}% of the accepted total`
+        : proposal.depositType === "custom_schedule"
+          ? `Deposit terms: Custom schedule value ${money(proposal.depositValue)}`
+          : "Deposit terms: None";
+  const lineItemBlocks = proposal.lineItems.map((item) => [
+      item.name,
+      `Quantity: ${item.quantity} ${item.unit}`,
+      `Line total: ${money(item.total)}`,
+      ...(item.description ? [`Description: ${item.description}`] : []),
+      "",
+    ]);
+  const optionBlocks = proposal.options.length
+    ? proposal.options.map((option) => [
+          `${option.selected ? "SELECTED" : "NOT SELECTED"}: ${option.name}`,
+          `Quantity: ${option.quantity} ${option.unit}`,
+          `Unit price: ${money(option.price)}`,
+          `Option total: ${money(optionTotal(option))}`,
+          describeOptionPricingEffect(option),
+          ...(option.description ? [`Description: ${option.description}`] : []),
+          ...(option.scopeDetails ? [`Scope details: ${option.scopeDetails}`] : []),
+          ...(option.warrantyEffect
+            ? [`Warranty effect: ${option.warrantyEffect}`]
+            : []),
+          ...(option.customerNotes ? [`Customer notes: ${option.customerNotes}`] : []),
+          "",
+        ])
+    : [["No proposal options are configured.", ""]];
+  const lines: Array<string | readonly string[]> = [
+    [
+      proposal.companyName,
+      proposal.title,
+      `Proposal ${proposal.proposalNumber} - Revision ${proposal.revisionNumber}`,
+      `Prepared for: ${proposal.customerName}`,
+      `Property: ${proposal.propertyAddress}`,
+      `Proposal date: ${proposal.issueDate}`,
+      "",
+    ],
+    ...proposal.sections.map((section) => [section.title, section.body, ""]),
+    ...(lineItemBlocks.length
+      ? lineItemBlocks.map((block, index) =>
+          index === 0 ? ["BASE PROPOSAL", ...block] : block,
+        )
+      : [["BASE PROPOSAL", "No base proposal line items are configured.", ""]]),
+    ...optionBlocks.map((block, index) =>
+      index === 0 ? ["OPTIONS", ...block] : block,
+    ),
+    [
+      "PRICING",
+      `Base subtotal: ${money(proposal.baseSubtotal)}`,
+      `Discount total: ${money(proposal.discountTotal)}`,
+      `Tax total: ${money(proposal.taxTotal)}`,
+      `Fee total: ${money(proposal.feeTotal)}`,
+      `Base total: ${money(proposal.baseTotal)}`,
+      `Selected upgrades: ${money(proposal.selectedUpgradesTotal)}`,
+      `Accepted total: ${money(proposal.acceptedTotal)}`,
+      depositTerms,
+      proposal.depositRequired
+        ? `Required deposit: ${money(proposal.depositAmount)}`
+        : "Required deposit: None",
+      `Remaining balance: ${money(proposal.remainingBalance)}`,
+      "",
+    ],
+    [
+      "TERMS AND ELECTRONIC ACCEPTANCE",
+      proposal.terms,
+      "",
+      "Acceptance applies only to this exact finalized proposal revision, its selected options, accepted total, and terms. Electronic signature evidence is recorded separately in the WeatherTech OS audit trail.",
+    ],
+  ];
+  const content = buildDeterministicUnicodeTextPdf({
+    lines,
+    fallbackTitle: `${proposal.companyName} proposal`,
+    linesPerPage: 40,
+  });
+
+  return {
+    fileName: safeProposalPdfFileName(
+      proposal.proposalNumber,
+      proposal.revisionNumber,
+    ),
+    mimeType: "application/pdf",
+    content,
+  };
+}
+
 export function buildEstimatePdfAttachment({
   estimate,
   lineItems,
@@ -1298,11 +1501,15 @@ export async function sendGmailEmail({
   message,
   accessToken,
   attachments = [],
+  reconciliationOnly = false,
+  beforeProviderSend,
   fetchImpl = fetch,
 }: {
   message: EmailMessageRecord | null;
   accessToken: string | null;
   attachments?: GmailOutboundAttachment[];
+  reconciliationOnly?: boolean;
+  beforeProviderSend?: () => Promise<boolean>;
   fetchImpl?: FetchLike;
 }): Promise<GmailSendResult> {
   const unavailableResult = (
@@ -1322,6 +1529,7 @@ export async function sendGmailEmail({
     duplicatePrevented: false,
     reconciled: false,
     idempotencyKey: null,
+    providerOutcomeKnown: true,
   });
 
   if (!getGoogleWorkspaceConfigCheckResult().ok) {
@@ -1331,7 +1539,10 @@ export async function sendGmailEmail({
     );
   }
 
-  if (!getBooleanEnvValue(googleWorkspaceEnvVars.gmailSendEnabled)) {
+  if (
+    !reconciliationOnly &&
+    !getBooleanEnvValue(googleWorkspaceEnvVars.gmailSendEnabled)
+  ) {
     return unavailableResult(
       "disabled",
       "No email was sent. GOOGLE_GMAIL_SEND_ENABLED must be explicitly enabled for controlled live sending.",
@@ -1485,6 +1696,7 @@ export async function sendGmailEmail({
     duplicatePrevented: true,
     reconciled: true,
     idempotencyKey,
+    providerOutcomeKnown: true,
   });
   const preflight = await findProviderMessage(2);
 
@@ -1501,11 +1713,73 @@ export async function sendGmailEmail({
       duplicatePrevented: false,
       reconciled: false,
       idempotencyKey,
+      providerOutcomeKnown: true,
     };
   }
 
   if (preflight.match) {
     return reconciledResult(preflight.match);
+  }
+
+  if (reconciliationOnly) {
+    const reconciliation = await findProviderMessage(3, true);
+    if (reconciliation.ok && reconciliation.match) {
+      return reconciledResult(reconciliation.match);
+    }
+
+    return {
+      attempted: false,
+      sent: false,
+      status: "provider_outcome_unknown",
+      message:
+        "Gmail delivery remains unconfirmed. WeatherTech OS will not resend while the provider outcome is unknown.",
+      error: reconciliation.ok ? undefined : reconciliation.error,
+      gmailMessageId: null,
+      gmailThreadId: null,
+      providerSendAttempts: 0,
+      duplicatePrevented: true,
+      reconciled: false,
+      idempotencyKey,
+      providerOutcomeKnown: false,
+    };
+  }
+
+  if (beforeProviderSend) {
+    try {
+      const providerSendMayStart = await beforeProviderSend();
+      if (!providerSendMayStart) {
+        return {
+          attempted: false,
+          sent: false,
+          status: "pre_send_stopped",
+          message:
+            "Gmail delivery stopped before the provider call because the durable send claim could not be advanced safely.",
+          gmailMessageId: null,
+          gmailThreadId: null,
+          providerSendAttempts: 0,
+          duplicatePrevented: false,
+          reconciled: false,
+          idempotencyKey,
+          providerOutcomeKnown: true,
+        };
+      }
+    } catch (error) {
+      return {
+        attempted: false,
+        sent: false,
+        status: "pre_send_stopped",
+        message:
+          "Gmail delivery stopped before the provider call because the durable send claim could not be advanced safely.",
+        error: error instanceof Error ? error.message : "Durable Gmail claim update failed.",
+        gmailMessageId: null,
+        gmailThreadId: null,
+        providerSendAttempts: 0,
+        duplicatePrevented: false,
+        reconciled: false,
+        idempotencyKey,
+        providerOutcomeKnown: true,
+      };
+    }
   }
 
   try {
@@ -1532,11 +1806,18 @@ export async function sendGmailEmail({
         };
       }
 
+      const providerOutcomeKnown =
+        response.status >= 400 &&
+        response.status < 500 &&
+        ![408, 409, 425, 429].includes(response.status);
+
       return {
         attempted: true,
         sent: false,
-        status: "failed",
-        message: "Gmail send failed.",
+        status: providerOutcomeKnown ? "failed" : "provider_outcome_unknown",
+        message: providerOutcomeKnown
+          ? "Gmail send failed."
+          : "Gmail delivery remains unconfirmed. WeatherTech OS will reconcile but will not resend automatically.",
         error:
           typeof payload.error?.message === "string"
             ? payload.error.message
@@ -1547,6 +1828,24 @@ export async function sendGmailEmail({
         duplicatePrevented: false,
         reconciled: false,
         idempotencyKey,
+        providerOutcomeKnown,
+      };
+    }
+
+    if (typeof payload.id !== "string" || !payload.id.trim()) {
+      return {
+        attempted: true,
+        sent: false,
+        status: "provider_outcome_unknown",
+        message:
+          "Gmail accepted the request without durable message identity. WeatherTech OS will reconcile but will not resend automatically.",
+        gmailMessageId: null,
+        gmailThreadId: null,
+        providerSendAttempts: 1,
+        duplicatePrevented: false,
+        reconciled: false,
+        idempotencyKey,
+        providerOutcomeKnown: false,
       };
     }
 
@@ -1561,6 +1860,7 @@ export async function sendGmailEmail({
       duplicatePrevented: false,
       reconciled: false,
       idempotencyKey,
+      providerOutcomeKnown: true,
     };
   } catch (error) {
     const reconciliation = await findProviderMessage(3, true);
@@ -1575,8 +1875,9 @@ export async function sendGmailEmail({
     return {
       attempted: true,
       sent: false,
-      status: "failed",
-      message: "Gmail send failed.",
+      status: "provider_outcome_unknown",
+      message:
+        "Gmail delivery remains unconfirmed. WeatherTech OS will reconcile but will not resend automatically.",
       error: error instanceof Error ? error.message : "Gmail send API returned an error.",
       gmailMessageId: null,
       gmailThreadId: null,
@@ -1584,6 +1885,7 @@ export async function sendGmailEmail({
       duplicatePrevented: false,
       reconciled: false,
       idempotencyKey,
+      providerOutcomeKnown: false,
     };
   }
 }

@@ -24,10 +24,15 @@ import {
   BROWSER_REGRESSION_TEST_USER_EMAIL,
   BROWSER_REGRESSION_TEST_USER_PASSWORD,
   DEFAULT_BROWSER_REGRESSION_GROUPS,
+  abortBrowserRegressionSession,
+  drainBrowserRegressionSession,
   getBrowserRegressionAuthCredentials,
   loadBrowserRegressionEnvironment,
   resolveBrowserRegressionGroups,
 } from "./regression-runtime.mjs";
+import { testNativeProposalSigningWorkflow } from "./proposal-signing-browser.mjs";
+
+export { abortBrowserRegressionSession };
 
 const BASE_URL = "http://localhost:3000/";
 const TEST_PREFIX = "TEST WTOS REGRESSION";
@@ -3675,16 +3680,18 @@ async function clickCompanyScope(tab, companyName) {
     if (headerCount === 1 || dashboardCount === 1) {
       const scopeButton = headerCount === 1 ? headerScopeButton : dashboardScopeButton;
       await scopeButton.click({ timeoutMs: 10000 });
-      await tab.playwright.waitForTimeout(600);
-      const selected = await tab.playwright.evaluate((targetName) =>
-        [...document.querySelectorAll('button[aria-pressed="true"]')].some(
-          (button) =>
-            button.innerText
-              ?.split("\n")
-              .some((line) => line.replace(/\s+/g, " ").trim() === targetName),
-        ), companyName);
-      if (selected) {
-        return;
+      const selectionStartedAt = Date.now();
+
+      while (Date.now() - selectionStartedAt < 3000) {
+        const ariaPressed = await scopeButton
+          .getAttribute("aria-pressed", { timeoutMs: 1000 })
+          .catch(() => null);
+
+        if (ariaPressed === "true") {
+          return;
+        }
+
+        await tab.playwright.waitForTimeout(100);
       }
     }
 
@@ -4633,8 +4640,8 @@ async function testOfficeOperationsWorkspace(browser, tab, env, seededJob) {
 }
 
 async function testExecutiveIntelligenceWorkspace(browser, tab) {
-  await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Analytics");
+  await clickCompanyScope(tab, "All companies");
 
   await waitFor(
     tab,
@@ -4767,8 +4774,8 @@ async function testExecutiveIntelligenceWorkspace(browser, tab) {
 }
 
 async function testAiToolsOperatingBrain(browser, tab) {
-  await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "AI Tools");
+  await clickCompanyScope(tab, "All companies");
 
   await waitFor(
     tab,
@@ -10755,6 +10762,11 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     throw new Error("Saved estimate was not associated with the test customer.");
   }
 
+  await waitForAsync(
+    async () => (await countEstimateLineItems(env, savedEstimate.id)) >= 2,
+    "created estimate line-item persistence",
+    10000,
+  );
   const lineItemCount = await countEstimateLineItems(env, savedEstimate.id);
 
   if (lineItemCount < 2) {
@@ -10846,9 +10858,18 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
         proposalText.includes("Base proposal") &&
         proposalText.includes("Customer-safe") &&
         proposalText.includes("online deposit collection is disabled") &&
-        proposalText.includes("Signature provider not connected") &&
+        proposalText.includes(
+          "Finalize an immutable customer-safe revision before requesting an electronic signature.",
+        ) &&
+        proposalText.includes(
+          "Finalize the exact revision and private PDF before preparing customer delivery.",
+        ) &&
+        !proposalText.includes("Signature provider not connected") &&
         proposalText.includes("QuickBooks sync remains production disabled") &&
         previewText.includes("Customer total") &&
+        previewText.includes(
+          "The customer electronically signs the exact immutable finalized proposal",
+        ) &&
         !previewText.includes("Profit margin") &&
         !previewText.includes("estimate notes")
       );
@@ -10867,14 +10888,14 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
 
       return Boolean(
         workspace?.textContent?.includes("Draft approval pending") &&
-          requestButton?.textContent?.includes("Request signature"),
+          requestButton?.textContent?.includes("Prepare signature email"),
       );
     },
-    "estimate signature request workspace ready",
+    "draft estimate truthful signature preparation workspace",
     15000,
   );
 
-  progress("estimates:signature-toast:start");
+  progress("estimates:signature-prefinalization-guard:start");
   const signatureButton = tab.playwright.locator(
     '[data-testid="estimate-request-signature-button"]',
   );
@@ -10883,96 +10904,69 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     element.scrollIntoView({ block: "center", behavior: "auto" }),
   );
   await tab.playwright.waitForTimeout(200);
-  await clickUnique(signatureButton, "request estimate signature", {
+  await clickUnique(signatureButton, "refuse signature preparation before finalization", {
     retryTransientClick: true,
   });
+  const prefinalizationMessage =
+    "Finalize the revised proposal choices before preparing customer delivery.";
   await waitFor(
     tab,
-    () => {
-      const toasts = [...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
-        .filter((toast) => {
-          const style = window.getComputedStyle(toast);
-          const rect = toast.getBoundingClientRect();
-
-          return (
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            Number(style.opacity) !== 0 &&
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        });
+    (expectedMessage) => {
+      const alert = document.querySelector(
+        '[role="alert"][aria-label="Error notification"]',
+      );
+      const falseSuccess = [...document.querySelectorAll(
+        '[role="status"][aria-label="Success notification"]',
+      )].some((toast) => /signature (requested|prepared)|active signature request/i.test(
+        toast.textContent ?? "",
+      ));
 
       return (
-        toasts.length === 1 &&
-        toasts[0].textContent.includes("Customer signature requested for the estimate packet.") &&
-        Boolean(toasts[0].querySelector('button[aria-label="Dismiss success notification"]'))
+        alert?.textContent?.replace(/\s+/g, " ").trim() === expectedMessage &&
+        !falseSuccess
       );
     },
-    "single dismissible signature request toast",
-    20000,
+    "prefinalization signature preparation refusal without false success",
+    15000,
+    prefinalizationMessage,
   );
-  const toastOverlayAllowsNavigation = await tab.playwright.evaluate(() => {
-    const overlay = document.querySelector('[aria-live="polite"]');
 
-    return Boolean(
-      overlay &&
-        window.getComputedStyle(overlay).pointerEvents === "none",
+  const [draftRevisions, draftSigningRequests] = await Promise.all([
+    restRequest(
+      env,
+      `estimate_proposal_revisions?select=id&estimate_id=eq.${encodeURIComponent(savedEstimate.id)}`,
+    ),
+    restRequest(
+      env,
+      `proposal_signing_requests?select=id&estimate_id=eq.${encodeURIComponent(savedEstimate.id)}`,
+    ),
+  ]);
+
+  if (draftRevisions.length !== 0 || draftSigningRequests.length !== 0) {
+    throw new Error(
+      "Prefinalization signature refusal created immutable proposal or signing-request residue.",
     );
-  });
-
-  if (!toastOverlayAllowsNavigation) {
-    throw new Error("Toast overlay can intercept unrelated navigation clicks.");
   }
 
-  await waitFor(
-    tab,
-    () =>
-      ![...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
-        .some((toast) =>
-          toast.textContent.includes("Customer signature requested for the estimate packet."),
-        ),
-    "signature request toast auto-dismiss",
-    10000,
-  );
-  await waitFor(
-    tab,
-    () => document.body.innerText.includes("Signature requested"),
-    "active signature UI state",
-    15000,
-  );
-  await signatureButton.evaluate((element) =>
-    element.scrollIntoView({ block: "center", behavior: "auto" }),
-  );
-  await tab.playwright.waitForTimeout(200);
-  await clickUnique(signatureButton, "duplicate signature request guard", {
-    retryTransientClick: true,
-  });
-  await waitFor(
-    tab,
-    () => {
-      const toasts = [...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
-        .filter((toast) => toast.textContent.includes("active signature request"));
-
-      return toasts.length === 1;
-    },
-    "single active signature request toast",
-    15000,
-  );
   await clickUnique(
-    tab.playwright.locator('button[aria-label="Dismiss success notification"]'),
-    "dismiss success notification",
+    tab.playwright.locator(
+      '[role="alert"][aria-label="Error notification"] button[aria-label="Dismiss error notification"]',
+    ),
+    "dismiss expected prefinalization signature refusal",
     { retryTransientClick: true },
   );
   await waitFor(
     tab,
-    () =>
-      ![...document.querySelectorAll('[role="status"][aria-label="Success notification"]')]
-        .some((toast) => toast.textContent.includes("active signature request")),
-    "signature duplicate toast dismissed",
+    (expectedMessage) =>
+      ![...document.querySelectorAll('[role="alert"][aria-label="Error notification"]')]
+        .some((alert) =>
+          alert.textContent?.replace(/\s+/g, " ").trim() === expectedMessage,
+        ),
+    "prefinalization signature refusal dismissed",
     5000,
+    prefinalizationMessage,
   );
-  progress("estimates:signature-toast:done");
+  progress("estimates:signature-prefinalization-guard:done");
 
   await waitFor(
     tab,
@@ -11008,114 +11002,182 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     () => {
       const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
       const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
+      const finalizeButton = document.querySelector('[data-testid="proposal-finalize-button"]');
 
       return Boolean(
         workspace?.textContent?.includes("Approved") &&
-          workspace?.textContent?.includes("Ready for draft job") &&
+          workspace?.textContent?.includes("Waiting on proposal gates") &&
           convertButton &&
-          convertButton.disabled === false,
+          convertButton.disabled === true &&
+          convertButton.textContent?.includes("Proposal gates incomplete") &&
+          finalizeButton &&
+          finalizeButton.disabled === false &&
+          finalizeButton.textContent?.includes("Finalize exact proposal"),
       );
     },
-    "approved estimate UI state",
+    "approved estimate remains blocked before immutable proposal finalization",
     15000,
   );
-
-  await withAcceptedConfirm(tab, async () => {
-    await clickUnique(
-      tab.playwright.locator('[data-testid="estimate-convert-job-button"]'),
-      "Convert estimate to draft job",
-      { retryTransientClick: true },
-    );
-  });
-
-  let linkedJob = await waitForAsync(async () => {
-    const job = await findJobByEstimateId(env, approvedEstimate.id);
-
-    return job?.estimate_id === approvedEstimate.id ? job : null;
-  }, "estimate-linked draft job persistence", 30000).catch(() => null);
-
-  if (!linkedJob) {
-    const conversionStillReady = await tab.playwright.evaluate(() => {
-      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
-      const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
-
-      return Boolean(
-        workspace?.textContent?.includes("Approved") &&
-          workspace?.textContent?.includes("Ready for draft job") &&
-          convertButton &&
-          convertButton.disabled === false,
-      );
-    });
-
-    if (conversionStillReady) {
-      await withAcceptedConfirm(tab, async () => {
-        await clickUnique(
-          tab.playwright.locator('[data-testid="estimate-convert-job-button"]'),
-          "Retry convert estimate to draft job",
-          { retryTransientClick: true },
-        );
-      });
-
-      linkedJob = await waitForAsync(async () => {
-        const job = await findJobByEstimateId(env, approvedEstimate.id);
-
-        return job?.estimate_id === approvedEstimate.id ? job : null;
-      }, "estimate-linked draft job persistence retry", 30000).catch(() => null);
-    }
-  }
-
-  if (!linkedJob) {
-    throw new Error("Timed out waiting for estimate-linked draft job persistence.");
-  }
-
-  if (linkedJob.status !== "draft") {
-    throw new Error(`Converted job status was ${linkedJob.status}, expected draft.`);
-  }
-
-  if (linkedJob.scheduled_start !== null || linkedJob.scheduled_end !== null) {
-    throw new Error("Converted draft job unexpectedly received a schedule.");
-  }
 
   const linkedJobCount = await countJobsByEstimateId(env, approvedEstimate.id);
 
-  if (linkedJobCount !== 1) {
-    throw new Error(`Estimate handoff created ${linkedJobCount} linked jobs, expected 1.`);
+  if (linkedJobCount !== 0) {
+    throw new Error(
+      `Incomplete proposal gates created ${linkedJobCount} linked jobs, expected zero.`,
+    );
   }
-
-  await waitFor(
-    tab,
-    () => {
-      const workspace = document.querySelector('[data-testid="estimate-approval-workspace"]');
-      const convertButton = document.querySelector('[data-testid="estimate-convert-job-button"]');
-
-      return Boolean(
-        workspace?.textContent?.includes("Job linked") &&
-          workspace?.textContent?.includes("Handoff readiness") &&
-          convertButton?.disabled === true,
-      );
-    },
-    "linked job handoff UI state",
-    15000,
-  );
 
   await tab.reload();
   await tab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 15000 });
-  await waitFor(
-    tab,
-    () => {
-      const text = document.body.innerText;
+  let lastPostRefreshState = null;
+  let lastPostRefreshReadError = null;
 
-      return (
-        text.includes("Dashboard") &&
-        text.includes("Leads") &&
-        text.includes("Estimates") &&
-        !text.includes("Customer signature requested for the estimate packet.") &&
-        !text.includes("This estimate packet already has an active signature request.")
-      );
-    },
-    "signature toast remains cleared after refresh",
-    45000,
-  );
+  try {
+    await waitForAsync(async () => {
+      try {
+        lastPostRefreshState = await tab.playwright.evaluate(
+          ({ expectedEstimateId, expectedRefusal }) => {
+            const queryValue = (key) => {
+              const query = window.location.search.startsWith("?")
+                ? window.location.search.slice(1)
+                : window.location.search;
+              const entry = query.split("&").find((part) => {
+                const [rawKey] = part.split("=");
+
+                return rawKey === key;
+              });
+
+              if (!entry) {
+                return null;
+              }
+
+              return entry.includes("=") ? entry.slice(entry.indexOf("=") + 1) : "";
+            };
+            const normalizedText = (value) =>
+              value?.replace(/\s+/g, " ").trim() ?? "";
+            const bodyText = document.body?.innerText ?? "";
+            const workspace = document.querySelector(
+              '[data-testid="estimate-approval-workspace"]',
+            );
+            const approvalStatus = document.querySelector(
+              '[data-testid="estimate-approval-status"]',
+            );
+            const conversionButton = document.querySelector(
+              '[data-testid="estimate-convert-job-button"]',
+            );
+            const finalizeButton = document.querySelector(
+              '[data-testid="proposal-finalize-button"]',
+            );
+            const alertNodes = [...document.querySelectorAll(
+              '[role="alert"][aria-label]',
+            )].filter((alert) => {
+              const rect = alert.getBoundingClientRect();
+              const style = window.getComputedStyle(alert);
+
+              return (
+                style.display !== "none" &&
+                style.visibility !== "hidden" &&
+                Number(style.opacity) !== 0 &&
+                rect.width > 0 &&
+                rect.height > 0
+              );
+            });
+            const alertDiagnostics = alertNodes.map((alert) => {
+              const text = normalizedText(alert.textContent);
+
+              return {
+                ariaLabel: alert.getAttribute("aria-label"),
+                expectedRefusal: text === expectedRefusal,
+                safeText: text === expectedRefusal ? text : `[redacted:${text.length}]`,
+              };
+            });
+            const workspaceText = normalizedText(workspace?.textContent);
+            const approvalLabels = [
+              "Approved",
+              "Draft approval pending",
+              "Awaiting customer approval",
+            ];
+            const conversionLabels = [
+              "Waiting on proposal gates",
+              "Ready for sold job",
+              "Matching job found",
+              "Job linked",
+            ];
+            const approvalLabel = approvalLabels.find((label) =>
+              workspace?.querySelector(`[aria-label="${label}"]`),
+            ) ?? null;
+            const conversionLabel = conversionLabels.find((label) =>
+              workspace?.querySelector(`[aria-label="${label}"]`),
+            ) ?? null;
+            const clauses = {
+              viewQueryMatches: queryValue("view") === "estimates",
+              estimateFocusMatches: queryValue("estimate") === expectedEstimateId,
+              noCompetingInvoiceFocus: queryValue("invoice") === null,
+              noCompetingJobFocus: queryValue("job") === null,
+              dashboardNavigationPresent: bodyText.includes("Dashboard"),
+              leadsNavigationPresent: bodyText.includes("Leads"),
+              estimatesNavigationPresent: bodyText.includes("Estimates"),
+              selectedEstimateWorkspacePresent: workspace !== null,
+              approvalStatusPresent: approvalStatus !== null,
+              approvalLabelApproved: approvalLabel === "Approved",
+              conversionLabelBlocked: conversionLabel === "Waiting on proposal gates",
+              conversionControlBlocked:
+                conversionButton?.disabled === true &&
+                normalizedText(conversionButton.textContent) === "Proposal gates incomplete",
+              finalizeControlReady:
+                finalizeButton?.disabled === false &&
+                normalizedText(finalizeButton.textContent) === "Finalize exact proposal",
+              transientRefusalAbsent: !bodyText.includes(expectedRefusal),
+            };
+
+            return {
+              ready: Object.values(clauses).every(Boolean),
+              location: {
+                pathname: window.location.pathname,
+                search: window.location.search,
+                hashPresent: window.location.hash !== "",
+                view: queryValue("view"),
+                estimateFocusPresent: queryValue("estimate") !== null,
+                estimateFocusMatches: queryValue("estimate") === expectedEstimateId,
+              },
+              selectedEstimate: {
+                workspacePresent: workspace !== null,
+                approvalStatusPresent: approvalStatus !== null,
+              },
+              labels: {
+                approval: approvalLabel,
+                conversion: conversionLabel,
+                conversionControl: normalizedText(conversionButton?.textContent),
+                finalizeControl: normalizedText(finalizeButton?.textContent),
+              },
+              visibleAlerts: alertDiagnostics,
+              clauses,
+              workspaceHasApprovalCopy: workspaceText.includes("Approved internally on"),
+            };
+          },
+          {
+            expectedEstimateId: approvedEstimate.id,
+            expectedRefusal: prefinalizationMessage,
+          },
+        );
+        lastPostRefreshReadError = null;
+
+        return lastPostRefreshState.ready ? lastPostRefreshState : null;
+      } catch (error) {
+        lastPostRefreshReadError =
+          error instanceof Error ? error.message : String(error);
+        return null;
+      }
+    }, "truthful proposal gates remain after refresh without transient refusal", 45000);
+  } catch (error) {
+    const waitMessage = error instanceof Error ? error.message : String(error);
+    const readError = lastPostRefreshReadError
+      ? ` Last browser read error: ${lastPostRefreshReadError}.`
+      : "";
+    throw new Error(
+      `${waitMessage} Last PII-free post-refresh state: ${JSON.stringify(lastPostRefreshState)}.${readError}`,
+    );
+  }
 
   return {
     estimateId: approvedEstimate.id,
@@ -11123,8 +11185,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     status: approvedEstimate.status,
     lineItemCount,
     total: approvedEstimate.total,
-    linkedJobId: linkedJob.id,
-    linkedJobStatus: linkedJob.status,
+    linkedJobId: null,
+    linkedJobStatus: null,
+    proposalFinalized: false,
+    signaturePrepared: false,
   };
 }
 
@@ -11734,8 +11798,8 @@ async function testProductionReadinessCenter(browser, tab, baseUrl) {
 }
 
 async function testWebsiteMarketingFoundation(browser, tab) {
-  await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Marketing Accountability");
+  await clickCompanyScope(tab, "All companies");
   await waitFor(
     tab,
     () => {
@@ -11830,10 +11894,9 @@ async function testWebsiteMarketingFoundation(browser, tab) {
   );
   await clickCompanyScope(tab, "All companies");
 
-  await clickUnique(
-    tab.playwright.locator(
-      'xpath=//*[@data-testid="website-marketing-foundation"]//button[contains(normalize-space(.), "Provider setup")]',
-    ),
+  await clickVisibleDomButtonByText(
+    tab,
+    "Provider setup",
     "marketing provider setup quick action",
   );
   await waitFor(
@@ -11932,10 +11995,9 @@ async function testWebsiteMarketingFoundation(browser, tab) {
   }
 
   await clickNav(tab, "Marketing Accountability");
-  await clickUnique(
-    tab.playwright.locator(
-      'xpath=//*[@data-testid="website-marketing-foundation"]//button[contains(normalize-space(.), "Open lead intake")]',
-    ),
+  await clickVisibleDomButtonByText(
+    tab,
+    "Open lead intake",
     "marketing lead intake quick action",
   );
   await waitFor(
@@ -14485,7 +14547,11 @@ async function testJobsWorkspaceFiltersAndSections(browser, tab, company, testJo
     10000,
   );
 
-  await clickUnique(tab.playwright.getByRole("button", { name: "Clear filters" }), "Clear filters");
+  await clickVisibleDomButtonByText(
+    tab,
+    "Clear filters",
+    "Clear jobs workspace filters",
+  );
   await fillUnique(
     tab.playwright.locator('[data-testid="jobs-search"]'),
     testJob.title,
@@ -14931,17 +14997,18 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     "inspection estimate title",
   );
   await scrollTextIntoView(tab, "Create estimate draft");
-  await clickUnique(
-    tab.playwright.locator('xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//button[@type="submit"]'),
-    "Create estimate draft",
+  const inspectionEstimateSubmit = tab.playwright.locator(
+    'xpath=//form[.//h4[normalize-space(.)="Estimate review"]]//button[@type="submit"]',
   );
-  await waitForAsync(
-    () =>
-      restRequest(env, `estimates?select=id,title&title=eq.${encodeURIComponent(estimateTitle)}&limit=1`)
-        .then((rows) => rows[0]),
-    `inspection estimate ${estimateTitle}`,
-    15000,
-  );
+  await clickEnabledUntilPersisted({
+    tab,
+    locator: inspectionEstimateSubmit,
+    clickLabel: "Create estimate draft",
+    persistenceLabel: `inspection estimate ${estimateTitle}`,
+    readPersisted: () => findEstimateByTitle(env, estimateTitle),
+    errorPrefix: "Inspection estimate creation was refused",
+    timeoutMs: 30000,
+  });
   await waitForNoSavingState(tab, "inspection estimate save complete");
   progress("inspections:estimate:done");
 
@@ -16061,7 +16128,46 @@ export function getCodexBrowserRegressionCommand({
   ].join("\n");
 }
 
-export async function runWeatherTechOsRegression({
+async function resetRegressionViewportForRecord(browser, progress, recordName) {
+  const timeoutMs = 10000;
+  let timeoutId = null;
+
+  progress(`record:${recordName}:viewport-reset:start`);
+
+  try {
+    await Promise.race([
+      (async () => {
+        const viewport = await browser.capabilities.get("viewport");
+        await viewport.set(LAPTOP_VIEWPORT);
+      })(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Timed out resetting the browser viewport for ${recordName} after ${timeoutMs}ms.`,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  progress(`record:${recordName}:viewport-reset:done`);
+}
+
+export async function runWeatherTechOsRegression(options = {}) {
+  return drainBrowserRegressionSession(
+    createWeatherTechOsRegressionSession(options),
+  );
+}
+
+export async function* createWeatherTechOsRegressionSession({
   browser,
   nodeRepl,
   baseUrl = BASE_URL,
@@ -16125,21 +16231,81 @@ export async function runWeatherTechOsRegression({
   let browserConsoleWarningCount = null;
   let cleanupAuthorized = false;
 
+  const buildRecordCheckpoint = (recordResult) => ({
+    kind: "record",
+    runId,
+    fullRun: groupSelection.fullRun,
+    expectedGroupCount: resolvedGroups.length,
+    completedAssertionCount: results.length,
+    lastRecord: {
+      name: recordResult.name,
+      status: recordResult.status,
+    },
+    cleanupPending: true,
+  });
+
   const record = async (name, fn) => {
+    let details;
+    let recordFailure = null;
+    let viewportResetFailure = null;
+
+    progress(`record:${name}:start`);
+
     try {
-      progress(`record:${name}:start`);
-      const details = await fn();
-      results.push({ name, status: "passed", details });
-      progress(`record:${name}:passed`);
+      details = await fn();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      recordFailure = error;
+    } finally {
+      try {
+        await resetRegressionViewportForRecord(browser, progress, name);
+      } catch (error) {
+        viewportResetFailure = error;
+        const resetMessage =
+          error instanceof Error ? error.message : String(error);
+        progress(`record:${name}:viewport-reset:failed:${resetMessage}`);
+      }
+    }
+
+    if (viewportResetFailure) {
+      const resetMessage =
+        viewportResetFailure instanceof Error
+          ? viewportResetFailure.message
+          : String(viewportResetFailure);
+      const combinedError = recordFailure
+        ? new AggregateError(
+            [recordFailure, viewportResetFailure],
+            `${recordFailure instanceof Error ? recordFailure.message : String(recordFailure)} Viewport reset also failed: ${resetMessage}`,
+          )
+        : viewportResetFailure;
+      const message =
+        combinedError instanceof Error ? combinedError.message : String(combinedError);
+
       results.push({
         name,
         status: "failed",
         error: message,
       });
       progress(`record:${name}:failed:${message}`);
+      throw combinedError;
     }
+
+    if (recordFailure) {
+      const message =
+        recordFailure instanceof Error ? recordFailure.message : String(recordFailure);
+      const recordResult = {
+        name,
+        status: "failed",
+        error: message,
+      };
+      results.push(recordResult);
+      progress(`record:${name}:failed:${message}`);
+      return buildRecordCheckpoint(recordResult);
+    }
+
+    const recordResult = { name, status: "passed", details };
+    results.push(recordResult);
+    progress(`record:${name}:passed`);
+    return buildRecordCheckpoint(recordResult);
   };
 
   let cleanup = { before: null, after: null };
@@ -16230,67 +16396,67 @@ export async function runWeatherTechOsRegression({
     }
 
       if (enabledGroups.has("dashboard")) {
-        await record("Dashboard loads in live Supabase mode", () =>
+        yield await record("Dashboard loads in live Supabase mode", () =>
           testDashboardLiveMode(tab),
         );
       }
 
       if (enabledGroups.has("operations")) {
-        await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
+        yield await record("Office Operations Command Center shows live priority queues and routes to existing modules", () =>
           testOfficeOperationsWorkspace(browser, tab, env, seededJob),
         );
       }
 
     if (enabledGroups.has("settings")) {
-      await record("Settings Integration Center displays provider readiness", () =>
+      yield await record("Settings Integration Center displays provider readiness", () =>
         testSettingsIntegrationCenter(tab),
       );
     }
 
     if (enabledGroups.has("production-readiness")) {
-      await record("Production Readiness Center reports deployment and provider activation blockers", () =>
+      yield await record("Production Readiness Center reports deployment and provider activation blockers", () =>
         testProductionReadinessCenter(browser, tab, baseUrl),
       );
     }
 
     if (enabledGroups.has("documents")) {
-      await record("Document Center filters, previews, renames, archives, and stays responsive", () =>
+      yield await record("Document Center filters, previews, renames, archives, and stays responsive", () =>
         testDocumentCenterWorkspace(browser, tab, env, weatherTech, seededJob, runId, baseUrl),
       );
     }
 
     if (enabledGroups.has("customer-portal")) {
-      await record("Customer Portal shows isolated project status, documents, photos, messages, schedule, payments, warranty, and profile", () =>
+      yield await record("Customer Portal shows isolated project status, documents, photos, messages, schedule, payments, warranty, and profile", () =>
         testCustomerPortalWorkspace(browser, tab, env, weatherTech, runId, baseUrl, progress),
       );
     }
 
     if (enabledGroups.has("financial")) {
-      await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
+      yield await record("Financial Operations creates invoices, records payments, guards overpayment, and stays responsive", () =>
         testFinancialOperationsWorkspace(browser, tab, env, weatherTech, ihc, runId, baseUrl, progress),
       );
     }
 
     if (enabledGroups.has("analytics")) {
-      await record("Executive Intelligence summarizes revenue, sales, operations, customer, financial, alerts, and trends", () =>
+      yield await record("Executive Intelligence summarizes revenue, sales, operations, customer, financial, alerts, and trends", () =>
         testExecutiveIntelligenceWorkspace(browser, tab),
       );
     }
 
     if (enabledGroups.has("ai-tools")) {
-      await record("AI Command Center 3.0 shows executive recommendations, advisor modes, and grounded approval-gated responses", () =>
+      yield await record("AI Command Center 3.0 shows executive recommendations, advisor modes, and grounded approval-gated responses", () =>
         testAiToolsOperatingBrain(browser, tab),
       );
     }
 
     if (enabledGroups.has("marketing")) {
-      await record("Website & Marketing foundation opens and routes to existing workspaces", () =>
+      yield await record("Website & Marketing foundation opens and routes to existing workspaces", () =>
         testWebsiteMarketingFoundation(browser, tab),
       );
     }
 
     if (shouldRunAccountabilityWorkflow) {
-      await record("Marketing accountability reviews attribution, owns funnel outcomes, records spend, reports isolation, and creates a repeat opportunity", () =>
+      yield await record("Marketing accountability reviews attribution, owns funnel outcomes, records spend, reports isolation, and creates a repeat opportunity", () =>
         testMarketingAccountabilityWorkflow(
           tab,
           env,
@@ -16302,7 +16468,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("calendar")) {
-      await record("Calendar screen opens with schedule metrics", () =>
+      yield await record("Calendar screen opens with schedule metrics", () =>
         testCalendarScreen(tab),
       );
     }
@@ -16313,7 +16479,7 @@ export async function runWeatherTechOsRegression({
     let jobBuilderSeededJob = seededJob;
 
     if (shouldRunLeadWorkflow) {
-      await record("Leads list opens and isolated lead can be created and updated", async () => {
+      yield await record("Leads list opens and isolated lead can be created and updated", async () => {
         leadWorkflow = await testLeadsWorkflow(tab, env, weatherTech, runId, leadNameColumn);
         return leadWorkflow;
       });
@@ -16327,7 +16493,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (shouldRunEstimatesWorkflow) {
-      await record("Estimates approve and convert an isolated estimate into one draft job", async () => {
+      yield await record("Estimates create and approve an isolated estimate while enforcing native proposal handoff gates", async () => {
         if (!leadWorkflow) {
           throw new Error("Lead workflow did not produce a test lead.");
         }
@@ -16337,7 +16503,7 @@ export async function runWeatherTechOsRegression({
     }
 
     if (shouldRunReconciliationWorkflow) {
-      await record("CRM identity review reconciles one exact graph and refuses unsafe matches", () =>
+      yield await record("CRM identity review reconciles one exact graph and refuses unsafe matches", () =>
         testIdentityReconciliationWorkflow(
           tab,
           env,
@@ -16349,13 +16515,13 @@ export async function runWeatherTechOsRegression({
     }
 
     if (shouldRunCustomersWorkflow) {
-      await record("Customers list opens and isolated customer can be created and updated", () =>
+      yield await record("Customers list opens and isolated customer can be created and updated", () =>
         testCustomersWorkflow(tab, env, weatherTech, runId),
       );
     }
 
       if (shouldRunInboxWorkflow) {
-        await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
+        yield await record("Unified Inbox search and activity filters narrow CRM activity", async () => {
           if (!leadWorkflow) {
             throw new Error("Lead workflow did not produce a test lead.");
           }
@@ -16371,7 +16537,7 @@ export async function runWeatherTechOsRegression({
           );
         });
 
-        await record("Google Workspace email remains company-scoped and owner-approved", () =>
+        yield await record("Google Workspace email remains company-scoped and owner-approved", () =>
           testGoogleWorkspaceOwnerApprovalFoundation(tab),
         );
       }
@@ -16390,7 +16556,7 @@ export async function runWeatherTechOsRegression({
       await ensureAppShell(tab, baseUrl, progress);
       progress("lead:seed-for-sales-pipeline:done");
 
-      await record("Sales Pipeline manages opportunities, conversion, filters, and reload persistence", async () => {
+      yield await record("Sales Pipeline manages opportunities, conversion, filters, and reload persistence", async () => {
         if (!salesPipelineLead) {
           throw new Error("Sales Pipeline seed did not produce a test lead.");
         }
@@ -16400,13 +16566,13 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("lead-intake-workspace")) {
-      await record("Lead Intake workspace creates a company-scoped CRM lead", () =>
+      yield await record("Lead Intake workspace creates a company-scoped CRM lead", () =>
         testLeadIntakeWorkspace(tab, env, weatherTech, runId, leadNameColumn),
       );
     }
 
     if (enabledGroups.has("lead-intake")) {
-      await record("Unified Website and Yelp lead intake routes, deduplicates, logs, retries, and appears in CRM", () =>
+      yield await record("Unified Website and Yelp lead intake routes, deduplicates, logs, retries, and appears in CRM", () =>
         testUnifiedLeadIntake(
           tab,
           env,
@@ -16420,41 +16586,41 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("themes")) {
-      await record("WeatherTech Roofing LLC theme keeps purple primary and orange accent", () =>
+      yield await record("WeatherTech Roofing LLC theme keeps purple primary and orange accent", () =>
         testTheme(tab, "WeatherTech Roofing LLC", "purple", "orange"),
       );
 
-      await record("IHC Painting switches to orange-focused theme", () =>
+      yield await record("IHC Painting switches to orange-focused theme", () =>
         testTheme(tab, "IHC Painting", "orange"),
       );
     }
 
     if (enabledGroups.has("layout")) {
-      await record("Dashboard quick actions do not overlap at laptop width", () =>
+      yield await record("Dashboard quick actions do not overlap at laptop width", () =>
         testQuickActionsDoNotOverlap(browser, tab),
       );
     }
 
     if (enabledGroups.has("inspections")) {
-      await record("Inspections module opens, validates, and runs live workflow when migration is available", () =>
+      yield await record("Inspections module opens, validates, and runs live workflow when migration is available", () =>
         testInspectionsWorkflow(tab, env, weatherTech, seededJob, runId, progress),
       );
     }
 
     if (enabledGroups.has("dispatch")) {
-      await record("Dispatch workspace schedules jobs, shows inspections, and avoids duplicate job events", () =>
+      yield await record("Dispatch workspace schedules jobs, shows inspections, and avoids duplicate job events", () =>
         testDispatchWorkspace(browser, tab, env, weatherTech, seededJob, runId, progress),
       );
     }
 
     if (enabledGroups.has("field-operations")) {
-      await record("Field Operations workspace manages mobile assignments, status, issues, materials, and routing", () =>
+      yield await record("Field Operations workspace manages mobile assignments, status, issues, materials, and routing", () =>
         testFieldOperationsWorkspace(browser, tab, env, weatherTech, runId, baseUrl, progress),
       );
     }
 
     if (shouldRunJobPhotoWorkflow) {
-      await record("Job photos upload privately, hydrate signed previews, reload, and remain company-scoped", () =>
+      yield await record("Job photos upload privately, hydrate signed previews, reload, and remain company-scoped", () =>
         testSecureJobPhotoWorkflow(
           browser,
           tab,
@@ -16468,8 +16634,22 @@ export async function runWeatherTechOsRegression({
       );
     }
 
+    if (enabledGroups.has("proposal-signing")) {
+      yield await record("Customers sign exact private finalized proposals and sold-job deposit gates remain exact", () =>
+        testNativeProposalSigningWorkflow({
+          browser,
+          tab,
+          env,
+          companies,
+          runId,
+          baseUrl,
+          progress,
+        }),
+      );
+    }
+
     if (enabledGroups.has("jobs-workspace")) {
-      await record("Jobs workspace filters and section navigation render", () =>
+      yield await record("Jobs workspace filters and section navigation render", () =>
         testJobsWorkspaceFiltersAndSections(browser, tab, weatherTech, seededJob),
       );
     }
@@ -16484,14 +16664,14 @@ export async function runWeatherTechOsRegression({
     }
 
     if (enabledGroups.has("job-builder")) {
-      await record("Jobs screen opens and isolated draft job can be edited and scheduled", async () => {
+      yield await record("Jobs screen opens and isolated draft job can be edited and scheduled", async () => {
         jobBuilderWorkflow = await testJobBuilderEditAndSchedule(tab, env, jobBuilderSeededJob, runId, progress);
         return jobBuilderWorkflow;
       });
     }
 
     if (enabledGroups.has("job-production")) {
-      await record("Job workflow scroll and refresh regression flows", () =>
+      yield await record("Job workflow scroll and refresh regression flows", () =>
         (async () => {
           const viewport = await browser.capabilities.get("viewport");
           await viewport.set(LAPTOP_VIEWPORT);

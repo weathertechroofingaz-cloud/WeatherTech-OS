@@ -165,6 +165,11 @@ for (const [needle, message] of [
   ["JULY BOUNDARY", "Pre-month Phoenix boundary fixture is present"],
   ["SEPTEMBER BOUNDARY", "Exclusive next-month Phoenix boundary fixture is present"],
   ["provider or financial state", "Provider and financial side effects remain zero"],
+  ["wtos_cleanup_synthetic_proposal_fixture", "Protected synthetic proposal evidence uses the service-only exact cleanup RPC"],
+  ["readSyntheticProposalCleanupGraph", "Proposal cleanup discovers its exact dependent graph before deletion"],
+  ["removeSyntheticProposalDocumentObjects", "Proposal Storage bytes are removed before protected metadata cleanup"],
+  ["cleaned.storageResidueCount === 0", "Protected cleanup proves zero Storage residue"],
+  ["cleaned.databaseResidueCount === 0", "Protected cleanup proves zero database residue"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
   ['deleteExactIds(service, "lead_accountability_events"', "Immutable events delete before accountability"],
   ['deleteExactIds(service, "lead_accountability"', "Current state deletes before leads"],
@@ -214,6 +219,15 @@ check(
 check(
   source.includes('.delete().in("id", exactIds)'),
   "Business cleanup deletes only captured exact ID sets",
+);
+check(
+  !source.includes(
+    'deleteExactIds(service, "estimate_proposal_acceptances", ids.estimate_proposal_acceptances)',
+  ) &&
+    !source.includes(
+      'deleteExactIds(service, "estimate_proposal_revisions", ids.estimate_proposal_revisions)',
+    ),
+  "Append-only acceptance evidence and finalized revisions are never directly deleted",
 );
 const marketingReceiptCleanupIndex = source.indexOf(
   'deleteExactIds(\n          service,\n          "marketing_accountability_operation_receipts"',

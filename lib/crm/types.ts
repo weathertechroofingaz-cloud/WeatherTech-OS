@@ -252,7 +252,10 @@ export type SignatureStatus =
   | "viewed"
   | "signed"
   | "declined"
-  | "expired";
+  | "expired"
+  | "failed"
+  | "revoked"
+  | "superseded";
 export type DocumentCategory =
   | "proposal"
   | "signed_proposal"
@@ -330,6 +333,8 @@ export type ProposalSignatureReadinessStatus =
   | "not_configured"
   | "sending_disabled"
   | "ready_for_sandbox_testing"
+  | "ready_to_send"
+  | "prepared"
   | "awaiting_signature"
   | "signed"
   | "declined"
@@ -356,7 +361,8 @@ export type ProposalQuickBooksSyncStatus =
 export type ProposalAcceptanceMethod =
   | "internal_recorded"
   | "customer_portal"
-  | "signature_provider";
+  | "signature_provider"
+  | "native_electronic";
 export type ProposalPaymentScheduleType =
   | "deposit"
   | "progress"
@@ -1106,6 +1112,9 @@ export type JobRecord = {
   customer_id: string | null;
   lead_id: string | null;
   estimate_id: string | null;
+  proposal_revision_id?: string | null;
+  proposal_acceptance_id?: string | null;
+  conversion_operation_key?: string | null;
   scope_id: string | null;
   property_id?: string | null;
   business: string | null;
@@ -1292,6 +1301,10 @@ export type InvoiceRecord = {
   customer_id: string | null;
   job_id: string | null;
   estimate_id: string | null;
+  proposal_revision_id?: string | null;
+  proposal_acceptance_id?: string | null;
+  invoice_purpose?: "proposal_deposit" | null;
+  proposal_invoice_operation_key?: string | null;
   property_id?: string | null;
   invoice_number: string;
   title: string;
@@ -1505,12 +1518,17 @@ export type SignatureRecord = {
   employee_id: string | null;
   document_id: string | null;
   change_order_id: string | null;
+  proposal_revision_id?: string | null;
+  acceptance_id?: string | null;
+  signed_document_id?: string | null;
   signer_name: string;
   signer_email: string | null;
   status: SignatureStatus;
   provider: string | null;
   provider_envelope_id: string | null;
   signature_data: string | null;
+  signature_method?: "typed_name" | null;
+  evidence_sha256?: string | null;
   sent_at: string | null;
   viewed_at: string | null;
   signed_at: string | null;
@@ -1530,6 +1548,10 @@ export type DocumentRecord = {
   inspection_id: string | null;
   invoice_id: string | null;
   change_order_id: string | null;
+  proposal_revision_id?: string | null;
+  artifact_operation_key?: string | null;
+  content_sha256?: string | null;
+  immutable_after_at?: string | null;
   property_id?: string | null;
   title: string;
   category: DocumentCategory;
@@ -1696,6 +1718,17 @@ export type EstimateProposalRevisionRecord = {
   lead_id: string | null;
   property_id: string | null;
   template_id: string | null;
+  finalization_operation_key?: string | null;
+  artifact_operation_key?: string | null;
+  customer_snapshot?: Record<string, unknown> | null;
+  revision_sha256?: string | null;
+  terms_sha256?: string | null;
+  finalized_at?: string | null;
+  finalized_by?: string | null;
+  finalized_document_id?: string | null;
+  accepted_signature_id?: string | null;
+  accepted_acceptance_id?: string | null;
+  signed_document_id?: string | null;
   proposal_number: string;
   revision_number: number;
   title: string;
@@ -1799,6 +1832,21 @@ export type EstimateProposalAcceptanceRecord = {
   proposal_revision_id: string;
   estimate_id: string;
   customer_id: string | null;
+  signing_request_id?: string | null;
+  signature_id?: string | null;
+  proposal_document_id?: string | null;
+  acceptance_operation_key?: string | null;
+  acceptance_request_sha256?: string | null;
+  proposal_revision_sha256?: string | null;
+  proposal_document_sha256?: string | null;
+  terms_sha256?: string | null;
+  consent_version?: string | null;
+  consent_sha256?: string | null;
+  electronic_records_consented?: boolean | null;
+  signature_intent_acknowledged?: boolean | null;
+  signature_method?: "typed_name" | null;
+  required_deposit_amount?: number | null;
+  evidence_sha256?: string | null;
   signer_name: string;
   signer_email: string | null;
   accepted_total: number;
@@ -1849,6 +1897,99 @@ export type ProposalAuditEventRecord = {
   metadata: Record<string, unknown>;
   idempotency_key: string | null;
   created_at: string;
+};
+
+export type ProposalSigningRequestStatus =
+  | "prepared"
+  | "sent"
+  | "viewed"
+  | "signed"
+  | "declined"
+  | "failed"
+  | "revoked"
+  | "superseded"
+  | "expired";
+
+export type ProposalSigningRequestRecord = {
+  id: string;
+  company_id: string;
+  proposal_revision_id: string;
+  estimate_id: string;
+  customer_id: string;
+  signature_id: string;
+  proposal_document_id: string;
+  operation_key: string;
+  request_token_sha256: string;
+  request_token_consumed_at: string | null;
+  request_token_consumed_session_id: string | null;
+  revision_sha256: string;
+  document_sha256: string;
+  terms_sha256: string;
+  consent_version: string;
+  consent_text: string;
+  consent_sha256: string;
+  intended_signer_name: string;
+  intended_signer_email: string;
+  status: ProposalSigningRequestStatus;
+  delivery_email_message_id: string | null;
+  delivery_provider_message_id: string | null;
+  failure_code: string | null;
+  revocation_reason: string | null;
+  expires_at: string;
+  sent_at: string | null;
+  first_viewed_at: string | null;
+  signed_at: string | null;
+  declined_at: string | null;
+  failed_at: string | null;
+  revoked_at: string | null;
+  superseded_at: string | null;
+  exchange_attempt_count: number;
+  exchange_window_started_at: string | null;
+  exchange_blocked_until: string | null;
+  session_read_attempt_count: number;
+  session_read_window_started_at: string | null;
+  session_read_blocked_until: string | null;
+  action_attempt_count: number;
+  action_window_started_at: string | null;
+  action_blocked_until: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProposalSigningSessionRecord = {
+  id: string;
+  company_id: string;
+  signing_request_id: string;
+  session_token_sha256: string;
+  status: "active" | "signed" | "declined" | "revoked" | "expired";
+  initial_ip_hash: string | null;
+  initial_user_agent: string | null;
+  opened_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  signed_at: string | null;
+  declined_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProposalSignatureReceiptRecord = {
+  id: string;
+  company_id: string;
+  signing_request_id: string;
+  proposal_revision_id: string;
+  acceptance_id: string;
+  signature_id: string;
+  source_document_id: string;
+  signed_document_id: string;
+  operation_key: string;
+  revision_sha256: string;
+  source_document_sha256: string;
+  signed_document_sha256: string;
+  evidence_sha256: string;
+  registered_at: string;
 };
 
 export type NotificationRecord = {
@@ -2924,6 +3065,9 @@ export type JobInput = {
   customer_id?: string | null;
   lead_id?: string | null;
   estimate_id?: string | null;
+  proposal_revision_id?: string | null;
+  proposal_acceptance_id?: string | null;
+  conversion_operation_key?: string | null;
   scope_id?: string | null;
   property_id?: string | null;
   business?: string | null;
@@ -3023,6 +3167,10 @@ export type InvoiceInput = {
   customer_id?: string | null;
   job_id?: string | null;
   estimate_id?: string | null;
+  proposal_revision_id?: string | null;
+  proposal_acceptance_id?: string | null;
+  invoice_purpose?: "proposal_deposit" | null;
+  proposal_invoice_operation_key?: string | null;
   property_id?: string | null;
   invoice_number: string;
   title: string;
@@ -3060,6 +3208,17 @@ export type EstimateProposalRevisionInput = {
   lead_id?: string | null;
   property_id?: string | null;
   template_id?: string | null;
+  finalization_operation_key?: string | null;
+  artifact_operation_key?: string | null;
+  customer_snapshot?: Record<string, unknown> | null;
+  revision_sha256?: string | null;
+  terms_sha256?: string | null;
+  finalized_at?: string | null;
+  finalized_by?: string | null;
+  finalized_document_id?: string | null;
+  accepted_signature_id?: string | null;
+  accepted_acceptance_id?: string | null;
+  signed_document_id?: string | null;
   proposal_number: string;
   revision_number?: number;
   title: string;
@@ -3154,6 +3313,21 @@ export type EstimateProposalAcceptanceInput = {
   proposal_revision_id: string;
   estimate_id: string;
   customer_id?: string | null;
+  signing_request_id?: string | null;
+  signature_id?: string | null;
+  proposal_document_id?: string | null;
+  acceptance_operation_key?: string | null;
+  acceptance_request_sha256?: string | null;
+  proposal_revision_sha256?: string | null;
+  proposal_document_sha256?: string | null;
+  terms_sha256?: string | null;
+  consent_version?: string | null;
+  consent_sha256?: string | null;
+  electronic_records_consented?: boolean | null;
+  signature_intent_acknowledged?: boolean | null;
+  signature_method?: "typed_name" | null;
+  required_deposit_amount?: number | null;
+  evidence_sha256?: string | null;
   signer_name: string;
   signer_email?: string | null;
   accepted_total: number;
@@ -3363,12 +3537,17 @@ export type SignatureInput = {
   employee_id?: string | null;
   document_id?: string | null;
   change_order_id?: string | null;
+  proposal_revision_id?: string | null;
+  acceptance_id?: string | null;
+  signed_document_id?: string | null;
   signer_name: string;
   signer_email?: string | null;
   status?: SignatureStatus;
   provider?: string | null;
   provider_envelope_id?: string | null;
   signature_data?: string | null;
+  signature_method?: "typed_name" | null;
+  evidence_sha256?: string | null;
   sent_at?: string | null;
   viewed_at?: string | null;
   signed_at?: string | null;
@@ -3385,6 +3564,10 @@ export type DocumentInput = {
   inspection_id?: string | null;
   invoice_id?: string | null;
   change_order_id?: string | null;
+  proposal_revision_id?: string | null;
+  artifact_operation_key?: string | null;
+  content_sha256?: string | null;
+  immutable_after_at?: string | null;
   property_id?: string | null;
   title: string;
   category: DocumentCategory;
@@ -4145,6 +4328,80 @@ export type ProposalAuditEventInsert = ProposalAuditEventInput & {
   created_at?: string;
 };
 
+export type ProposalSigningRequestInsert = Omit<
+  ProposalSigningRequestRecord,
+  | "status"
+  | "request_token_consumed_at"
+  | "request_token_consumed_session_id"
+  | "delivery_email_message_id"
+  | "delivery_provider_message_id"
+  | "failure_code"
+  | "revocation_reason"
+  | "sent_at"
+  | "first_viewed_at"
+  | "signed_at"
+  | "declined_at"
+  | "failed_at"
+  | "revoked_at"
+  | "superseded_at"
+  | "exchange_attempt_count"
+  | "exchange_window_started_at"
+  | "exchange_blocked_until"
+  | "session_read_attempt_count"
+  | "session_read_window_started_at"
+  | "session_read_blocked_until"
+  | "action_attempt_count"
+  | "action_window_started_at"
+  | "action_blocked_until"
+  | "created_at"
+  | "updated_at"
+> & {
+  status?: ProposalSigningRequestStatus;
+  request_token_consumed_at?: string | null;
+  request_token_consumed_session_id?: string | null;
+  delivery_email_message_id?: string | null;
+  delivery_provider_message_id?: string | null;
+  failure_code?: string | null;
+  revocation_reason?: string | null;
+  sent_at?: string | null;
+  first_viewed_at?: string | null;
+  signed_at?: string | null;
+  declined_at?: string | null;
+  failed_at?: string | null;
+  revoked_at?: string | null;
+  superseded_at?: string | null;
+  exchange_attempt_count?: number;
+  exchange_window_started_at?: string | null;
+  exchange_blocked_until?: string | null;
+  session_read_attempt_count?: number;
+  session_read_window_started_at?: string | null;
+  session_read_blocked_until?: string | null;
+  action_attempt_count?: number;
+  action_window_started_at?: string | null;
+  action_blocked_until?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ProposalSigningSessionInsert = Omit<
+  ProposalSigningSessionRecord,
+  "id" | "opened_at" | "last_seen_at" | "created_at" | "updated_at"
+> & {
+  id?: string;
+  opened_at?: string;
+  last_seen_at?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ProposalSignatureReceiptInsert = Omit<
+  ProposalSignatureReceiptRecord,
+  "id" | "registered_at"
+> & {
+  id?: string;
+  registered_at?: string;
+};
+
 export type MaterialOrderInsert = MaterialOrderInput & {
   id?: string;
   total?: number;
@@ -4740,6 +4997,24 @@ export type Database = {
         >;
         Relationships: [];
       };
+      proposal_signing_requests: {
+        Row: ProposalSigningRequestRecord;
+        Insert: ProposalSigningRequestInsert;
+        Update: Partial<ProposalSigningRequestInsert>;
+        Relationships: [];
+      };
+      proposal_signing_sessions: {
+        Row: ProposalSigningSessionRecord;
+        Insert: ProposalSigningSessionInsert;
+        Update: Partial<ProposalSigningSessionInsert>;
+        Relationships: [];
+      };
+      proposal_signature_receipts: {
+        Row: ProposalSignatureReceiptRecord;
+        Insert: ProposalSignatureReceiptInsert;
+        Update: Partial<ProposalSignatureReceiptInsert>;
+        Relationships: [];
+      };
       notifications: {
         Row: NotificationRecord;
         Insert: NotificationInsert;
@@ -4989,6 +5264,66 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_finalize_proposal_revision: {
+        Args: { finalization_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_register_proposal_artifact: {
+        Args: { artifact_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_prepare_proposal_signing_request: {
+        Args: { signing_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_transition_proposal_signing_request: {
+        Args: { transition_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_create_proposal_signature_email_draft: {
+        Args: { draft_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_queue_proposal_signature_email: {
+        Args: { queue_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_transition_proposal_signature_email: {
+        Args: { delivery_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_activate_synthetic_proposal_signing_fixture: {
+        Args: { activation_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_exchange_proposal_signing_token: {
+        Args: { signing_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_get_proposal_signing_session: {
+        Args: { signing_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_accept_proposal_signing: {
+        Args: { signing_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_decline_proposal_signing: {
+        Args: { signing_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_register_proposal_signing_receipt: {
+        Args: { receipt_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_create_proposal_deposit_invoice: {
+        Args: { deposit_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_convert_proposal_to_sold_job: {
+        Args: { conversion_request: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
       wtos_begin_job_photo_upload: {
         Args: JobPhotoUploadRpcArgs;
         Returns: JobPhotoUploadOperationRecord;
