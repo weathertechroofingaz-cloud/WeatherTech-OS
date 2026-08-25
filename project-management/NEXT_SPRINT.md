@@ -4,9 +4,7 @@ This file is planning-only. It cannot authorize development, expand an active sp
 
 ## Approval Status
 
-No next sprint is selected, approved, promoted, or started.
-
-Proposal-to-Sold Job Operational Completion Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) and [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md). This planning file grants no authority to extend that sprint or begin another one.
+WeatherTech Tucson Inbound Voice Forwarding Phase 1 is the exact active owner-approved sprint. No subsequent sprint is selected, approved, promoted, or started.
 
 ## Sprint Name
 
@@ -14,24 +12,24 @@ No subsequent sprint selected.
 
 ## Objective
 
-Preserve the waiting state after the completed Proposal-to-Sold Job Operational Completion Phase 1 sprint. No later sprint may be inferred, selected, promoted, or started automatically.
+Preserve the waiting state for every item after the active Tucson voice-forwarding sprint. No later sprint may be inferred or started automatically.
 
-## Closed-Sprint Boundary
+## Active-Sprint Boundary
 
-- The completed approved sequence is `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`.
-- The exact immutable proposal/artifact, truthful owner-approved Gmail delivery, narrow native sign-only customer flow, auditable signature evidence, existing posted-payment deposit gate, server-enforced job conversion, mobile validation, isolated no-send tests, and single additive migration are completed work.
-- Native customer electronic signature remains the implemented normal workflow; owner-recorded paper or in-person acceptance was not substituted as the normal workflow.
-- This file cannot broaden, reopen, or extend those items; authorize a third-party signature provider; or authorize any additional implementation, release, provider, environment, migration, Production-data, or customer-facing action.
+- The active sprint is limited to protected, configurable inbound voice forwarding for the exact WeatherTech Tucson Twilio number, exact signed route validation, bounded call evidence, branch-identity hardening, truthful owner readiness, and Tucson route labeling for existing inbound SMS.
+- Existing Tucson inbound SMS must remain operational; Phoenix and IHC routing identities must remain distinct and unactivated for voice.
+- A real test call remains separately owner-gated after code, deployment, protected destination, and Twilio callback configuration are verified.
+- This file cannot broaden the active sprint or authorize any additional provider, environment, migration, Production-data, customer-contact, or application work.
 
 ## Owner-Approved Scope
 
-- No subsequent sprint scope is owner-approved. The completed sprint grants no continuing implementation authority.
+- No work beyond the exact active sprint in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) is approved.
 
 ## Explicit Exclusions
 
-- No later sprint implementation, provider activation, Production business-data operation, environment change, migration, deployment, or customer send is authorized.
-- No DocuSign, Dropbox Sign, customer portal/public registration, staff provisioning, Yelp/Mighty Apes, Twilio, Stripe, QuickBooks, payment automation, or unrelated workflow may be inferred from the completed sprint.
-- The external Mighty Apes/Yelp provider test remains separate and does not authorize implementation, configuration, activation, or any later sprint.
+- No later sprint implementation, number purchase/port/release/reassignment, unrelated provider activation, Production business-data operation, environment change, migration, deployment, or customer contact beyond the exact active authorization.
+- No real test call without a separate explicit owner approval.
+- No DocuSign, Dropbox Sign, Customer Portal, staff provisioning, Yelp/Mighty Apes, outbound Twilio messaging, A2P, Stripe, QuickBooks, or unrelated workflow may be inferred from the active sprint.
 
 ## Completion Criteria
 
@@ -47,14 +45,11 @@ Codex must never automatically promote a later sprint. Promotion requires a new 
 
 ## Completed-Work And External-Dependency Guardrails
 
-- Secure Company-Scoped Job Photos & Field Upload Reliability Phase 1 is complete and preserved in [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md); it must not be rebuilt or disturbed.
-- Lead Attribution & Marketing Accountability Phase 1 is complete and must not be rebuilt.
-- Proposal-to-Sold Job Operational Completion Phase 1 is complete at implementation commit `b694ad844af48fb23d1849f3180382a016056441`, merge commit `7186001eec28177a32b454168e5fd05b43af9937`, and final Production migration ledger `51/51`; it must not be rebuilt or treated as unfinished sprint authority.
-- CRM Identity Integrity, inbound-only Twilio, and the deployed Mighty Apes/Yelp implementation remain completed work within their recorded boundaries.
-- The Mighty Apes official provider test remains an external action; it does not authorize new implementation, configuration, activation, or a later sprint.
-- The ten preserved Production lead/intake records are development test data, not real historical marketing or operating evidence.
-- Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
+- Proposal-to-Sold Job Operational Completion Phase 1 is complete at implementation commit `b694ad844af48fb23d1849f3180382a016056441`, merge commit `7186001eec28177a32b454168e5fd05b43af9937`, and final Production migration ledger `51/51`; it must not be rebuilt or changed.
+- Secure Company-Scoped Job Photos, Lead Attribution & Marketing Accountability, CRM Identity Integrity, inbound-only Twilio SMS, and Mighty Apes/Yelp implementation remain completed within their recorded boundaries.
+- Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure still requires legal review; this voice sprint does not alter that gate or authorize legal-language changes.
+- The ten preserved Production lead/intake records remain development test data, not real business history.
 
 ## Last Review
 
-Proposal-to-Sold Job Operational Completion Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started, and this planning-only file cannot authorize any additional work.
+WeatherTech Tucson Inbound Voice Forwarding Phase 1 is active and owner-approved under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started.

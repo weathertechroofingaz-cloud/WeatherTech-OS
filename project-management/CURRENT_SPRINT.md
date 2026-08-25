@@ -1,20 +1,20 @@
 # Current Sprint
 
-This file records the most recently completed owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) and this file before beginning any newly approved development.
+This file is the source of truth for the active WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before changing product files.
 
 ## Approval Status
 
-Completed
+Approved
 
-The owner explicitly approved Proposal-to-Sold Job Operational Completion Phase 1 in the Codex task on 2026-08-23, corrected the approved scope to require a real native customer electronic-signature workflow, and approved its Production rollout on 2026-08-24. The approved operational sequence was `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`. That exact implementation, isolated validation, release, single additive migration, read-only Production validation, and governance closeout are complete. The approval did not authorize any excluded provider, broad public portal, real customer send, payment-provider activation, Production business-data write, or later sprint, and no such authority carries forward from this closed sprint.
+The owner explicitly approved WeatherTech Tucson Inbound Voice Forwarding Phase 1 in the Codex task on 2026-08-24. This approval authorizes only the narrow implementation, isolated validation, release, protected Tucson-only voice configuration, read-only Production verification, and governance closeout described below. It does not authorize a real test call, number purchase, port, release, reassignment, unrelated provider activation, outbound SMS, recording, transcription, automatic reply, automatic lead creation, or later sprint.
 
 ## Sprint Name
 
-Proposal-to-Sold Job Operational Completion Phase 1
+WeatherTech Tucson Inbound Voice Forwarding Phase 1
 
 ## Objective
 
-Complete the first dependable revenue handoff for WeatherTech Roofing LLC and IHC Painting by turning an estimate into an exact immutable customer-safe proposal, delivering that exact artifact truthfully through the existing owner-approved Gmail path, allowing the intended customer to electronically sign it through a narrow native sign-only workflow, enforcing any required recorded deposit, and creating exactly one linked sold job only after those server-validated requirements are satisfied.
+Make the existing WeatherTech Roofing LLC Tucson Twilio number function as a customer-facing Tucson voice number by forwarding authenticated inbound calls to an owner-configured protected destination while preserving the already-live Tucson inbound SMS path and keeping WeatherTech Tucson, WeatherTech Phoenix, and IHC Painting routing identities exact and distinct.
 
 ## Owner
 
@@ -22,119 +22,103 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-23.
+2026-08-24.
 
 ## Verified Starting State
 
 - Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; branch `main`.
-- Starting local `HEAD`, cached `origin/main`, live remote `main`, and canonical Production deployment: `2cb3fd9f45fb82515763f467e9df0e3ad25b6569`.
-- Starting working tree and index: clean.
-- Canonical `/api/health`: HTTP 200 at the exact starting SHA. `/api/readiness`: truthfully HTTP 503 under the pre-existing live-provider/owner-approval safety gate.
-- Production Supabase project: `gahfcgyjtfwwmsterhzu` / WeatherTech OS / `ACTIVE_HEALTHY` / Postgres 17; local and Production migration ledgers match all `50/50` committed migrations.
-- Secure Company-Scoped Job Photos & Field Upload Reliability Phase 1 is released, closed, and preserved in [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md). It must not be rebuilt or disturbed.
-- Core lead/customer, inspection, estimate, scheduling, job, production, secure photo, invoice/manual-payment, documents, and owner command-center foundations already exist and must be reused.
-- Proposal revision, section, option, acceptance, payment-schedule, and audit-event tables exist, but Production has no proposal revision or proposal acceptance history proving a real end-to-end customer workflow.
-- Existing `signatures` and proposal-acceptance foundations anticipate native and provider-backed signatures, but the active native UI is an internal authenticated status/signature form rather than a customer signing surface.
-- Existing `Request signature` behavior creates a local pending signature and reports success without delivering a usable customer signing request. That behavior is not truthful and is a proven defect within this sprint.
-- Existing DocuSign and Dropbox Sign work is readiness-only. Production has no connected electronic-signature provider record or provider envelope, and this sprint does not require or authorize provider activation.
-- The existing private `customer-documents` bucket, server-only Supabase access patterns, proposal audit events, and explicitly owner-approved Gmail delivery path provide the approved infrastructure for a narrow native sign-only workflow.
-- The ten existing Production leads and intake records remain development test data, not real business or marketing history, and must not be altered.
-- Protected migration `supabase/migrations/0026_property_intelligence_foundation.sql`, `.env.local`, completed photo migrations, provider configuration, and unrelated Production state must remain unchanged.
+- Starting local `HEAD`, cached `origin/main`, live GitHub `main`, and canonical Production deployment: `8691a1e0952a42159ad533c9a98c044f36f87103`.
+- Starting working tree and index: clean; no merge, rebase, cherry-pick, or bisect is in progress.
+- Canonical `/api/health`: HTTP 200 and reports the exact starting SHA. `/api/readiness`: truthfully HTTP 503 solely under the existing live-provider/owner-approval safety gate.
+- Production Supabase project: `gahfcgyjtfwwmsterhzu` / WeatherTech OS / `ACTIVE_HEALTHY` / Postgres 17; local and Production ledgers match all `51/51` committed migrations.
+- Production contains three exact active Twilio number mappings: `weathertech-tucson` and `weathertech-phoenix` inside WeatherTech Roofing LLC, plus tenant-separated `ihc-primary` inside IHC Painting.
+- WeatherTech Tucson, documented only by masked ending `3145`, has two authenticated completed inbound SMS records and two matched provider events. WeatherTech Phoenix, ending `1326`, has one; IHC, ending `6930`, remains mapped but lacks carrier-ingress validation.
+- Outbound SMS remains application-locked and disabled. Tucson and Phoenix reuse the verified WeatherTech Twilio connection; IHC uses its own separate connection.
+- The Tucson route begins with `communication_channel='sms'`, zero `call_records`, zero voice provider events, no forwarding destination, and no voice settings.
+- `POST /api/integrations/twilio/voice` exists but deliberately returns HTTP 503 for voice events and produces no `<Dial>` TwiML.
+- Vercel Production has the existing Twilio account, Auth Token, Messaging Service, canonical public base URL, inbound/outbound SMS gates, and separate Tucson/Phoenix/IHC number variables. It has no voice-forwarding enable flag or destination variable.
+- Latest direct Twilio provider inspection on 2026-08-15 found voice, status, recording, TwiML App, Studio Flow, trunk, and call-forwarding configuration unset. A fresh number-resource inspection requires the owner to sign in to Twilio Console.
+- Existing `business_phone_numbers`, `call_records`, and `communication_provider_events` schema is sufficient; no migration is expected.
+- Protected starting hashes:
+  - `.env.local`: `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+  - `supabase/migrations/0026_property_intelligence_foundation.sql`: `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e`.
+  - `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql`: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`.
+- Proposal-to-Sold Job Operational Completion Phase 1 is released, closed, and must not be changed or reopened.
 
 ## Owner-Approved Scope
 
-- Persist a complete company-scoped proposal revision from the selected estimate, including the exact customer-visible sections, selected options, totals, deposit terms, payment schedule, customer terms, source snapshot, and audit evidence.
-- Finalize the exact proposal revision and customer-safe PDF artifact immutably. Draft changes remain editable; any change after finalization must create a new revision and supersede rather than overwrite the prior revision or artifact.
-- Bind the finalized artifact to the exact proposal revision and a deterministic content digest, store it only in the existing private `customer-documents` bucket, and never persist a public or signed URL.
-- Generate proposal PDFs only from persisted customer-safe proposal data. Internal cost, margin, markup, commission, profit, private notes, and internal planning content must never enter the customer artifact.
-- Deliver only the exact finalized artifact through the existing Gmail workflow after an authenticated company owner explicitly approves the send. Provider success must be confirmed before local delivery state advances; failures, disabled configuration, stale approval, and duplicate/retry states must be reported truthfully.
-- Remove the unsafe raw-estimate PDF fallback from proposal delivery. Never claim that a signature was requested merely because a local pending row was created.
-- Add a narrow native customer sign-only flow for the intended proposal recipient. It may expose only the exact finalized customer-safe proposal associated with a high-entropy, hashed, expiring, revocable signing request and must not activate the broader Customer Portal or public registration.
-- Allow the customer to view and retain the exact proposal, affirm electronic-record and terms consent, confirm the accepted options and total, and provide a typed electronic signature suitable for desktop and mobile use.
-- Persist auditable signature evidence tied to the exact immutable revision, including signer name and delivery email, accepted option IDs, accepted total, terms acknowledgement, signed timestamp, proposal/document digest, signature evidence, request/view/acceptance audit events, privacy-preserving network evidence, sanitized user-agent evidence, and idempotency/replay evidence.
-- Make the native signing lifecycle server-controlled, company-scoped, tamper-evident, retry-safe, revocable, expiration-aware, and single-acceptance. Direct anonymous table access or mutation remains denied.
-- Record the completed signed artifact and audit certificate privately and make the exact completed customer copy available through authorized short-lived access without persisting a durable public URL.
-- Enforce the approved lifecycle on the server: an unsigned, declined, expired, superseded, stale, mismatched, or tampered revision cannot become a sold job.
-- When the finalized revision requires a deposit before job creation, require sufficient same-company, same-customer, same-proposal/invoice, posted payment evidence already recorded through the existing manual payment workflow. Do not activate a new payment provider.
-- When no deposit is required, the exact valid electronic signature is sufficient for the deposit gate. When a deposit is required, signature alone is insufficient.
-- Convert a qualifying signed-and-funded proposal into exactly one correctly linked draft job through an atomic, idempotent server operation. Retries and concurrent attempts must return the same job rather than create duplicates.
-- Make the owner proposal/follow-up/conversion actions open the exact record and preserve context through refresh/back navigation. Validate the owner workflow and customer signing flow on desktop and at 390x844 mobile width.
-- Add focused proposal, document, delivery, signature, deposit, job-conversion, company-isolation, security, hosted lifecycle, application, targeted Browser, and complete isolated Browser regression coverage with exact cleanup and zero residue. No test may send to a real customer.
-- Add at most one new immutable additive migration if the required token, digest, linkage, immutability, audit, deposit, or atomic-conversion invariants cannot be enforced safely by the current schema. Do not rewrite, squash, or renumber any existing migration.
-- If every non-Production gate passes, create and push one focused implementation commit, verify exact-SHA CI and deployment, apply only the approved additive migration if one exists through the established safe process, perform the approved read-only Production validation, and create at most one documentation-only closeout commit.
+- Add protected, server-only Tucson voice configuration with a default-disabled route-specific enable gate and an owner-configured forwarding destination. The destination must never be hard-coded, exposed through `NEXT_PUBLIC_`, logged, returned unmasked, or committed.
+- Accept only bounded `application/x-www-form-urlencoded` Twilio voice requests whose official signature validates against the exact canonical HTTPS URL and configured Auth Token.
+- Resolve the request through the exact configured Twilio Account SID, Tucson receiving E.164 number, active `weathertech-tucson` business-number row, connected same-company integration, and exact Tucson route metadata.
+- Return SDK-generated `<Dial>` TwiML only for the verified WeatherTech Tucson route and only while the Tucson voice gate and valid destination are present.
+- Validate the destination as E.164 and reject self-forwarding, the configured Tucson number, configured Phoenix/IHC Twilio-number loops, malformed values, duplicate critical fields, wrong account, wrong receiving number, cross-company routes, missing configuration, or ambiguous mappings.
+- Preserve the caller-facing Tucson number and the original inbound caller context; do not purchase, port, release, reassign, or replace any number.
+- Persist bounded, idempotent, company- and route-scoped inbound call and dial-outcome evidence using the existing `call_records` and `communication_provider_events` schema. Do not persist credentials, raw signed requests, or unnecessary destination data.
+- Add a bounded signed voice status/dial-outcome callback that can update only the exact previously claimed Tucson call and cannot create an unrelated call or cross-route record.
+- Keep call recording and transcription explicitly disabled in TwiML and data state.
+- Bind Phoenix, Tucson, and IHC configuration to their exact `routing_key`, `business_location`, `team_queue`, and `lead_source` metadata in webhook and readiness checks.
+- Surface the receiving business-number route label, such as `WeatherTech Tucson`, on inbound SMS items in the Unified Inbox without changing message content or contact-matching behavior.
+- Extend owner-only readiness with masked Tucson voice configuration, exact route status, and provider-configuration next action without revealing the destination.
+- Preserve the existing signed, idempotent Tucson/Phoenix/IHC inbound SMS implementation and keep outbound SMS hard-locked and disabled.
+- Add focused route, signature, TwiML, persistence, replay, status, privacy, company/branch isolation, configuration, UI mapping, and regression tests.
+- If every non-Production gate passes, create and push one focused implementation commit, verify exact-SHA CI and deployment, perform the normal safe disabled-by-default Production rollout and read-only verification, then create at most one documentation-only closeout commit after owner-only activation/testing is complete.
 
 ## Explicit Exclusions
 
-- No DocuSign, Dropbox Sign, or other third-party electronic-signature selection, purchase, credential setup, OAuth, webhook, provider write, sandbox activation, or Production activation.
-- No owner-recorded paper, uploaded-paper, or in-person acceptance as the normal proposal acceptance workflow.
-- No broad Customer Portal activation, public registration, employee portal, staff provisioning, employee onboarding, or role redesign.
-- No Yelp/Mighty Apes, Twilio, SMS, voice, Google Calendar, QuickBooks, Stripe, IHC payment, accounting sync, payment-link automation, refund, or other unrelated provider change.
-- No automatic customer messaging, bulk delivery, reminder automation, real customer email, real customer signature request, or live customer test during implementation or validation.
-- No new payment provider or payment-processing workflow. Existing posted manual payment records are the only authorized deposit evidence for this phase.
-- No Production proposal, customer, signature, acceptance, payment, invoice, job, document, email, or other business-record creation or mutation during validation.
-- No cleanup or reinterpretation of existing Production test/legacy records, including the ten preserved development lead/intake records and the existing pending native signature.
-- No broad estimate, invoice, scheduling, job, photo, warranty, maintenance, mobile-navigation, UI, or visual redesign beyond the exact proposal-to-sold-job handoff.
-- No unrelated provider, integration, readiness-gate, environment-variable, `.env.local`, secret, package/lockfile, protected migration `0026`, completed migration, or Production-configuration change.
-- No weakening of RLS, company isolation, private Storage, authorization, owner send approval, regression-target safeguards, security tests, or cleanup/residue guards.
+- No real test call without a separate explicit owner approval after the exact Production configuration is verified.
+- No phone-number purchase, port, release, reassignment, transfer, carrier change, caller-ID ownership change, or modification of an existing Verizon, AT&T, or unrelated Twilio number.
+- No hard-coded forwarding destination and no forwarding destination in chat, source control, logs, screenshots, browser-visible variables, database rows readable by ordinary users, or support output.
+- No Phoenix or IHC voice activation, fallback routing, shared default destination, or implicit enablement.
+- No outbound SMS, MMS, SMS status activation, auto-response, reminders, campaigns, bulk messaging, or A2P registration.
+- No call recording, recording callback activation, voicemail recording, transcription, speech recognition, IVR, queue, conference, simultaneous ring, or automated customer messaging.
+- No automatic lead, customer, job, estimate, follow-up, or task creation from a call or SMS.
+- No GoHighLevel, Gmail, Google Calendar, Yelp, Stripe, QuickBooks, proposal/e-signature, Customer Portal, or unrelated provider/application change.
+- No schema migration, RLS change, new table, destructive database mutation, or historical migration modification unless a newly proven invariant cannot be enforced with the existing schema and the owner separately approves that expansion.
+- No `.env.local`, secret, package/lockfile, protected migration, unrelated Production data, or readiness-gate change outside the exact Tucson voice configuration.
+- No Production synthetic call/event rows. Provider activation may update only the protected Tucson environment variables and only Tucson's Twilio voice webhook after all code gates pass.
 - No later sprint selection or implementation.
 
 ## Completion Criteria
 
-- A WeatherTech or IHC owner can persist and reload the exact proposal revision, selected options, terms, total, deposit rule, payment schedule, source snapshot, and customer-safe artifact.
-- Finalization makes the revision, its customer-visible children, and its artifact immutable. A later change creates a new superseding revision without altering the earlier customer record.
-- The stored and downloaded PDF matches the exact finalized revision digest and contains no internal-only financial or operational content.
-- Gmail sends only the exact stored finalized artifact after explicit authenticated owner approval. Disabled, failed, stale, duplicate, or unconfirmed delivery never produces a false success or advances the proposal/signature state.
-- The intended synthetic test customer can open the narrow sign-only link in an unauthenticated clean browser, review and retain the exact proposal, accept the exact options/total/terms, type an electronic signature, and receive a truthful completion result on desktop and 390x844 mobile.
-- Signing tokens are high entropy, stored only as hashes, expire, can be revoked, do not leak through durable URLs or repository/browser logs, and cannot expose another revision, customer, or company.
-- Signature evidence is complete, immutable, company-scoped, digest-bound, idempotent, and auditable. Replay, concurrent submission, stale/superseded revision, altered total/options, missing consent, expired/revoked token, and cross-company attempts fail safely.
-- Anonymous users cannot query or mutate proposal, customer, signature, acceptance, document, payment, or job tables directly. Only the narrow server-validated signing operation can create the exact authorized customer acceptance.
-- Required-deposit proposals cannot convert until sufficient posted payment evidence is linked to the same company/customer/proposal or its exact deposit invoice. Pending, failed, refunded, unrelated, cross-company, or insufficient payments do not satisfy the gate.
-- A valid signed proposal with its applicable deposit gate satisfied creates exactly one linked draft job. Direct client writes, retries, concurrency, or repeated clicks cannot bypass the gate or create duplicate jobs.
-- Existing lead/customer, inspection, estimate, scheduling, production, secure photo, invoice/manual-payment, document, provider, and company-isolation behavior remains unchanged outside the exact handoff.
-- All focused unit, migration, security, hosted lifecycle, application, desktop/mobile Browser, build, type-check, lint, dependency, secret, whitespace, migration-integrity, protected-file, residue, and scope gates pass.
-- The complete established 24-group isolated Browser regression passes with zero unexpected console errors or warnings and zero residue.
-- The exact implementation and any one approved additive migration are released through the established safe process; CI, exact deployment SHA, `/api/health = 200`, migration ledger, private Storage, protected hashes, and unrelated provider/data baselines pass read-only Production verification.
-- No real customer send, signature request, acceptance, payment, job, proposal artifact, or other Production business write occurs during release validation.
-- Implementation and documentation closeout commits are pushed; local `main`, `origin/main`, live remote `main`, and the final canonical deployment SHA match as appropriate; tree and index are clean.
+- A valid signed inbound call to the exact configured Tucson Twilio number returns safe SDK-generated `<Dial>` TwiML for the protected configured destination only.
+- Wrong-account, wrong-number, Phoenix, IHC, malformed, duplicate-field, disabled, missing-config, cross-company, replay-conflict, and loop attempts fail closed without dialing or persisting false evidence.
+- The destination can be changed through protected server configuration and deployment without changing application code.
+- Initial call claims and dial outcomes are idempotent, exact-route/company bound, bounded, and truthful in existing call/provider-event records.
+- Recording and transcription remain unrequested; no automatic CRM record is created from an unknown caller.
+- Tucson inbound SMS retains its exact existing behavior and durable evidence. Phoenix and IHC remain distinct and unchanged.
+- The Unified Inbox visibly distinguishes the Tucson receiving route for inbound SMS without exposing unnecessary full numbers.
+- Owner-only readiness exposes only masked/boolean voice configuration evidence and reports provider setup truthfully.
+- Focused security, branch-isolation, SMS regression, runtime, type-check, lint, build, dependency, secret, whitespace, protected-file, and scope gates pass.
+- Targeted Integration/Inbox Browser validation and the complete established isolated Browser regression pass with zero unexpected console errors or warnings and zero residue. No provider call or real SMS is sent by automated validation.
+- Exact implementation SHA CI and Vercel deployment pass; canonical `/api/health` returns HTTP 200 at that SHA. Production database/migration ledger remains `51/51` because no migration is expected.
+- Before the first call, the owner signs in to Twilio, securely enters the destination in protected Vercel configuration, approves the Tucson-only Twilio Voice callback update, and separately approves one controlled real test call.
+- No existing Verizon, AT&T, or Twilio number is ported, released, reassigned, or otherwise modified beyond Tucson's approved voice webhook setting.
+- Implementation and final documentation closeout commits are pushed; repository refs are synchronized and the tree is clean.
 
 ## Validation Plan
 
-- Reverify Git/ref/deployment identity, clean tree, governance, protected files, Production/regression target identity, migration parity, private document Storage, provider state, and relevant zero/legacy data baselines before implementation and release.
-- Test proposal calculations, selected-option persistence, company/trade separation, customer-safe content scrubbing, deterministic PDF generation, digest stability, revision supersession, and immutable finalized children/artifacts.
-- Test Gmail owner authorization, exact artifact attachment, recipient/company matching, stale approval, disabled send, provider failure, timeout, duplicate/retry behavior, and truthful local status transitions without contacting a real customer.
-- Test signing-token entropy, hash-only persistence, expiry, revocation, replay, concurrency, rate limiting, no-cache/no-referrer behavior, privacy-preserving request evidence, malformed input, and zero token/secret leakage.
-- Test anonymous direct-access denial and WeatherTech-to-IHC/IHC-to-WeatherTech denial across proposals, documents, signing requests, signatures, acceptances, payments, and job conversion.
-- Test exact revision/document digest binding; altered content, options, totals, terms, signer, customer, company, or superseded revision must fail before acceptance.
-- Test electronic-record consent, typed-signature evidence, view/accept/decline/expire events, signed artifact and audit-certificate persistence, short-lived authorized retrieval, refresh/reload, and idempotent completion.
-- Test deposit not required, deposit required and sufficient, insufficient, pending, failed, refunded, unrelated invoice, unrelated customer, cross-company, duplicated, and concurrent payment/job-conversion cases.
-- Run the unchanged synthetic end-to-end hosted lifecycle from finalized proposal through customer electronic signature, applicable recorded deposit, and exactly one sold-job handoff with complete cleanup and zero residue. Do not send email externally; use the established isolated test capture/injection boundary.
-- Run targeted desktop and 390x844 Browser validation for both companies, then the complete established 24-group isolated Browser suite with zero unexpected console errors or warnings.
-- Run every top-level repository test, focused migration/security suites, migration integrity, type-check, lint, Production build, dependency audit, secret scan, `git diff --check`, protected-file checks, residue checks, and final scope/diff/security audit.
-- If a migration is necessary, require exactly one expected additive entry, dry-run the linked chain, apply it through the established safe process only after exact-SHA CI/deployment succeeds, and perform read-only Production catalog/security verification without synthetic business writes.
-- Record the immutable implementation commit and final evidence in completed governance with at most one documentation-only closeout commit. Do not begin another sprint.
+- Reverify Git/ref/deployment identity, clean tree, governance, protected hashes, Production/regression target identity, `51/51` migration parity, exact Twilio route/message/call baselines, environment-variable names, and provider state before implementation and release.
+- Unit-test canonical URL signature validation, bounded form parsing, duplicate critical fields, exact Tucson routing, branch metadata, E.164 destination normalization, self/cross-route loops, disabled/missing configuration, SDK TwiML structure, recording disabled, and privacy-safe errors.
+- Runtime-test exact initial-call idempotency, conflicting CallSid reuse, same-company contact matching, unknown/ambiguous callers, one bounded provider event, dial status convergence, and rejection of forged/cross-company status callbacks without an external provider call.
+- Regression-test Tucson/Phoenix/IHC inbound SMS, exact company and number identity, message/event counts, no lead/customer auto-creation, outbound lock, and Unified Inbox route labeling.
+- Run focused tests, complete repository tests, type-check, lint, Production build, dependency audit, secret scan, `git diff --check`, protected-file verification, migration integrity, and final independent diff/security audit.
+- Use the isolated regression project only for write-capable hosted tests; require exact cleanup and zero residue. Production validation remains read-only until the owner separately approves the one real inbound call.
+- Run targeted signed-in Browser validation for owner readiness/route labels, then the complete established 24-group isolated Browser suite without any Twilio provider call or real SMS.
+- Push one implementation commit on a focused branch, require exact-SHA CI and Vercel success, and deploy disabled-by-default code before any protected destination or Twilio voice webhook is configured.
+- Stop for the owner to sign in to Twilio and securely set the protected destination. After read-only verification, request separate approval for the first real test call.
+- After a successful owner-approved live call and exact evidence verification, record the immutable implementation/release evidence in completed governance with at most one documentation-only closeout commit. Do not begin another sprint.
 
 ## Release Commits
 
-- Implementation: `b694ad844af48fb23d1849f3180382a016056441`.
-- Merge: `7186001eec28177a32b454168e5fd05b43af9937`.
-- Documentation closeout: this documentation-only commit; Git history is authoritative for its immutable hash.
-
-## Completion Evidence
-
-- GitHub Actions push run `32790490435` passed for the exact merge SHA: repository-only job `97630910053` and protected isolated-Supabase lifecycle job `97631410575` both `success`.
-- GitHub/Vercel Production deployment `6073515066`, status `17277113969`, completed successfully for exact merge SHA `7186001eec28177a32b454168e5fd05b43af9937`.
-- The one approved additive migration, `20260824044610_native_proposal_esign_sold_job_gate.sql` at SHA-256 `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`, was applied successfully. The historical `50/50` starting state is preserved above; final local, regression, and Production ledgers match `51/51` with no pending, remote-only, or mismatched migration.
-- Targeted proposal/signature Browser run `20260824223608414` passed, and complete isolated Browser run `20260824231426642` passed all `24/24` groups and `31/31` assertions. Both retained bounded cleanup, zero residue, and zero unexpected console errors or warnings.
-- Production database catalog, privilege, isolation, private-Storage, and unchanged-data verification passed. Canonical `/api/health` returned HTTP 200 at the exact merge SHA; security-route checks and authenticated read-only Browser smoke passed. `/api/readiness` truthfully remained HTTP 503 under unchanged provider/owner activation controls.
-- No real customer proposal/signature request was sent, no real customer acceptance was created, no real deposit was charged or collected, no real sold job was created, and no other Production business-data write was used for validation.
-- Local `main`, `origin/main`, and live GitHub `main` synchronized at the released merge SHA before governance closeout. Final synchronization and canonical deployment identity will be reverified for the documentation-only closeout commit.
+- Approval record: this approval documentation commit; Git history is authoritative for its immutable hash.
+- Implementation: pending.
+- Merge: pending.
+- Documentation closeout: pending until owner-only configuration and controlled live-call validation are complete.
 
 ## Final Status
 
-Completed and closed. The exact approved implementation, validation, merge, Production deployment, one additive migration, read-only Production verification, and governance closeout passed. No real customer delivery or Production business-data write was used for validation, and no next sprint is selected, approved, promoted, or started.
+Approved and active. Implementation, isolated validation, safe disabled-by-default deployment, and owner-assisted Tucson-only configuration are authorized within the exact scope above. A real test call remains separately gated on explicit owner approval.
 
 ## Notes
 
-The owner resolved the electronic-signature architecture decision by requiring a real customer electronic signature and rejecting paper/in-person acceptance as the normal workflow. Repository and Production evidence confirm that the approved native sign-only path is implemented with existing Next.js, Supabase, private document Storage, proposal audit, and owner-approved Gmail infrastructure; a third-party provider credential was not a prerequisite for this sprint.
-
-Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
+The owner must provide the forwarding destination only through protected environment configuration, never through Codex chat. Configuring a Twilio number to request WeatherTech OS TwiML and using `<Dial>` forwards the inbound call through a Twilio call leg; it does not port, reassign, or modify the destination carrier number.
