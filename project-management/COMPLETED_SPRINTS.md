@@ -4,6 +4,32 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### Proposal-to-Sold Job Operational Completion Phase 1
+
+- Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`
+- Merge commit: `7186001eec28177a32b454168e5fd05b43af9937`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, merged, pushed, deployed, migrated, and validated in Production without sending a real proposal/signature request or creating a real customer acceptance, deposit, payment, proposal artifact, or sold job.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `42/42 pass`; migration integrity, type-check, lint, Production build, dependency audit with zero vulnerabilities, protected-file checks, and `git diff --check`: `pass`
+  - Targeted proposal/signature Browser run `20260824223608414`: `pass`, covering both deposit and no-deposit lifecycle paths, signed-session renewal, exact completed-receipt access, zero residue, and zero console errors or warnings
+  - Complete isolated Browser run `20260824231426642`: all `24/24` groups and `31/31` assertions passed with bounded cleanup, independently verified zero residue, and zero console errors or warnings
+  - GitHub Actions push run `32790490435`: repository-only job `97630910053` and protected isolated-Supabase lifecycle job `97631410575` both `success` for exact merge SHA `7186001eec28177a32b454168e5fd05b43af9937`
+  - GitHub/Vercel Production deployment `6073515066`, status `17277113969`, completed successfully for exact merge SHA `7186001eec28177a32b454168e5fd05b43af9937`
+  - Production database catalog, privilege, isolation, private-Storage, and unchanged-data checks passed. Canonical `/api/health` returned HTTP 200 at the exact merge SHA; security-route checks and authenticated read-only Browser smoke passed with zero console errors or warnings. `/api/readiness` truthfully remained HTTP 503 under the unchanged provider/owner activation gate.
+- Database:
+  - Historical starting state: local and Production migration ledgers matched all `50/50` committed migrations before this sprint's additive migration.
+  - `20260824044610_native_proposal_esign_sold_job_gate.sql` — SHA-256 `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
+  - Exactly that one approved additive migration was applied through the established explicit Production workflow. Local, regression, and Production ledgers match all `51/51` committed migrations, with no pending, remote-only, or mismatched migration.
+  - Post-apply verification confirmed the expected additive schema, fixed function search paths, restricted execution/table privileges, company-scoped policies, private `customer-documents` Storage, zero new proposal-lifecycle table rows, and unchanged pre-existing business/provider baselines.
+- Notes:
+  - Added exact immutable proposal revisions and customer-safe artifacts, truthful owner-approved Gmail delivery, a narrow hashed-token native customer signing lifecycle, auditable signed receipts/certificates, same-company posted-payment deposit enforcement, and atomic idempotent sold-job conversion for both WeatherTech Roofing LLC and IHC Painting.
+  - Validation used isolated synthetic lifecycle data only. No real customer delivery, signature request, acceptance, charge, deposit collection, payment record, proposal artifact, sold job, provider activation, or other Production business-data write occurred.
+  - Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
+  - No next sprint was selected, approved, promoted, or started.
+
 ### Secure Company-Scoped Job Photos & Field Upload Reliability Phase 1
 
 - Implementation commit: `b4f5519afc1dd3d5d688f90167a994a8de447c0d`

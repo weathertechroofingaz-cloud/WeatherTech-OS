@@ -1,6 +1,31 @@
 # Electronic Signatures Phase 1 Setup
 
-This document records the WeatherTech OS electronic signature integration foundation for DocuSign and Dropbox Sign. It is intentionally readiness-only: it does not connect to either provider, send live signature requests, upload documents to providers, download signed files, or store live OAuth tokens.
+This document records both the WeatherTech OS electronic-signature integration foundation for DocuSign and Dropbox Sign and the independently implemented native electronic-signature workflow. The external-provider foundation remains readiness-only: it does not connect to either provider, send provider signature requests, upload documents to providers, download provider-signed files, or store live OAuth tokens. Native signing does not activate either provider or customer-facing portal authentication.
+
+## Native Electronic-Signature Operational Completion
+
+Proposal-to-Sold Job Operational Completion Phase 1 provides:
+
+- owner-only finalization of an approved estimate into an immutable customer-safe proposal revision and deterministic PDF
+- owner-controlled preparation and delivery of an exact native signing request
+- a one-time raw signing token whose persisted evidence is digest-bound, followed by scoped secure-session and CSRF protections
+- exact-revision review, acceptance or decline, immutable signature and acceptance evidence, signed-document registration, and receipt recovery
+- secure renewal of a terminal read-only signed session so the intended signer can reopen the exact receipt after the original active session expires
+- owner-only deposit-invoice creation, exact posted-deposit enforcement when required, and company-scoped sold-job conversion
+- source-drift, replay, cross-company, stale-session, duplicate-delivery, evidence-mutation, and direct-write fail-closed controls
+
+Verified release evidence:
+
+- Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`
+- Merge and Production implementation deployment commit: `7186001eec28177a32b454168e5fd05b43af9937`
+- Production migration: `20260824044610_native_proposal_esign_sold_job_gate.sql`
+- Migration SHA-256: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
+- Final local, regression, and Production migration state: `51/51`
+- Targeted Browser run `20260824223608414` passed the deposit and no-deposit paths, signed-session renewal, exact receipt recovery, zero console findings, and zero residue.
+- Complete isolated Browser run `20260824231426642` passed `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and zero residue.
+- No proposal/signature request was sent to a real customer, and no real acceptance, deposit, payment, invoice, or sold job was created for validation.
+
+Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
 
 ## Official Capability Boundary
 
@@ -87,7 +112,7 @@ DROPBOX_SIGN_ACCOUNT_ID_WEATHERTECH=
 DROPBOX_SIGN_ACCOUNT_ID_IHC=
 ```
 
-## Database Change
+## Database Changes
 
 `supabase/migrations/0031_electronic_signatures_foundation.sql` only extends existing `integration_connections` and `integration_sync_logs` provider check constraints so future provider records can reference `docusign` and `dropbox_sign`.
 
@@ -102,17 +127,16 @@ The migration is:
 
 The existing `signatures.provider` check already supports `native`, `docusign`, and `dropbox_sign` from the Document Storage & Signature Workflow foundation.
 
+`supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` is the approved additive native-signing and sold-job-gate migration. It adds private signing-request, session, receipt, and guard tables; immutable evidence links; guarded native-signing lifecycle functions; deposit-invoice enforcement; and exact sold-job conversion. It does not backfill or mutate existing proposal, document, payment, signature, invoice, job, or Storage records. Its verified SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`; local, regression, and Production ledgers match at `51/51`.
+
 ## Owner Setup Still Required
 
-1. Create or select the approved DocuSign developer app.
-2. Create or select the approved Dropbox Sign API app.
-3. Configure OAuth redirect URIs for WeatherTech OS.
-4. Map WeatherTech Roofing LLC and IHC provider account IDs server-side.
-5. Configure DocuSign Connect webhook validation.
-6. Configure Dropbox Sign account or app callback validation.
-7. Validate envelope/request mapping in sandbox or test mode.
-8. Validate status callbacks, duplicate keys, retries, and signed-document download.
-9. Complete a future owner-approved activation sprint before live signature requests, document uploads, provider writes, or customer-facing provider sends are enabled.
+1. Complete the legal-review gate above before the first real customer native electronic-signature delivery.
+2. Keep native delivery owner-controlled and do not treat this release as customer portal activation.
+3. Create or select an approved DocuSign developer app only in a separately approved provider-activation sprint.
+4. Create or select an approved Dropbox Sign API app only in a separately approved provider-activation sprint.
+5. Configure OAuth redirects, company account mappings, webhook validation, sandbox mappings, retries, and signed-document handling before either external provider is activated.
+6. Complete a future owner-approved activation sprint before external-provider signature requests, document uploads, provider writes, or customer-facing provider sends are enabled.
 
 ## Explicitly Not Implemented
 
@@ -123,4 +147,7 @@ The existing `signatures.provider` check already supports `native`, `docusign`, 
 - No provider webhook route.
 - No OAuth token exchange route.
 - No customer-facing provider send.
+- No customer-facing portal authentication or customer portal activation.
+- No automatic native-signature delivery; the implemented native path requires an authorized owner action.
+- No real customer signature delivery, acceptance, deposit, payment, invoice, or sold job was created for release validation.
 - No provider status is shown as connected unless a real saved connection record exists.

@@ -4,9 +4,9 @@ This file is planning-only. It cannot authorize development, expand an active sp
 
 ## Approval Status
 
-Proposal-to-Sold Job Operational Completion Phase 1 is the exact active owner-approved sprint. No subsequent sprint is selected or approved.
+No next sprint is selected, approved, promoted, or started.
 
-The active sprint and its owner-corrected mandatory native customer electronic-signature scope are defined only in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). This planning file grants no additional authority beyond that exact scope.
+Proposal-to-Sold Job Operational Completion Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) and [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md). This planning file grants no authority to extend that sprint or begin another one.
 
 ## Sprint Name
 
@@ -14,23 +14,23 @@ No subsequent sprint selected.
 
 ## Objective
 
-Preserve the waiting state for all work after the active Proposal-to-Sold Job Operational Completion Phase 1 sprint. No later sprint may be inferred, selected, promoted, or started automatically.
+Preserve the waiting state after the completed Proposal-to-Sold Job Operational Completion Phase 1 sprint. No later sprint may be inferred, selected, promoted, or started automatically.
 
-## Active-Sprint Boundary
+## Closed-Sprint Boundary
 
-- The active approved sequence is `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`.
-- Native customer electronic signature is mandatory for the active sprint; owner-recorded paper or in-person acceptance is not the normal approved workflow.
-- The active sprint may implement only the exact immutable proposal/artifact, truthful owner-approved Gmail delivery, narrow native sign-only customer flow, auditable signature evidence, existing posted-payment deposit gate, server-enforced job conversion, mobile validation, isolated no-send tests, and at most one additive migration described in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md).
-- This file cannot broaden those items, authorize a third-party signature provider, or authorize any additional implementation, release, provider, environment, migration, Production-data, or customer-facing action.
+- The completed approved sequence is `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`.
+- The exact immutable proposal/artifact, truthful owner-approved Gmail delivery, narrow native sign-only customer flow, auditable signature evidence, existing posted-payment deposit gate, server-enforced job conversion, mobile validation, isolated no-send tests, and single additive migration are completed work.
+- Native customer electronic signature remains the implemented normal workflow; owner-recorded paper or in-person acceptance was not substituted as the normal workflow.
+- This file cannot broaden, reopen, or extend those items; authorize a third-party signature provider; or authorize any additional implementation, release, provider, environment, migration, Production-data, or customer-facing action.
 
 ## Owner-Approved Scope
 
-- No work beyond the exact active sprint is approved.
+- No subsequent sprint scope is owner-approved. The completed sprint grants no continuing implementation authority.
 
 ## Explicit Exclusions
 
-- No later sprint implementation, provider activation, Production business-data operation, environment change, migration, deployment, or customer send beyond the exact authorization in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md).
-- No DocuSign, Dropbox Sign, customer portal/public registration, staff provisioning, Yelp/Mighty Apes, Twilio, Stripe, QuickBooks, payment automation, or unrelated workflow may be inferred from the active sprint.
+- No later sprint implementation, provider activation, Production business-data operation, environment change, migration, deployment, or customer send is authorized.
+- No DocuSign, Dropbox Sign, customer portal/public registration, staff provisioning, Yelp/Mighty Apes, Twilio, Stripe, QuickBooks, payment automation, or unrelated workflow may be inferred from the completed sprint.
 - The external Mighty Apes/Yelp provider test remains separate and does not authorize implementation, configuration, activation, or any later sprint.
 
 ## Completion Criteria
@@ -49,10 +49,12 @@ Codex must never automatically promote a later sprint. Promotion requires a new 
 
 - Secure Company-Scoped Job Photos & Field Upload Reliability Phase 1 is complete and preserved in [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md); it must not be rebuilt or disturbed.
 - Lead Attribution & Marketing Accountability Phase 1 is complete and must not be rebuilt.
+- Proposal-to-Sold Job Operational Completion Phase 1 is complete at implementation commit `b694ad844af48fb23d1849f3180382a016056441`, merge commit `7186001eec28177a32b454168e5fd05b43af9937`, and final Production migration ledger `51/51`; it must not be rebuilt or treated as unfinished sprint authority.
 - CRM Identity Integrity, inbound-only Twilio, and the deployed Mighty Apes/Yelp implementation remain completed work within their recorded boundaries.
 - The Mighty Apes official provider test remains an external action; it does not authorize new implementation, configuration, activation, or a later sprint.
 - The ten preserved Production lead/intake records are development test data, not real historical marketing or operating evidence.
+- Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
 
 ## Last Review
 
-Proposal-to-Sold Job Operational Completion Phase 1 is active and owner-approved under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started, and this planning-only file cannot authorize any additional work.
+Proposal-to-Sold Job Operational Completion Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started, and this planning-only file cannot authorize any additional work.

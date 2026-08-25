@@ -4,6 +4,21 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### Proposal-to-Sold Job Operational Completion Phase 1
+
+- Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`
+- Merge and Production implementation deployment commit: `7186001eec28177a32b454168e5fd05b43af9937`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Status: COMPLETED — MERGED, EXACT-SHA DEPLOYED, ADDITIVE PRODUCTION MIGRATION APPLIED, AND PRODUCTION-SAFE VALIDATED.
+- Capability: completed the owner-controlled path from an approved estimate through immutable customer-safe proposal finalization, native one-time-link electronic signing, signed-document and receipt recovery, deposit-invoice gating, recorded-deposit verification, and company-scoped sold-job conversion. Finalized and signed evidence is immutable, idempotent, and bound to the exact customer, property, estimate, revision, selections, total, terms, document, and company.
+- Database: applied only `20260824044610_native_proposal_esign_sold_job_gate.sql`, SHA-256 `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`. Local, regression, and Production migration ledgers match at `51/51`; the additive migration did not backfill or mutate an existing proposal, document, payment, signature, invoice, job, or Storage object.
+- Validation: all `42/42` top-level tests, type-check, lint, Production build, dependency audit with zero vulnerabilities, migration-integrity and protected-file checks passed. Targeted native-signing Browser run `20260824223608414` passed both deposit and no-deposit paths, including signed-session renewal and exact receipt recovery. Complete isolated Browser run `20260824231426642` passed `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue. GitHub Actions run `32790490435` passed repository-only job `97630910053` and protected isolated-Supabase lifecycle job `97631410575` at the exact merge SHA.
+- Production evidence: GitHub/Vercel Production deployment `6073515066`, status `17277113969`, completed successfully for exact SHA `7186001eec28177a32b454168e5fd05b43af9937`, and canonical `/api/health` returned HTTP 200 with that SHA. `/api/readiness` remained truthfully HTTP 503 solely under the unchanged owner/provider safety flags, with no readiness warnings. Production-safe post-deployment validation was read-only.
+- Safety and activation boundary: no proposal or signature request was sent to a real customer; no real acceptance, deposit, payment, invoice, or sold job was created for validation. DocuSign, Dropbox Sign, payment processors, QuickBooks Online writes, automatic customer communications, and customer-facing portal authentication remain disabled or separately gated; this release does not activate a customer portal.
+- Legal gate: Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
+
+## Recent Verified Milestones
+
 ### Lead Attribution & Marketing Accountability Phase 1
 
 - Implementation commit: `ba816c2bad315f7ef85051bb3e247f2f965f50b6`
@@ -15,8 +30,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Production evidence: Vercel deployed the exact implementation SHA and canonical `/api/health` returned HTTP 200 with it. The original 72-table, 277-row fingerprint remains `9750d6d890554fb766f3e5379d6ca49f`; all new tables are empty and existing provider mappings, events, fingerprints, and gates are unchanged.
 - Safety: `/api/readiness` remains truthfully HTTP 503 under existing broad owner/provider approval controls. No synthetic Production data, attribution backfill, fake spend, provider activation, outbound message, environment change, protected migration change, or `.env.local` change occurred.
 - Operational boundary: Production has no real Phase 1 accountability or spend evidence yet. The dashboard must not be used as historical marketing truth until real intake and owner-entered spend generate defensible data.
-
-## Recent Verified Milestones
 
 ### Live Yelp Lead Intake via Mighty Apes
 

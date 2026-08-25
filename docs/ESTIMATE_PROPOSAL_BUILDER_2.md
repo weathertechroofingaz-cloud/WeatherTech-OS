@@ -1,8 +1,21 @@
 # Estimate & Proposal Builder 2.0
 
-This document records the WeatherTech OS Estimate & Proposal Builder 2.0 foundation for WeatherTech Roofing LLC and IHC Painting.
+This document records the WeatherTech OS Estimate & Proposal Builder 2.0 foundation and Proposal-to-Sold Job Operational Completion Phase 1 for WeatherTech Roofing LLC and IHC Painting.
 
-The sprint upgrades the existing estimate workflow into a customer-safe proposal workflow. It does not activate live signature providers, payment processors, QuickBooks Online writes, outbound communications, or customer delivery.
+The completed workflow upgrades an approved estimate into an immutable customer-safe proposal, an owner-controlled native electronic-signature request, a signed receipt, a deposit gate, and a company-scoped sold job. It does not activate DocuSign, Dropbox Sign, a payment processor, QuickBooks Online writes, automatic outbound communications, or customer-facing portal authentication.
+
+## Verified Production Release
+
+- Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`
+- Merge and Production implementation deployment commit: `7186001eec28177a32b454168e5fd05b43af9937`
+- Approved additive migration: `20260824044610_native_proposal_esign_sold_job_gate.sql`
+- Migration SHA-256: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
+- Final local, regression, and Production migration state: `51/51`
+- Targeted native-signing Browser run `20260824223608414`: passed the deposit and no-deposit paths, signed-session renewal, and exact receipt recovery.
+- Complete isolated Browser run `20260824231426642`: `24/24` groups and `31/31` assertions passed with zero console errors, zero console warnings, bounded cleanup, and zero residue.
+- Release safety: no proposal/signature request was sent to a real customer, and no real acceptance, deposit, payment, invoice, or sold job was created for validation.
+
+Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
 
 ## Supported Foundation
 
@@ -16,7 +29,7 @@ The sprint upgrades the existing estimate workflow into a customer-safe proposal
 - Proposal audit events for lifecycle tracking without live provider writes.
 - Customer-safe proposal document drafts saved through the existing Documents workflow.
 - Deposit invoice drafts created through the existing Invoices workflow.
-- Customer Portal proposal and payment summary visibility.
+- Owner-side Customer Portal workspace proposal and payment-summary visibility only; no customer-facing portal authentication or activation.
 
 ## Customer-Safe Boundary
 
@@ -42,16 +55,18 @@ The proposal helper scrubs sensitive phrases from customer-visible sections and 
 - Deposit amount is calculated from the accepted proposal total.
 - Deposit invoices are created as drafts only; online payment collection remains disabled.
 
-## Provider Readiness
+## Signing, Payment, And Provider Boundaries
 
-The proposal workflow is prepared for future providers but does not activate them:
+The proposal workflow now supports the native path while external providers and automated financial writes remain separately gated:
 
-- Electronic signatures: DocuSign / Dropbox Sign readiness only.
-- Payments: deposit/payment schedule readiness only.
+- Native electronic signatures: owner-controlled delivery of the exact finalized revision, scoped one-time-link exchange, acceptance or decline, immutable signed evidence, and terminal receipt recovery.
+- External electronic signatures: DocuSign / Dropbox Sign readiness only; neither provider is connected or activated by this release.
+- Payments: deposit invoice and recorded-payment gates only; online collection remains disabled.
 - QuickBooks Online: export mapping readiness only.
-- Communications: no live proposal email, SMS, or customer delivery.
+- Communications: no automatic proposal email or SMS, and no real customer delivery occurred during release validation.
+- Portal: no customer-facing authentication or customer portal activation.
 
-## Database Change
+## Database Changes
 
 `supabase/migrations/0032_estimate_proposal_builder_v2.sql` is additive and transactionally wrapped.
 
@@ -72,15 +87,17 @@ It extends document categories to support:
 
 It does not delete production data, remove policies, weaken RLS, grant authenticated delete access, activate providers, or apply remote database changes by itself.
 
-## Owner Setup Still Required
+The approved additive migration `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` operationalizes native signing and the sold-job gate. It adds private signing-request, session, receipt, synthetic-cleanup-guard, and native-RPC-guard tables; exact immutable evidence links; guarded finalization, signing, receipt, deposit-invoice, and sold-job operations; and additive proposal/document/signature/acceptance/job/invoice columns. It does not backfill or mutate existing business records or Storage objects. Its SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`, and the verified final migration state is `51/51` in local, regression, and Production.
 
-1. Apply migration `0032_estimate_proposal_builder_v2.sql` through the approved Supabase migration path after deployment review.
-2. Review and approve the seeded WeatherTech Roofing LLC proposal templates.
-3. Review and approve the seeded IHC Painting proposal templates.
-4. Approve any live signature provider activation in a future sprint.
-5. Approve any online payment processor activation in a future sprint.
-6. Approve QuickBooks Online export and accounting writes in a future sprint.
-7. Approve any real proposal delivery by email, SMS, customer portal, or provider workflow in a future sprint.
+## Operational Activation Still Required
+
+1. Complete the legal-review gate above before the first real customer native electronic-signature delivery.
+2. Review and approve the WeatherTech Roofing LLC and IHC Painting customer-facing proposal templates, terms, and operational delivery procedure before real use.
+3. Keep every real proposal delivery owner-controlled and within the exact finalized-revision workflow.
+4. Approve any DocuSign or Dropbox Sign activation separately in a future provider-activation sprint.
+5. Approve any online payment processor activation separately; the current sold-job gate trusts only an exact posted deposit record when a deposit is required.
+6. Approve QuickBooks Online export and accounting writes separately.
+7. Approve customer-facing portal authentication separately; this release does not activate it.
 
 ## Explicitly Not Implemented
 
@@ -91,6 +108,7 @@ It does not delete production data, remove policies, weaken RLS, grant authentic
 - No live QuickBooks Online export.
 - No automatic customer email.
 - No automatic SMS.
+- No real customer electronic-signature delivery was used for release validation.
 - No provider webhooks.
-- No PDF rendering service activation.
+- No external PDF rendering service activation; deterministic server-rendered proposal and receipt PDFs are implemented.
 - No customer-facing portal authentication activation.

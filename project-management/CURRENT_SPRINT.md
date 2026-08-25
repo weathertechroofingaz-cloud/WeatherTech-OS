@@ -1,12 +1,12 @@
 # Current Sprint
 
-This file is the source of truth for the active WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) and this file before beginning development.
+This file records the most recently completed owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md) and this file before beginning any newly approved development.
 
 ## Approval Status
 
-Approved
+Completed
 
-The owner explicitly approved Proposal-to-Sold Job Operational Completion Phase 1 in the Codex task on 2026-08-23 and then corrected the approved scope to require a real native customer electronic-signature workflow. The approved operational sequence is `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`. This approval authorizes only the narrow implementation, isolated validation, release, optional single additive migration, read-only Production validation, and governance closeout described below. It does not authorize any excluded provider, public portal, customer send, payment-provider activation, Production business-data write, or later sprint.
+The owner explicitly approved Proposal-to-Sold Job Operational Completion Phase 1 in the Codex task on 2026-08-23, corrected the approved scope to require a real native customer electronic-signature workflow, and approved its Production rollout on 2026-08-24. The approved operational sequence was `Finalized Proposal -> Customer Electronic Signature -> Required Deposit (when applicable) -> Sold Job`. That exact implementation, isolated validation, release, single additive migration, read-only Production validation, and governance closeout are complete. The approval did not authorize any excluded provider, broad public portal, real customer send, payment-provider activation, Production business-data write, or later sprint, and no such authority carries forward from this closed sprint.
 
 ## Sprint Name
 
@@ -115,13 +115,26 @@ Joe Harris
 
 ## Release Commits
 
-- Implementation: pending.
-- Documentation closeout: pending.
+- Implementation: `b694ad844af48fb23d1849f3180382a016056441`.
+- Merge: `7186001eec28177a32b454168e5fd05b43af9937`.
+- Documentation closeout: this documentation-only commit; Git history is authoritative for its immutable hash.
+
+## Completion Evidence
+
+- GitHub Actions push run `32790490435` passed for the exact merge SHA: repository-only job `97630910053` and protected isolated-Supabase lifecycle job `97631410575` both `success`.
+- GitHub/Vercel Production deployment `6073515066`, status `17277113969`, completed successfully for exact merge SHA `7186001eec28177a32b454168e5fd05b43af9937`.
+- The one approved additive migration, `20260824044610_native_proposal_esign_sold_job_gate.sql` at SHA-256 `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`, was applied successfully. The historical `50/50` starting state is preserved above; final local, regression, and Production ledgers match `51/51` with no pending, remote-only, or mismatched migration.
+- Targeted proposal/signature Browser run `20260824223608414` passed, and complete isolated Browser run `20260824231426642` passed all `24/24` groups and `31/31` assertions. Both retained bounded cleanup, zero residue, and zero unexpected console errors or warnings.
+- Production database catalog, privilege, isolation, private-Storage, and unchanged-data verification passed. Canonical `/api/health` returned HTTP 200 at the exact merge SHA; security-route checks and authenticated read-only Browser smoke passed. `/api/readiness` truthfully remained HTTP 503 under unchanged provider/owner activation controls.
+- No real customer proposal/signature request was sent, no real customer acceptance was created, no real deposit was charged or collected, no real sold job was created, and no other Production business-data write was used for validation.
+- Local `main`, `origin/main`, and live GitHub `main` synchronized at the released merge SHA before governance closeout. Final synchronization and canonical deployment identity will be reverified for the documentation-only closeout commit.
 
 ## Final Status
 
-Approved and active. Implementation and validation are authorized only within the exact scope above. No customer-facing electronic-signature request may be sent to a real customer during testing, no excluded provider or Production business record may be changed, and no later sprint may begin.
+Completed and closed. The exact approved implementation, validation, merge, Production deployment, one additive migration, read-only Production verification, and governance closeout passed. No real customer delivery or Production business-data write was used for validation, and no next sprint is selected, approved, promoted, or started.
 
 ## Notes
 
-The owner resolved the electronic-signature architecture decision by requiring a real customer electronic signature and rejecting paper/in-person acceptance as the normal workflow. Repository and Production evidence show that the approved native sign-only path can be implemented with existing Next.js, Supabase, private document Storage, proposal audit, and owner-approved Gmail infrastructure; a third-party provider credential is not a prerequisite for this sprint. Stop only for a genuine new owner-only business decision, credential/account action outside existing infrastructure, destructive operation outside this approval, material scope change, or prerequisite drift.
+The owner resolved the electronic-signature architecture decision by requiring a real customer electronic signature and rejecting paper/in-person acceptance as the normal workflow. Repository and Production evidence confirm that the approved native sign-only path is implemented with existing Next.js, Supabase, private document Storage, proposal audit, and owner-approved Gmail infrastructure; a third-party provider credential was not a prerequisite for this sprint.
+
+Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
