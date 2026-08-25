@@ -562,6 +562,8 @@ try {
     "WTOS_CUSTOMER_PORTAL_ENABLED",
     "WTOS_AUTOMATED_CUSTOMER_NOTIFICATIONS_ENABLED",
     "WTOS_PUBLIC_REGISTRATION_ENABLED",
+    "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
+    "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
     "AI_ENABLED",
     "AI_ACTION_EXECUTION_ENABLED",
   ].forEach((envName) =>
@@ -577,6 +579,8 @@ try {
     SUPABASE_SERVICE_ROLE_KEY: "super-secret-service-key",
     NEXT_PUBLIC_APP_URL: "https://app.example.test",
     TWILIO_OUTBOUND_SMS_ENABLED: "false",
+    TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED: "false",
+    TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO: "+16235550101",
     GOOGLE_GMAIL_SEND_ENABLED: "maybe",
     WEBSITE_INTAKE_ENABLED: "true",
   });
@@ -599,6 +603,29 @@ try {
       (check) => check.name === "TWILIO_OUTBOUND_SMS_ENABLED" && check.status === "disabled_safely",
     ),
     "Disabled provider-write gates are recognized as safe",
+  );
+  assert(
+    validatedChecks.filter(
+      (check) => check.name === "TWILIO_WEATHERTECH_TUCSON_NUMBER",
+    ).length === 1,
+    "Each Twilio business-number environment check appears exactly once",
+  );
+  assert(
+    validatedChecks.some(
+      (check) =>
+        check.name === "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO" &&
+        check.status === "present" &&
+        check.secret,
+    ),
+    "The protected Tucson forwarding destination is explicitly redacted",
+  );
+  assert(
+    validatedChecks.some(
+      (check) =>
+        check.name === "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED" &&
+        check.status === "disabled_safely",
+    ),
+    "The Tucson voice forwarding gate is tracked as a disabled safety flag",
   );
   assert(
     validatedChecks.some(

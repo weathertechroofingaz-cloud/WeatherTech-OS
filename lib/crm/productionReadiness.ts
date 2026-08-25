@@ -238,6 +238,10 @@ const providerGuideEnv = {
     twilioEnvVars.authToken,
     twilioEnvVars.messagingServiceSid,
     twilioEnvVars.publicBaseUrl,
+    twilioEnvVars.weatherTechPhoenixNumber,
+    twilioEnvVars.weatherTechTucsonNumber,
+    twilioEnvVars.ihcNumber,
+    twilioEnvVars.weatherTechTucsonVoiceForwardTo,
   ],
   googleWorkspace: [
     googleWorkspaceEnvVars.clientId,
@@ -601,6 +605,9 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
       "Verify each company-controlled Twilio number before creating its exact active company mapping.",
       "Configure the signed inbound SMS callback URL for each mapped number.",
       "Complete one controlled live inbound SMS test before marking inbound messaging validated.",
+      "Enter the Tucson forwarding destination only in protected Production configuration; never send it through chat.",
+      "Sign in to Twilio and configure only the exact Tucson number's Voice webhook after Tucson voice readiness is green.",
+      "Approve the first real Tucson test call separately after configuration is verified.",
     ],
     requiredCredentials: providerGuideEnv.twilio,
     oauthSetup: ["OAuth is not used for this Twilio foundation; signed webhooks and server credentials are required."],
@@ -609,10 +616,13 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
       "Run the existing Twilio readiness check.",
       "Send signed sandbox webhook payloads.",
       "Run one controlled live inbound SMS test for each company actually mapped.",
+      "Run the provider-isolated Tucson voice lifecycle with the route-specific gate disabled outside the fixture.",
+      "After owner configuration, verify Tucson readiness without placing a call, then stop for separate call approval.",
       "Enable outbound SMS only in a later owner-approved activation sprint.",
     ],
     rollbackProcedure: [
       "Disable Twilio webhook URLs in Twilio Console.",
+      "Disable the Tucson voice-forwarding gate and restore only its route capability to SMS if voice rollback is required.",
       "Set outbound send gates back to false.",
       "Pause saved Twilio connection records if any provider error appears.",
     ],
@@ -1085,18 +1095,21 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       id: "twilio",
       label: "Twilio",
       status: "controlled_testing_required",
-      summary: "The inbound-SMS backend is hardened; external Twilio account access, one verified company number, its exact mapping and callback, and a controlled live inbound validation remain. Outbound SMS is unavailable.",
+      summary: "The exact Tucson and Phoenix inbound-SMS routes are live-validated and outbound SMS remains unavailable. Tucson voice forwarding is separately protected, branch-bound, and disabled until the owner supplies the protected destination and configures only the Tucson Voice webhook.",
       setupDocumentPath: setupDocumentPaths.twilio,
       requiredBeforeActivation: productionActivationGuides[0].requiredOwnerActions,
       requiredMappings: [
-        "Each connected Twilio number must map to exactly one verified company and active connection",
+        "Each connected Twilio number must map to exactly one verified company, branch identity, and active connection",
+        "Only the exact WeatherTech Tucson route may become sms_voice; Phoenix and IHC remain SMS-only",
         "Unverified or unavailable company numbers remain unconfigured",
       ],
       controlledTestPlan: productionActivationGuides[0].testingSequence,
       rollbackSummary: productionActivationGuides[0].rollbackProcedure,
       disabledSafetyFlags: [
         twilioEnvVars.outboundSmsEnabled ?? "TWILIO_OUTBOUND_SMS_ENABLED",
-        "Voice, recording, and status callbacks are disabled in the inbound-SMS-only phase",
+        twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled ??
+          "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
+        "Recording, transcription, automatic replies, and automatic lead creation remain disabled",
       ],
       evidenceFields: productionEvidenceFields,
     },
@@ -1390,7 +1403,7 @@ function environmentVariableSummary(
 }
 
 function isSecretEnvironmentVariable(name: string) {
-  return /SECRET|TOKEN|KEY|SID|HMAC|VERIFIER/i.test(name) &&
+  return /SECRET|TOKEN|KEY|SID|HMAC|VERIFIER|FORWARD_TO/i.test(name) &&
     !name.startsWith("NEXT_PUBLIC_");
 }
 
@@ -1468,16 +1481,11 @@ export function buildProductionEnvironmentInventory(
           name: twilioEnvVars.inboundSmsEnabled,
           classification: "required_before_provider_connection" as const,
         },
-        {
-          name: twilioEnvVars.weatherTechPhoenixNumber,
-          classification: "optional" as const,
-        },
-        {
-          name: twilioEnvVars.weatherTechTucsonNumber,
-          classification: "optional" as const,
-        },
-        { name: twilioEnvVars.ihcNumber, classification: "optional" as const },
         { name: twilioEnvVars.outboundSmsEnabled, classification: "disabled_safety_flag" },
+        {
+          name: twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled,
+          classification: "disabled_safety_flag",
+        },
       ],
       env,
     ),

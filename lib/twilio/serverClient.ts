@@ -1,7 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { twilioEnvVars } from "../crm/integrations";
 import type { Database } from "../crm/types";
-import { normalizeTwilioPhoneNumber } from "./webhooks";
+import {
+  getTwilioBusinessNumberRouteTemplate,
+  type TwilioBusinessNumberRouteTemplate,
+  type TwilioBusinessRouteKey,
+} from "./foundation";
 
 export type TwilioConfigWarningCode =
   | "missing_from_number"
@@ -26,11 +30,38 @@ export type TwilioMaskedConfig = {
 
 export type TwilioBusinessNumberConfig = {
   key: "weathertech_phoenix" | "weathertech_tucson" | "ihc";
+  routeKey: TwilioBusinessRouteKey;
   label: string;
   company: "WeatherTech Roofing LLC" | "IHC Painting";
+  businessLocation: TwilioBusinessNumberRouteTemplate["businessLocation"];
+  teamQueue: string;
+  leadSource: string;
+  communicationChannel: TwilioBusinessNumberRouteTemplate["communicationChannel"];
+  timeZone: TwilioBusinessNumberRouteTemplate["timeZone"];
   envVar: string;
   configured: boolean;
   phoneNumber: string | null;
+};
+
+export type TwilioTucsonVoiceForwardingServerConfig = {
+  enabled: boolean;
+  tucsonNumberE164: string | null;
+  destinationPresent: boolean;
+  destinationE164: string | null;
+  loopDetected: boolean;
+  statusCallbackUrl: string | null;
+  configurationReady: boolean;
+};
+
+export type TwilioTucsonVoiceForwardingCheckResult = {
+  enabled: boolean;
+  destinationConfigured: boolean;
+  destinationValid: boolean;
+  maskedDestination: string | null;
+  loopDetected: boolean;
+  routeExact: boolean;
+  ready: boolean;
+  webhookUrl: string | null;
 };
 
 export type TwilioConfigStatus =
@@ -87,6 +118,7 @@ export type TwilioServerConfig = {
   publicBaseUrl: string | null;
   inboundSmsEnabled: boolean;
   outboundSmsEnabled: boolean;
+  tucsonVoiceForwarding: TwilioTucsonVoiceForwardingServerConfig;
   businessNumbers: TwilioBusinessNumberConfig[];
 };
 
@@ -94,6 +126,12 @@ export type TwilioExpectedBusinessNumber = {
   key: TwilioBusinessNumberConfig["key"];
   label: string;
   company: TwilioBusinessNumberConfig["company"];
+  routeKey: TwilioBusinessRouteKey;
+  businessLocation: TwilioBusinessNumberRouteTemplate["businessLocation"];
+  teamQueue: string;
+  leadSource: string;
+  communicationChannel: TwilioBusinessNumberRouteTemplate["communicationChannel"];
+  timeZone: TwilioBusinessNumberRouteTemplate["timeZone"];
   envVar: string;
   phoneNumberE164: string | null;
 };
@@ -136,6 +174,12 @@ function getBooleanEnvValue(name: string) {
   return value === "true";
 }
 
+function getStrictE164EnvValue(name: string) {
+  const value = getEnvValue(name);
+
+  return value && /^\+[1-9]\d{7,14}$/.test(value) ? value : null;
+}
+
 function getTwilioAccountSid() {
   const value = getEnvValue(twilioEnvVars.accountSid);
 
@@ -170,40 +214,66 @@ function getPublicBaseUrl() {
 }
 
 export function getTwilioExpectedBusinessNumbers(): TwilioExpectedBusinessNumber[] {
-  return [
+  const configuredNumbers = [
     {
       key: "weathertech_phoenix",
+      routeKey: "weathertech-phoenix",
       label: "WeatherTech Phoenix",
       company: "WeatherTech Roofing LLC",
       envVar: twilioEnvVars.weatherTechPhoenixNumber,
-      phoneNumberE164: normalizeTwilioPhoneNumber(
-        getEnvValue(twilioEnvVars.weatherTechPhoenixNumber),
+      phoneNumberE164: getStrictE164EnvValue(
+        twilioEnvVars.weatherTechPhoenixNumber,
       ),
     },
     {
       key: "weathertech_tucson",
+      routeKey: "weathertech-tucson",
       label: "WeatherTech Tucson",
       company: "WeatherTech Roofing LLC",
       envVar: twilioEnvVars.weatherTechTucsonNumber,
-      phoneNumberE164: normalizeTwilioPhoneNumber(
-        getEnvValue(twilioEnvVars.weatherTechTucsonNumber),
+      phoneNumberE164: getStrictE164EnvValue(
+        twilioEnvVars.weatherTechTucsonNumber,
       ),
     },
     {
       key: "ihc",
+      routeKey: "ihc-primary",
       label: "IHC",
       company: "IHC Painting",
       envVar: twilioEnvVars.ihcNumber,
-      phoneNumberE164: normalizeTwilioPhoneNumber(getEnvValue(twilioEnvVars.ihcNumber)),
+      phoneNumberE164: getStrictE164EnvValue(twilioEnvVars.ihcNumber),
     },
-  ];
+  ] as const;
+
+  return configuredNumbers.map((number) => {
+    const template = getTwilioBusinessNumberRouteTemplate(number.routeKey);
+
+    if (!template) {
+      throw new Error(`Missing Twilio route template for ${number.routeKey}.`);
+    }
+
+    return {
+      ...number,
+      businessLocation: template.businessLocation,
+      teamQueue: template.teamQueue,
+      leadSource: template.leadSource,
+      communicationChannel: template.communicationChannel,
+      timeZone: template.timeZone,
+    };
+  });
 }
 
 function getBusinessNumberConfig(): TwilioBusinessNumberConfig[] {
   return getTwilioExpectedBusinessNumbers().map((number) => ({
     key: number.key,
+    routeKey: number.routeKey,
     label: number.label,
     company: number.company,
+    businessLocation: number.businessLocation,
+    teamQueue: number.teamQueue,
+    leadSource: number.leadSource,
+    communicationChannel: number.communicationChannel,
+    timeZone: number.timeZone,
     envVar: number.envVar,
     configured: Boolean(number.phoneNumberE164),
     phoneNumber: maskPhoneNumber(number.phoneNumberE164),
@@ -211,17 +281,67 @@ function getBusinessNumberConfig(): TwilioBusinessNumberConfig[] {
 }
 
 export function getTwilioServerConfig(): TwilioServerConfig {
+  const tucsonForwardingDestination = getEnvValue(
+    twilioEnvVars.weatherTechTucsonVoiceForwardTo,
+  );
+  const accountSid = getTwilioAccountSid();
+  const authToken = getEnvValue(twilioEnvVars.authToken);
+  const publicBaseUrl = getPublicBaseUrl();
+  const outboundSmsEnabled = getBooleanEnvValue(twilioEnvVars.outboundSmsEnabled);
+  const businessNumbers = getBusinessNumberConfig();
+  const expectedBusinessNumbers = getTwilioExpectedBusinessNumbers();
+  const tucsonNumberE164 =
+    expectedBusinessNumbers.find(
+      (number) => number.routeKey === "weathertech-tucson",
+    )?.phoneNumberE164 ?? null;
+  const destinationE164 = getStrictE164EnvValue(
+    twilioEnvVars.weatherTechTucsonVoiceForwardTo,
+  );
+  const voiceForwardingEnabled = getBooleanEnvValue(
+    twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled,
+  );
+  const loopDetected = Boolean(
+    destinationE164 &&
+      expectedBusinessNumbers.some(
+        (number) => number.phoneNumberE164 === destinationE164,
+      ),
+  );
+  const statusCallbackUrl = getTwilioWebhookUrl(
+    publicBaseUrl,
+    twilioEnvVars.voiceStatusCallbackPath,
+  );
+
   return {
-    accountSid: getTwilioAccountSid(),
-    authToken: getEnvValue(twilioEnvVars.authToken),
+    accountSid,
+    authToken,
     apiKeySid: getEnvValue(twilioEnvVars.apiKeySid),
     apiKeySecret: getEnvValue(twilioEnvVars.apiKeySecret),
     messagingServiceSid: getEnvValue(twilioEnvVars.messagingServiceSid),
     fromNumber: getEnvValue(twilioEnvVars.fromNumber),
-    publicBaseUrl: getPublicBaseUrl(),
+    publicBaseUrl,
     inboundSmsEnabled: getBooleanEnvValue(twilioEnvVars.inboundSmsEnabled),
-    outboundSmsEnabled: getBooleanEnvValue(twilioEnvVars.outboundSmsEnabled),
-    businessNumbers: getBusinessNumberConfig(),
+    outboundSmsEnabled,
+    tucsonVoiceForwarding: {
+      enabled: voiceForwardingEnabled,
+      tucsonNumberE164,
+      destinationPresent: Boolean(tucsonForwardingDestination),
+      destinationE164,
+      loopDetected,
+      statusCallbackUrl,
+      configurationReady: Boolean(
+        voiceForwardingEnabled &&
+          accountSid &&
+          authToken &&
+          publicBaseUrl &&
+          tucsonNumberE164 &&
+          tucsonForwardingDestination &&
+          destinationE164 &&
+          !loopDetected &&
+          statusCallbackUrl &&
+          !outboundSmsEnabled
+      ),
+    },
+    businessNumbers,
   };
 }
 
@@ -333,6 +453,52 @@ function getInboundWebhookUrl(config: TwilioServerConfig) {
   } catch {
     return null;
   }
+}
+
+function getTwilioWebhookUrl(
+  publicBaseUrl: string | null,
+  path: string,
+) {
+  if (!publicBaseUrl) {
+    return null;
+  }
+
+  try {
+    return new URL(path, `${publicBaseUrl}/`).toString();
+  } catch {
+    return null;
+  }
+}
+
+export function getTwilioTucsonVoiceForwardingCheckResult({
+  routeExact,
+  config = getTwilioServerConfig(),
+}: {
+  routeExact: boolean;
+  config?: TwilioServerConfig;
+}): TwilioTucsonVoiceForwardingCheckResult {
+  const destination = config.tucsonVoiceForwarding.destinationE164;
+  const webhookUrl = getTwilioWebhookUrl(
+    config.publicBaseUrl,
+    twilioEnvVars.voiceWebhookPath,
+  );
+  const destinationValid = Boolean(destination);
+  const ready = Boolean(
+    config.tucsonVoiceForwarding.configurationReady &&
+      routeExact &&
+      webhookUrl,
+  );
+
+  return {
+    enabled: config.tucsonVoiceForwarding.enabled,
+    destinationConfigured: config.tucsonVoiceForwarding.destinationPresent,
+    destinationValid,
+    maskedDestination: maskPhoneNumber(destination),
+    loopDetected: config.tucsonVoiceForwarding.loopDetected,
+    routeExact,
+    ready,
+    webhookUrl,
+  };
 }
 
 export function normalizeTwilioTestRecipient(value: unknown) {

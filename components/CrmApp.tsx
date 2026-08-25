@@ -18069,10 +18069,11 @@ function TwilioCommunicationsSetupNotice() {
           <p className="mt-1 text-sm leading-6 text-amber-900">
             Only authenticated SMS received through an exact active company-number
             mapping appears here. Unknown or ambiguous senders remain unassigned for
-            review, and outbound SMS remains unavailable.
+            review. Tucson inbound calls may be forwarded only through the separate
+            protected Tucson voice gate; outbound SMS remains unavailable.
           </p>
         </div>
-        <ProviderStatusBadge label="No Outbound SMS Or Calls" tone="red" />
+        <ProviderStatusBadge label="Outbound SMS Disabled" tone="red" />
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         {twilioBusinessNumberRouteTemplates.map((route) => (
@@ -47761,6 +47762,7 @@ type TwilioInboundReadinessResult = {
     exactMappedNumberCount: number;
     routes: Array<{
       key: string;
+      routeKey: string;
       label: string;
       company: string;
       configured: boolean;
@@ -47772,6 +47774,7 @@ type TwilioInboundReadinessResult = {
       routingStatus: string | null;
       accountMatches: boolean;
       exactNumberMatches: boolean;
+      routeIdentityMatches: boolean;
       exactMapped: boolean;
       inboundValidated: boolean;
       lastValidatedInboundAt: string | null;
@@ -47784,6 +47787,16 @@ type TwilioInboundReadinessResult = {
   };
   inboundValidated: boolean;
   outboundDisabled: boolean;
+  tucsonVoiceForwarding: {
+    enabled: boolean;
+    destinationConfigured: boolean;
+    destinationValid: boolean;
+    maskedDestination: string | null;
+    loopDetected: boolean;
+    routeExact: boolean;
+    ready: boolean;
+    webhookUrl: string | null;
+  };
   communicationsSent: boolean;
 };
 
@@ -52433,6 +52446,40 @@ function getTwilioReadinessTone(status: TwilioLiveReadinessStatus): ProviderBadg
   return "amber";
 }
 
+function getTucsonVoiceForwardingNextAction(
+  voice: TwilioInboundReadinessResult["tucsonVoiceForwarding"] | null,
+) {
+  if (!voice) {
+    return "Sign in with owner access and refresh the owner-only Twilio readiness check.";
+  }
+
+  if (!voice.destinationConfigured) {
+    return "Enter TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO securely in Vercel Production as strict E.164; never paste the number into chat.";
+  }
+
+  if (!voice.destinationValid) {
+    return "Replace the protected forwarding destination with strict E.164 (+ followed by 8 to 15 digits), then redeploy.";
+  }
+
+  if (voice.loopDetected) {
+    return "Choose a destination that is not the Tucson, Phoenix, or IHC business number, then recheck readiness.";
+  }
+
+  if (!voice.routeExact) {
+    return "Update only the verified Tucson business-number route from sms to sms_voice; leave Phoenix and IHC unchanged, then recheck readiness.";
+  }
+
+  if (!voice.enabled) {
+    return "Set TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=true in Vercel Production and redeploy the reviewed commit.";
+  }
+
+  if (!voice.ready || !voice.webhookUrl) {
+    return "Verify the Twilio account secret, canonical public URL, outbound-SMS lock, and Tucson route configuration before provider setup.";
+  }
+
+  return `Configure only the Tucson Twilio number's incoming Voice webhook as POST ${voice.webhookUrl}; do not place a real test call without separate owner approval.`;
+}
+
 function TwilioLiveFoundationPanel() {
   const [readiness, setReadiness] = useState<TwilioInboundReadinessResult | null>(null);
 
@@ -52458,6 +52505,8 @@ function TwilioLiveFoundationPanel() {
   }, []);
 
   const status = readiness?.status ?? "not_connected";
+  const tucsonVoice = readiness?.tucsonVoiceForwarding ?? null;
+  const tucsonVoiceNextAction = getTucsonVoiceForwardingNextAction(tucsonVoice);
 
   return (
     <section
@@ -52470,13 +52519,14 @@ function TwilioLiveFoundationPanel() {
             Twilio Live Integration Foundation
           </p>
           <h3 className="mt-1 text-xl font-bold text-slate-950">
-            Inbound SMS routing and validation
+            Inbound SMS and Tucson voice forwarding
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
             Signed inbound SMS can be recorded only after credentials, phone
             ownership, exact business-number mapping, the Twilio Console webhook,
-            and a controlled live test are verified. Outbound SMS remains disabled
-            until a separate owner-approved phase.
+            and a controlled live test are verified. Tucson voice forwarding has a
+            separate protected destination and gate. Phoenix and IHC voice, outbound
+            SMS, recording, and transcription remain unavailable.
           </p>
         </div>
         <ProviderStatusBadge
@@ -52503,6 +52553,80 @@ function TwilioLiveFoundationPanel() {
         <ProfileStat label="Database" value={readiness?.schema.applied ? "Available" : "Not verified"} />
       </div>
 
+      <div
+        className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4"
+        data-testid="twilio-tucson-voice-readiness"
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-bold uppercase text-sky-800">
+              WeatherTech Tucson inbound voice
+            </p>
+            <p className="mt-1 text-sm leading-6 text-sky-950">
+              The destination remains server-only. This owner view displays only its
+              configured state and masked last four digits.
+            </p>
+          </div>
+          <ProviderStatusBadge
+            label={tucsonVoice?.ready ? "Application Ready" : "Not Ready"}
+            tone={tucsonVoice?.ready ? "green" : "amber"}
+          />
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <ProfileStat
+            label="Voice gate"
+            value={tucsonVoice?.enabled ? "Enabled" : "Disabled"}
+          />
+          <ProfileStat
+            label="Destination"
+            value={
+              !tucsonVoice?.destinationConfigured
+                ? "Not configured"
+                : tucsonVoice.destinationValid
+                  ? `Valid ${tucsonVoice.maskedDestination ?? "(masked)"}`
+                  : "Configured but invalid"
+            }
+          />
+          <ProfileStat
+            label="Loop guard"
+            value={tucsonVoice?.loopDetected ? "Blocked loop" : "Clear"}
+          />
+          <ProfileStat
+            label="Tucson route"
+            value={tucsonVoice?.routeExact ? "Exact sms_voice" : "Not voice-ready"}
+          />
+          <ProfileStat
+            label="Forwarding"
+            value={tucsonVoice?.ready ? "Ready" : "Blocked"}
+          />
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+          <div className="rounded-lg border border-sky-200 bg-white p-3">
+            <p className="text-xs font-semibold uppercase text-slate-500">
+              Canonical Tucson voice webhook
+            </p>
+            <code className="mt-1 block break-all text-sm font-semibold text-slate-950">
+              POST {tucsonVoice?.webhookUrl ?? "/api/integrations/twilio/voice"}
+            </code>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-xs font-semibold uppercase text-amber-800">
+              Exact next action
+            </p>
+            <p className="mt-1 text-sm leading-6 text-amber-950">
+              {tucsonVoiceNextAction}
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs font-semibold text-sky-900">
+          Tucson only. Phoenix and IHC voice remain unavailable. Recording,
+          transcription, outbound SMS, auto-replies, and automatic lead creation stay disabled.
+        </p>
+      </div>
+
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
         <div className="grid gap-3">
           <p className="text-sm font-bold uppercase text-slate-500">
@@ -52510,9 +52634,7 @@ function TwilioLiveFoundationPanel() {
           </p>
           {twilioBusinessNumberRouteTemplates.map((route) => {
             const routeReadiness = readiness?.mapping.routes.find(
-              (candidate) =>
-                candidate.key.replace(/_/g, "-") ===
-                route.key.replace("-primary", ""),
+              (candidate) => candidate.routeKey === route.key,
             );
 
             return (
@@ -52559,13 +52681,36 @@ function TwilioLiveFoundationPanel() {
 
         <div className="grid gap-3">
           <p className="text-sm font-bold uppercase text-slate-500">
-            Twilio Console Webhooks
+            Twilio Webhooks and callbacks
           </p>
-          {twilioWebhookEndpoints.map((endpoint) => (
-            <div
-              key={endpoint.id}
-              className="rounded-lg border border-slate-200 bg-slate-50 p-3"
-            >
+          {twilioWebhookEndpoints.map((endpoint) => {
+            const isInboundSms = endpoint.id === "inbound_sms";
+            const isTucsonVoice =
+              endpoint.id === "voice" || endpoint.id === "voice_status";
+            const endpointReady = isInboundSms
+              ? Boolean(readiness?.configuration.inboundGateEnabled)
+              : isTucsonVoice
+                ? Boolean(tucsonVoice?.ready)
+                : false;
+            const endpointStatus = isInboundSms
+              ? endpointReady
+                ? "Inbound Gate Enabled"
+                : "Inbound Gate Disabled"
+              : isTucsonVoice
+                ? endpointReady
+                  ? "Tucson Application Ready"
+                  : tucsonVoice?.enabled
+                    ? "Tucson Gate Blocked"
+                    : "Tucson Gate Disabled"
+                : endpoint.id === "sms_status"
+                  ? "Disabled / Outbound SMS Off"
+                  : "Disabled";
+
+            return (
+              <div
+                key={endpoint.id}
+                className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+              >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="font-bold text-slate-950">{endpoint.label}</p>
@@ -52574,25 +52719,16 @@ function TwilioLiveFoundationPanel() {
                   </code>
                 </div>
                 <ProviderStatusBadge
-                  label={
-                    endpoint.id === "inbound_sms" &&
-                    readiness?.configuration.inboundGateEnabled
-                      ? "Inbound Gate Enabled"
-                      : "Disabled / Not In Scope"
-                  }
-                  tone={
-                    endpoint.id === "inbound_sms" &&
-                    readiness?.configuration.inboundGateEnabled
-                      ? "green"
-                      : "amber"
-                  }
+                  label={endpointStatus}
+                  tone={endpointReady ? "green" : "amber"}
                 />
               </div>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 {endpoint.summary}
               </p>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
 

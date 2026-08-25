@@ -47,6 +47,8 @@ const HANDLER_ENV_NAMES = [
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_INBOUND_SMS_ENABLED",
   "TWILIO_OUTBOUND_SMS_ENABLED",
+  "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
+  "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
@@ -304,6 +306,8 @@ function installHandlerEnvironment(environment, fixture) {
   process.env.TWILIO_PUBLIC_BASE_URL = CANONICAL_PUBLIC_BASE_URL;
   process.env.TWILIO_INBOUND_SMS_ENABLED = "true";
   process.env.TWILIO_OUTBOUND_SMS_ENABLED = "false";
+  process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "false";
+  delete process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO;
   process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = WEATHERTECH_NUMBER;
   delete process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER;
   process.env.TWILIO_IHC_NUMBER = IHC_UNMAPPED_NUMBER;
@@ -569,7 +573,7 @@ export async function runTwilioInboundRegression({
   const ambiguousLeadIds = [randomUUID(), randomUUID()];
   const ihcLeadId = randomUUID();
   const retryDriftLeadId = randomUUID();
-  const routingKey = `TEST WTOS REGRESSION TWILIO ROUTE ${runId}`;
+  const routingKey = "weathertech-phoenix";
   const messageSids = {
     known: syntheticSid("SM", runId, "known"),
     knownCustomer: syntheticSid("SM", runId, "known-customer"),
@@ -704,9 +708,9 @@ export async function runTwilioInboundRegression({
         phone_number_e164: WEATHERTECH_NUMBER,
         display_name: marker,
         routing_key: routingKey,
-        business_location: "Regression only",
-        team_queue: "weathertech-regression-only",
-        lead_source: marker,
+        business_location: "Phoenix",
+        team_queue: "weathertech-roofing-phoenix",
+        lead_source: "Phone - WeatherTech Phoenix",
         communication_channel: "sms",
         time_zone: "America/Phoenix",
         routing_status: "active",

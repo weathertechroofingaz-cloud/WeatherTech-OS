@@ -5,8 +5,13 @@ import {
   getTwilioConfigCheckResult,
   getTwilioExpectedBusinessNumbers,
   getTwilioServerConfig,
+  getTwilioTucsonVoiceForwardingCheckResult,
 } from "../../../../../lib/twilio/serverClient";
-import type { TwilioLiveReadinessStatus } from "../../../../../lib/twilio/foundation";
+import {
+  getTwilioBusinessNumberRouteTemplate,
+  matchesTwilioBusinessRouteTemplate,
+  type TwilioLiveReadinessStatus,
+} from "../../../../../lib/twilio/foundation";
 import {
   createTwilioInboundEvidenceProof,
   createTwilioInboundPayloadFingerprint,
@@ -203,6 +208,12 @@ export async function GET() {
         configuredPhoneCounts.get(expected.phoneNumberE164) === 1 &&
         route?.phone_number_e164 === expected.phoneNumberE164,
     );
+    const routeTemplate = getTwilioBusinessNumberRouteTemplate(expected.routeKey);
+    const routeIdentityMatches = matchesTwilioBusinessRouteTemplate(
+      route,
+      routeTemplate,
+      "sms",
+    );
     const exactMapped = Boolean(
       company &&
         route &&
@@ -213,8 +224,7 @@ export async function GET() {
         connection.status === "connected" &&
         !connection.disabled_at &&
         route.routing_status === "active" &&
-        (route.communication_channel === "sms" ||
-          route.communication_channel === "sms_voice") &&
+        routeIdentityMatches &&
         accountMatches &&
         exactNumberMatches,
     );
@@ -296,6 +306,7 @@ export async function GET() {
 
     return {
       key: expected.key,
+      routeKey: expected.routeKey,
       label: expected.label,
       company: expected.company,
       configured: Boolean(expected.phoneNumberE164),
@@ -307,6 +318,7 @@ export async function GET() {
       routingStatus: route?.routing_status ?? null,
       accountMatches,
       exactNumberMatches,
+      routeIdentityMatches,
       exactMapped,
       inboundValidated: Boolean(validatedEvent),
       lastValidatedInboundAt: validatedEvent?.received_at ?? null,
@@ -339,6 +351,31 @@ export async function GET() {
       routingKey: number.routing_key,
     }));
   const outboundDisabled = !rawConfig.outboundSmsEnabled;
+  const tucsonExpected = expectedNumbers.find(
+    (number) => number.routeKey === "weathertech-tucson",
+  );
+  const tucsonRoute = tucsonExpected?.phoneNumberE164
+    ? businessNumbers.filter(
+        (number) =>
+          number.phone_number_e164 === tucsonExpected.phoneNumberE164,
+      )
+    : [];
+  const tucsonSmsReadiness = routes.find(
+    (route) => route.routeKey === "weathertech-tucson",
+  );
+  const tucsonVoiceRouteExact = Boolean(
+    tucsonSmsReadiness?.exactMapped &&
+      tucsonRoute.length === 1 &&
+      matchesTwilioBusinessRouteTemplate(
+        tucsonRoute[0],
+        getTwilioBusinessNumberRouteTemplate("weathertech-tucson"),
+        "voice",
+      ),
+  );
+  const tucsonVoiceForwarding = getTwilioTucsonVoiceForwardingCheckResult({
+    routeExact: tucsonVoiceRouteExact,
+    config: rawConfig,
+  });
   const baseStatus = getReadinessStatus({
     schemaApplied: fullSchemaApplied,
     configured: ownerConfigurationReady,
@@ -403,6 +440,7 @@ export async function GET() {
     },
     inboundValidated,
     outboundDisabled,
+    tucsonVoiceForwarding,
     communicationsSent: false,
   });
 }

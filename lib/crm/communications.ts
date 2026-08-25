@@ -658,9 +658,14 @@ function getBusinessPhoneNumber(
   snapshot: CrmSnapshot,
   businessPhoneNumberId: string | null | undefined,
   phoneNumber: string | null | undefined,
+  companyId?: string | null,
 ): BusinessPhoneNumberRecord | null {
   const byId = businessPhoneNumberId
-    ? snapshot.businessPhoneNumbers.find((phone) => phone.id === businessPhoneNumberId)
+    ? snapshot.businessPhoneNumbers.find(
+        (phone) =>
+          phone.id === businessPhoneNumberId &&
+          (!companyId || phone.company_id === companyId),
+      )
     : null;
 
   if (byId) {
@@ -675,7 +680,9 @@ function getBusinessPhoneNumber(
 
   return (
     snapshot.businessPhoneNumbers.find(
-      (phone) => normalizePhoneDigits(phone.phone_number_e164) === phoneDigits,
+      (phone) =>
+        normalizePhoneDigits(phone.phone_number_e164) === phoneDigits &&
+        (!companyId || phone.company_id === companyId),
     ) ?? null
   );
 }
@@ -1563,6 +1570,7 @@ export function buildUnifiedInboxItems(
       snapshot,
       record.business_phone_number_id,
       record.business_phone,
+      record.company_id,
     );
     const contactPhone =
       record.customer_phone ??
@@ -1691,6 +1699,7 @@ export function buildUnifiedInboxItems(
         snapshot,
         event.business_phone_number_id,
         event.business_phone,
+        event.company_id,
       );
       const contactPhone =
         event.customer_phone ??
@@ -1860,6 +1869,14 @@ export function buildUnifiedInboxItems(
     const target = getSmsTarget(snapshot, message);
     const direction = getSmsDirection(message);
     const contactPhone = direction === "inbound" ? message.from_phone : message.to_phone;
+    const receivingBusinessPhone =
+      direction === "inbound" ? message.to_phone : message.from_phone;
+    const businessPhoneNumber = getBusinessPhoneNumber(
+      snapshot,
+      message.business_phone_number_id,
+      receivingBusinessPhone,
+      message.company_id,
+    );
 
     return {
       id: `sms-${message.id}`,
@@ -1873,19 +1890,29 @@ export function buildUnifiedInboxItems(
       jobId: message.job_id,
       estimateId: null,
       scheduleEventId: message.schedule_event_id,
+      businessPhoneNumberId: businessPhoneNumber?.id ?? null,
       relatedTable: "sms_messages",
       relatedRecordId: message.id,
       customerName: target.name,
       contact: contactPhone ?? message.to_phone,
       phone: contactPhone ?? message.to_phone,
       email: null,
-      businessLocation: getCompanyLocationLabel(companyMap.get(message.company_id), target.location),
-      sourceAccount: message.from_phone,
+      businessLocation: getCompanyLocationLabel(
+        companyMap.get(message.company_id),
+        businessPhoneNumber?.business_location ?? target.location,
+      ),
+      sourceAccount:
+        getBusinessPhoneLabel(businessPhoneNumber) ?? receivingBusinessPhone,
       sourceLabel: "Twilio",
       serviceType: target.serviceType,
       summary: message.body,
       notes: message.last_error,
-      participants: compactParticipants([message.from_phone, message.to_phone, target.name]),
+      participants: compactParticipants([
+        message.from_phone,
+        message.to_phone,
+        businessPhoneNumber?.display_name,
+        target.name,
+      ]),
       attachments: [],
       createdAt: message.sent_at ?? message.queued_at ?? message.created_at,
       updatedAt: message.updated_at,
@@ -1923,7 +1950,7 @@ export function buildUnifiedInboxItems(
       isMissedCall: false,
       isUnassigned: !message.customer_id && !message.lead_id,
       followUpAt: null,
-      assignedTo: null,
+      assignedTo: businessPhoneNumber?.team_queue ?? null,
       failureDetail: sanitizeIntegrationSyncLogText(message.last_error),
     };
   });

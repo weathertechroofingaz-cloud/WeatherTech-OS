@@ -17,17 +17,53 @@ export type TwilioLiveReadinessStatus =
 export type TwilioBusinessNumberRouteTemplate = {
   key: TwilioBusinessRouteKey;
   companyName: "WeatherTech Roofing LLC" | "IHC Painting";
-  businessLocation: "Phoenix" | "Tucson" | "IHC";
+  businessLocation: "Phoenix" | "Tucson" | "Scottsdale";
   teamQueue: string;
   leadSource: string;
-  communicationChannel: "sms_voice";
+  communicationChannel: "sms" | "sms_voice";
   timeZone: "America/Phoenix";
   routingStatus: "configuration_required";
   phoneNumberConfigured: false;
 };
 
+export type TwilioBusinessRouteIdentity = {
+  routing_key: string | null;
+  business_location: string | null;
+  team_queue: string | null;
+  lead_source: string | null;
+  communication_channel: string | null;
+  time_zone: string | null;
+};
+
+export type TwilioBusinessRouteCapability = "sms" | "voice";
+
+export function normalizeTwilioPhoneNumber(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || !/^\+?[0-9().\s-]+$/.test(trimmed)) {
+    return null;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (trimmed.startsWith("+")) {
+    return digits.length >= 8 && digits.length <= 15 && !digits.startsWith("0")
+      ? `+${digits}`
+      : null;
+  }
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+  return null;
+}
+
 export type TwilioWebhookEndpoint = {
-  id: "inbound_sms" | "sms_status" | "voice" | "recording";
+  id: "inbound_sms" | "sms_status" | "voice" | "voice_status" | "recording";
   label: string;
   path: string;
   method: "POST";
@@ -54,7 +90,7 @@ export const twilioBusinessNumberRouteTemplates: TwilioBusinessNumberRouteTempla
     businessLocation: "Phoenix",
     teamQueue: "weathertech-roofing-phoenix",
     leadSource: "Phone - WeatherTech Phoenix",
-    communicationChannel: "sms_voice",
+    communicationChannel: "sms",
     timeZone: "America/Phoenix",
     routingStatus: "configuration_required",
     phoneNumberConfigured: false,
@@ -73,15 +109,52 @@ export const twilioBusinessNumberRouteTemplates: TwilioBusinessNumberRouteTempla
   {
     key: "ihc-primary",
     companyName: "IHC Painting",
-    businessLocation: "IHC",
+    businessLocation: "Scottsdale",
     teamQueue: "ihc-painting",
     leadSource: "Phone - IHC",
-    communicationChannel: "sms_voice",
+    communicationChannel: "sms",
     timeZone: "America/Phoenix",
     routingStatus: "configuration_required",
     phoneNumberConfigured: false,
   },
 ];
+
+export function getTwilioBusinessNumberRouteTemplate(
+  key: TwilioBusinessRouteKey,
+) {
+  return (
+    twilioBusinessNumberRouteTemplates.find((route) => route.key === key) ??
+    null
+  );
+}
+
+export function matchesTwilioBusinessRouteTemplate(
+  route: TwilioBusinessRouteIdentity | null | undefined,
+  template: TwilioBusinessNumberRouteTemplate | null | undefined,
+  capability: TwilioBusinessRouteCapability,
+) {
+  if (!route || !template) {
+    return false;
+  }
+
+  const communicationChannelMatches =
+    capability === "voice"
+      ? template.key === "weathertech-tucson" &&
+        route.communication_channel === "sms_voice"
+      : template.communicationChannel === "sms_voice"
+        ? route.communication_channel === "sms" ||
+          route.communication_channel === "sms_voice"
+        : route.communication_channel === template.communicationChannel;
+
+  return (
+    route.routing_key === template.key &&
+    route.business_location === template.businessLocation &&
+    route.team_queue === template.teamQueue &&
+    route.lead_source === template.leadSource &&
+    communicationChannelMatches &&
+    route.time_zone === template.timeZone
+  );
+}
 
 export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
   {
@@ -98,15 +171,26 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
     path: "/api/integrations/twilio/status",
     method: "POST",
     liveEnabled: false,
-    summary: "Receives signed delivery updates such as queued, sent, delivered, failed, or undelivered.",
+    summary:
+      "Disabled while outbound SMS is unavailable; it rejects callbacks and stores no delivery update.",
   },
   {
     id: "voice",
-    label: "Voice webhook",
+    label: "Tucson inbound voice webhook",
     path: "/api/integrations/twilio/voice",
     method: "POST",
     liveEnabled: false,
-    summary: "Receives signed inbound call events and returns no call-routing TwiML yet.",
+    summary:
+      "Returns signed Tucson-only call-forwarding TwiML after the protected gate, exact route, destination, and loop checks pass.",
+  },
+  {
+    id: "voice_status",
+    label: "Tucson voice status callback",
+    path: "/api/integrations/twilio/voice/status",
+    method: "POST",
+    liveEnabled: false,
+    summary:
+      "Stores bounded signed Tucson forwarding status evidence; it does not enable recording, transcription, or another business route.",
   },
   {
     id: "recording",
@@ -114,7 +198,8 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
     path: "/api/integrations/twilio/recording",
     method: "POST",
     liveEnabled: false,
-    summary: "Receives signed recording metadata only; no recording files or transcripts are fabricated.",
+    summary:
+      "Disabled; it rejects callbacks and stores no recording metadata, file, or transcript.",
   },
 ];
 
@@ -126,6 +211,8 @@ export const twilioInboundGuardrails = [
   "The receiving E.164 number, Twilio account, active connection, and company must match exactly.",
   "Provider MessageSid deduplication prevents duplicate inbox or CRM records.",
   "Unknown or ambiguous senders remain safely unmatched for owner review.",
+  "Only the exact Tucson sms_voice route may return forwarding TwiML, and the protected destination is never exposed to the browser.",
+  "Phoenix and IHC voice, recording, transcription, auto-replies, and automatic lead creation remain disabled.",
   "Outbound SMS is locked in the application and remains disabled by production configuration.",
 ];
 
@@ -135,5 +222,7 @@ export const twilioLiveFoundationChecklist = [
   "Verify Twilio account ownership, Auth Token signature validation, and the canonical HTTPS webhook URL.",
   "Configure the signed inbound SMS webhook URL in Twilio Console.",
   "Run one controlled live inbound test before marking the mapped number validated.",
+  "Keep Tucson voice forwarding blocked until its protected destination, exact sms_voice route, and loop guard all pass readiness.",
+  "Configure only the Tucson incoming Voice URL after readiness passes; never place a real test call without separate owner approval.",
   "Keep outbound SMS disabled until a separate owner-approved sprint.",
 ];
