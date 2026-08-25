@@ -74,11 +74,16 @@ export const twilioEnvVars = {
   outboundSmsEnabled: "TWILIO_OUTBOUND_SMS_ENABLED",
   weatherTechPhoenixNumber: "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   weatherTechTucsonNumber: "TWILIO_WEATHERTECH_TUCSON_NUMBER",
+  weatherTechTucsonVoiceForwardingEnabled:
+    "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
+  weatherTechTucsonVoiceForwardTo:
+    "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
   ihcNumber: "TWILIO_IHC_NUMBER",
   messagesEndpoint: "https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json",
   inboundSmsWebhookPath: "/api/integrations/twilio/webhook",
   smsStatusCallbackPath: "/api/integrations/twilio/status",
   voiceWebhookPath: "/api/integrations/twilio/voice",
+  voiceStatusCallbackPath: "/api/integrations/twilio/voice/status",
   recordingCallbackPath: "/api/integrations/twilio/recording",
 };
 

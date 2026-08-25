@@ -785,7 +785,7 @@ try {
   for (const [needle, message] of [
     ['from "twilio"', "Official Twilio SDK is imported for request validation"],
     ["validateRequest", "Official Twilio request validator is called"],
-    ["TWILIO_PUBLIC_BASE_URL", "Canonical public base URL participates in authentication"],
+    ["getTwilioServerConfig", "Canonical public base URL uses the centralized server configuration"],
     ["TWILIO_INBOUND_SMS_ENABLED", "Inbound processing uses an explicit production gate"],
     ["provider_payload_fingerprint", "Stored messages carry a signed-payload fingerprint"],
     ["createTwilioInboundEvidenceProof", "Completed inbound evidence is bound by a server-only HMAC"],

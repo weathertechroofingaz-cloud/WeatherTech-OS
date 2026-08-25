@@ -1422,11 +1422,11 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
       company_id: companies.weatherTech.id,
       provider: "twilio",
       phone_number_e164: fakeBusinessPhone,
-      display_name: `${TEST_PREFIX} ${runId} Phoenix Office Line`,
-      routing_key: `${TEST_PREFIX} ${runId} PHOENIX PHONE ROUTE`,
-      business_location: "Phoenix",
-      team_queue: "Office",
-      lead_source: "Phone",
+      display_name: `WeatherTech Tucson ${TEST_PREFIX} ${runId}`,
+      routing_key: `${TEST_PREFIX} ${runId} TUCSON PHONE ROUTE`,
+      business_location: "Tucson",
+      team_queue: "weathertech-roofing-tucson",
+      lead_source: "Phone - WeatherTech Tucson",
       communication_channel: "sms_voice",
       routing_status: "active",
       settings: { testRunId: runId },
@@ -1535,6 +1535,29 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
     }),
   });
 
+  const [inboundTucsonSms] = await restRequest(env, "sms_messages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.weatherTech.id,
+      business_phone_number_id: businessPhoneRoute.id,
+      provider: "twilio_sms",
+      category: "general",
+      status: "sent",
+      direction: "inbound",
+      delivery_status: "received",
+      to_phone: fakeBusinessPhone,
+      from_phone: alternateCustomerPhone,
+      body: `${TEST_PREFIX} ${runId} Tucson inbound SMS route label`,
+      twilio_message_sid: `${TEST_PREFIX} ${runId} TUCSON INBOUND SMS SID`,
+      sent_at: oneHourAgo,
+      delivered_at: oneHourAgo,
+      correlation_id: `${TEST_PREFIX} ${runId} TUCSON INBOUND SMS`,
+      metadata: { testRunId: runId, contact_match_status: "unmatched" },
+      last_error: null,
+    }),
+  });
+
   const [emailMessage] = await restRequest(env, "email_messages", {
     method: "POST",
     headers: { Prefer: "return=representation" },
@@ -1630,6 +1653,7 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
     voicemail,
     providerFailure,
     smsFailure,
+    inboundTucsonSms,
     emailMessage,
     websiteIntake,
     yelpIntake,
@@ -9298,10 +9322,11 @@ async function testUnifiedInboxSearchAndFilters(
           text.includes("error state") &&
           text.includes("business phone") &&
           text.includes("twilio inbound safety") &&
-        text.includes("no outbound sms or calls") &&
+        text.includes("outbound sms disabled") &&
+        text.includes("tucson inbound calls may be forwarded") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
-        text.includes("ihc painting - ihc")
+        text.includes("ihc painting - scottsdale")
       );
     },
     "unified inbox",
@@ -9451,6 +9476,38 @@ async function testUnifiedInboxSearchAndFilters(
     10000,
   );
   await clickUnique(tab.playwright.getByRole("button", { name: "Clear" }), "Clear failed delivery filters");
+  await clickUnique(
+    tab.playwright.locator(
+      'xpath=//div[@aria-label="Communication inbox views"]//button[contains(normalize-space(.), "Texts")]',
+    ),
+    "Texts inbox view",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inbox-search"]'),
+    communicationsSeed.inboundTucsonSms.body,
+    "Tucson inbound SMS search",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const detail = document.querySelector('[data-testid="communication-detail"]');
+      const text = detail?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes(expected.body.toLowerCase()) &&
+        text.includes("weathertech tucson") &&
+        text.includes("weathertech · tucson") &&
+        text.includes("weathertech-roofing-tucson")
+      );
+    },
+    "Tucson inbound SMS receiving-route label",
+    10000,
+    { body: communicationsSeed.inboundTucsonSms.body },
+  );
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Clear" }),
+    "Clear Tucson SMS inbox filters",
+  );
   await waitFor(
     tab,
     () => {
@@ -11415,18 +11472,26 @@ async function testSettingsIntegrationCenter(tab) {
         (text.includes("connect gmail oauth later before enabling live send or mailbox sync") ||
           text.includes("gmail mailbox is saved for")) &&
         text.includes("twilio live integration foundation") &&
-        text.includes("inbound sms routing and validation") &&
+        text.includes("inbound sms and tucson voice forwarding") &&
         text.includes("outbound sms disabled") &&
         text.includes("inbound not validated") &&
+        text.includes("weathertech tucson inbound voice") &&
+        text.includes("voice gate") &&
+        text.includes("destination") &&
+        text.includes("loop guard") &&
+        text.includes("tucson route") &&
+        text.includes("exact next action") &&
+        text.includes("phoenix and ihc voice remain unavailable") &&
         text.includes("business number routing") &&
-        text.includes("twilio console webhooks") &&
+        text.includes("twilio webhooks and callbacks") &&
         text.includes("owner setup checklist") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
-        text.includes("ihc painting - ihc") &&
+        text.includes("ihc painting - scottsdale") &&
         text.includes("/api/integrations/twilio/webhook") &&
         text.includes("/api/integrations/twilio/status") &&
         text.includes("/api/integrations/twilio/voice") &&
+        text.includes("/api/integrations/twilio/voice/status") &&
         text.includes("/api/integrations/twilio/recording") &&
         text.includes("gohighlevel live synchronization foundation") &&
         text.includes("check sync readiness") &&

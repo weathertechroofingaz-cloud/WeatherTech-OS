@@ -1,10 +1,11 @@
-# Twilio Phase 1: Inbound SMS
+# Twilio Phase 1: Inbound SMS And Tucson Voice Forwarding
 
-This runbook is the authoritative setup contract for the owner-approved inbound-only Twilio phase. WeatherTech OS may receive an SMS only after the Twilio account, Messaging Service, receiving number, active database route, and company connection all agree exactly. Outbound customer SMS, voice, recording, automatic replies, reminders, campaigns, and bulk messaging remain unavailable.
+This runbook is the authoritative setup contract for the owner-approved inbound-only Twilio SMS phase and the separately approved WeatherTech Tucson Inbound Voice Forwarding Phase 1 extension. WeatherTech OS may receive an SMS only after the Twilio account, Messaging Service, receiving number, active database route, and company connection all agree exactly. The Tucson Twilio number may return forwarding TwiML only after its signed voice request, exact branch identity, protected destination, route-specific gate, and voice-capable database route all agree. Phoenix and IHC voice remain unavailable. Outbound customer SMS, recording, transcription, automatic replies, reminders, campaigns, and bulk messaging remain unavailable.
 
 ## Verified Product Boundary
 
-- Active endpoint for this phase: `POST /api/integrations/twilio/webhook`.
+- Active inbound-SMS endpoint: `POST /api/integrations/twilio/webhook`.
+- Tucson-only voice endpoints: `POST /api/integrations/twilio/voice` for the initial call and `POST /api/integrations/twilio/voice/status` for the exact `<Dial>` outcome.
 - Authentication: the official Twilio SDK validates `X-Twilio-Signature` against the exact canonical URL derived from `TWILIO_PUBLIC_BASE_URL` and all form fields.
 - Content type: `application/x-www-form-urlencoded` only.
 - Media boundary: text-only SMS with `NumMedia=0`. MMS/media is unsupported in this phase and is rejected without acknowledging or dropping attachments.
@@ -13,9 +14,12 @@ This runbook is the authoritative setup contract for the owner-approved inbound-
 - Idempotency: Twilio's globally unique `MessageSid` produces a deterministic local message identity. An identical replay is acknowledged without creating another message; conflicting reuse is rejected.
 - Audit: a completed inbound message is paired with one company-scoped `communication_provider_events` record.
 - Unified Inbox: persisted `sms_messages` remain the source of truth; no parallel inbox is created.
+- Voice routing: only the exact WeatherTech Tucson route may return an SDK-generated `<Dial>`. The destination comes only from protected server configuration, is never written to the call record, and is rejected when malformed or equal to any configured Tucson, Phoenix, or IHC Twilio number.
+- Voice evidence: an accepted initial call creates one exact Tucson `call_records` row plus a bounded `voice_inbound` provider event before TwiML is returned. The signed outcome callback may update only that claimed call and adds one bounded `voice_status` event. Identical retries converge; conflicting provider-identifier reuse is rejected.
+- Call privacy: recording and transcription remain `not_requested`. The TwiML does not enable recording, change caller ID, create a lead, send a message, or initiate an outbound call without an active inbound caller.
 - Outbound status: hard-locked in application code; the independent `TWILIO_OUTBOUND_SMS_ENABLED` production gate must also remain `false`.
 
-The status, voice, and recording callback routes remain disabled in this sprint. Do not configure them in Twilio Console.
+The generic SMS status and recording callback routes remain disabled. Do not configure them in Twilio Console. The Tucson Voice URL is configured only during the controlled activation sequence below; do not assign it to Phoenix or IHC.
 
 ## Verified Production State
 
@@ -32,6 +36,7 @@ Production has three deliberately distinct route states:
 - no scheduled inventory automation remains;
 - official signed simulations verify application behavior but cannot prove carrier ingress or public webhook delivery for a newly configured route;
 - outbound SMS remains hard-locked in code and disabled in production, with zero outbound messages; and
+- before the Tucson voice extension is activated, all three number rows remain SMS-only, the protected voice variables are absent, the Tucson Voice URL is unset, and Production contains zero call records, voice events, recordings, or transcripts; and
 - the server-only credential was securely rotated before the live SMS and was never committed or copied into `.env.local`.
 
 Do not record the full phone number, Account SID, Messaging Service SID, Message SID, message body, or authentication credential in source control, screenshots, logs, or support messages.
@@ -53,6 +58,13 @@ Required for every independently verified connected inbound number:
 - `TWILIO_INBOUND_SMS_ENABLED=false` during configuration; after every enabled route is exact and healthy, it may be set `true` for controlled live validation. Readiness remains `ready_for_live_test` while any configured route lacks durable signed inbound evidence
 - `TWILIO_OUTBOUND_SMS_ENABLED=false` at all times in this phase
 
+Required only for the WeatherTech Tucson voice extension:
+
+- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO` contains the owner-selected destination in E.164 form. Enter it directly into protected Vercel environment configuration; never paste it into Codex chat, source control, logs, screenshots, or a browser-visible variable.
+- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false` while configuration is being prepared. Set it to `true` only after the destination is valid, the exact Tucson database route is voice-capable, the reviewed deployment is healthy, and the owner is ready for the Twilio Voice URL to become operational.
+
+The destination must not equal any configured Tucson, Phoenix, or IHC Twilio business number. It may be changed later by replacing only the protected destination variable and redeploying; no application-code edit or phone-number reassignment is required.
+
 `TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`, and `TWILIO_FROM_NUMBER` are not required for inbound processing and must not be treated as permission to send. Configure only independently verified company-controlled numbers. The current IHC route is verified, mapped, and active but still needs its own controlled live inbound test; WeatherTech Phoenix has satisfied that boundary.
 
 ## Database Mapping Contract
@@ -66,7 +78,8 @@ Create exactly one company-scoped `integration_connections` row for each connect
 - `provider_account_sid` matches `TWILIO_ACCOUNT_SID` exactly;
 - `messaging_service_sid` matches `TWILIO_MESSAGING_SERVICE_SID` exactly;
 - `phone_number_e164` matches the single configured company-number environment value exactly;
-- `communication_channel` is `sms` or `sms_voice`;
+- `communication_channel` is `sms` for SMS-only routes or `sms_voice` for the exact Tucson route only after approved voice activation;
+- `routing_key`, `business_location`, `team_queue`, `lead_source`, and `time_zone` match the canonical branch template exactly;
 - `routing_status` is `active`;
 - no active unexpected number mapping exists;
 - every company or branch without its own independently verified number remains unmapped.
@@ -81,7 +94,15 @@ For the independently verified receiving number or Messaging Service, configure 
 POST https://weathertech-os.vercel.app/api/integrations/twilio/webhook
 ```
 
-Do not configure WeatherTech OS as the status, voice, or recording callback in this phase. Do not enable an auto-response, Studio flow, marketing campaign, appointment reminder, or other outbound behavior.
+Do not configure WeatherTech OS as the SMS status or recording callback. Do not enable an auto-response, Studio flow, marketing campaign, appointment reminder, or other outbound behavior.
+
+For the exact WeatherTech Tucson incoming phone number only, after every Tucson voice readiness condition is green, configure **A call comes in** as:
+
+```text
+Webhook · POST https://weathertech-os.vercel.app/api/integrations/twilio/voice
+```
+
+Do not set a Voice URL, TwiML App, Studio Flow, SIP trunk, status callback, or recording callback on the Phoenix or IHC numbers. The `<Dial>` action callback is generated by WeatherTech OS and points to the exact signed Tucson status route; it is not entered separately in Twilio Console. Changing this webhook does not port, reassign, release, or modify the owner-selected destination carrier number.
 
 The account has no A2P Brand, and the current shared Messaging Service has no A2P Campaign association. A2P absence does not itself prevent inbound SMS; with the separately inspected SMS capability and current inbound routing, Twilio can invoke the canonical webhook. Twilio blocks SMS/MMS sent from these unregistered US long-code senders to US recipients. Because the service currently contains both WeatherTech and IHC senders, do not submit a single-business campaign against it without a separately approved company/service-separation design and truthful legal-use-case review. A2P registration is a separate compliance and outbound-activation decision; never treat sender-pool membership as registration.
 
@@ -95,6 +116,7 @@ The authenticated owner-only endpoint `GET /api/integrations/twilio/readiness` d
 - unexpected active mappings;
 - authenticated inbound validation evidence;
 - application outbound lock and production outbound gate state.
+- masked Tucson voice gate/destination validity, loop detection, exact route capability, and the canonical Voice webhook next action without returning the full destination.
 
 Credentials alone are not a successful connection. A route becomes validated only after one signed inbound message has been durably recorded through that exact mapping; overall readiness remains `ready_for_live_test` while any configured route lacks that evidence. Simulated signed payloads cannot substitute for carrier-originated ingress evidence.
 
@@ -117,11 +139,23 @@ Controlled live sequence:
 8. Confirm no outbound request and no unrelated CRM mutation occurred.
 9. Leave outbound false. The inbound gate may remain true only after the live evidence is complete and the exact mapping remains healthy; otherwise return it to false.
 
+### Tucson Voice Activation Sequence
+
+1. Deploy and verify the reviewed code while `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false`. Tucson SMS must remain healthy and the voice readiness result must remain disabled.
+2. The owner enters `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO` directly in protected Vercel Production configuration. Do not send the value through chat or store it in Git.
+3. Redeploy the exact reviewed commit while the Tucson voice enable gate remains `false`. A protected Vercel environment change does not alter an already-built deployment.
+4. Verify the owner-only readiness response reports `enabled=false`, `ready=false`, a configured, valid, non-looping masked destination, and the exact Tucson branch identity. Phoenix and IHC voice must remain not configured.
+5. Update only the exact `weathertech-tucson` `business_phone_numbers` row from `communication_channel='sms'` to `communication_channel='sms_voice'`. Re-read all three rows and prove Phoenix and IHC remain unchanged.
+6. Set only `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=true`, redeploy the exact reviewed commit a second time, and verify health plus Tucson voice readiness. Keep outbound SMS false.
+7. The owner signs in to Twilio Console. Inspect the Tucson number first, then set only its **A call comes in** webhook to the exact POST URL above. Do not touch the phone number assignment, Messaging callback, Phoenix, IHC, Verizon, or AT&T configuration.
+8. Stop. A real test call requires a separate explicit owner approval. Merely completing configuration does not authorize Codex to place the call.
+9. After approval, place one owner-controlled inbound call, verify one exact initial call/event and one exact outcome event, confirm the destination rang, and prove recording/transcription/outbound SMS/automatic lead creation remained zero. Do not create a second call merely to test retry behavior.
+
 ## Isolated Regression
 
 Routine tests use only the approved non-production Supabase project. They use synthetic Twilio identifiers and locally generated valid signatures; they never call Twilio APIs or send an SMS. Every test fixture uses captured IDs, exact cleanup, and final zero-residue verification. Production is prohibited as a regression target.
 
-The isolated suite must cover valid and invalid signatures, canonical-URL tampering, wrong account/number/service, disabled or missing mapping, known customer, known lead, unknown sender, ambiguous sender, cross-company data, identical replay, conflicting `MessageSid`, retryable persistence failure, secret sanitization, and proof that no outbound network call occurs.
+The isolated SMS suite must cover valid and invalid signatures, canonical-URL tampering, wrong account/number/service, disabled or missing mapping, known customer, known lead, unknown sender, ambiguous sender, cross-company data, identical replay, conflicting `MessageSid`, retryable persistence failure, secret sanitization, and proof that no outbound network call occurs. The isolated voice suite must additionally cover gate-off and missing-destination states, malformed and duplicate critical fields, Tucson/Phoenix/IHC route separation, every configured-number loop, exact `sms_voice` metadata, initial/status idempotency, conflicting `CallSid` reuse, status-without-claim rejection, duration bounds, SDK-generated no-recording TwiML, bounded evidence, and zero-residue cleanup. It must never call Twilio or a real destination.
 
 ## Troubleshooting
 
@@ -130,6 +164,9 @@ The isolated suite must cover valid and invalid signatures, canonical-URL tamper
 - `403`: wrong account, receiving number, Messaging Service, or company route.
 - `409`: conflicting reuse of an existing provider message identifier.
 - `503`: inbound gate/configuration/mapping is disabled or durable persistence did not complete. Twilio may safely retry after the underlying issue is corrected.
+- voice `403`: the signed request targets a non-Tucson number, wrong account, wrong company/route metadata, or an unclaimed status callback.
+- voice `409`: the call identifier or signed status evidence conflicts with the already-claimed Tucson call.
+- voice `503`: the Tucson voice gate, protected destination, canonical public URL, `sms_voice` capability, or durable evidence write is not ready. Do not point Twilio at the endpoint until readiness is green.
 - readiness `ready_for_live_test`: configuration and mapping are ready, but no completed signed inbound message has been observed.
 - readiness `connected`: at least one exact mapped signed inbound message was durably validated; outbound remains disabled.
 
@@ -139,4 +176,6 @@ Never paste the Auth Token into chat or diagnostics. Readiness exposes only bool
 
 Rotate the server-only Auth Token immediately if it may have entered chat, terminal output, logs, screenshots, or another untrusted surface. Update only protected Vercel Production configuration, redeploy, and verify the owner-only readiness endpoint before accepting another inbound SMS. Never place the replacement token in `.env.local` or source control.
 
-If inbound readiness or authentication fails, first remove or disable the Twilio incoming-message callback, set `TWILIO_INBOUND_SMS_ENABLED=false`, and redeploy. Keep outbound false. Repair only the affected exact account/service/number/company mapping and credential, then repeat isolated signed-request tests before any new owner-authorized live validation. Do not map WeatherTech Phoenix or any other route without its own independently verified company-controlled number.
+If SMS readiness or authentication fails, first remove or disable the Twilio incoming-message callback, set `TWILIO_INBOUND_SMS_ENABLED=false`, and redeploy. Keep outbound false. Repair only the affected exact account/service/number/company mapping and credential, then repeat isolated signed-request tests before any new owner-authorized live validation. Do not map WeatherTech Phoenix or any other route without its own independently verified company-controlled number.
+
+If Tucson voice readiness fails, first remove the Tucson Voice URL or set `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false` and redeploy. Keep the SMS webhook and inbound SMS gate unchanged. Repair only the protected destination or exact Tucson route; never substitute Phoenix/IHC or an unverified fallback. Restoring `communication_channel='sms'` is the database rollback for Tucson voice capability and does not remove its SMS mapping. A destination change is only a protected-environment update plus redeploy; it never requires a code change, port, number release, or carrier modification.

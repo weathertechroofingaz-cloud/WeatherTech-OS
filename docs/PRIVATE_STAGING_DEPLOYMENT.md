@@ -51,6 +51,7 @@ Do not commit real values for secrets, tokens, service-role keys, OAuth client s
 These flags must remain `false` or unset for private staging unless a later sprint explicitly approves a controlled live test:
 
 - `TWILIO_OUTBOUND_SMS_ENABLED`
+- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED`
 - `GOOGLE_GMAIL_SEND_ENABLED`
 - `GOOGLE_CALENDAR_WRITE_ENABLED`
 - `WEBSITE_INTAKE_ENABLED`

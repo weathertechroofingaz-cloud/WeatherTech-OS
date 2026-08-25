@@ -75,7 +75,7 @@ Joe Harris
 - No GoHighLevel, Gmail, Google Calendar, Yelp, Stripe, QuickBooks, proposal/e-signature, Customer Portal, or unrelated provider/application change.
 - No schema migration, RLS change, new table, destructive database mutation, or historical migration modification unless a newly proven invariant cannot be enforced with the existing schema and the owner separately approves that expansion.
 - No `.env.local`, secret, package/lockfile, protected migration, unrelated Production data, or readiness-gate change outside the exact Tucson voice configuration.
-- No Production synthetic call/event rows. Provider activation may update only the protected Tucson environment variables and only Tucson's Twilio voice webhook after all code gates pass.
+- No Production synthetic call/event rows. Provider activation may update only the protected Tucson environment variables, only Tucson's Twilio voice webhook, and the exact Tucson `business_phone_numbers.communication_channel` value from `sms` to `sms_voice` (or back to `sms` for rollback) after all code gates pass. Phoenix, IHC, and every other Tucson field remain unchanged.
 - No later sprint selection or implementation.
 
 ## Completion Criteria
@@ -91,7 +91,7 @@ Joe Harris
 - Focused security, branch-isolation, SMS regression, runtime, type-check, lint, build, dependency, secret, whitespace, protected-file, and scope gates pass.
 - Targeted Integration/Inbox Browser validation and the complete established isolated Browser regression pass with zero unexpected console errors or warnings and zero residue. No provider call or real SMS is sent by automated validation.
 - Exact implementation SHA CI and Vercel deployment pass; canonical `/api/health` returns HTTP 200 at that SHA. Production database/migration ledger remains `51/51` because no migration is expected.
-- Before the first call, the owner signs in to Twilio, securely enters the destination in protected Vercel configuration, approves the Tucson-only Twilio Voice callback update, and separately approves one controlled real test call.
+- Before the first call, the owner signs in to Twilio, securely enters the destination in protected Vercel configuration, verifies the exact Tucson-only `sms_voice` route transition, approves the Tucson-only Twilio Voice callback update, and separately approves one controlled real test call.
 - No existing Verizon, AT&T, or Twilio number is ported, released, reassigned, or otherwise modified beyond Tucson's approved voice webhook setting.
 - Implementation and final documentation closeout commits are pushed; repository refs are synchronized and the tree is clean.
 
