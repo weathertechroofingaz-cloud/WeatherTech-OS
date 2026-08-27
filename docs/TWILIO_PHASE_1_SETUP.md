@@ -19,7 +19,7 @@ This runbook is the authoritative setup contract for the owner-approved inbound-
 - Call privacy: recording and transcription remain `not_requested`. The TwiML does not enable recording, change caller ID, create a lead, send a message, or initiate an outbound call without an active inbound caller.
 - Outbound status: hard-locked in application code; the independent `TWILIO_OUTBOUND_SMS_ENABLED` production gate must also remain `false`.
 
-The generic SMS status and recording callback routes remain disabled. Do not configure them in Twilio Console. The Tucson Voice URL is configured only during the controlled activation sequence below; do not assign it to Phoenix or IHC.
+The generic SMS status and recording callback routes remain disabled. Do not configure them in Twilio Console. The Tucson Voice URL was configured only through the controlled activation sequence below and remains assigned only to Tucson; do not assign it to Phoenix or IHC.
 
 ## Verified Production State
 
@@ -35,8 +35,14 @@ Production has three deliberately distinct route states:
 - Twilio shows no A2P Brand or Campaign on the account. The three US long-code senders therefore remain unregistered for outbound A2P traffic; sender-pool membership is not A2P approval and does not authorize outbound messaging;
 - no scheduled inventory automation remains;
 - official signed simulations verify application behavior but cannot prove carrier ingress or public webhook delivery for a newly configured route;
-- outbound SMS remains hard-locked in code and disabled in production, with zero outbound messages; and
-- before the Tucson voice extension is activated, all three number rows remain SMS-only, the protected voice variables are absent, the Tucson Voice URL is unset, and Production contains zero call records, voice events, recordings, or transcripts; and
+- outbound SMS remains hard-locked in code and disabled in production, with zero outbound messages;
+- the protected Tucson forwarding destination is configured only in Vercel Production, passes strict E.164 and configured-number loop checks, and is not recorded in this runbook, source control, call evidence, or a browser-visible value;
+- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED` is enabled for the completed owner-approved checkpoint, only the exact Tucson database route is `sms_voice`, and Phoenix and IHC remain `sms` with voice unavailable;
+- the Tucson number's **A call comes in** configuration is exactly `Webhook · POST https://weathertech-os.vercel.app/api/integrations/twilio/voice`; the signed `<Dial>` outcome callback remains SDK-generated at `/api/integrations/twilio/voice/status`, and no Phoenix or IHC voice webhook was configured;
+- the controlled Production checkpoint produced two distinct, owner-confirmed intentional Tucson calls 67 seconds apart. Both completed with working two-way audio, bounded durations of 15 and 18 seconds, and exactly one `voice_inbound` plus one `voice_status` event per call;
+- the original live-call approval covered one call. Monitoring stopped when a second distinct call appeared; the owner then confirmed that both calls were intentional and both had working two-way audio. That reconciliation is historical evidence, not standing authorization for another test call;
+- final read-only evidence is exactly two terminal `call_records` rows, two `voice_inbound` events, and two `voice_status` events, with zero active calls, recordings, transcripts, outbound call records, outbound SMS, automatic replies, or automatically created or linked CRM records; and
+- Tucson, Phoenix, and IHC SMS evidence remained unchanged at two messages/two events, one message/one event, and zero messages/zero events respectively; and
 - the server-only credential was securely rotated before the live SMS and was never committed or copied into `.env.local`.
 
 Do not record the full phone number, Account SID, Messaging Service SID, Message SID, message body, or authentication credential in source control, screenshots, logs, or support messages.
@@ -61,7 +67,7 @@ Required for every independently verified connected inbound number:
 Required only for the WeatherTech Tucson voice extension:
 
 - `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO` contains the owner-selected destination in E.164 form. Enter it directly into protected Vercel environment configuration; never paste it into Codex chat, source control, logs, screenshots, or a browser-visible variable.
-- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false` while configuration is being prepared. Set it to `true` only after the destination is valid, the exact Tucson database route is voice-capable, the reviewed deployment is healthy, and the owner is ready for the Twilio Voice URL to become operational.
+- `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false` while configuration is being prepared. Set it to `true` only after the destination is valid, the exact Tucson database route is voice-capable, the reviewed deployment is healthy, and the owner is ready for the Twilio Voice URL to become operational. Production completed those gates and now has this route-specific flag enabled; it does not authorize another live call or any outbound SMS behavior.
 
 The destination must not equal any configured Tucson, Phoenix, or IHC Twilio business number. It may be changed later by replacing only the protected destination variable and redeploying; no application-code edit or phone-number reassignment is required.
 
@@ -102,6 +108,8 @@ For the exact WeatherTech Tucson incoming phone number only, after every Tucson 
 Webhook · POST https://weathertech-os.vercel.app/api/integrations/twilio/voice
 ```
 
+The completed Production checkpoint has this exact Tucson-only webhook configured with method `POST`. Treat the block above as both the current verified state and the required value for any future recovery verification.
+
 Do not set a Voice URL, TwiML App, Studio Flow, SIP trunk, status callback, or recording callback on the Phoenix or IHC numbers. The `<Dial>` action callback is generated by WeatherTech OS and points to the exact signed Tucson status route; it is not entered separately in Twilio Console. Changing this webhook does not port, reassign, release, or modify the owner-selected destination carrier number.
 
 The account has no A2P Brand, and the current shared Messaging Service has no A2P Campaign association. A2P absence does not itself prevent inbound SMS; with the separately inspected SMS capability and current inbound routing, Twilio can invoke the canonical webhook. Twilio blocks SMS/MMS sent from these unregistered US long-code senders to US recipients. Because the service currently contains both WeatherTech and IHC senders, do not submit a single-business campaign against it without a separately approved company/service-separation design and truthful legal-use-case review. A2P registration is a separate compliance and outbound-activation decision; never treat sender-pool membership as registration.
@@ -139,7 +147,9 @@ Controlled live sequence:
 8. Confirm no outbound request and no unrelated CRM mutation occurred.
 9. Leave outbound false. The inbound gate may remain true only after the live evidence is complete and the exact mapping remains healthy; otherwise return it to false.
 
-### Tucson Voice Activation Sequence
+### Tucson Voice Activation Sequence — Completed Production Checkpoint And Preserved Runbook
+
+This sequence was completed against merge/deployment SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`. Canonical `/api/health` returned HTTP 200 at that exact SHA, the Production migration ledger remained `51/51`, and the final read-only lifecycle audit passed. The ordered steps remain the mandatory runbook for any rollback, destination replacement, or later reactivation; the completed checkpoint does not authorize a new test call.
 
 1. Deploy and verify the reviewed code while `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=false`. Tucson SMS must remain healthy and the voice readiness result must remain disabled.
 2. The owner enters `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO` directly in protected Vercel Production configuration. Do not send the value through chat or store it in Git.
@@ -149,7 +159,8 @@ Controlled live sequence:
 6. Set only `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=true`, redeploy the exact reviewed commit a second time, and verify health plus Tucson voice readiness. Keep outbound SMS false.
 7. The owner signs in to Twilio Console. Inspect the Tucson number first, then set only its **A call comes in** webhook to the exact POST URL above. Do not touch the phone number assignment, Messaging callback, Phoenix, IHC, Verizon, or AT&T configuration.
 8. Stop. A real test call requires a separate explicit owner approval. Merely completing configuration does not authorize Codex to place the call.
-9. After approval, place one owner-controlled inbound call, verify one exact initial call/event and one exact outcome event, confirm the destination rang, and prove recording/transcription/outbound SMS/automatic lead creation remained zero. Do not create a second call merely to test retry behavior.
+9. The checkpoint's explicit approval covered one owner-controlled inbound call. During monitoring, two distinct calls appeared 67 seconds apart, so monitoring stopped at the unexpected difference. The owner then confirmed both calls were intentional and both had working two-way audio. Each converged to one exact initial call/event and one exact terminal outcome event; both were `completed` with bounded durations of 15 and 18 seconds. No second call was created merely to test retry behavior, and this owner reconciliation does not authorize a future call.
+10. Final read-only verification proved exactly two terminal call rows, two inbound events, and two status events; zero active calls, recordings, transcripts, outbound calls independent of the active inbound caller, Twilio REST calls, outbound call records, outbound SMS, automatic replies, and automatic CRM creation; unchanged Tucson/Phoenix/IHC SMS evidence; exact route isolation; `51/51` migrations; and HTTP 200 health at the reviewed SHA.
 
 ## Isolated Regression
 

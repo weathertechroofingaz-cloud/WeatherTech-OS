@@ -4,6 +4,37 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### WeatherTech Tucson Inbound Voice Forwarding Phase 1
+
+- Implementation commit: `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`
+- Merge commit: `2ace30ba04edfb0743b63ee050c7f3845540fe54`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Pull request: #14
+- Branch: `main`
+- Remote: `origin/main`
+- Result: Completed, merged, exact-SHA deployed, configured only for WeatherTech Tucson, and live-validated through two intentional owner-controlled inbound calls without activating Phoenix/IHC voice or any excluded automation.
+- Validation:
+  - Every top-level `tests/*.test.mjs` file: `45/45 pass`; type-check, lint, Production build, dependency audit with zero vulnerabilities, migration integrity, protected-file, secret, scope, and `git diff --check` gates: `pass`
+  - Focused Tucson voice security, route/inbox identity, inbound SMS, and hosted voice/SMS lifecycle suites: `pass`, with no Twilio provider request from automated validation and zero isolated-target residue
+  - Targeted Browser run `20260825022712513`: `4/4 pass`; complete isolated Browser run `20260825022840810`: all `24/24` groups and `31/31` assertions passed with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue
+  - PR-head GitHub Actions run `32802756048`: repository-only job `97666732131` succeeded for implementation SHA `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`; isolated-Supabase job `97667112021` was correctly skipped for the pull request
+  - Main push GitHub Actions run `32802962484`: repository-only job `97667369745` and protected isolated-Supabase lifecycle job `97667830543` both succeeded for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`
+  - Gate-on Vercel Production deployment `dpl_BzukHpKwCH1HTWqNMHyxJsNLrAx6` completed `READY` for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`; canonical `/api/health` returned HTTP 200 with that SHA, while `/api/readiness` truthfully remained HTTP 503 under the broad owner/provider safety gate
+- Database and provider state:
+  - No migration was added or applied. Local, regression, and Production ledgers remain exact at `51/51`.
+  - The owner configured the destination only in protected Vercel Production configuration. The value remains absent from chat, Git, logs, screenshots, governance, browser-visible variables, and ordinary database output.
+  - Only `weathertech-tucson` changed from `communication_channel='sms'` to `communication_channel='sms_voice'`. `weathertech-phoenix` and `ihc-primary` remain SMS-only and company/branch distinct.
+  - Only the Tucson Twilio number's incoming Voice webhook was set to the canonical WeatherTech OS Tucson Voice POST endpoint. The existing inbound SMS webhook and evidence remained intact; Phoenix and IHC voice settings remained untouched.
+  - Production contains exactly two completed Tucson call records, bounded to `15` and `18` seconds, and exactly four matching voice provider events. Both owner-controlled calls had confirmed two-way audio. No active call or forbidden side effect remains.
+  - Existing SMS evidence is unchanged: Tucson remains at two received messages/two completed SMS events, Phoenix remains at one/one, and IHC remains at zero/zero pending its separately gated carrier-ingress validation.
+- Notes:
+  - The owner initially approved one controlled live call. Monitoring stopped when a second call appeared; the owner then confirmed both calls were intentionally placed by the owner and both had two-way audio. This factual closeout does not retroactively describe the second call as preauthorized and grants no authority for another validation call.
+  - Recording and transcription remain `not_requested`. Outbound SMS, automatic replies, automatic lead/customer/job/estimate/follow-up/task creation, Phoenix/IHC voice, MMS, campaigns, reminders, and broad provider activation remain disabled or separately gated.
+  - No Verizon, AT&T, or Twilio number was purchased, ported, released, reassigned, transferred, or otherwise modified beyond Tucson's exact approved Voice webhook setting.
+  - The forwarding destination, full phone numbers, credentials, and provider call identifiers remain excluded from governance. The owner may later change the protected destination without an application-code rewrite, but this completed sprint grants no continuing configuration authority.
+  - Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This voice sprint neither changes that gate nor authorizes legal-language changes.
+  - No next sprint was selected, approved, promoted, or started.
+
 ### Proposal-to-Sold Job Operational Completion Phase 1
 
 - Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`

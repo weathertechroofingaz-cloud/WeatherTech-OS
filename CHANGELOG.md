@@ -4,6 +4,21 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 
 ## Latest Verified Release
 
+### WeatherTech Tucson Inbound Voice Forwarding Phase 1
+
+- Implementation commit: `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`
+- PR and merge commit: PR #14, `2ace30ba04edfb0743b63ee050c7f3845540fe54`
+- Closeout: this documentation-only commit; use Git history for its immutable hash.
+- Status: COMPLETED — MERGED, EXACT-SHA CI-VALIDATED, TUCSON-ONLY PRODUCTION DEPLOYED, AND OWNER LIVE-CALL VALIDATED.
+- Capability: added signed WeatherTech Tucson inbound voice forwarding to an owner-configurable protected destination. Only the exact active Tucson route can return SDK-generated `<Dial>` TwiML; malformed destinations, configured-number/self loops, wrong accounts, wrong receiving numbers, Phoenix/IHC routes, ambiguous mappings, and cross-company connections fail closed. Changing the destination requires protected environment configuration and a redeploy, not an application-code change or number reassignment.
+- Database: no migration was required. The existing `call_records` and `communication_provider_events` schema stores bounded, idempotent, company- and route-scoped evidence. Local and Production migration ledgers remain exact at `51/51`, with no local-only or Production-only migration.
+- CI and deployment: exact implementation-SHA PR run `32802756048` completed successfully with repository job `97666732131`. Exact merge-SHA main run `32802962484` completed successfully with repository job `97667369745` and protected isolated-Supabase lifecycle job `97667830543`. Gate-on Vercel Production deployment `dpl_BzukHpKwCH1HTWqNMHyxJsNLrAx6` is healthy at merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`; canonical `/api/health` returned HTTP 200 with that SHA.
+- Live Production evidence: the owner intentionally completed two Tucson inbound calls of 15 and 18 seconds and confirmed two-way audio. Production contains the two exact completed inbound call records plus two `voice_inbound` and two `voice_status` events. Both calls have complete signed ingress/status evidence, bounded durations, no customer, lead, job, recording, or transcript link, and no raw forwarding destination in stored metadata summaries.
+- SMS and isolation regression: Tucson inbound SMS remains at two messages/two events, Phoenix remains at one/one, and IHC remains at zero/zero. Tucson alone is `sms_voice`; Phoenix and IHC remain exact, active, distinct SMS-only routes. No outbound SMS, no outbound call independent of the active inbound caller, no Twilio REST call, no outbound call record, no automatic reply, no automatic lead/customer/job creation, no recording, no transcription, and no recording-status event occurred.
+- Safety and external boundary: the Tucson customer-facing Twilio number was preserved; no Verizon, AT&T, Twilio, or destination number was purchased, ported, reassigned, released, or replaced. Broad `/api/readiness` remains truthfully HTTP 503 while `WTOS_PRODUCTION_APPROVED=false`; IHC live inbound validation, A2P registration, outbound messaging, Phoenix/IHC or broader voice routing, MMS, automation, and unrelated providers remain separately gated. The proposal electronic-record/customer disclosure still requires legal review before the first real customer electronic-signature delivery.
+
+## Recent Verified Milestones
+
 ### Proposal-to-Sold Job Operational Completion Phase 1
 
 - Implementation commit: `b694ad844af48fb23d1849f3180382a016056441`
@@ -16,8 +31,6 @@ This changelog records verified WeatherTech OS repository milestones. Future ent
 - Production evidence: GitHub/Vercel Production deployment `6073515066`, status `17277113969`, completed successfully for exact SHA `7186001eec28177a32b454168e5fd05b43af9937`, and canonical `/api/health` returned HTTP 200 with that SHA. `/api/readiness` remained truthfully HTTP 503 solely under the unchanged owner/provider safety flags, with no readiness warnings. Production-safe post-deployment validation was read-only.
 - Safety and activation boundary: no proposal or signature request was sent to a real customer; no real acceptance, deposit, payment, invoice, or sold job was created for validation. DocuSign, Dropbox Sign, payment processors, QuickBooks Online writes, automatic customer communications, and customer-facing portal authentication remain disabled or separately gated; this release does not activate a customer portal.
 - Legal gate: Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure must receive legal review. This is an operational go-live gate; it does not authorize Codex to invent, rewrite, approve, or represent the legal sufficiency of that language.
-
-## Recent Verified Milestones
 
 ### Lead Attribution & Marketing Accountability Phase 1
 

@@ -1,12 +1,12 @@
 # Current Sprint
 
-This file is the source of truth for the active WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before changing product files.
+This file records the most recently completed owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before beginning any newly approved development.
 
 ## Approval Status
 
-Approved
+Completed
 
-The owner explicitly approved WeatherTech Tucson Inbound Voice Forwarding Phase 1 in the Codex task on 2026-08-24. This approval authorizes only the narrow implementation, isolated validation, release, protected Tucson-only voice configuration, read-only Production verification, and governance closeout described below. It does not authorize a real test call, number purchase, port, release, reassignment, unrelated provider activation, outbound SMS, recording, transcription, automatic reply, automatic lead creation, or later sprint.
+The owner explicitly approved WeatherTech Tucson Inbound Voice Forwarding Phase 1 in the Codex task on 2026-08-24. That approval authorized only the narrow implementation, isolated validation, release, protected Tucson-only voice configuration, read-only Production verification, and governance closeout described below. It did not authorize a real test call, number purchase, port, release, reassignment, unrelated provider activation, outbound SMS, recording, transcription, automatic reply, automatic lead creation, or later sprint. The owner later gave separate approval for one controlled live test call. When a second call appeared, monitoring stopped; the owner then confirmed both calls were intentionally placed by the owner and that both had two-way audio. That confirmation records the completed evidence without treating the second call as preauthorized or granting continuing authority for another validation call.
 
 ## Sprint Name
 
@@ -24,7 +24,9 @@ Joe Harris
 
 2026-08-24.
 
-## Verified Starting State
+## Verified Starting State (Historical)
+
+The following facts preserve the exact pre-implementation baseline and are not a description of the current Production voice state.
 
 - Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; branch `main`.
 - Starting local `HEAD`, cached `origin/main`, live GitHub `main`, and canonical Production deployment: `8691a1e0952a42159ad533c9a98c044f36f87103`.
@@ -110,15 +112,31 @@ Joe Harris
 
 ## Release Commits
 
-- Approval record: this approval documentation commit; Git history is authoritative for its immutable hash.
-- Implementation: pending.
-- Merge: pending.
-- Documentation closeout: pending until owner-only configuration and controlled live-call validation are complete.
+- Approval record: `be0014307d38151223eca08df42afddc713712de`.
+- Implementation: `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`.
+- Merge and Production implementation deployment: `2ace30ba04edfb0743b63ee050c7f3845540fe54` through PR #14.
+- Documentation closeout: this documentation-only commit; Git history is authoritative for its immutable hash.
+
+## Completion Evidence
+
+- The focused implementation remained one commit on `codex/weathertech-tucson-voice-forwarding-phase-1` and merged through PR #14 as exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`.
+- PR-head GitHub Actions run `32802756048` completed successfully for exact implementation SHA `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`; repository-only job `97666732131` passed, and isolated-Supabase job `97667112021` was correctly skipped at the pull-request boundary.
+- Main push GitHub Actions run `32802962484` completed successfully for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`; repository-only job `97667369745` and protected isolated-Supabase lifecycle job `97667830543` both passed.
+- All `45/45` top-level repository tests, type-check, lint, Production build, dependency audit with zero vulnerabilities, migration-integrity, protected-file, secret, scope, and whitespace checks passed. Focused Tucson voice security, route/inbox identity, inbound SMS, and hosted voice/SMS lifecycle validation passed without a provider call and with zero isolated-target residue.
+- Targeted Browser run `20260825022712513` passed `4/4` affected checks. Complete isolated Browser run `20260825022840810` passed all `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue.
+- Gate-on Vercel Production deployment `dpl_BzukHpKwCH1HTWqNMHyxJsNLrAx6` completed `READY` for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`. Canonical `/api/health` returned HTTP 200 and reported that exact SHA. `/api/readiness` remained truthfully HTTP 503 under the broad owner/provider safety gate; this route-specific activation did not set broad `WTOS_PRODUCTION_APPROVED` or weaken another provider gate.
+- No schema migration was added or applied. Local, regression, and Production migration ledgers remain exact at `51/51`.
+- The owner entered the destination only through protected Vercel Production configuration. Readiness verified it as configured, valid, non-looping, and masked without exposing the value. Only `weathertech-tucson` changed to `communication_channel='sms_voice'`; `weathertech-phoenix` and `ihc-primary` remain `communication_channel='sms'` with their separate identities intact.
+- Only the WeatherTech Tucson Twilio number's **A call comes in** webhook was configured for `POST https://weathertech-os.vercel.app/api/integrations/twilio/voice`. Phoenix and IHC voice configuration remained untouched, and the existing inbound SMS callback remained operational.
+- The owner initially approved one controlled live call. After a second call appeared, monitoring stopped until the owner confirmed that both calls were intentional owner actions and that each had two-way audio. Production contains exactly two completed Tucson call records with bounded durations of `15` and `18` seconds and exactly four matching voice provider events. No active call, recording, transcript, outbound SMS, automatic reply, automatic lead, customer, job, estimate, follow-up, or task side effect remains.
+- The established inbound SMS evidence is unchanged: Tucson retains two received messages and two completed SMS provider events, Phoenix retains one received message and one completed SMS provider event, and IHC remains at zero messages/events pending its separate carrier-ingress validation.
+- No Verizon, AT&T, or Twilio number was purchased, ported, released, reassigned, transferred, or otherwise changed beyond the exact approved Tucson Voice webhook setting. No forwarding destination, credential, full phone number, or provider call identifier is recorded in governance.
+- Local `main`, `origin/main`, live GitHub `main`, and canonical Production synchronized at the released merge SHA before this governance closeout. Final synchronization and clean-tree status must be reverified after the documentation-only closeout commit is pushed.
 
 ## Final Status
 
-Approved and active. Implementation, isolated validation, safe disabled-by-default deployment, and owner-assisted Tucson-only configuration are authorized within the exact scope above. A real test call remains separately gated on explicit owner approval.
+Completed and closed. The exact approved implementation, PR merge, disabled-first Production rollout, protected destination setup, Tucson-only route and webhook activation, isolated validation, and controlled live-call verification passed. The two observed calls were confirmed by the owner as intentional and had two-way audio; the second was not treated as preauthorized, and this closeout grants no authority for another validation call or a later sprint.
 
 ## Notes
 
-The owner must provide the forwarding destination only through protected environment configuration, never through Codex chat. Configuring a Twilio number to request WeatherTech OS TwiML and using `<Dial>` forwards the inbound call through a Twilio call leg; it does not port, reassign, or modify the destination carrier number.
+The owner provided the forwarding destination only through protected environment configuration and never through Codex chat or source control. Future destination changes remain protected configuration operations requiring explicit owner direction; they do not require an application-code rewrite. Configuring the Tucson Twilio number to request WeatherTech OS TwiML and using `<Dial>` forwards an authenticated inbound call through a Twilio call leg; it does not port, reassign, release, or modify the destination carrier number.

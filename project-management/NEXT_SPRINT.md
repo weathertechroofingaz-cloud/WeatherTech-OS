@@ -4,7 +4,9 @@ This file is planning-only. It cannot authorize development, expand an active sp
 
 ## Approval Status
 
-WeatherTech Tucson Inbound Voice Forwarding Phase 1 is the exact active owner-approved sprint. No subsequent sprint is selected, approved, promoted, or started.
+No next sprint is selected, approved, promoted, or started.
+
+WeatherTech Tucson Inbound Voice Forwarding Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) and [COMPLETED_SPRINTS.md](./COMPLETED_SPRINTS.md). This planning file grants no authority to extend that sprint or begin another one.
 
 ## Sprint Name
 
@@ -12,24 +14,24 @@ No subsequent sprint selected.
 
 ## Objective
 
-Preserve the waiting state for every item after the active Tucson voice-forwarding sprint. No later sprint may be inferred or started automatically.
+Preserve the waiting state after the completed Tucson voice-forwarding sprint. No later sprint may be inferred, selected, promoted, or started automatically.
 
-## Active-Sprint Boundary
+## Closed-Sprint Boundary
 
-- The active sprint is limited to protected, configurable inbound voice forwarding for the exact WeatherTech Tucson Twilio number, exact signed route validation, bounded call evidence, branch-identity hardening, truthful owner readiness, and Tucson route labeling for existing inbound SMS.
-- Existing Tucson inbound SMS must remain operational; Phoenix and IHC routing identities must remain distinct and unactivated for voice.
-- A real test call remains separately owner-gated after code, deployment, protected destination, and Twilio callback configuration are verified.
-- This file cannot broaden the active sprint or authorize any additional provider, environment, migration, Production-data, customer-contact, or application work.
+- Protected, configurable inbound voice forwarding for the exact WeatherTech Tucson Twilio number, exact signed route validation, bounded call evidence, branch-identity hardening, truthful owner readiness, and Tucson route labeling for existing inbound SMS are completed work.
+- Tucson inbound SMS remains operational. Phoenix and IHC routing identities remain distinct and SMS-only; neither was activated for voice.
+- The owner initially approved one controlled live test call. When a second call appeared, monitoring stopped until the owner confirmed both were intentional owner actions with two-way audio. The completed evidence does not authorize another Codex-initiated validation call.
+- This file cannot broaden, reopen, or extend the completed sprint or authorize any additional provider, environment, migration, Production-data, customer-contact, or application work.
 
 ## Owner-Approved Scope
 
-- No work beyond the exact active sprint in [CURRENT_SPRINT.md](./CURRENT_SPRINT.md) is approved.
+- No subsequent sprint scope is owner-approved. The completed sprint grants no continuing implementation or configuration authority.
 
 ## Explicit Exclusions
 
-- No later sprint implementation, number purchase/port/release/reassignment, unrelated provider activation, Production business-data operation, environment change, migration, deployment, or customer contact beyond the exact active authorization.
-- No real test call without a separate explicit owner approval.
-- No DocuSign, Dropbox Sign, Customer Portal, staff provisioning, Yelp/Mighty Apes, outbound Twilio messaging, A2P, Stripe, QuickBooks, or unrelated workflow may be inferred from the active sprint.
+- No later sprint implementation, number purchase/port/release/reassignment, unrelated provider activation, Production business-data operation, environment change, migration, deployment, or customer contact is authorized.
+- No additional Codex-initiated validation call or Tucson/Phoenix/IHC provider change is authorized without a new explicit owner instruction.
+- No DocuSign, Dropbox Sign, Customer Portal, staff provisioning, Yelp/Mighty Apes, outbound Twilio messaging, A2P, Stripe, QuickBooks, or unrelated workflow may be inferred from the completed sprint.
 
 ## Completion Criteria
 
@@ -46,10 +48,12 @@ Codex must never automatically promote a later sprint. Promotion requires a new 
 ## Completed-Work And External-Dependency Guardrails
 
 - Proposal-to-Sold Job Operational Completion Phase 1 is complete at implementation commit `b694ad844af48fb23d1849f3180382a016056441`, merge commit `7186001eec28177a32b454168e5fd05b43af9937`, and final Production migration ledger `51/51`; it must not be rebuilt or changed.
+- WeatherTech Tucson Inbound Voice Forwarding Phase 1 is complete at implementation commit `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`, merge commit `2ace30ba04edfb0743b63ee050c7f3845540fe54`, and unchanged final Production migration ledger `51/51`; it must not be rebuilt or treated as unfinished sprint authority.
+- Tucson voice forwarding remains route-specific and protected. Phoenix and IHC remain SMS-only; IHC still lacks its separately gated carrier-ingress SMS validation. Outbound SMS, recording, transcription, automatic replies, and automatic CRM creation remain unavailable.
 - Secure Company-Scoped Job Photos, Lead Attribution & Marketing Accountability, CRM Identity Integrity, inbound-only Twilio SMS, and Mighty Apes/Yelp implementation remain completed within their recorded boundaries.
-- Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure still requires legal review; this voice sprint does not alter that gate or authorize legal-language changes.
+- Before the first real customer electronic-signature delivery, the electronic-record/customer disclosure still requires legal review; this voice sprint did not alter that gate or authorize legal-language changes.
 - The ten preserved Production lead/intake records remain development test data, not real business history.
 
 ## Last Review
 
-WeatherTech Tucson Inbound Voice Forwarding Phase 1 is active and owner-approved under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started.
+WeatherTech Tucson Inbound Voice Forwarding Phase 1 is completed and closed under [CURRENT_SPRINT.md](./CURRENT_SPRINT.md). No subsequent sprint is selected, approved, promoted, or started, and this planning-only file cannot authorize additional work.
