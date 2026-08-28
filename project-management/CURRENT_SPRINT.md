@@ -1,20 +1,20 @@
 # Current Sprint
 
-This file records the most recently completed owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before beginning any newly approved development.
+This file records the currently owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
 
 ## Approval Status
 
-Completed
+Approved
 
-The owner explicitly approved WeatherTech Tucson Inbound Voice Forwarding Phase 1 in the Codex task on 2026-08-24. That approval authorized only the narrow implementation, isolated validation, release, protected Tucson-only voice configuration, read-only Production verification, and governance closeout described below. It did not authorize a real test call, number purchase, port, release, reassignment, unrelated provider activation, outbound SMS, recording, transcription, automatic reply, automatic lead creation, or later sprint. The owner later gave separate approval for one controlled live test call. When a second call appeared, monitoring stopped; the owner then confirmed both calls were intentionally placed by the owner and that both had two-way audio. That confirmation records the completed evidence without treating the second call as preauthorized or granting continuing authority for another validation call.
+The owner explicitly approved this sprint in the Codex task on 2026-08-28. The approval authorizes the narrow implementation, isolated validation, commit, pull request, merge, disabled-first deployment, and protected configuration preparation described below. It does not authorize porting or changing ownership of any carrier number, changing carrier forwarding or Twilio number configuration without the owner at the provider boundary, sending SMS, enabling outbound messaging, or placing a real test call without separate explicit approval for that exact call.
 
 ## Sprint Name
 
-WeatherTech Tucson Inbound Voice Forwarding Phase 1
+WeatherTech Phoenix + IHC Carrier-Forwarded Voice Integration Phase 1
 
 ## Objective
 
-Make the existing WeatherTech Roofing LLC Tucson Twilio number function as a customer-facing Tucson voice number by forwarding authenticated inbound calls to an owner-configured protected destination while preserving the already-live Tucson inbound SMS path and keeping WeatherTech Tucson, WeatherTech Phoenix, and IHC Painting routing identities exact and distinct.
+Bring inbound calls placed to the existing WeatherTech Phoenix and IHC public carrier numbers through distinct hidden Twilio ingress numbers and into WeatherTech OS, then ring one owner-verified assistant carrier line as the protected terminal destination. Preserve the existing public carrier numbers, preserve the completed Tucson Twilio ingress and SMS behavior, prevent all forwarding loops, and keep Tucson, Phoenix, and IHC company/branch evidence exact and separate.
 
 ## Owner
 
@@ -22,121 +22,100 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-24.
+2026-08-28.
 
-## Verified Starting State (Historical)
-
-The following facts preserve the exact pre-implementation baseline and are not a description of the current Production voice state.
+## Verified Starting State
 
 - Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; branch `main`.
-- Starting local `HEAD`, cached `origin/main`, live GitHub `main`, and canonical Production deployment: `8691a1e0952a42159ad533c9a98c044f36f87103`.
+- Starting local `HEAD`, local `origin/main`, live GitHub `main`, and canonical Production deployment: `da3dfc0096b60a7e2adc69aa87edfee949e76aba`.
 - Starting working tree and index: clean; no merge, rebase, cherry-pick, or bisect is in progress.
-- Canonical `/api/health`: HTTP 200 and reports the exact starting SHA. `/api/readiness`: truthfully HTTP 503 solely under the existing live-provider/owner-approval safety gate.
+- Canonical `/api/health`: HTTP 200 and reports the exact starting SHA. `/api/readiness`: truthfully HTTP 503 under the existing broad live-provider/owner-approval safety gate.
 - Production Supabase project: `gahfcgyjtfwwmsterhzu` / WeatherTech OS / `ACTIVE_HEALTHY` / Postgres 17; local and Production ledgers match all `51/51` committed migrations.
-- Production contains three exact active Twilio number mappings: `weathertech-tucson` and `weathertech-phoenix` inside WeatherTech Roofing LLC, plus tenant-separated `ihc-primary` inside IHC Painting.
-- WeatherTech Tucson, documented only by masked ending `3145`, has two authenticated completed inbound SMS records and two matched provider events. WeatherTech Phoenix, ending `1326`, has one; IHC, ending `6930`, remains mapped but lacks carrier-ingress validation.
-- Outbound SMS remains application-locked and disabled. Tucson and Phoenix reuse the verified WeatherTech Twilio connection; IHC uses its own separate connection.
-- The Tucson route begins with `communication_channel='sms'`, zero `call_records`, zero voice provider events, no forwarding destination, and no voice settings.
-- `POST /api/integrations/twilio/voice` exists but deliberately returns HTTP 503 for voice events and produces no `<Dial>` TwiML.
-- Vercel Production has the existing Twilio account, Auth Token, Messaging Service, canonical public base URL, inbound/outbound SMS gates, and separate Tucson/Phoenix/IHC number variables. It has no voice-forwarding enable flag or destination variable.
-- Latest direct Twilio provider inspection on 2026-08-15 found voice, status, recording, TwiML App, Studio Flow, trunk, and call-forwarding configuration unset. A fresh number-resource inspection requires the owner to sign in to Twilio Console.
+- Three exact active Twilio routes exist with distinct receiving numbers and exact company/branch metadata: `weathertech-tucson` is `sms_voice`; `weathertech-phoenix` and `ihc-primary` are `sms`.
+- The owner identifies the WeatherTech Phoenix public line as Verizon Wireless, the IHC public line as AT&T, and a separate assistant terminal line as Verizon Wireless. These carrier facts are owner-supplied; WeatherTech OS cannot inspect carrier forwarding state.
+- The owner confirms the proposed assistant terminal is distinct from both public carrier source numbers and all three Twilio ingress numbers. Activation still requires the owner to verify that every unconditional, busy, no-answer, simultaneous-ring, hunt-group, and other forwarding path on that assistant line is disabled.
+- The completed Tucson path currently uses the exact shared Production voice webhook and persists bounded call/status evidence. Its protected destination must move off the Phoenix public carrier line before Phoenix carrier forwarding can be enabled, or Tucson calls would re-enter through the Phoenix route.
+- Twilio numbers documented only by masked endings `1326` and `6930` are already owned in the same Twilio account, Voice/SMS capable, and associated with the existing Messaging Service. Their incoming Voice URL, backup URL, and number-level status callback were blank at the latest provider inspection. Tucson ending `3145` retains the established signed Production Voice webhook.
+- Vercel Production has only the existing Tucson voice gate/destination. It does not yet have Phoenix/IHC voice gates, protected public-source values, or route-specific protected destinations.
 - Existing `business_phone_numbers`, `call_records`, and `communication_provider_events` schema is sufficient; no migration is expected.
+- Baseline evidence: Phoenix has one authenticated inbound SMS record/event and no voice record; Tucson has two authenticated inbound SMS records/events plus two completed owner-confirmed call lifecycles; IHC has no SMS or voice evidence. Outbound SMS, standalone/application-initiated calls, recording, and transcription remain at zero.
 - Protected starting hashes:
   - `.env.local`: `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
   - `supabase/migrations/0026_property_intelligence_foundation.sql`: `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e`.
   - `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql`: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`.
-- Proposal-to-Sold Job Operational Completion Phase 1 is released, closed, and must not be changed or reopened.
+- WeatherTech Tucson Inbound Voice Forwarding Phase 1 is released and closed. This sprint may generalize the shared voice implementation and later replace only Tucson's protected terminal destination, but it must not alter Tucson's customer-facing Twilio number, signed webhook identity, SMS behavior, call-evidence contract, or completed historical evidence.
 
 ## Owner-Approved Scope
 
-- Add protected, server-only Tucson voice configuration with a default-disabled route-specific enable gate and an owner-configured forwarding destination. The destination must never be hard-coded, exposed through `NEXT_PUBLIC_`, logged, returned unmasked, or committed.
-- Accept only bounded `application/x-www-form-urlencoded` Twilio voice requests whose official signature validates against the exact canonical HTTPS URL and configured Auth Token.
-- Resolve the request through the exact configured Twilio Account SID, Tucson receiving E.164 number, active `weathertech-tucson` business-number row, connected same-company integration, and exact Tucson route metadata.
-- Return SDK-generated `<Dial>` TwiML only for the verified WeatherTech Tucson route and only while the Tucson voice gate and valid destination are present.
-- Validate the destination as E.164 and reject self-forwarding, the configured Tucson number, configured Phoenix/IHC Twilio-number loops, malformed values, duplicate critical fields, wrong account, wrong receiving number, cross-company routes, missing configuration, or ambiguous mappings.
-- Preserve the caller-facing Tucson number and the original inbound caller context; do not purchase, port, release, reassign, or replace any number.
-- Persist bounded, idempotent, company- and route-scoped inbound call and dial-outcome evidence using the existing `call_records` and `communication_provider_events` schema. Do not persist credentials, raw signed requests, or unnecessary destination data.
-- Add a bounded signed voice status/dial-outcome callback that can update only the exact previously claimed Tucson call and cannot create an unrelated call or cross-route record.
-- Keep call recording and transcription explicitly disabled in TwiML and data state.
-- Bind Phoenix, Tucson, and IHC configuration to their exact `routing_key`, `business_location`, `team_queue`, and `lead_source` metadata in webhook and readiness checks.
-- Surface the receiving business-number route label, such as `WeatherTech Tucson`, on inbound SMS items in the Unified Inbox without changing message content or contact-matching behavior.
-- Extend owner-only readiness with masked Tucson voice configuration, exact route status, and provider-configuration next action without revealing the destination.
-- Preserve the existing signed, idempotent Tucson/Phoenix/IHC inbound SMS implementation and keep outbound SMS hard-locked and disabled.
-- Add focused route, signature, TwiML, persistence, replay, status, privacy, company/branch isolation, configuration, UI mapping, and regression tests.
-- If every non-Production gate passes, create and push one focused implementation commit, verify exact-SHA CI and deployment, perform the normal safe disabled-by-default Production rollout and read-only verification, then create at most one documentation-only closeout commit after owner-only activation/testing is complete.
+- Generalize the existing signed inbound voice handler from Tucson-only to three explicit route definitions while preserving the existing canonical POST endpoints.
+- Add separate protected, server-only Phoenix and IHC voice enable gates, protected forwarding destinations, and protected public carrier-source values. Keep all destinations and public-source values out of `NEXT_PUBLIC_`, source control, logs, ordinary database rows, client payloads, and unmasked readiness output.
+- Allow one owner-verified assistant line to be the terminal destination for Tucson, Phoenix, and IHC only when it differs from every configured Twilio ingress and public carrier source and the complete configured routing graph is acyclic.
+- Keep Tucson's existing route-specific gate and destination configuration compatible. The only later Tucson configuration change authorized by this sprint is replacing its protected terminal destination with the assistant line after Tucson is disabled and the assistant no-forwarding prerequisite is confirmed.
+- Resolve every voice request from Twilio's signed `To` number to exactly one configured account, active business-number row, connected same-company integration, routing key, company, location, queue, lead source, and `sms_voice` channel. Phoenix and IHC must never fall back to Tucson or to each other.
+- Return SDK-generated `<Dial>` TwiML only for the exact enabled route and its protected terminal. Preserve `answerOnBridge`, bounded timeout, disabled recording/transcription, POST dial-result handling, and no Twilio REST call.
+- Reject malformed or duplicate critical fields, invalid signatures, wrong accounts, wrong receiving numbers, disabled routes, missing/invalid destinations, cross-company rows, self-forwarding, any public-source or Twilio-ingress destination, and any configured cycle before TwiML or persistence.
+- Persist bounded, idempotent, company/branch-scoped call and provider-event evidence using the existing schema. Status callbacks may update only an exact already-claimed parent/child call graph and remain rollback-safe after a route is returned from `sms_voice` to `sms`.
+- Preserve the caller's identity on the terminal handset. WeatherTech OS must show the receiving company/branch route; the shared terminal handset is not required to display which business route rang.
+- Make Unified Inbox call/SMS conversation grouping and receiving-route resolution company-safe so identical external phone numbers cannot merge WeatherTech and IHC histories.
+- Extend owner-only readiness and Integration Center UI to show masked/boolean state for Tucson, Phoenix, and IHC separately, including gate, protected source/destination validity, loop state, exact `sms_voice` route state, shared webhook URL, and exact next action.
+- Preserve existing inbound SMS behavior for all three Twilio numbers and keep outbound SMS disabled. Document truthfully that carrier voice forwarding does not forward SMS sent to the public Verizon/AT&T numbers.
+- Add focused unit, static, route, identity, persistence, concurrency/replay, rollback, privacy, UI, hosted regression, and Browser validation without a real provider call or SMS.
+- If all non-Production gates pass, create and push one focused implementation commit, merge through the established pull-request procedure, deploy the exact merge SHA disabled by default, and stop at owner-only carrier/Twilio/live-call actions.
 
 ## Explicit Exclusions
 
-- No real test call without a separate explicit owner approval after the exact Production configuration is verified.
-- No phone-number purchase, port, release, reassignment, transfer, carrier change, caller-ID ownership change, or modification of an existing Verizon, AT&T, or unrelated Twilio number.
-- No hard-coded forwarding destination and no forwarding destination in chat, source control, logs, screenshots, browser-visible variables, database rows readable by ordinary users, or support output.
-- No Phoenix or IHC voice activation, fallback routing, shared default destination, or implicit enablement.
-- No outbound SMS, MMS, SMS status activation, auto-response, reminders, campaigns, bulk messaging, or A2P registration.
-- No call recording, recording callback activation, voicemail recording, transcription, speech recognition, IVR, queue, conference, simultaneous ring, or automated customer messaging.
-- No automatic lead, customer, job, estimate, follow-up, or task creation from a call or SMS.
-- No GoHighLevel, Gmail, Google Calendar, Yelp, Stripe, QuickBooks, proposal/e-signature, Customer Portal, or unrelated provider/application change.
-- No schema migration, RLS change, new table, destructive database mutation, or historical migration modification unless a newly proven invariant cannot be enforced with the existing schema and the owner separately approves that expansion.
-- No `.env.local`, secret, package/lockfile, protected migration, unrelated Production data, or readiness-gate change outside the exact Tucson voice configuration.
-- No Production synthetic call/event rows. Provider activation may update only the protected Tucson environment variables, only Tucson's Twilio voice webhook, and the exact Tucson `business_phone_numbers.communication_channel` value from `sms` to `sms_voice` (or back to `sms` for rollback) after all code gates pass. Phoenix, IHC, and every other Tucson field remain unchanged.
+- No port, transfer, release, reassignment, cancellation, ownership change, carrier change, or purchase for any Verizon, AT&T, Twilio, or other number.
+- No carrier forwarding change by Codex. The owner must authenticate to Verizon and AT&T and configure or remove forwarding only after each route's application readiness is independently green.
+- No Twilio Console number mutation until the owner is signed in and the exact route is ready. Only the Phoenix and IHC **A call comes in** POST webhook may later be set to the existing canonical Production voice endpoint; Tucson's provider configuration remains unchanged.
+- No real Tucson, Phoenix, or IHC test call without separate owner approval for that exact test after protected configuration, route state, deployment, carrier forwarding, and Twilio webhook checks pass.
+- No public carrier-number SMS ingestion claim. Standard voice call forwarding does not deliver texts. Do not enable hosted messaging, carrier messaging APIs, SMS forwarding, number hosting, or porting in this sprint.
+- No outbound SMS/MMS, automatic reply, campaign, reminder, bulk messaging, A2P registration submission, sender registration, or outbound messaging enablement. A2P remains a later prerequisite before application-originated US 10DLC messaging.
+- No call recording, voicemail recording, transcription, speech recognition, IVR, queue, conference, simultaneous ring, automated customer message, or automatic lead/customer/job/estimate/task creation.
+- No hard-coded public number or destination and no full number in governance, source, tests, logs, screenshots, support output, or browser-visible variables.
+- No new phone number, schema migration, RLS change, table, destructive database operation, or historical migration change.
+- No `.env.local`, package/lockfile, proposal/e-signature, GoHighLevel, Gmail, Calendar, Yelp, Stripe, QuickBooks, Customer Portal, or unrelated application/provider change.
+- No change to the completed Tucson public number, SMS webhook, existing SMS evidence, completed call evidence, or provider Voice URL.
 - No later sprint selection or implementation.
 
 ## Completion Criteria
 
-- A valid signed inbound call to the exact configured Tucson Twilio number returns safe SDK-generated `<Dial>` TwiML for the protected configured destination only.
-- Wrong-account, wrong-number, Phoenix, IHC, malformed, duplicate-field, disabled, missing-config, cross-company, replay-conflict, and loop attempts fail closed without dialing or persisting false evidence.
-- The destination can be changed through protected server configuration and deployment without changing application code.
-- Initial call claims and dial outcomes are idempotent, exact-route/company bound, bounded, and truthful in existing call/provider-event records.
-- Recording and transcription remain unrequested; no automatic CRM record is created from an unknown caller.
-- Tucson inbound SMS retains its exact existing behavior and durable evidence. Phoenix and IHC remain distinct and unchanged.
-- The Unified Inbox visibly distinguishes the Tucson receiving route for inbound SMS without exposing unnecessary full numbers.
-- Owner-only readiness exposes only masked/boolean voice configuration evidence and reports provider setup truthfully.
-- Focused security, branch-isolation, SMS regression, runtime, type-check, lint, build, dependency, secret, whitespace, protected-file, and scope gates pass.
-- Targeted Integration/Inbox Browser validation and the complete established isolated Browser regression pass with zero unexpected console errors or warnings and zero residue. No provider call or real SMS is sent by automated validation.
-- Exact implementation SHA CI and Vercel deployment pass; canonical `/api/health` returns HTTP 200 at that SHA. Production database/migration ledger remains `51/51` because no migration is expected.
-- Before the first call, the owner signs in to Twilio, securely enters the destination in protected Vercel configuration, verifies the exact Tucson-only `sms_voice` route transition, approves the Tucson-only Twilio Voice callback update, and separately approves one controlled real test call.
-- No existing Verizon, AT&T, or Twilio number is ported, released, reassigned, or otherwise modified beyond Tucson's approved voice webhook setting.
-- Implementation and final documentation closeout commits are pushed; repository refs are synchronized and the tree is clean.
+- The configured graph is proven acyclic: Tucson/Phoenix/IHC Twilio ingress routes each terminate at the protected assistant line; no destination equals a public source or Twilio ingress; the assistant line has no owner-configured forwarding path.
+- Valid signed calls to the exact enabled Phoenix and IHC Twilio ingress numbers return safe SDK-generated route-specific `<Dial>` TwiML and cannot cross tenant or branch boundaries.
+- Existing Tucson calls continue using the same signed ingress contract after its protected terminal destination is changed; Tucson SMS and historical call evidence remain unchanged.
+- Wrong-route/account/company/channel, malformed, duplicate, disabled, missing-config, replay-conflict, forged-status, and loop attempts fail closed without false persistence or TwiML.
+- Each route's call and status evidence is exact, idempotent, bounded, privacy-safe, and independently visible in WeatherTech OS; no raw destination is stored.
+- Unified Inbox never groups WeatherTech and IHC communications solely because they share an external phone number or email.
+- Owner-only readiness exposes only masked/boolean configuration evidence and reports each route independently.
+- Phoenix/IHC public carrier voice can be forwarded to their hidden Twilio ingress numbers without changing public ownership. Customers keep calling the existing public lines.
+- Public-line inbound SMS remains at the existing carriers unless a separate hosted-messaging/API/port decision is later approved; SMS sent directly to the existing Twilio numbers retains the established OS ingestion path.
+- No migration is added; local, regression, and Production ledgers remain exact `51/51`.
+- Focused tests, complete repository tests, type-check, lint, Production build, dependency audit, secret scan, migration integrity, protected hashes, `git diff --check`, hosted regression, targeted Browser validation, and the full established isolated Browser suite pass with zero residue and no provider call/message.
+- The exact implementation SHA passes pull-request CI/preview, established merge procedure, main-push CI, and disabled-by-default Production health/readiness verification.
+- Before carrier/provider activation, the owner verifies assistant-line forwarding is fully disabled, enters protected values securely, authenticates to Twilio/Verizon/AT&T, and separately approves each real validation call.
 
 ## Validation Plan
 
-- Reverify Git/ref/deployment identity, clean tree, governance, protected hashes, Production/regression target identity, `51/51` migration parity, exact Twilio route/message/call baselines, environment-variable names, and provider state before implementation and release.
-- Unit-test canonical URL signature validation, bounded form parsing, duplicate critical fields, exact Tucson routing, branch metadata, E.164 destination normalization, self/cross-route loops, disabled/missing configuration, SDK TwiML structure, recording disabled, and privacy-safe errors.
-- Runtime-test exact initial-call idempotency, conflicting CallSid reuse, same-company contact matching, unknown/ambiguous callers, one bounded provider event, dial status convergence, and rejection of forged/cross-company status callbacks without an external provider call.
-- Regression-test Tucson/Phoenix/IHC inbound SMS, exact company and number identity, message/event counts, no lead/customer auto-creation, outbound lock, and Unified Inbox route labeling.
-- Run focused tests, complete repository tests, type-check, lint, Production build, dependency audit, secret scan, `git diff --check`, protected-file verification, migration integrity, and final independent diff/security audit.
-- Use the isolated regression project only for write-capable hosted tests; require exact cleanup and zero residue. Production validation remains read-only until the owner separately approves the one real inbound call.
-- Run targeted signed-in Browser validation for owner readiness/route labels, then the complete established 24-group isolated Browser suite without any Twilio provider call or real SMS.
-- Push one implementation commit on a focused branch, require exact-SHA CI and Vercel success, and deploy disabled-by-default code before any protected destination or Twilio voice webhook is configured.
-- Stop for the owner to sign in to Twilio and securely set the protected destination. After read-only verification, request separate approval for the first real test call.
-- After a successful owner-approved live call and exact evidence verification, record the immutable implementation/release evidence in completed governance with at most one documentation-only closeout commit. Do not begin another sprint.
+- Reverify exact Git refs, clean tree, governance, protected hashes, Production health, `51/51` migration parity, exact route metadata, Vercel variable-name inventory, provider number capabilities/configuration, and call/SMS baselines.
+- Unit-test route-specific configuration, canonical signed URL handling, duplicate/bounded form fields, exact account/To/company/branch identity, graph-wide loop detection, strict E.164 values, disabled/missing config, SDK TwiML, recording/transcription locks, and masked readiness.
+- Runtime-test Phoenix and IHC exact ingress/status persistence, known/unknown/ambiguous callers, same external caller across two companies, partial-claim recovery, concurrency, replay, conflict, rollback-safe status, and zero forbidden side effects.
+- Regression-test the existing Tucson/Phoenix/IHC SMS paths and company/route labels with outbound messaging disabled.
+- Test company-safe Unified Inbox grouping by exact company plus route/contact identity rather than phone/email alone.
+- Run all repository tests, type-check, lint, Production build, dependency audit, migration integrity, secret/protected-file/scope/whitespace checks, and a final independent security diff audit.
+- Run write-capable tests only against the exact guarded regression project with captured-ID cleanup and zero residue. Run targeted and full Browser regression without provider calls or messages.
+- Push exactly one focused implementation commit on a `codex/` branch, require exact-head CI and preview, merge through the established merge-commit procedure, require main-push CI and exact-SHA Production deployment, and verify health/readiness with Phoenix/IHC gates off.
+- Stop before any carrier forwarding, Twilio number save, route channel activation, protected terminal replacement, or real call that requires owner/provider action. Provide the exact ordered owner steps and rollback at that boundary.
 
 ## Release Commits
 
-- Approval record: `be0014307d38151223eca08df42afddc713712de`.
-- Implementation: `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`.
-- Merge and Production implementation deployment: `2ace30ba04edfb0743b63ee050c7f3845540fe54` through PR #14.
-- Documentation closeout: this documentation-only commit; Git history is authoritative for its immutable hash.
-
-## Completion Evidence
-
-- The focused implementation remained one commit on `codex/weathertech-tucson-voice-forwarding-phase-1` and merged through PR #14 as exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`.
-- PR-head GitHub Actions run `32802756048` completed successfully for exact implementation SHA `0ed7b07c3ee45d77508890dfda8d5f45b1cc1ef0`; repository-only job `97666732131` passed, and isolated-Supabase job `97667112021` was correctly skipped at the pull-request boundary.
-- Main push GitHub Actions run `32802962484` completed successfully for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`; repository-only job `97667369745` and protected isolated-Supabase lifecycle job `97667830543` both passed.
-- All `45/45` top-level repository tests, type-check, lint, Production build, dependency audit with zero vulnerabilities, migration-integrity, protected-file, secret, scope, and whitespace checks passed. Focused Tucson voice security, route/inbox identity, inbound SMS, and hosted voice/SMS lifecycle validation passed without a provider call and with zero isolated-target residue.
-- Targeted Browser run `20260825022712513` passed `4/4` affected checks. Complete isolated Browser run `20260825022840810` passed all `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and independently verified zero residue.
-- Gate-on Vercel Production deployment `dpl_BzukHpKwCH1HTWqNMHyxJsNLrAx6` completed `READY` for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`. Canonical `/api/health` returned HTTP 200 and reported that exact SHA. `/api/readiness` remained truthfully HTTP 503 under the broad owner/provider safety gate; this route-specific activation did not set broad `WTOS_PRODUCTION_APPROVED` or weaken another provider gate.
-- No schema migration was added or applied. Local, regression, and Production migration ledgers remain exact at `51/51`.
-- The owner entered the destination only through protected Vercel Production configuration. Readiness verified it as configured, valid, non-looping, and masked without exposing the value. Only `weathertech-tucson` changed to `communication_channel='sms_voice'`; `weathertech-phoenix` and `ihc-primary` remain `communication_channel='sms'` with their separate identities intact.
-- Only the WeatherTech Tucson Twilio number's **A call comes in** webhook was configured for `POST https://weathertech-os.vercel.app/api/integrations/twilio/voice`. Phoenix and IHC voice configuration remained untouched, and the existing inbound SMS callback remained operational.
-- The owner initially approved one controlled live call. After a second call appeared, monitoring stopped until the owner confirmed that both calls were intentional owner actions and that each had two-way audio. Production contains exactly two completed Tucson call records with bounded durations of `15` and `18` seconds and exactly four matching voice provider events. No active call, recording, transcript, outbound SMS, automatic reply, automatic lead, customer, job, estimate, follow-up, or task side effect remains.
-- The established inbound SMS evidence is unchanged: Tucson retains two received messages and two completed SMS provider events, Phoenix retains one received message and one completed SMS provider event, and IHC remains at zero messages/events pending its separate carrier-ingress validation.
-- No Verizon, AT&T, or Twilio number was purchased, ported, released, reassigned, transferred, or otherwise changed beyond the exact approved Tucson Voice webhook setting. No forwarding destination, credential, full phone number, or provider call identifier is recorded in governance.
-- Local `main`, `origin/main`, live GitHub `main`, and canonical Production synchronized at the released merge SHA before this governance closeout. Final synchronization and clean-tree status must be reverified after the documentation-only closeout commit is pushed.
+- Approval record: this governance-only commit; Git history is authoritative for its immutable hash.
+- Implementation: pending.
+- Merge and Production implementation deployment: pending.
+- Documentation closeout: pending after owner-only activation and approved live validation.
 
 ## Final Status
 
-Completed and closed. The exact approved implementation, PR merge, disabled-first Production rollout, protected destination setup, Tucson-only route and webhook activation, isolated validation, and controlled live-call verification passed. The two observed calls were confirmed by the owner as intentional and had two-way audio; the second was not treated as preauthorized, and this closeout grants no authority for another validation call or a later sprint.
+Approved and awaiting implementation.
 
 ## Notes
 
-The owner provided the forwarding destination only through protected environment configuration and never through Codex chat or source control. Future destination changes remain protected configuration operations requiring explicit owner direction; they do not require an application-code rewrite. Configuring the Tucson Twilio number to request WeatherTech OS TwiML and using `<Dial>` forwards an authenticated inbound call through a Twilio call leg; it does not port, reassign, release, or modify the destination carrier number.
+The simplest approved topology keeps all public carrier ownership unchanged, uses the already-owned Twilio numbers only as hidden voice ingresses, and shares one protected terminal destination without sharing route authority. The terminal line must remain a sink: any call-forwarding, hunt-group, or recursive ring path from it fails the activation gate. A Twilio `<Dial>` child leg is part of an authenticated inbound-call lifecycle; it is not a standalone application-originated call.
