@@ -213,6 +213,7 @@ import {
   communicationItemMatchesAttentionFilter,
   communicationItemMatchesDateFilter,
   communicationItemMatchesInboxView,
+  communicationItemsShareConversation,
   communicationMatchStatusLabels,
   communicationPriorityLabels,
   communicationResponseStatusLabels,
@@ -17785,22 +17786,7 @@ function CommunicationDetailPanel({
   }
 
   const threadItems = items
-    .filter((candidate) => {
-      if (candidate.id === item.id) {
-        return true;
-      }
-
-      return Boolean(
-        (item.customerId && candidate.customerId === item.customerId) ||
-          (item.leadId && candidate.leadId === item.leadId) ||
-          (item.phone &&
-            candidate.phone &&
-            normalizePhoneDigits(item.phone) === normalizePhoneDigits(candidate.phone)) ||
-          (item.email &&
-            candidate.email &&
-            normalizeCrmLookup(item.email) === normalizeCrmLookup(candidate.email)),
-      );
-    })
+    .filter((candidate) => communicationItemsShareConversation(item, candidate))
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   const relatedRecords = [
     item.leadId ? "Lead linked" : null,
@@ -18069,8 +18055,10 @@ function TwilioCommunicationsSetupNotice() {
           <p className="mt-1 text-sm leading-6 text-amber-900">
             Only authenticated SMS received through an exact active company-number
             mapping appears here. Unknown or ambiguous senders remain unassigned for
-            review. Tucson inbound calls may be forwarded only through the separate
-            protected Tucson voice gate; outbound SMS remains unavailable.
+            review. Phoenix, Tucson, and IHC inbound calls use separate protected
+            Twilio ingress identities, route-specific gates, and company-scoped
+            evidence. Carrier call forwarding does not forward SMS sent to the public
+            Phoenix or IHC numbers; outbound SMS remains unavailable.
           </p>
         </div>
         <ProviderStatusBadge label="Outbound SMS Disabled" tone="red" />
@@ -47787,6 +47775,33 @@ type TwilioInboundReadinessResult = {
   };
   inboundValidated: boolean;
   outboundDisabled: boolean;
+  voiceForwarding?: {
+    webhookUrl: string | null;
+    statusCallbackUrl: string | null;
+    graphValid: boolean;
+    sharedDestination: boolean;
+    terminalForwardingDisabledConfirmed: boolean;
+    routes: Array<{
+      routeKey: string;
+      label: string;
+      enabled: boolean;
+      ingressConfigured: boolean;
+      maskedIngressNumber: string | null;
+      publicSourceRequired: boolean;
+      publicSourceConfigured: boolean;
+      publicSourceValid: boolean;
+      maskedPublicSource: string | null;
+      destinationConfigured: boolean;
+      destinationValid: boolean;
+      maskedDestination: string | null;
+      loopDetected: boolean;
+      routeExact: boolean;
+      terminalForwardingAttestationRequired: boolean;
+      terminalForwardingDisabledConfirmed: boolean;
+      ready: boolean;
+      nextAction: string;
+    }>;
+  };
   tucsonVoiceForwarding: {
     enabled: boolean;
     destinationConfigured: boolean;
@@ -52446,38 +52461,28 @@ function getTwilioReadinessTone(status: TwilioLiveReadinessStatus): ProviderBadg
   return "amber";
 }
 
-function getTucsonVoiceForwardingNextAction(
-  voice: TwilioInboundReadinessResult["tucsonVoiceForwarding"] | null,
-) {
+type TwilioVoiceRouteReadiness = NonNullable<
+  TwilioInboundReadinessResult["voiceForwarding"]
+>["routes"][number];
+
+function getVoiceForwardingNextAction(voice: TwilioVoiceRouteReadiness | null) {
   if (!voice) {
     return "Sign in with owner access and refresh the owner-only Twilio readiness check.";
   }
 
-  if (!voice.destinationConfigured) {
-    return "Enter TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO securely in Vercel Production as strict E.164; never paste the number into chat.";
+  return voice.nextAction;
+}
+
+function getTwilioVoiceRouteTestId(routeKey: string) {
+  if (routeKey === "weathertech-phoenix") {
+    return "twilio-phoenix-voice-readiness";
   }
 
-  if (!voice.destinationValid) {
-    return "Replace the protected forwarding destination with strict E.164 (+ followed by 8 to 15 digits), then redeploy.";
+  if (routeKey === "weathertech-tucson") {
+    return "twilio-tucson-voice-readiness";
   }
 
-  if (voice.loopDetected) {
-    return "Choose a destination that is not the Tucson, Phoenix, or IHC business number, then recheck readiness.";
-  }
-
-  if (!voice.routeExact) {
-    return "Update only the verified Tucson business-number route from sms to sms_voice; leave Phoenix and IHC unchanged, then recheck readiness.";
-  }
-
-  if (!voice.enabled) {
-    return "Set TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED=true in Vercel Production and redeploy the reviewed commit.";
-  }
-
-  if (!voice.ready || !voice.webhookUrl) {
-    return "Verify the Twilio account secret, canonical public URL, outbound-SMS lock, and Tucson route configuration before provider setup.";
-  }
-
-  return `Configure only the Tucson Twilio number's incoming Voice webhook as POST ${voice.webhookUrl}; do not place a real test call without separate owner approval.`;
+  return "twilio-ihc-voice-readiness";
 }
 
 function TwilioLiveFoundationPanel() {
@@ -52505,8 +52510,12 @@ function TwilioLiveFoundationPanel() {
   }, []);
 
   const status = readiness?.status ?? "not_connected";
-  const tucsonVoice = readiness?.tucsonVoiceForwarding ?? null;
-  const tucsonVoiceNextAction = getTucsonVoiceForwardingNextAction(tucsonVoice);
+  const voiceForwarding = readiness?.voiceForwarding ?? null;
+  const voiceRoutes = voiceForwarding?.routes ?? [];
+  const readyVoiceRouteCount = voiceRoutes.filter((route) => route.ready).length;
+  const allVoiceRoutesReady =
+    voiceRoutes.length === twilioBusinessNumberRouteTemplates.length &&
+    voiceRoutes.every((route) => route.ready);
 
   return (
     <section
@@ -52519,14 +52528,15 @@ function TwilioLiveFoundationPanel() {
             Twilio Live Integration Foundation
           </p>
           <h3 className="mt-1 text-xl font-bold text-slate-950">
-            Inbound SMS and Tucson voice forwarding
+            Inbound SMS and company-safe voice forwarding
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
             Signed inbound SMS can be recorded only after credentials, phone
             ownership, exact business-number mapping, the Twilio Console webhook,
-            and a controlled live test are verified. Tucson voice forwarding has a
-            separate protected destination and gate. Phoenix and IHC voice, outbound
-            SMS, recording, and transcription remain unavailable.
+            and a controlled live test are verified. Phoenix, Tucson, and IHC voice
+            routes each retain an exact protected ingress, company identity, branch,
+            destination, and gate. Outbound SMS, recording, and transcription remain
+            unavailable.
           </p>
         </div>
         <ProviderStatusBadge
@@ -52555,75 +52565,154 @@ function TwilioLiveFoundationPanel() {
 
       <div
         className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4"
-        data-testid="twilio-tucson-voice-readiness"
+        data-testid="twilio-voice-routing-graph"
       >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-sm font-bold uppercase text-sky-800">
-              WeatherTech Tucson inbound voice
+              Protected inbound voice routing graph
             </p>
             <p className="mt-1 text-sm leading-6 text-sky-950">
-              The destination remains server-only. This owner view displays only its
-              configured state and masked last four digits.
+              Public carrier numbers and forwarding destinations remain server-only.
+              This owner view exposes only boolean state and masked last four digits.
             </p>
           </div>
           <ProviderStatusBadge
-            label={tucsonVoice?.ready ? "Application Ready" : "Not Ready"}
-            tone={tucsonVoice?.ready ? "green" : "amber"}
+            label={allVoiceRoutesReady ? "All Routes Ready" : `${readyVoiceRouteCount}/3 Routes Ready`}
+            tone={allVoiceRoutesReady ? "green" : "amber"}
           />
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ProfileStat
-            label="Voice gate"
-            value={tucsonVoice?.enabled ? "Enabled" : "Disabled"}
+            label="Routing graph"
+            value={voiceForwarding?.graphValid ? "Acyclic" : "Blocked / incomplete"}
           />
           <ProfileStat
-            label="Destination"
+            label="Shared terminal"
+            value={voiceForwarding?.sharedDestination ? "Verified shared sink" : "Not verified"}
+          />
+          <ProfileStat
+            label="Terminal forwarding"
             value={
-              !tucsonVoice?.destinationConfigured
-                ? "Not configured"
-                : tucsonVoice.destinationValid
-                  ? `Valid ${tucsonVoice.maskedDestination ?? "(masked)"}`
-                  : "Configured but invalid"
+              voiceForwarding?.terminalForwardingDisabledConfirmed
+                ? "Owner confirmed disabled"
+                : "Owner confirmation required"
             }
           />
           <ProfileStat
-            label="Loop guard"
-            value={tucsonVoice?.loopDetected ? "Blocked loop" : "Clear"}
+            label="Voice webhook"
+            value={voiceForwarding?.webhookUrl ? "Canonical POST" : "Not configured"}
           />
           <ProfileStat
-            label="Tucson route"
-            value={tucsonVoice?.routeExact ? "Exact sms_voice" : "Not voice-ready"}
-          />
-          <ProfileStat
-            label="Forwarding"
-            value={tucsonVoice?.ready ? "Ready" : "Blocked"}
+            label="Status callback"
+            value={voiceForwarding?.statusCallbackUrl ? "Canonical POST" : "Not configured"}
           />
         </div>
 
-        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-          <div className="rounded-lg border border-sky-200 bg-white p-3">
-            <p className="text-xs font-semibold uppercase text-slate-500">
-              Canonical Tucson voice webhook
-            </p>
-            <code className="mt-1 block break-all text-sm font-semibold text-slate-950">
-              POST {tucsonVoice?.webhookUrl ?? "/api/integrations/twilio/voice"}
-            </code>
-          </div>
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs font-semibold uppercase text-amber-800">
-              Exact next action
-            </p>
-            <p className="mt-1 text-sm leading-6 text-amber-950">
-              {tucsonVoiceNextAction}
-            </p>
-          </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <code className="block break-all rounded-lg border border-sky-200 bg-white p-3 text-sm font-semibold text-slate-950">
+            Voice: POST {voiceForwarding?.webhookUrl ?? "/api/integrations/twilio/voice"}
+          </code>
+          <code className="block break-all rounded-lg border border-sky-200 bg-white p-3 text-sm font-semibold text-slate-950">
+            Status: POST {voiceForwarding?.statusCallbackUrl ?? "/api/integrations/twilio/voice/status"}
+          </code>
         </div>
 
-        <p className="mt-3 text-xs font-semibold text-sky-900">
-          Tucson only. Phoenix and IHC voice remain unavailable. Recording,
-          transcription, outbound SMS, auto-replies, and automatic lead creation stay disabled.
+        <div className="mt-4 grid gap-3 xl:grid-cols-3">
+          {twilioBusinessNumberRouteTemplates.map((route) => {
+            const voiceRoute = voiceRoutes.find(
+              (candidate) => candidate.routeKey === route.key,
+            ) ?? null;
+            const publicSourceRequired =
+              voiceRoute?.publicSourceRequired ?? route.key !== "weathertech-tucson";
+
+            return (
+              <article
+                key={route.key}
+                className="rounded-lg border border-sky-200 bg-white p-4"
+                data-testid={getTwilioVoiceRouteTestId(route.key)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-slate-950">
+                      {voiceRoute?.label ?? `${route.companyName} ${route.businessLocation}`}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase text-slate-500">
+                      {route.teamQueue}
+                    </p>
+                  </div>
+                  <ProviderStatusBadge
+                    label={voiceRoute?.ready ? "Application Ready" : "Not Ready"}
+                    tone={voiceRoute?.ready ? "green" : "amber"}
+                  />
+                </div>
+
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                  <ProfileStat label="Voice gate" value={voiceRoute?.enabled ? "Enabled" : "Disabled"} />
+                  <ProfileStat
+                    label="Twilio ingress"
+                    value={
+                      voiceRoute?.ingressConfigured
+                        ? `Configured ${voiceRoute.maskedIngressNumber ?? "(masked)"}`
+                        : "Not configured"
+                    }
+                  />
+                  <ProfileStat
+                    label="Public source"
+                    value={
+                      !publicSourceRequired
+                        ? "Direct Twilio number"
+                        : !voiceRoute?.publicSourceConfigured
+                          ? "Not configured"
+                          : voiceRoute.publicSourceValid
+                            ? `Valid ${voiceRoute.maskedPublicSource ?? "(masked)"}`
+                            : "Configured but invalid"
+                    }
+                  />
+                  <ProfileStat
+                    label="Destination"
+                    value={
+                      !voiceRoute?.destinationConfigured
+                        ? "Not configured"
+                        : voiceRoute.destinationValid
+                          ? `Valid ${voiceRoute.maskedDestination ?? "(masked)"}`
+                          : "Configured but invalid"
+                    }
+                  />
+                  <ProfileStat
+                    label="Loop guard"
+                    value={
+                      !voiceRoute
+                        ? "Not verified"
+                        : voiceRoute.loopDetected
+                          ? "Blocked loop"
+                          : "Clear"
+                    }
+                  />
+                  <ProfileStat
+                    label="Route identity"
+                    value={voiceRoute?.routeExact ? "Exact sms_voice" : "Not voice-ready"}
+                  />
+                </div>
+
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold uppercase text-amber-800">
+                    Exact next action
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-amber-950">
+                    {getVoiceForwardingNextAction(voiceRoute)}
+                  </p>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-xs font-semibold leading-5 text-sky-900">
+          Recording, transcription, outbound SMS, auto-replies, and automatic lead
+          creation stay disabled. Standard carrier call forwarding does not deliver
+          SMS sent to the public Verizon or AT&amp;T numbers into WeatherTech OS.
         </p>
       </div>
 
@@ -52685,23 +52774,19 @@ function TwilioLiveFoundationPanel() {
           </p>
           {twilioWebhookEndpoints.map((endpoint) => {
             const isInboundSms = endpoint.id === "inbound_sms";
-            const isTucsonVoice =
+            const isVoiceEndpoint =
               endpoint.id === "voice" || endpoint.id === "voice_status";
             const endpointReady = isInboundSms
               ? Boolean(readiness?.configuration.inboundGateEnabled)
-              : isTucsonVoice
-                ? Boolean(tucsonVoice?.ready)
+              : isVoiceEndpoint
+                ? allVoiceRoutesReady
                 : false;
             const endpointStatus = isInboundSms
               ? endpointReady
                 ? "Inbound Gate Enabled"
                 : "Inbound Gate Disabled"
-              : isTucsonVoice
-                ? endpointReady
-                  ? "Tucson Application Ready"
-                  : tucsonVoice?.enabled
-                    ? "Tucson Gate Blocked"
-                    : "Tucson Gate Disabled"
+              : isVoiceEndpoint
+                ? `${readyVoiceRouteCount}/3 Voice Routes Ready`
                 : endpoint.id === "sms_status"
                   ? "Disabled / Outbound SMS Off"
                   : "Disabled";

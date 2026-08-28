@@ -19,10 +19,13 @@ import {
   getTwilioBusinessNumberRouteTemplate,
   matchesTwilioBusinessRouteTemplate,
   normalizeTwilioPhoneNumber,
+  type TwilioBusinessRouteKey,
 } from "./foundation";
 import {
   getTwilioExpectedBusinessNumbers,
   getTwilioServerConfig,
+  type TwilioServerConfig,
+  type TwilioVoiceRouteServerConfig,
 } from "./serverClient";
 
 export { normalizeTwilioPhoneNumber } from "./foundation";
@@ -93,6 +96,7 @@ type CrmClient = SupabaseClient<Database>;
 type VerifiedRoute = {
   number: BusinessPhoneNumberRecord;
   connection: IntegrationConnectionRecord;
+  routeKey: TwilioBusinessRouteKey;
 };
 
 type ContactMatch = {
@@ -387,10 +391,38 @@ function createTwilioVoiceSecretProof(namespace: string, payload: Record<string,
 }
 
 export function createTwilioVoiceDestinationProof(input: {
+  routeKey?: TwilioBusinessRouteKey;
   parentCallSid: string;
   destination: string;
 }) {
-  return createTwilioVoiceSecretProof("wtos:twilio:tucson-forward-destination", input);
+  const { routeKey = "weathertech-tucson", ...payload } = input;
+  const namespace =
+    routeKey === "weathertech-tucson"
+      ? "wtos:twilio:tucson-forward-destination"
+      : `wtos:twilio:${routeKey}-forward-destination`;
+
+  return createTwilioVoiceSecretProof(namespace, payload);
+}
+
+export type TwilioVoiceDeterministicRecordKind =
+  | "call"
+  | "voice_inbound_event"
+  | "voice_status_event";
+
+export function getTwilioVoiceDeterministicNamespace(
+  routeKey: TwilioBusinessRouteKey,
+  kind: TwilioVoiceDeterministicRecordKind,
+) {
+  const routeNamespace =
+    routeKey === "weathertech-tucson" ? "tucson" : routeKey;
+
+  if (kind === "call") {
+    return `wtos:twilio:${routeNamespace}-call:v1`;
+  }
+  if (kind === "voice_inbound_event") {
+    return `wtos:twilio:${routeNamespace}-voice-inbound-event:v1`;
+  }
+  return `wtos:twilio:${routeNamespace}-voice-status-event:v1`;
 }
 
 export function createTwilioVoicePayloadFingerprint(input: {
@@ -412,6 +444,7 @@ export function createTwilioVoicePayloadFingerprint(input: {
 }
 
 export function createTwilioVoiceEvidenceProof(input: {
+  routeKey?: TwilioBusinessRouteKey;
   kind: "voice_inbound" | "voice_status";
   callRecordId: string;
   eventId: string;
@@ -425,7 +458,13 @@ export function createTwilioVoiceEvidenceProof(input: {
   signatureEvidence: string;
   destinationProof: string;
 }) {
-  return createTwilioVoiceSecretProof("wtos:twilio:tucson-voice-evidence", input);
+  const { routeKey = "weathertech-tucson", ...payload } = input;
+  const namespace =
+    routeKey === "weathertech-tucson"
+      ? "wtos:twilio:tucson-voice-evidence"
+      : `wtos:twilio:${routeKey}-voice-evidence`;
+
+  return createTwilioVoiceSecretProof(namespace, payload);
 }
 
 function deterministicUuid(namespace: string, ...parts: string[]) {
@@ -579,10 +618,13 @@ async function resolveVerifiedRoute(
     return { status: "forbidden" };
   }
 
-  return { status: "matched", route: { number, connection } };
+  return {
+    status: "matched",
+    route: { number, connection, routeKey: configuredNumber.routeKey },
+  };
 }
 
-async function resolveVerifiedTucsonRoute(
+async function resolveVerifiedVoiceRoute(
   client: CrmClient,
   payload: { accountSid: string; to: string },
   phase: "voice_ingress" | "voice_status",
@@ -594,13 +636,13 @@ async function resolveVerifiedTucsonRoute(
     (candidate) => candidate.phoneNumberE164 === payload.to,
   );
 
-  if (
-    configuredCandidates.length !== 1 ||
-    configuredCandidates[0].routeKey !== "weathertech-tucson"
-  ) {
+  if (configuredCandidates.length !== 1) {
     return { status: configuredCandidates.length > 1 ? "conflict" : "forbidden" };
   }
-  const template = getTwilioBusinessNumberRouteTemplate("weathertech-tucson");
+  const configuredNumber = configuredCandidates[0];
+  const template = getTwilioBusinessNumberRouteTemplate(
+    configuredNumber.routeKey,
+  );
   if (!template) {
     return { status: "retryable" };
   }
@@ -666,31 +708,60 @@ async function resolveVerifiedTucsonRoute(
   const company = companyResult.data[0];
   const connection = connectionResult.data[0];
   const connectionAccountSid = connection.provider_account_id ?? connection.external_account_id;
+  const configuredMessagingServiceSid = getTwilioServerConfig().messagingServiceSid;
   if (
-    company.name !== "WeatherTech Roofing LLC" ||
+    company.name !== configuredNumber.company ||
     number.company_id !== connection.company_id ||
     connection.status !== "connected" ||
     connection.disabled_at ||
-    connectionAccountSid !== payload.accountSid
+    connectionAccountSid !== payload.accountSid ||
+    !configuredMessagingServiceSid ||
+    number.messaging_service_sid !== configuredMessagingServiceSid
   ) {
     return { status: "forbidden" };
   }
 
-  return { status: "matched", route: { number, connection } };
+  return {
+    status: "matched",
+    route: { number, connection, routeKey: configuredNumber.routeKey },
+  };
 }
 
-function resolveVerifiedTucsonVoiceIngressRoute(
+function resolveVerifiedVoiceIngressRoute(
   client: CrmClient,
   payload: { accountSid: string; to: string },
 ) {
-  return resolveVerifiedTucsonRoute(client, payload, "voice_ingress");
+  return resolveVerifiedVoiceRoute(client, payload, "voice_ingress");
 }
 
-function resolveVerifiedTucsonVoiceStatusRoute(
+function resolveVerifiedVoiceStatusRoute(
   client: CrmClient,
   payload: { accountSid: string; to: string },
 ) {
-  return resolveVerifiedTucsonRoute(client, payload, "voice_status");
+  return resolveVerifiedVoiceRoute(client, payload, "voice_status");
+}
+
+function getTwilioVoiceRouteByIngress(
+  config: TwilioServerConfig,
+  ingressNumber: string,
+) {
+  const candidates = config.voiceForwarding.routes.filter(
+    (route) => route.ingressNumberE164 === ingressNumber,
+  );
+
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function isTwilioVoiceProtectedNode(
+  config: TwilioServerConfig,
+  phoneNumber: string,
+) {
+  return config.voiceForwarding.routes.some(
+    (route) =>
+      route.ingressNumberE164 === phoneNumber ||
+      route.publicSourceE164 === phoneNumber ||
+      route.destinationE164 === phoneNumber,
+  );
 }
 
 async function resolveContact(
@@ -1316,7 +1387,7 @@ function getStoredVoiceContactStatus(
   return null;
 }
 
-async function claimTucsonVoiceCall(
+async function claimTwilioVoiceCall(
   client: CrmClient,
   params: {
     route: VerifiedRoute;
@@ -1334,7 +1405,10 @@ async function claimTucsonVoiceCall(
   | { status: "ok"; claim: VoiceCallClaim }
   | { status: "conflict" | "retryable" }
 > {
-  const id = deterministicUuid("wtos:twilio:tucson-call:v1", params.callSid);
+  const id = deterministicUuid(
+    getTwilioVoiceDeterministicNamespace(params.route.routeKey, "call"),
+    params.callSid,
+  );
   const insert: CallRecordInsert = {
     id,
     company_id: params.route.number.company_id,
@@ -1368,6 +1442,7 @@ async function claimTucsonVoiceCall(
       ingestion_status: "claimed",
       contact_match_status: params.contact.status,
       source: "authenticated_twilio_voice_webhook",
+      voice_route_key: params.route.routeKey,
       initial_request_fingerprint: params.requestFingerprint,
       forward_destination_proof: params.destinationProof,
       recording_requested: false,
@@ -1390,7 +1465,9 @@ async function claimTucsonVoiceCall(
   const { data: existing, error: existingError } = await client
     .from("call_records")
     .select("*")
-    .eq("id", id)
+    .eq("provider", "twilio")
+    .eq("provider_account_sid", params.accountSid)
+    .eq("provider_call_sid", params.callSid)
     .limit(2);
   if (existingError || existing?.length !== 1) {
     return { status: "retryable" };
@@ -1460,9 +1537,10 @@ function voiceInboundEventMatchesClaim(
   );
 }
 
-async function convergeTucsonVoiceInboundEvent(
+async function convergeTwilioVoiceInboundEvent(
   client: CrmClient,
   params: {
+    routeKey: TwilioBusinessRouteKey;
     call: CallRecord;
     contactStatus: ContactMatch["status"];
     callStatus: CallRecord["call_status"];
@@ -1478,8 +1556,15 @@ async function convergeTucsonVoiceInboundEvent(
   if (!callSid || !params.call.company_id || !params.call.integration_connection_id || !params.call.business_phone_number_id) {
     return { status: "conflict" };
   }
-  const eventId = deterministicUuid("wtos:twilio:tucson-voice-inbound-event:v1", callSid);
+  const eventId = deterministicUuid(
+    getTwilioVoiceDeterministicNamespace(
+      params.routeKey,
+      "voice_inbound_event",
+    ),
+    callSid,
+  );
   const evidenceProof = createTwilioVoiceEvidenceProof({
+    routeKey: params.routeKey,
     kind: "voice_inbound",
     callRecordId: params.call.id,
     eventId,
@@ -1523,6 +1608,7 @@ async function convergeTucsonVoiceInboundEvent(
     request_fingerprint: params.requestFingerprint,
     payload_summary: {
       contact_match_status: params.contactStatus,
+      voice_route_key: params.routeKey,
       signature_validated: true,
       signature_evidence: params.signatureEvidence,
     },
@@ -1578,6 +1664,7 @@ async function convergeTucsonVoiceInboundEvent(
   const metadata = {
     ...(params.call.metadata ?? {}),
     ingestion_status: "complete",
+    voice_route_key: params.routeKey,
     provider_event_id: event.id,
     evidence_proof: evidenceProof,
   };
@@ -1595,9 +1682,10 @@ async function convergeTucsonVoiceInboundEvent(
   return { status: "ok", event };
 }
 
-async function storeTwilioTucsonVoiceInboundPayload(
+async function storeTwilioVoiceInboundPayload(
   payload: TwilioWebhookPayload,
   signatureEvidence: string,
+  voiceRouteConfig: TwilioVoiceRouteServerConfig,
   forwardTo: string,
 ): Promise<TwilioStorageResult> {
   const accountSid = payload.accountSid;
@@ -1607,7 +1695,7 @@ async function storeTwilioTucsonVoiceInboundPayload(
   const callStatus = normalizeTwilioInitialCallStatus(payload.callStatus);
   const config = getTwilioServerConfig();
   const configuredAccountSid = config.accountSid;
-  const configuredTucsonNumber = config.tucsonVoiceForwarding.tucsonNumberE164;
+  const configuredIngressNumber = voiceRouteConfig.ingressNumberE164;
 
   if (
     payload.kind !== "voice_inbound" ||
@@ -1623,16 +1711,20 @@ async function storeTwilioTucsonVoiceInboundPayload(
     payload.dialCallDurationSeconds !== null ||
     payload.dialBridged !== null ||
     !to ||
-    to !== configuredTucsonNumber ||
+    to !== configuredIngressNumber ||
     payload.direction !== "inbound" ||
     !callStatus ||
     !STRICT_E164_PATTERN.test(forwardTo) ||
-    from === forwardTo
+    voiceRouteConfig.destinationE164 !== forwardTo ||
+    !voiceRouteConfig.configurationReady ||
+    !config.voiceForwarding.graphValid ||
+    (from !== null && isTwilioVoiceProtectedNode(config, from))
   ) {
     throw new TwilioWebhookError("invalid_voice_payload", 400);
   }
 
   const destinationProof = createTwilioVoiceDestinationProof({
+    routeKey: voiceRouteConfig.routeKey,
     parentCallSid: callSid,
     destination: forwardTo,
   });
@@ -1644,12 +1736,15 @@ async function storeTwilioTucsonVoiceInboundPayload(
   if (!client) {
     throw new TwilioWebhookError("storage_unavailable", 503);
   }
-  const routeResult = await resolveVerifiedTucsonVoiceIngressRoute(client, { accountSid, to });
+  const routeResult = await resolveVerifiedVoiceIngressRoute(client, { accountSid, to });
   if (routeResult.status !== "matched") {
     throw new TwilioWebhookError(
       routeResult.status === "forbidden" ? "voice_route_rejected" : routeResult.status,
       routeResult.status === "forbidden" ? 403 : routeResult.status === "conflict" ? 409 : 503,
     );
+  }
+  if (routeResult.route.routeKey !== voiceRouteConfig.routeKey) {
+    throw new TwilioWebhookError("voice_route_rejected", 403);
   }
 
   const contactResult = from
@@ -1681,7 +1776,7 @@ async function storeTwilioTucsonVoiceInboundPayload(
     companyId: routeResult.route.number.company_id,
     destinationProof,
   });
-  const claimResult = await claimTucsonVoiceCall(client, {
+  const claimResult = await claimTwilioVoiceCall(client, {
     route: routeResult.route,
     contact: contactResult.match,
     accountSid,
@@ -1700,7 +1795,8 @@ async function storeTwilioTucsonVoiceInboundPayload(
     );
   }
 
-  const eventResult = await convergeTucsonVoiceInboundEvent(client, {
+  const eventResult = await convergeTwilioVoiceInboundEvent(client, {
+    routeKey: routeResult.route.routeKey,
     call: claimResult.claim.call,
     contactStatus: claimResult.claim.contactStatus,
     callStatus,
@@ -1772,7 +1868,7 @@ function voiceStatusEventMatchesClaim(
   );
 }
 
-async function storeTwilioTucsonVoiceStatusPayload(
+async function storeTwilioVoiceStatusPayload(
   payload: TwilioWebhookPayload,
   signatureEvidence: string,
 ): Promise<TwilioStorageResult> {
@@ -1787,6 +1883,9 @@ async function storeTwilioTucsonVoiceStatusPayload(
     : null;
   const durationSeconds = payload.dialCallDurationSeconds;
   const config = getTwilioServerConfig();
+  const voiceRouteConfig = callbackTo
+    ? getTwilioVoiceRouteByIngress(config, callbackTo)
+    : null;
 
   if (
     payload.kind !== "voice_status" ||
@@ -1802,7 +1901,7 @@ async function storeTwilioTucsonVoiceStatusPayload(
     payload.parentCallSid !== null ||
     payload.direction !== "inbound" ||
     !callbackTo ||
-    callbackTo !== config.tucsonVoiceForwarding.tucsonNumberE164 ||
+    !voiceRouteConfig ||
     !providerDialStatus ||
     !finalStatus ||
     durationSeconds === null ||
@@ -1843,12 +1942,13 @@ async function storeTwilioTucsonVoiceStatusPayload(
     throw new TwilioWebhookError("voice_status_identity_rejected", 403);
   }
 
-  const routeResult = await resolveVerifiedTucsonVoiceStatusRoute(client, {
+  const routeResult = await resolveVerifiedVoiceStatusRoute(client, {
     accountSid,
     to: call.to_phone,
   });
   if (
     routeResult.status !== "matched" ||
+    routeResult.route.routeKey !== voiceRouteConfig.routeKey ||
     routeResult.route.number.id !== call.business_phone_number_id ||
     routeResult.route.connection.id !== call.integration_connection_id ||
     routeResult.route.number.company_id !== call.company_id
@@ -1887,10 +1987,14 @@ async function storeTwilioTucsonVoiceStatusPayload(
     destinationProof,
   });
   const eventId = deterministicUuid(
-    "wtos:twilio:tucson-voice-status-event:v1",
+    getTwilioVoiceDeterministicNamespace(
+      routeResult.route.routeKey,
+      "voice_status_event",
+    ),
     parentCallSid,
   );
   const evidenceProof = createTwilioVoiceEvidenceProof({
+    routeKey: routeResult.route.routeKey,
     kind: "voice_status",
     callRecordId: call.id,
     eventId,
@@ -1934,6 +2038,7 @@ async function storeTwilioTucsonVoiceStatusPayload(
     request_fingerprint: requestFingerprint,
     payload_summary: {
       provider_dial_status: providerDialStatus,
+      voice_route_key: routeResult.route.routeKey,
       duration_seconds: durationSeconds,
       dial_bridged: payload.dialBridged,
       signature_validated: true,
@@ -1962,11 +2067,20 @@ async function storeTwilioTucsonVoiceStatusPayload(
   let duplicate = false;
   if (eventError?.code === "23505") {
     duplicate = true;
-    const existingResult = await client
+    let existingResult = await client
       .from("communication_provider_events")
       .select("*")
       .eq("id", eventId)
       .limit(2);
+    if (!existingResult.error && existingResult.data?.length === 0) {
+      existingResult = await client
+        .from("communication_provider_events")
+        .select("*")
+        .eq("provider", "twilio")
+        .eq("event_type", "voice_status")
+        .eq("provider_event_sid", childCallSid)
+        .limit(2);
+    }
     if (existingResult.error || existingResult.data?.length !== 1) {
       throw new TwilioWebhookError("voice_status_event_lookup_failed", 503);
     }
@@ -2165,12 +2279,14 @@ export async function handleTwilioWebhook(
 
   if (expectedKind === "voice_inbound") {
     const config = getTwilioServerConfig();
-    const voiceConfig = config.tucsonVoiceForwarding;
     const receivingNumber = normalizeTwilioPhoneNumber(parsed.payload.to);
     const callerNumber = normalizeTwilioPhoneNumber(parsed.payload.from);
+    const voiceRouteConfig = receivingNumber
+      ? getTwilioVoiceRouteByIngress(config, receivingNumber)
+      : null;
 
-    if (!config.accountSid || !voiceConfig.tucsonNumberE164) {
-      return new Response("Twilio Tucson voice configuration is incomplete.", {
+    if (!config.accountSid) {
+      return new Response("Twilio voice configuration is incomplete.", {
         status: 503,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -2181,23 +2297,23 @@ export async function handleTwilioWebhook(
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-    if (!receivingNumber || receivingNumber !== voiceConfig.tucsonNumberE164) {
+    if (!receivingNumber || !voiceRouteConfig) {
       return new Response("Twilio voice route rejected.", {
         status: 403,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
     if (
-      !voiceConfig.configurationReady ||
-      !voiceConfig.destinationE164 ||
-      !voiceConfig.statusCallbackUrl
+      !voiceRouteConfig.configurationReady ||
+      !voiceRouteConfig.destinationE164 ||
+      !config.voiceForwarding.statusCallbackUrl
     ) {
-      return new Response("Twilio Tucson voice forwarding remains disabled or incomplete.", {
+      return new Response("Twilio voice forwarding remains disabled or incomplete.", {
         status: 503,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-    if (callerNumber && callerNumber === voiceConfig.destinationE164) {
+    if (callerNumber && isTwilioVoiceProtectedNode(config, callerNumber)) {
       return new Response("Twilio voice forwarding loop rejected.", {
         status: 403,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
@@ -2205,18 +2321,19 @@ export async function handleTwilioWebhook(
     }
 
     try {
-      await storeTwilioTucsonVoiceInboundPayload(
+      await storeTwilioVoiceInboundPayload(
         parsed.payload,
         parsed.signatureEvidence,
-        voiceConfig.destinationE164,
+        voiceRouteConfig,
+        voiceRouteConfig.destinationE164,
       );
       return createTwilioVoiceForwardingResponse({
-        destination: voiceConfig.destinationE164,
-        statusCallbackUrl: voiceConfig.statusCallbackUrl,
+        destination: voiceRouteConfig.destinationE164,
+        statusCallbackUrl: config.voiceForwarding.statusCallbackUrl,
       });
     } catch (error) {
       const status = error instanceof TwilioWebhookError ? error.status : 503;
-      return new Response("Twilio Tucson inbound voice was not accepted.", {
+      return new Response("Twilio inbound voice was not accepted.", {
         status,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -2226,9 +2343,12 @@ export async function handleTwilioWebhook(
   if (expectedKind === "voice_status") {
     const config = getTwilioServerConfig();
     const receivingNumber = normalizeTwilioPhoneNumber(parsed.payload.to);
+    const voiceRouteConfig = receivingNumber
+      ? getTwilioVoiceRouteByIngress(config, receivingNumber)
+      : null;
 
-    if (!config.accountSid || !config.tucsonVoiceForwarding.tucsonNumberE164) {
-      return new Response("Twilio Tucson voice status configuration is incomplete.", {
+    if (!config.accountSid) {
+      return new Response("Twilio voice status configuration is incomplete.", {
         status: 503,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -2239,7 +2359,7 @@ export async function handleTwilioWebhook(
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-    if (!receivingNumber || receivingNumber !== config.tucsonVoiceForwarding.tucsonNumberE164) {
+    if (!receivingNumber || !voiceRouteConfig) {
       return new Response("Twilio voice status route rejected.", {
         status: 403,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
@@ -2247,11 +2367,11 @@ export async function handleTwilioWebhook(
     }
 
     try {
-      await storeTwilioTucsonVoiceStatusPayload(parsed.payload, parsed.signatureEvidence);
+      await storeTwilioVoiceStatusPayload(parsed.payload, parsed.signatureEvidence);
       return createTwilioVoiceEndResponse();
     } catch (error) {
       const status = error instanceof TwilioWebhookError ? error.status : 503;
-      return new Response("Twilio Tucson voice status was not accepted.", {
+      return new Response("Twilio voice status was not accepted.", {
         status,
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });

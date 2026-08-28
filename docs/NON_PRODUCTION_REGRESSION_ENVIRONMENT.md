@@ -85,7 +85,10 @@ STRIPE_WEBHOOK_PROCESSING_ENABLED
 GOOGLE_GMAIL_SEND_ENABLED
 GOOGLE_CALENDAR_WRITE_ENABLED
 TWILIO_OUTBOUND_SMS_ENABLED
+TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED
+TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED
 TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED
+TWILIO_IHC_VOICE_FORWARDING_ENABLED
 QUICKBOOKS_SYNC_ENABLED
 QUICKBOOKS_ACCOUNTING_WRITES_ENABLED
 QUICKBOOKS_PAYMENT_PROCESSING_ENABLED
@@ -99,6 +102,17 @@ GHL_SYNC_ENABLED
 The harness fetches the local server's raw HTML before opening the application and then checks the same non-secret markers in the rendered page. A target mismatch, enabled demo fallback, or enabled aggregate side-effect state fails before authentication or browser/database/API work.
 
 Source-specific provider flags are also false. Ordinary regression must not contain live provider credentials merely because a corresponding gate is false.
+
+The dedicated Twilio voice runner is the sole exception to those three voice-gate values. It compiles and invokes the Production webhook code locally, injects only synthetic ingress, public-source, shared-terminal, account, and signing values into that Node process, and permits network traffic only to the positively verified regression Supabase origin. It exercises all three exact route identities, signed ingress and status replay/concurrency, graph-wide loop refusal, route rollback, bounded evidence, company isolation, and captured-ID cleanup. It never calls Twilio, a carrier, or the synthetic terminal. The ordinary browser server and the SMS-only runner keep every voice gate false.
+
+Run the two Twilio hosted contracts only with the permission-restricted external file selected and no Supabase credentials already present in the parent process:
+
+```bash
+WTOS_BROWSER_REGRESSION_ENV_FILE=/Users/spotty/.config/weathertech-os/regression.env WTOS_TWILIO_VOICE_INBOUND_REGRESSION_RUN=true node tests/twilio-voice-inbound-regression.test.mjs
+WTOS_BROWSER_REGRESSION_ENV_FILE=/Users/spotty/.config/weathertech-os/regression.env WTOS_TWILIO_INBOUND_REGRESSION_RUN=true node tests/twilio-inbound-regression.test.mjs
+```
+
+Each runner independently proves the pinned project reference before fixtures and again after exact cleanup. After both pass, run the established separate `verify-residue` process with the same protected target credentials and require zero residue. A skipped hosted execution is not a pass for a release that changes these webhook paths.
 
 The Mighty Apes coverage has one narrow exception: `MIGHTY_APES_YELP_WEBHOOK_SECRET` must be a synthetic server-only value of at least 32 characters in the permission-restricted external regression environment. It is used only to sign requests to the locally served WeatherTech OS receiver while all live-provider flags remain false. It must not equal the Production provider secret, appear in source control, or authorize a request to any external provider. The dedicated Mighty Apes hosted runner additionally blocks every network origin except the approved regression Supabase project.
 

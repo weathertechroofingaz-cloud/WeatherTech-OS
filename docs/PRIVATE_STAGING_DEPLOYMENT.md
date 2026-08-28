@@ -51,7 +51,10 @@ Do not commit real values for secrets, tokens, service-role keys, OAuth client s
 These flags must remain `false` or unset for private staging unless a later sprint explicitly approves a controlled live test:
 
 - `TWILIO_OUTBOUND_SMS_ENABLED`
+- `TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED`
+- `TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED`
 - `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED`
+- `TWILIO_IHC_VOICE_FORWARDING_ENABLED`
 - `GOOGLE_GMAIL_SEND_ENABLED`
 - `GOOGLE_CALENDAR_WRITE_ENABLED`
 - `WEBSITE_INTAKE_ENABLED`
@@ -74,6 +77,8 @@ These flags must remain `false` or unset for private staging unless a later spri
 - `WTOS_PUBLIC_REGISTRATION_ENABLED`
 
 If any of these are set to `true`, `/api/readiness` must report staging as blocked.
+
+Do not copy real Phoenix/IHC public sources or the real assistant destination into private staging. Ordinary staging keeps the terminal confirmation and all three route gates false. Multi-route voice behavior is exercised only by the guarded synthetic runner against the pinned regression project; that runner cannot contact Twilio or a carrier.
 
 ## Supabase Configuration
 

@@ -195,6 +195,15 @@ const envNames = [
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
+  "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+  "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+  "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
+  "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
+  "TWILIO_IHC_PUBLIC_NUMBER",
+  "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
+  "TWILIO_IHC_VOICE_FORWARD_TO",
 ];
 const envSnapshot = snapshotEnvironment(envNames);
 const originalFetch = globalThis.fetch;
@@ -284,6 +293,23 @@ try {
   check(routes.some((route) => route.key === "weathertech-phoenix"), "Phoenix route exists");
   check(routes.some((route) => route.key === "weathertech-tucson"), "Tucson route exists");
   check(routes.some((route) => route.key === "ihc-primary"), "IHC route exists");
+  for (const route of routes) {
+    check(
+      foundation.matchesTwilioBusinessRouteTemplate(
+        {
+          routing_key: route.key,
+          business_location: route.businessLocation,
+          team_queue: route.teamQueue,
+          lead_source: route.leadSource,
+          communication_channel: "sms_voice",
+          time_zone: route.timeZone,
+        },
+        route,
+        "voice",
+      ),
+      `${route.key} accepts voice only through its exact sms_voice identity`,
+    );
+  }
 
   const authToken = "test-only-auth-token";
   const accountSid = "AC11111111111111111111111111111111";

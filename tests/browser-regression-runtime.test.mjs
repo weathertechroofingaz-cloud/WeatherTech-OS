@@ -394,6 +394,20 @@ const resumableRunner = harness.slice(resumableRunnerStart);
 const yieldedRecordCount = [
   ...resumableRunner.matchAll(/yield await record\(/g),
 ].length;
+const jobBuilderScrollHelperStart = harness.indexOf(
+  "async function waitForSelectedJobBuilderScrollTarget",
+);
+const jobBuilderScrollHelper = harness.slice(
+  jobBuilderScrollHelperStart,
+  harness.indexOf("async function runUiMutationTests", jobBuilderScrollHelperStart),
+);
+const jobBuilderScrollWorkflowStart = harness.indexOf(
+  'progress("job:open-existing:start")',
+);
+const jobBuilderScrollWorkflow = harness.slice(
+  jobBuilderScrollWorkflowStart,
+  harness.indexOf("const openAfter = await getScrollY(tab);", jobBuilderScrollWorkflowStart),
+);
 
 assert(
   runner.includes("runtimeEnv = null") &&
@@ -426,7 +440,11 @@ assert(
     layout.includes("data-wtos-crm-demo-fallback") &&
     layout.includes("data-wtos-provider-side-effects") &&
     regressionSafety.includes("REGRESSION_SIDE_EFFECT_FLAGS") &&
-    regressionSafety.includes("GHL_SYNC_ENABLED"),
+    regressionSafety.includes("GHL_SYNC_ENABLED") &&
+    regressionSafety.includes("TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED") &&
+    regressionSafety.includes("TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED") &&
+    regressionSafety.includes("TWILIO_IHC_VOICE_FORWARDING_ENABLED") &&
+    regressionSafety.includes("TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED"),
   "The browser verifies the raw and rendered app markers for disabled demo fallback and provider side effects",
 );
 assert(
@@ -461,6 +479,26 @@ assert(
     harness.includes("Browser console remains free of runtime warnings") &&
     harness.includes("Browser console inspection must complete"),
   "Regression results report assertion and browser warning counts and fail when warning inspection cannot complete",
+);
+assert(
+  jobBuilderScrollHelperStart >= 0 &&
+    jobBuilderScrollHelper.includes('titleInput?.value !== expectedTitle') &&
+    jobBuilderScrollHelper.includes('style.display !== "none"') &&
+    jobBuilderScrollHelper.includes("rect.bottom > 0") &&
+    jobBuilderScrollHelper.includes("rect.top < window.innerHeight") &&
+    jobBuilderScrollHelper.includes("rect.top >= -20") &&
+    jobBuilderScrollHelper.includes("rect.top <= 120") &&
+    jobBuilderScrollWorkflowStart >= 0 &&
+    jobBuilderScrollWorkflow.includes(
+      "for (let attempt = 1; attempt <= 2; attempt += 1)",
+    ) &&
+    jobBuilderScrollWorkflow.includes("clickJobListItemByText(") &&
+    jobBuilderScrollWorkflow.includes("waitForSelectedJobBuilderScrollTarget(") &&
+    jobBuilderScrollWorkflow.includes(
+      'progress("job:open-existing:scroll-retry")',
+    ) &&
+    !jobBuilderScrollHelper.includes("scrollIntoView"),
+  "The job-builder scroll retry stays bounded and still proves the exact selected visible target without moving it from the harness",
 );
 assert(
   layout.includes("data-wtos-supabase-origin={getPublicSupabaseOrigin()}") &&
