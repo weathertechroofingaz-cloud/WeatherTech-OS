@@ -6,6 +6,7 @@ import {
   getTwilioExpectedBusinessNumbers,
   getTwilioServerConfig,
   getTwilioTucsonVoiceForwardingCheckResult,
+  getTwilioVoiceForwardingCheckResult,
 } from "../../../../../lib/twilio/serverClient";
 import {
   getTwilioBusinessNumberRouteTemplate,
@@ -351,31 +352,60 @@ export async function GET() {
       routingKey: number.routing_key,
     }));
   const outboundDisabled = !rawConfig.outboundSmsEnabled;
-  const tucsonExpected = expectedNumbers.find(
-    (number) => number.routeKey === "weathertech-tucson",
+  const voiceRouteExactByKey = Object.fromEntries(
+    expectedNumbers.map((expected) => {
+      const storedRoutes = expected.phoneNumberE164
+        ? businessNumbers.filter(
+            (number) =>
+              number.phone_number_e164 === expected.phoneNumberE164,
+          )
+        : [];
+      const smsReadiness = routes.find(
+        (route) => route.routeKey === expected.routeKey,
+      );
+      const routeExact = Boolean(
+        smsReadiness?.exactMapped &&
+          storedRoutes.length === 1 &&
+          matchesTwilioBusinessRouteTemplate(
+            storedRoutes[0],
+            getTwilioBusinessNumberRouteTemplate(expected.routeKey),
+            "voice",
+          ),
+      );
+
+      return [expected.routeKey, routeExact];
+    }),
   );
-  const tucsonRoute = tucsonExpected?.phoneNumberE164
-    ? businessNumbers.filter(
-        (number) =>
-          number.phone_number_e164 === tucsonExpected.phoneNumberE164,
-      )
-    : [];
-  const tucsonSmsReadiness = routes.find(
-    (route) => route.routeKey === "weathertech-tucson",
-  );
-  const tucsonVoiceRouteExact = Boolean(
-    tucsonSmsReadiness?.exactMapped &&
-      tucsonRoute.length === 1 &&
-      matchesTwilioBusinessRouteTemplate(
-        tucsonRoute[0],
-        getTwilioBusinessNumberRouteTemplate("weathertech-tucson"),
-        "voice",
-      ),
-  );
-  const tucsonVoiceForwarding = getTwilioTucsonVoiceForwardingCheckResult({
-    routeExact: tucsonVoiceRouteExact,
+  const fullVoiceForwarding = getTwilioVoiceForwardingCheckResult({
+    routeExactByKey: voiceRouteExactByKey,
     config: rawConfig,
   });
+  const ownerVoiceRouteKeys = new Set(
+    expectedNumbers.map((number) => number.routeKey),
+  );
+  const voiceForwarding = {
+    ...fullVoiceForwarding,
+    routes: fullVoiceForwarding.routes.filter((route) =>
+      ownerVoiceRouteKeys.has(route.routeKey),
+    ),
+  };
+  const tucsonVoiceRouteExact =
+    voiceRouteExactByKey["weathertech-tucson"] === true;
+  const tucsonVoiceForwarding = ownerVoiceRouteKeys.has("weathertech-tucson")
+    ? getTwilioTucsonVoiceForwardingCheckResult({
+        routeExact: tucsonVoiceRouteExact,
+        config: rawConfig,
+      })
+    : {
+        enabled: false,
+        destinationConfigured: false,
+        destinationValid: false,
+        maskedDestination: null,
+        loopDetected: false,
+        routeExact: false,
+        ready: false,
+        webhookUrl: fullVoiceForwarding.webhookUrl,
+      };
   const baseStatus = getReadinessStatus({
     schemaApplied: fullSchemaApplied,
     configured: ownerConfigurationReady,
@@ -440,6 +470,7 @@ export async function GET() {
     },
     inboundValidated,
     outboundDisabled,
+    voiceForwarding,
     tucsonVoiceForwarding,
     communicationsSent: false,
   });

@@ -50,28 +50,42 @@ for (const [needle, message] of [
   ["app/api/integrations/twilio/voice/route.ts", "Production voice ingress route is compiled"],
   ["app/api/integrations/twilio/voice/status/route.ts", "Production voice status route is compiled"],
   ["getExpectedTwilioSignature", "Official Twilio signatures drive route requests"],
-  ['routing_key: "weathertech-tucson"', "Exact Tucson route key is seeded"],
-  ['business_location: "Tucson"', "Exact Tucson location is seeded"],
-  ['team_queue: "weathertech-roofing-tucson"', "Exact Tucson queue is seeded"],
-  ['lead_source: "Phone - WeatherTech Tucson"', "Exact Tucson lead source is seeded"],
-  ['communication_channel: "sms_voice"', "Voice-capable Tucson route is explicit"],
+  ['key: "weathertech-phoenix"', "Exact Phoenix route is declared"],
+  ['key: "weathertech-tucson"', "Exact Tucson route is declared"],
+  ['key: "ihc-primary"', "Exact IHC route is declared"],
+  ['businessLocation: "Phoenix"', "Exact Phoenix location is seeded"],
+  ['businessLocation: "Tucson"', "Exact Tucson location is seeded"],
+  ['businessLocation: "Scottsdale"', "Exact IHC location is seeded"],
+  ['teamQueue: "weathertech-roofing-phoenix"', "Exact Phoenix queue is seeded"],
+  ['teamQueue: "weathertech-roofing-tucson"', "Exact Tucson queue is seeded"],
+  ['teamQueue: "ihc-painting"', "Exact IHC queue is seeded"],
+  ['leadSource: "Phone - WeatherTech Phoenix"', "Exact Phoenix lead source is seeded"],
+  ['leadSource: "Phone - WeatherTech Tucson"', "Exact Tucson lead source is seeded"],
+  ['leadSource: "Phone - IHC"', "Exact IHC lead source is seeded"],
+  ['communication_channel: "sms_voice"', "Every synthetic route is voice capable"],
+  ["TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER", "Phoenix public source stays protected"],
+  ["TWILIO_IHC_PUBLIC_NUMBER", "IHC public source stays protected"],
+  ["graph-wide public-source loop", "Graph-wide public-source loops are rejected"],
+  ["shared terminal caller loop", "Calls originating from the terminal are rejected"],
   ["retry recovery after partial call claim", "Partial persistence retry is exercised"],
   ["POST-CLAIM MATCH DRIFT", "CRM match drift after claim is exercised"],
   ["same-company known caller", "Known same-company contact matching is exercised"],
   ["ambiguous same-company caller", "Ambiguous same-company matching is exercised"],
-  ["concurrent exact ingress", "Concurrent ingress convergence is exercised"],
+  ["concurrent exact ingress", "Concurrent ingress convergence is exercised for every route"],
   ["changed same parent ingress conflict", "Changed parent replay is rejected"],
   ["status without exact parent claim", "Parentless status is rejected"],
   ["forged voice status signature", "Forged status signatures are rejected"],
   ["cross-company IHC status route", "Cross-company status routing is rejected"],
   ["forged parent caller identity", "Changed parent identity is rejected"],
-  ["rollback-safe concurrent status", "In-flight status survives sms_voice to sms rollback"],
+  ["rollback-safe concurrent status", "Every route's in-flight status survives sms_voice to sms rollback"],
   ["different child status conflict", "A second child leg conflicts"],
   ["different terminal status conflict", "A changed terminal result conflicts"],
-  ["new ingress blocked after sms-only rollback", "Rollback blocks new Dial authorization"],
+  ["new ingress blocked after sms-only rollback", "Every route rollback blocks new Dial authorization"],
   ["provider_dial_status", "Bounded provider outcome evidence is verified"],
   ["expectedAnsweredAt", "Answered time derivation is verified"],
   ["!storedEvidence.includes(FORWARD_DESTINATION)", "Raw destination storage is prohibited"],
+  ["!storedEvidence.includes(PHOENIX_PUBLIC_SOURCE)", "Raw Phoenix public source storage is prohibited"],
+  ["!storedEvidence.includes(IHC_PUBLIC_SOURCE)", "Raw IHC public source storage is prohibited"],
   ["recording_status === \"not_requested\"", "Recording remains not requested"],
   ["transcript_status === \"not_requested\"", "Transcription remains not requested"],
   ["discoverExactPhoneSideEffects", "Unexpected exact-phone side effects are captured"],
@@ -80,6 +94,7 @@ for (const [needle, message] of [
   ["assertExactIdsAbsent", "Cleanup proves exact-ID absence"],
   ["cleanupResidue = 0", "Final zero residue is reported only after verification"],
   ["providerNetworkRequests: 0", "Provider network requests must remain zero"],
+  ["outboundCallRecords: 0", "Unexpected outbound call records must remain zero"],
 ]) {
   check(source.includes(needle), message);
 }
@@ -119,8 +134,18 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   const report = await runTwilioVoiceInboundRegression({ cwd });
   assert.equal(report.result, "PASS");
   assert.equal(report.target, "hygtnhmmaoboduqghhwg");
-  assert.equal(report.parentCalls, 1);
-  assert.equal(report.providerEvents, 2);
+  assert.equal(report.parentCalls, 3);
+  assert.equal(report.providerEvents, 6);
+  assert.deepEqual(report.routeKeys, [
+    "weathertech-tucson",
+    "weathertech-phoenix",
+    "ihc-primary",
+  ]);
+  assert.equal(report.exactRouteLifecycles, 3);
+  assert.equal(report.sharedTerminalVerified, true);
+  assert.equal(report.graphWideLoopRejected, true);
+  assert.equal(report.terminalCallerLoopRejected, true);
+  assert.equal(report.exactCompanyAndBranchIsolationVerified, true);
   assert.equal(report.partialClaimRetryRecovered, true);
   assert.equal(report.crmMatchDriftPreservedOriginalClaim, true);
   assert.equal(report.knownSameCompanyCallerMatched, true);
@@ -133,6 +158,7 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.crossCompanyStatusRejected, true);
   assert.equal(report.forgedParentIdentityRejected, true);
   assert.equal(report.rollbackStatusReconciled, true);
+  assert.equal(report.everyRouteRollbackVerified, true);
   assert.equal(report.concurrentStatusConverged, true);
   assert.equal(report.conflictingChildRejected, true);
   assert.equal(report.conflictingStatusRejected, true);
@@ -143,15 +169,16 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.transcriptionRequested, false);
   assert.equal(report.automaticLeadCreated, false);
   assert.equal(report.automaticCustomerCreated, false);
+  assert.equal(report.outboundCallRecords, 0);
   assert.equal(report.outboundSmsCreated, false);
   assert.equal(report.providerNetworkRequests, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 29;
-  console.log("Twilio Tucson voice hosted regression execution: PASS");
+  assertionCount += 37;
+  console.log("Twilio multi-route voice hosted regression execution: PASS");
 } else {
   console.log(
-    `Twilio Tucson voice hosted regression execution: NOT RUN (set ${TWILIO_VOICE_INBOUND_REGRESSION_RUN}=true with the secure external regression environment to execute it)`,
+    `Twilio multi-route voice hosted regression execution: NOT RUN (set ${TWILIO_VOICE_INBOUND_REGRESSION_RUN}=true with the secure external regression environment to execute it)`,
   );
 }
 
-console.log(`Twilio Tucson voice regression runner contract: PASS (${assertionCount} assertions)`);
+console.log(`Twilio multi-route voice regression runner contract: PASS (${assertionCount} assertions)`);

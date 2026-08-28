@@ -1412,6 +1412,7 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
   const fakeBusinessPhone = `+1602555${runId.slice(-4)}`;
+  const ihcBusinessPhone = `+1602666${runId.slice(-4)}`;
   const fakeCustomerPhone = `+1480555${runId.slice(-4)}`;
   const alternateCustomerPhone = `+1480666${runId.slice(-4)}`;
 
@@ -1427,6 +1428,24 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
       business_location: "Tucson",
       team_queue: "weathertech-roofing-tucson",
       lead_source: "Phone - WeatherTech Tucson",
+      communication_channel: "sms_voice",
+      routing_status: "active",
+      settings: { testRunId: runId },
+    }),
+  });
+
+  const [ihcBusinessPhoneRoute] = await restRequest(env, "business_phone_numbers", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.ihc.id,
+      provider: "twilio",
+      phone_number_e164: ihcBusinessPhone,
+      display_name: `IHC Scottsdale ${TEST_PREFIX} ${runId}`,
+      routing_key: `${TEST_PREFIX} ${runId} IHC PHONE ROUTE`,
+      business_location: "Scottsdale",
+      team_queue: "ihc-painting",
+      lead_source: "Phone - IHC",
       communication_channel: "sms_voice",
       routing_status: "active",
       settings: { testRunId: runId },
@@ -1558,6 +1577,29 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
     }),
   });
 
+  const [inboundIhcSms] = await restRequest(env, "sms_messages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      company_id: companies.ihc.id,
+      business_phone_number_id: ihcBusinessPhoneRoute.id,
+      provider: "twilio_sms",
+      category: "general",
+      status: "sent",
+      direction: "inbound",
+      delivery_status: "received",
+      to_phone: ihcBusinessPhone,
+      from_phone: alternateCustomerPhone,
+      body: `${TEST_PREFIX} ${runId} IHC inbound SMS company-isolation label`,
+      twilio_message_sid: `${TEST_PREFIX} ${runId} IHC INBOUND SMS SID`,
+      sent_at: oneHourAgo,
+      delivered_at: oneHourAgo,
+      correlation_id: `${TEST_PREFIX} ${runId} IHC INBOUND SMS`,
+      metadata: { testRunId: runId, contact_match_status: "unmatched" },
+      last_error: null,
+    }),
+  });
+
   const [emailMessage] = await restRequest(env, "email_messages", {
     method: "POST",
     headers: { Prefer: "return=representation" },
@@ -1646,14 +1688,17 @@ async function seedCommunicationHubRecords(env, companies, leadWorkflow, runId) 
 
   return {
     fakeBusinessPhone,
+    ihcBusinessPhone,
     fakeCustomerPhone,
     alternateCustomerPhone,
     businessPhoneRoute,
+    ihcBusinessPhoneRoute,
     missedCall,
     voicemail,
     providerFailure,
     smsFailure,
     inboundTucsonSms,
+    inboundIhcSms,
     emailMessage,
     websiteIntake,
     yelpIntake,
@@ -9323,7 +9368,8 @@ async function testUnifiedInboxSearchAndFilters(
           text.includes("business phone") &&
           text.includes("twilio inbound safety") &&
         text.includes("outbound sms disabled") &&
-        text.includes("tucson inbound calls may be forwarded") &&
+        text.includes("phoenix, tucson, and ihc inbound calls use separate protected") &&
+        text.includes("carrier call forwarding does not forward sms") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
         text.includes("ihc painting - scottsdale")
@@ -9497,16 +9543,50 @@ async function testUnifiedInboxSearchAndFilters(
         text.includes(expected.body.toLowerCase()) &&
         text.includes("weathertech tucson") &&
         text.includes("weathertech · tucson") &&
-        text.includes("weathertech-roofing-tucson")
+        text.includes("weathertech-roofing-tucson") &&
+        !text.includes(expected.crossCompanyBody.toLowerCase())
       );
     },
     "Tucson inbound SMS receiving-route label",
     10000,
-    { body: communicationsSeed.inboundTucsonSms.body },
+    {
+      body: communicationsSeed.inboundTucsonSms.body,
+      crossCompanyBody: communicationsSeed.inboundIhcSms.body,
+    },
   );
   await clickUnique(
     tab.playwright.getByRole("button", { name: "Clear" }),
     "Clear Tucson SMS inbox filters",
+  );
+  await fillUnique(
+    tab.playwright.locator('[data-testid="inbox-search"]'),
+    communicationsSeed.inboundIhcSms.body,
+    "IHC inbound SMS search",
+  );
+  await waitFor(
+    tab,
+    (expected) => {
+      const detail = document.querySelector('[data-testid="communication-detail"]');
+      const text = detail?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes(expected.body.toLowerCase()) &&
+        text.includes("ihc painting") &&
+        text.includes("scottsdale") &&
+        text.includes("ihc-painting") &&
+        !text.includes(expected.crossCompanyBody.toLowerCase())
+      );
+    },
+    "IHC inbound SMS company-scoped conversation",
+    10000,
+    {
+      body: communicationsSeed.inboundIhcSms.body,
+      crossCompanyBody: communicationsSeed.inboundTucsonSms.body,
+    },
+  );
+  await clickUnique(
+    tab.playwright.getByRole("button", { name: "Clear" }),
+    "Clear IHC SMS inbox filters",
   );
   await waitFor(
     tab,
@@ -9555,6 +9635,7 @@ async function testUnifiedInboxSearchAndFilters(
     failedDelivery: "visible",
     operationsQueue: "visible",
     detailPanel: "passed",
+    crossCompanyConversationIsolation: "passed",
   };
 }
 
@@ -11447,6 +11528,16 @@ async function testSettingsIntegrationCenter(tab) {
       const cards = [
         ...(section?.querySelectorAll('[data-testid="integration-provider-card"]') ?? []),
       ];
+      const voiceGraph = section?.querySelector('[data-testid="twilio-voice-routing-graph"]');
+      const phoenixVoice = section?.querySelector(
+        '[data-testid="twilio-phoenix-voice-readiness"]',
+      );
+      const tucsonVoice = section?.querySelector(
+        '[data-testid="twilio-tucson-voice-readiness"]',
+      );
+      const ihcVoice = section?.querySelector(
+        '[data-testid="twilio-ihc-voice-readiness"]',
+      );
 
       return (
         text.includes("integration center") &&
@@ -11470,18 +11561,24 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("reconnect flow") &&
         text.includes("oauth ready") &&
         (text.includes("connect gmail oauth later before enabling live send or mailbox sync") ||
-          text.includes("gmail mailbox is saved for")) &&
+        text.includes("gmail mailbox is saved for")) &&
         text.includes("twilio live integration foundation") &&
-        text.includes("inbound sms and tucson voice forwarding") &&
+        text.includes("inbound sms and company-safe voice forwarding") &&
         text.includes("outbound sms disabled") &&
         text.includes("inbound not validated") &&
-        text.includes("weathertech tucson inbound voice") &&
+        text.includes("protected inbound voice routing graph") &&
+        text.includes("shared terminal") &&
+        text.includes("terminal forwarding") &&
+        text.includes("owner confirmation required") &&
         text.includes("voice gate") &&
+        text.includes("twilio ingress") &&
+        text.includes("public source") &&
         text.includes("destination") &&
         text.includes("loop guard") &&
-        text.includes("tucson route") &&
+        text.includes("route identity") &&
         text.includes("exact next action") &&
-        text.includes("phoenix and ihc voice remain unavailable") &&
+        text.includes("standard carrier call forwarding does not deliver") &&
+        text.includes("sms sent to the public verizon or at&t numbers") &&
         text.includes("business number routing") &&
         text.includes("twilio webhooks and callbacks") &&
         text.includes("owner setup checklist") &&
@@ -11595,6 +11692,7 @@ async function testSettingsIntegrationCenter(tab) {
         ].every((capability) => text.includes(capability)) &&
         Boolean(section?.querySelector('[data-testid="quickbooks-online-foundation"]')) &&
         Boolean(section?.querySelector('[data-testid="electronic-signatures-foundation"]')) &&
+        Boolean(voiceGraph && phoenixVoice && tucsonVoice && ihcVoice) &&
         cards.length >= 11
       );
     },
@@ -15449,6 +15547,42 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
   };
 }
 
+async function waitForSelectedJobBuilderScrollTarget(
+  tab,
+  jobTitle,
+  timeoutMs,
+) {
+  return waitFor(
+    tab,
+    (expectedTitle) => {
+      const builder = document.querySelector("#job-builder");
+      const titleInput = builder?.querySelector('input[name="title"]');
+
+      if (!builder || titleInput?.value !== expectedTitle) {
+        return false;
+      }
+
+      const rect = builder.getBoundingClientRect();
+      const style = window.getComputedStyle(builder);
+
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number(style.opacity) !== 0 &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.top < window.innerHeight &&
+        rect.top >= -20 &&
+        rect.top <= 120
+      );
+    },
+    "selected job builder scroll target",
+    timeoutMs,
+    jobTitle,
+  );
+}
+
 async function runUiMutationTests(tab, env, testJob, runId, progress) {
   const addedTaskTitle = `${TEST_PREFIX} ${runId} ADDED TASK`;
   const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;
@@ -15474,21 +15608,36 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
   await fillUnique(tab.playwright.getByPlaceholder("Search jobs", { exact: true }), testJob.title, "job search");
   await tab.playwright.waitForTimeout(300);
   await tab.playwright.evaluate(() => window.scrollTo(0, 260));
-  await clickJobListItemByText(tab, testJob.title, `job card ${testJob.title}`);
-  await waitFor(
-    tab,
-    () => {
-      const builder = document.querySelector("#job-builder");
+  let jobBuilderScrollError = null;
 
-      if (!builder) {
-        return false;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await clickJobListItemByText(
+      tab,
+      testJob.title,
+      `job card ${testJob.title}${attempt === 1 ? "" : " scroll retry"}`,
+    );
+
+    try {
+      await waitForSelectedJobBuilderScrollTarget(
+        tab,
+        testJob.title,
+        attempt === 1 ? 3000 : 10000,
+      );
+      jobBuilderScrollError = null;
+      break;
+    } catch (error) {
+      jobBuilderScrollError = error;
+
+      if (attempt === 1) {
+        progress("job:open-existing:scroll-retry");
+        await tab.playwright.waitForTimeout(300);
       }
+    }
+  }
 
-      const rect = builder.getBoundingClientRect();
-      return rect.top >= -20 && rect.top <= 120;
-    },
-    "job builder scroll target",
-  );
+  if (jobBuilderScrollError) {
+    throw jobBuilderScrollError;
+  }
   const openAfter = await getScrollY(tab);
   await tab.playwright.waitForTimeout(800);
   const openSettled = await getScrollY(tab);

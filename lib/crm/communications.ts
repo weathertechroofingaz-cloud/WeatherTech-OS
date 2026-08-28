@@ -360,6 +360,31 @@ function normalizePhoneDigits(value: string | null | undefined) {
   return (value ?? "").replace(/\D/g, "");
 }
 
+export function communicationItemsShareConversation(
+  item: UnifiedInboxItem,
+  candidate: UnifiedInboxItem,
+) {
+  if (candidate.id === item.id) {
+    return true;
+  }
+
+  if (!item.companyId || candidate.companyId !== item.companyId) {
+    return false;
+  }
+
+  const itemPhone = normalizePhoneDigits(item.phone);
+  const candidatePhone = normalizePhoneDigits(candidate.phone);
+  const itemEmail = normalizeCrmLookup(item.email);
+  const candidateEmail = normalizeCrmLookup(candidate.email);
+
+  return Boolean(
+    (item.customerId && candidate.customerId === item.customerId) ||
+      (item.leadId && candidate.leadId === item.leadId) ||
+      (itemPhone.length >= 7 && itemPhone === candidatePhone) ||
+      (Boolean(itemEmail) && itemEmail === candidateEmail),
+  );
+}
+
 function getCustomerName(snapshot: CrmSnapshot, customerId: string | null) {
   if (!customerId) {
     return null;
@@ -674,7 +699,7 @@ function getBusinessPhoneNumber(
 
   const phoneDigits = normalizePhoneDigits(phoneNumber);
 
-  if (!phoneDigits) {
+  if (!phoneDigits || !companyId) {
     return null;
   }
 
@@ -682,7 +707,7 @@ function getBusinessPhoneNumber(
     snapshot.businessPhoneNumbers.find(
       (phone) =>
         normalizePhoneDigits(phone.phone_number_e164) === phoneDigits &&
-        (!companyId || phone.company_id === companyId),
+        phone.company_id === companyId,
     ) ?? null
   );
 }
@@ -771,14 +796,23 @@ function getProviderEventCompanyId(
 
 function findCustomerContactMatch(
   snapshot: CrmSnapshot,
+  companyId: string,
   phone: string | null | undefined,
   email: string | null | undefined,
 ) {
+  if (!companyId) {
+    return null;
+  }
+
   const phoneDigits = normalizePhoneDigits(phone);
   const emailKey = normalizeCrmLookup(email);
 
   return (
     snapshot.customers.find((customer) => {
+      if (customer.company_id !== companyId) {
+        return false;
+      }
+
       const matchesPhone =
         phoneDigits.length >= 7 && normalizePhoneDigits(customer.phone).endsWith(phoneDigits.slice(-7));
       const matchesEmail = Boolean(emailKey && normalizeCrmLookup(customer.email) === emailKey);
@@ -790,14 +824,23 @@ function findCustomerContactMatch(
 
 function findLeadContactMatch(
   snapshot: CrmSnapshot,
+  companyId: string,
   phone: string | null | undefined,
   email: string | null | undefined,
 ) {
+  if (!companyId) {
+    return null;
+  }
+
   const phoneDigits = normalizePhoneDigits(phone);
   const emailKey = normalizeCrmLookup(email);
 
   return (
     snapshot.leads.find((lead) => {
+      if (lead.company_id !== companyId) {
+        return false;
+      }
+
       const matchesPhone =
         phoneDigits.length >= 7 && normalizePhoneDigits(lead.phone).endsWith(phoneDigits.slice(-7));
       const matchesEmail = Boolean(emailKey && normalizeCrmLookup(lead.email) === emailKey);
@@ -1471,12 +1514,20 @@ export function buildUnifiedInboxItems(
     const companyId = getLeadIntakeCompanyId(snapshot, record);
     const customer =
       (record.linked_customer_id
-        ? snapshot.customers.find((item) => item.id === record.linked_customer_id)
-        : null) ?? findCustomerContactMatch(snapshot, record.phone, record.email);
+        ? snapshot.customers.find(
+            (item) =>
+              item.id === record.linked_customer_id && item.company_id === companyId,
+          )
+        : null) ?? findCustomerContactMatch(snapshot, companyId, record.phone, record.email);
     const lead =
       (record.linked_lead_id
-        ? snapshot.leads.find((item) => item.id === record.linked_lead_id)
-        : null) ?? (!customer ? findLeadContactMatch(snapshot, record.phone, record.email) : null);
+        ? snapshot.leads.find(
+            (item) => item.id === record.linked_lead_id && item.company_id === companyId,
+          )
+        : null) ??
+      (!customer
+        ? findLeadContactMatch(snapshot, companyId, record.phone, record.email)
+        : null);
     const responseStatus = getLeadIntakeResponseStatus(record);
     const matchStatus = getLeadIntakeMatchStatus(record);
     const company = companyMap.get(companyId);
@@ -1572,6 +1623,7 @@ export function buildUnifiedInboxItems(
       record.business_phone,
       record.company_id,
     );
+    const companyId = getProviderEventCompanyId(snapshot, record, businessPhoneNumber);
     const contactPhone =
       record.customer_phone ??
       (record.direction === "inbound" ? record.from_phone : record.to_phone) ??
@@ -1579,13 +1631,22 @@ export function buildUnifiedInboxItems(
       record.to_phone;
     const customer =
       (record.customer_id
-        ? snapshot.customers.find((item) => item.id === record.customer_id)
-        : null) ?? findCustomerContactMatch(snapshot, contactPhone, null);
+        ? snapshot.customers.find(
+            (item) => item.id === record.customer_id && item.company_id === companyId,
+          )
+        : null) ?? findCustomerContactMatch(snapshot, companyId, contactPhone, null);
     const lead =
-      (record.lead_id ? snapshot.leads.find((item) => item.id === record.lead_id) : null) ??
-      (!customer ? findLeadContactMatch(snapshot, contactPhone, null) : null);
-    const job = record.job_id ? snapshot.jobs.find((item) => item.id === record.job_id) : null;
-    const companyId = getProviderEventCompanyId(snapshot, record, businessPhoneNumber);
+      (record.lead_id
+        ? snapshot.leads.find(
+            (item) => item.id === record.lead_id && item.company_id === companyId,
+          )
+        : null) ??
+      (!customer ? findLeadContactMatch(snapshot, companyId, contactPhone, null) : null);
+    const job = record.job_id
+      ? snapshot.jobs.find(
+          (item) => item.id === record.job_id && item.company_id === companyId,
+        )
+      : null;
     const responseStatus = getCallResponseStatus(record);
     const matchStatus = getProviderEventMatchStatus(record);
     const isMissedCall =
@@ -1701,6 +1762,7 @@ export function buildUnifiedInboxItems(
         event.business_phone,
         event.company_id,
       );
+      const companyId = getProviderEventCompanyId(snapshot, event, businessPhoneNumber);
       const contactPhone =
         event.customer_phone ??
         (event.direction === "inbound" ? event.from_phone : event.to_phone) ??
@@ -1708,13 +1770,22 @@ export function buildUnifiedInboxItems(
         event.to_phone;
       const customer =
         (event.customer_id
-          ? snapshot.customers.find((item) => item.id === event.customer_id)
-          : null) ?? findCustomerContactMatch(snapshot, contactPhone, null);
+          ? snapshot.customers.find(
+              (item) => item.id === event.customer_id && item.company_id === companyId,
+            )
+          : null) ?? findCustomerContactMatch(snapshot, companyId, contactPhone, null);
       const lead =
-        (event.lead_id ? snapshot.leads.find((item) => item.id === event.lead_id) : null) ??
-        (!customer ? findLeadContactMatch(snapshot, contactPhone, null) : null);
-      const job = event.job_id ? snapshot.jobs.find((item) => item.id === event.job_id) : null;
-      const companyId = getProviderEventCompanyId(snapshot, event, businessPhoneNumber);
+        (event.lead_id
+          ? snapshot.leads.find(
+              (item) => item.id === event.lead_id && item.company_id === companyId,
+            )
+          : null) ??
+        (!customer ? findLeadContactMatch(snapshot, companyId, contactPhone, null) : null);
+      const job = event.job_id
+        ? snapshot.jobs.find(
+            (item) => item.id === event.job_id && item.company_id === companyId,
+          )
+        : null;
       const channel: CommunicationChannel = event.channel === "voice" ? "phone_call" : "sms";
       const failed = Boolean(
         event.error_message ||

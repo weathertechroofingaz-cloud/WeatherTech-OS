@@ -13,6 +13,7 @@ const envNames = [
   "SUPABASE_SERVICE_ROLE_KEY",
   "TWILIO_ACCOUNT_SID",
   "TWILIO_AUTH_TOKEN",
+  "TWILIO_MESSAGING_SERVICE_SID",
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_OUTBOUND_SMS_ENABLED",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
@@ -149,6 +150,8 @@ try {
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.TWILIO_ACCOUNT_SID = accountSid;
   process.env.TWILIO_AUTH_TOKEN = authToken;
+  process.env.TWILIO_MESSAGING_SERVICE_SID =
+    "MG11111111111111111111111111111111";
   process.env.TWILIO_PUBLIC_BASE_URL = publicBaseUrl;
   process.env.TWILIO_OUTBOUND_SMS_ENABLED = "false";
   process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = phoenixNumber;
@@ -286,7 +289,11 @@ try {
     voiceUrl,
     inboundVoiceParams({ To: phoenixNumber }),
   );
-  equal(response.status, 403, "Signed Phoenix voice ingress cannot receive Tucson Dial TwiML");
+  equal(
+    response.status,
+    503,
+    "Signed Phoenix voice ingress remains disabled until its exact protected route is configured",
+  );
   response = await invokeHandler(
     webhooks,
     "voice_inbound",
@@ -294,7 +301,11 @@ try {
     voiceUrl,
     inboundVoiceParams({ To: ihcNumber }),
   );
-  equal(response.status, 403, "Signed IHC voice ingress cannot receive Tucson Dial TwiML");
+  equal(
+    response.status,
+    503,
+    "Signed IHC voice ingress remains disabled until its exact protected route is configured",
+  );
 
   const wrongAccountParams = inboundVoiceParams({
     AccountSid: "AC99999999999999999999999999999999",
@@ -441,7 +452,11 @@ try {
     statusUrl,
     voiceStatusParams({ To: phoenixNumber }),
   );
-  equal(response.status, 403, "Phoenix cannot submit a Tucson Dial action callback");
+  equal(
+    response.status,
+    503,
+    "A Phoenix status callback cannot persist without its exact claimed parent and storage route",
+  );
   response = await invokeHandler(webhooks, "voice_status", statusPath, statusUrl, statusParams);
   equal(response.status, 503, "A valid status callback cannot report success before durable storage");
 
@@ -461,6 +476,7 @@ try {
     ["DialBridged", "Dial bridge evidence is parsed explicitly"],
     ["call_records", "Existing call schema stores bounded parent evidence"],
     ["communication_provider_events", "Existing event schema stores bounded voice evidence"],
+    ['.eq("id", eventId)', "Status conflicts recover the deterministic parent event before exact replay comparison"],
     ['record: "do-not-record"', "SDK TwiML explicitly disables recording"],
     ["createTwilioVoiceDestinationProof", "Forward destination is persisted only as keyed evidence"],
   ]) {

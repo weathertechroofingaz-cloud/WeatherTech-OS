@@ -15,10 +15,17 @@ const envNames = [
   "TWILIO_INBOUND_SMS_ENABLED",
   "TWILIO_OUTBOUND_SMS_ENABLED",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
+  "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
+  "TWILIO_IHC_PUBLIC_NUMBER",
+  "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
+  "TWILIO_IHC_VOICE_FORWARD_TO",
+  "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
 ];
 const envSnapshot = new Map(envNames.map((name) => [name, process.env[name]]));
 let assertionCount = 0;
@@ -90,16 +97,16 @@ try {
   equal(
     voiceEndpoint.path,
     "/api/integrations/twilio/voice",
-    "Foundation lists the canonical Tucson inbound voice webhook",
+    "Foundation lists the canonical shared inbound voice webhook",
   );
   check(
-    voiceEndpoint.summary.includes("Tucson-only call-forwarding TwiML"),
-    "Voice endpoint truthfully describes guarded Tucson forwarding TwiML",
+    voiceEndpoint.summary.includes("route-specific call-forwarding TwiML"),
+    "Voice endpoint truthfully describes guarded route-specific forwarding TwiML",
   );
   equal(
     voiceStatusEndpoint.path,
     "/api/integrations/twilio/voice/status",
-    "Foundation lists the signed Tucson voice status callback",
+    "Foundation lists the shared signed voice status callback",
   );
   check(
     !foundation.twilioWebhookEndpoints.some((endpoint) =>
@@ -109,28 +116,40 @@ try {
   );
 
   for (const [needle, message] of [
-    ['data-testid="twilio-tucson-voice-readiness"', "Owner Tucson voice readiness panel exists"],
-    ["tucsonVoice?.enabled", "Voice gate state is rendered"],
+    ['data-testid="twilio-voice-routing-graph"', "Owner voice graph panel exists"],
+    ['"twilio-phoenix-voice-readiness"', "Owner Phoenix voice readiness card exists"],
+    ['"twilio-tucson-voice-readiness"', "Owner Tucson voice readiness card exists"],
+    ['"twilio-ihc-voice-readiness"', "Owner IHC voice readiness card exists"],
+    ["voiceRoute?.enabled", "Each route-specific voice gate is rendered"],
+    ["ingressConfigured", "Masked Twilio ingress state is rendered"],
+    ["maskedIngressNumber", "Only the masked ingress number is rendered"],
+    ["publicSourceConfigured", "Protected public-source state is rendered"],
+    ["maskedPublicSource", "Only the masked public source is rendered"],
     ["destinationConfigured", "Destination configured state is rendered"],
     ["destinationValid", "Destination validity is rendered"],
     ["maskedDestination", "Only the masked destination is rendered"],
     ["loopDetected", "Loop guard state is rendered"],
-    ["routeExact", "Exact Tucson voice route state is rendered"],
-    ["tucsonVoice?.ready", "Tucson application readiness is rendered"],
-    ["tucsonVoice?.webhookUrl", "Canonical voice webhook URL is rendered"],
+    ["routeExact", "Exact company voice route state is rendered"],
+    ["voiceRoute?.ready", "Route-specific application readiness is rendered"],
+    ["voiceForwarding?.webhookUrl", "Canonical voice webhook URL is rendered"],
+    ["voiceForwarding?.statusCallbackUrl", "Canonical status callback URL is rendered"],
+    ["voiceForwarding?.graphValid", "Graph-wide loop readiness is rendered"],
+    ["voiceForwarding?.sharedDestination", "Shared terminal state is rendered"],
+    ["terminalForwardingDisabledConfirmed", "Owner terminal attestation state is rendered"],
     ["Exact next action", "Owner receives an explicit next action"],
-    ["TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO", "Secure destination environment action is named"],
-    ["TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED", "Protected voice gate action is named"],
-    ["do not place a real test call without separate owner approval", "Real test call remains owner-gated"],
-    ["Phoenix and IHC voice remain unavailable", "Phoenix and IHC voice stay explicitly unavailable"],
     ["Recording,", "Recording remains explicitly disabled"],
     ["transcription, outbound SMS, auto-replies", "Disallowed communications remain explicit"],
+    ["Carrier call forwarding does not forward SMS", "Carrier SMS limitation remains explicit"],
   ]) {
     check(crmAppSource.includes(needle), message);
   }
   check(
     !crmAppSource.includes("destinationE164"),
     "Client UI cannot reference the raw forwarding destination",
+  );
+  check(
+    !crmAppSource.includes("publicSourceE164"),
+    "Client UI cannot reference a raw public carrier source",
   );
   check(
     !crmAppSource.includes("Disabled / Not In Scope"),
@@ -149,12 +168,12 @@ try {
   equal(
     tucsonTemplate.communicationChannel,
     "sms_voice",
-    "Only the approved Tucson template targets combined SMS and voice",
+    "The completed Tucson template retains combined SMS and voice",
   );
   equal(
     phoenixTemplate.communicationChannel,
     "sms",
-    "Phoenix template cannot imply voice availability",
+    "Phoenix template preserves the current Production SMS baseline",
   );
   equal(
     ihcTemplate.businessLocation,
@@ -164,7 +183,7 @@ try {
   equal(
     ihcTemplate.communicationChannel,
     "sms",
-    "IHC template cannot imply voice availability",
+    "IHC template preserves the current Production SMS baseline",
   );
 
   const tucsonSmsRoute = {
@@ -231,7 +250,7 @@ try {
     "Phoenix SMS remains bound to its own exact route identity",
   );
   check(
-    !foundation.matchesTwilioBusinessRouteTemplate(
+    foundation.matchesTwilioBusinessRouteTemplate(
       {
         routing_key: "weathertech-phoenix",
         business_location: "Phoenix",
@@ -243,7 +262,22 @@ try {
       phoenixTemplate,
       "sms",
     ),
-    "Phoenix cannot silently become voice-capable through sms_voice metadata",
+    "An exact Phoenix sms_voice route continues accepting inbound SMS",
+  );
+  check(
+    foundation.matchesTwilioBusinessRouteTemplate(
+      {
+        routing_key: "weathertech-phoenix",
+        business_location: "Phoenix",
+        team_queue: "weathertech-roofing-phoenix",
+        lead_source: "Phone - WeatherTech Phoenix",
+        communication_channel: "sms_voice",
+        time_zone: "America/Phoenix",
+      },
+      phoenixTemplate,
+      "voice",
+    ),
+    "Only exact Phoenix sms_voice metadata can become voice-capable",
   );
   check(
     foundation.matchesTwilioBusinessRouteTemplate(
@@ -261,7 +295,7 @@ try {
     "IHC SMS remains bound to its separate Scottsdale route identity",
   );
   check(
-    !foundation.matchesTwilioBusinessRouteTemplate(
+    foundation.matchesTwilioBusinessRouteTemplate(
       {
         routing_key: "ihc-primary",
         business_location: "Scottsdale",
@@ -273,7 +307,22 @@ try {
       ihcTemplate,
       "sms",
     ),
-    "IHC cannot silently become voice-capable through sms_voice metadata",
+    "An exact IHC sms_voice route continues accepting inbound SMS",
+  );
+  check(
+    foundation.matchesTwilioBusinessRouteTemplate(
+      {
+        routing_key: "ihc-primary",
+        business_location: "Scottsdale",
+        team_queue: "ihc-painting",
+        lead_source: "Phone - IHC",
+        communication_channel: "sms_voice",
+        time_zone: "America/Phoenix",
+      },
+      ihcTemplate,
+      "voice",
+    ),
+    "Only exact IHC sms_voice metadata can become voice-capable",
   );
 
   process.env.TWILIO_ACCOUNT_SID = "AC11111111111111111111111111111111";
@@ -286,8 +335,15 @@ try {
   process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = "+16025550101";
   process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER = "+15205550101";
   process.env.TWILIO_IHC_NUMBER = "+14805550101";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER = "+14805550111";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = "true";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = "+16235550101";
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "true";
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "+16235550101";
+  process.env.TWILIO_IHC_PUBLIC_NUMBER = "+14805550112";
+  process.env.TWILIO_IHC_VOICE_FORWARDING_ENABLED = "true";
+  process.env.TWILIO_IHC_VOICE_FORWARD_TO = "+16235550101";
+  process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
 
   const expectedNumbers = serverClient.getTwilioExpectedBusinessNumbers();
   equal(
@@ -296,8 +352,12 @@ try {
     "weathertech-roofing-tucson",
     "Configured Tucson number is bound to the exact Tucson queue template",
   );
-  const validVoiceCheck = serverClient.getTwilioTucsonVoiceForwardingCheckResult({
-    routeExact: true,
+  const validVoiceCheck = serverClient.getTwilioVoiceForwardingCheckResult({
+    routeExactByKey: {
+      "weathertech-phoenix": true,
+      "weathertech-tucson": true,
+      "ihc-primary": true,
+    },
   });
   const validServerConfig = serverClient.getTwilioServerConfig();
   equal(
@@ -306,64 +366,130 @@ try {
     "Runtime config retains the strict Tucson receiving identity server-side",
   );
   equal(
-    validServerConfig.tucsonVoiceForwarding.statusCallbackUrl,
+    validServerConfig.voiceForwarding.statusCallbackUrl,
     "https://weathertech.example.test/api/integrations/twilio/voice/status",
     "Runtime config builds the canonical signed voice status URL",
   );
   equal(
-    validServerConfig.tucsonVoiceForwarding.configurationReady,
+    validServerConfig.voiceForwarding.graphValid,
     true,
-    "Runtime and readiness share one protected configuration result",
+    "The configured three-route graph is acyclic",
   );
-  equal(validVoiceCheck.enabled, true, "Protected Tucson voice gate is explicit");
-  equal(validVoiceCheck.destinationConfigured, true, "Destination presence is reported");
-  equal(validVoiceCheck.destinationValid, true, "Valid E.164 destination is recognized");
-  equal(validVoiceCheck.loopDetected, false, "Unrelated destination does not trigger loop guard");
-  equal(validVoiceCheck.ready, true, "Exact route and valid protected config are ready");
   equal(
-    validVoiceCheck.maskedDestination,
-    "****0101",
-    "Readiness masks the forwarding destination",
+    validVoiceCheck.sharedDestination,
+    true,
+    "Readiness confirms the three routes share a terminal without exposing it",
   );
+  equal(validVoiceCheck.routes.length, 3, "All three voice routes have independent readiness");
+  for (const route of validVoiceCheck.routes) {
+    equal(route.enabled, true, `${route.label} protected voice gate is explicit`);
+    equal(route.ingressConfigured, true, `${route.label} ingress presence is reported`);
+    equal(route.destinationConfigured, true, `${route.label} destination presence is reported`);
+    equal(route.destinationValid, true, `${route.label} valid E.164 destination is recognized`);
+    equal(route.loopDetected, false, `${route.label} does not trigger the graph loop guard`);
+    equal(route.routeExact, true, `${route.label} exact database identity is required`);
+    equal(route.ready, true, `${route.label} protected configuration is ready`);
+    equal(route.maskedDestination, "****0101", `${route.label} destination is masked`);
+  }
+  const phoenixVoiceCheck = validVoiceCheck.routes.find(
+    (route) => route.routeKey === "weathertech-phoenix",
+  );
+  const tucsonVoiceCheck = validVoiceCheck.routes.find(
+    (route) => route.routeKey === "weathertech-tucson",
+  );
+  const ihcVoiceCheck = validVoiceCheck.routes.find(
+    (route) => route.routeKey === "ihc-primary",
+  );
+  check(phoenixVoiceCheck, "Phoenix voice readiness is present");
+  check(tucsonVoiceCheck, "Tucson voice readiness is present");
+  check(ihcVoiceCheck, "IHC voice readiness is present");
+  equal(phoenixVoiceCheck.publicSourceRequired, true, "Phoenix requires its carrier source");
+  equal(tucsonVoiceCheck.publicSourceRequired, false, "Tucson is a direct Twilio public ingress");
+  equal(ihcVoiceCheck.publicSourceRequired, true, "IHC requires its carrier source");
+  equal(phoenixVoiceCheck.maskedPublicSource, "****0111", "Phoenix source is masked");
+  equal(ihcVoiceCheck.maskedPublicSource, "****0112", "IHC source is masked");
   check(
-    !JSON.stringify(validVoiceCheck).includes("+16235550101"),
-    "Readiness never returns the forwarding destination",
+    !JSON.stringify(validVoiceCheck).includes("+16235550101") &&
+      !JSON.stringify(validVoiceCheck).includes("+14805550111") &&
+      !JSON.stringify(validVoiceCheck).includes("+14805550112"),
+    "Readiness never returns a raw forwarding destination or carrier source",
   );
   assert.deepEqual(
     Object.keys(validVoiceCheck).sort(),
     [
+      "graphValid",
+      "routes",
+      "sharedDestination",
+      "statusCallbackUrl",
+      "terminalForwardingDisabledConfirmed",
+      "webhookUrl",
+    ],
+    "Voice readiness exposes only graph, masked route, and canonical URL fields",
+  );
+  assertionCount += 1;
+  assert.deepEqual(
+    Object.keys(phoenixVoiceCheck).sort(),
+    [
       "destinationConfigured",
       "destinationValid",
       "enabled",
+      "ingressConfigured",
+      "label",
       "loopDetected",
       "maskedDestination",
+      "maskedIngressNumber",
+      "maskedPublicSource",
+      "nextAction",
+      "publicSourceConfigured",
+      "publicSourceRequired",
+      "publicSourceValid",
       "ready",
       "routeExact",
-      "webhookUrl",
+      "routeKey",
+      "terminalForwardingAttestationRequired",
+      "terminalForwardingDisabledConfirmed",
     ],
-    "Voice readiness exposes only the approved masked fields",
+    "Route readiness exposes only the approved masked and boolean fields",
   );
   assertionCount += 1;
 
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "+15205550101";
-  const loopCheck = serverClient.getTwilioTucsonVoiceForwardingCheckResult({
-    routeExact: true,
+  const loopCheck = serverClient.getTwilioVoiceForwardingCheckResult({
+    routeExactByKey: {
+      "weathertech-phoenix": true,
+      "weathertech-tucson": true,
+      "ihc-primary": true,
+    },
   });
-  equal(loopCheck.loopDetected, true, "Forwarding back to Tucson is a loop");
-  equal(loopCheck.ready, false, "A forwarding loop fails readiness closed");
+  equal(loopCheck.graphValid, false, "Forwarding back to Tucson invalidates the graph");
+  equal(
+    loopCheck.routes.find((route) => route.routeKey === "weathertech-tucson")?.loopDetected,
+    true,
+    "Forwarding back to the Tucson ingress is a route loop",
+  );
+  check(
+    loopCheck.routes.every((route) => !route.ready),
+    "A graph-wide loop fails every route readiness closed",
+  );
 
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "not-a-phone";
-  const malformedCheck = serverClient.getTwilioTucsonVoiceForwardingCheckResult({
-    routeExact: true,
+  const malformedCheck = serverClient.getTwilioVoiceForwardingCheckResult({
+    routeExactByKey: { "weathertech-tucson": true },
   });
-  equal(malformedCheck.destinationConfigured, true, "Malformed configured input is distinguished");
-  equal(malformedCheck.destinationValid, false, "Malformed destination fails validation");
-  equal(malformedCheck.maskedDestination, null, "Malformed destination is never echoed");
-  equal(malformedCheck.ready, false, "Malformed destination fails readiness closed");
+  const malformedTucsonCheck = malformedCheck.routes.find(
+    (route) => route.routeKey === "weathertech-tucson",
+  );
+  equal(malformedTucsonCheck.destinationConfigured, true, "Malformed input is distinguished");
+  equal(malformedTucsonCheck.destinationValid, false, "Malformed destination fails validation");
+  equal(malformedTucsonCheck.maskedDestination, null, "Malformed destination is never echoed");
+  equal(malformedTucsonCheck.ready, false, "Malformed destination fails readiness closed");
 
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "520-555-0101";
-  const formattedButNotStrictCheck =
-    serverClient.getTwilioTucsonVoiceForwardingCheckResult({ routeExact: true });
+  const formattedButNotStrictCheck = serverClient
+    .getTwilioVoiceForwardingCheckResult({
+      routeExactByKey: { "weathertech-tucson": true },
+    })
+    .routes.find((route) => route.routeKey === "weathertech-tucson");
   equal(
     formattedButNotStrictCheck.destinationConfigured,
     true,
@@ -384,6 +510,11 @@ try {
     id: "weathertech-company",
     name: "WeatherTech Roofing LLC",
     short_name: "WeatherTech",
+  };
+  const ihcCompany = {
+    id: "ihc-company",
+    name: "IHC Painting",
+    short_name: "IHC",
   };
   const businessPhoneNumber = {
     id: "tucson-business-number",
@@ -464,11 +595,122 @@ try {
     body: "Cross-company phone fallback must not be trusted",
     twilio_message_sid: "SM44444444444444444444444444444444",
   };
+  const sharedContactPhone = "+16025550999";
+  const sharedContactEmail = "shared-contact@example.test";
+  const weathertechSharedContact = {
+    id: "weathertech-shared-contact",
+    company_id: company.id,
+    display_name: "WeatherTech Contact",
+    contact_name: "WeatherTech Contact",
+    phone: sharedContactPhone,
+    email: sharedContactEmail,
+    property_address: "WeatherTech test address",
+    city: "Phoenix",
+    state: "AZ",
+    postal_code: "85001",
+    customer_type: "residential",
+    status: "active",
+    notes: null,
+    created_at: "2026-08-24T00:00:00.000Z",
+    updated_at: "2026-08-24T00:00:00.000Z",
+  };
+  const ihcSharedContact = {
+    ...weathertechSharedContact,
+    id: "ihc-shared-contact",
+    company_id: ihcCompany.id,
+    display_name: "IHC Contact",
+    contact_name: "IHC Contact",
+    property_address: "IHC test address",
+    city: "Scottsdale",
+  };
+  const ihcLeadIntake = {
+    id: "ihc-shared-contact-intake",
+    company_id: ihcCompany.id,
+    linked_lead_id: null,
+    linked_customer_id: null,
+    related_communication_event_id: null,
+    integration_sync_log_id: null,
+    provider: "twilio_sms",
+    provider_event_id: "SM55555555555555555555555555555555",
+    source: "Twilio SMS",
+    source_detail: "IHC hidden ingress",
+    campaign: null,
+    correlation_id: "ihc-shared-contact-correlation",
+    company_key: "ihc_painting",
+    branch_key: "scottsdale",
+    routing_status: "matched",
+    status: "new",
+    duplicate_confidence: "exact",
+    follow_up_state: "required",
+    urgency: "normal",
+    assigned_queue: "ihc-painting",
+    assigned_user_id: null,
+    first_name: "IHC",
+    last_name: "Contact",
+    contact_name: "IHC Contact",
+    company_name: null,
+    phone: sharedContactPhone,
+    email: sharedContactEmail,
+    service_address: "IHC test address",
+    city: "Scottsdale",
+    state: "AZ",
+    postal_code: "85250",
+    requested_service: "painting",
+    message: "Company-safe contact matching test",
+    preferred_contact_method: "sms",
+    receiving_business_phone_number: ihcBusinessPhoneNumber.phone_number_e164,
+    consent_metadata: {},
+    source_metadata: {},
+    safe_raw_source_reference: null,
+    possible_matches: [],
+    routing_reasons: [],
+    review_notes: null,
+    dismissed_at: null,
+    dismissed_by: null,
+    non_lead_reason: null,
+    intake_timestamp: "2026-08-24T00:00:00.000Z",
+    original_submission_timestamp: null,
+    created_at: "2026-08-24T00:00:00.000Z",
+    updated_at: "2026-08-24T00:00:00.000Z",
+  };
+  const companylessPhoneFallbackCall = {
+    id: "companyless-phone-fallback-call",
+    company_id: null,
+    business_phone_number_id: null,
+    integration_connection_id: null,
+    customer_id: null,
+    lead_id: null,
+    job_id: null,
+    provider: "twilio",
+    provider_account_sid: null,
+    provider_call_sid: "CA11111111111111111111111111111111",
+    provider_parent_call_sid: null,
+    direction: "inbound",
+    call_status: "completed",
+    from_phone: sharedContactPhone,
+    to_phone: ihcBusinessPhoneNumber.phone_number_e164,
+    business_phone: ihcBusinessPhoneNumber.phone_number_e164,
+    customer_phone: sharedContactPhone,
+    routing_status: "needs_review",
+    started_at: "2026-08-24T00:00:00.000Z",
+    answered_at: "2026-08-24T00:00:01.000Z",
+    ended_at: "2026-08-24T00:01:00.000Z",
+    duration_seconds: 59,
+    recording_sid: null,
+    recording_status: "not_requested",
+    recording_duration_seconds: null,
+    transcript_status: "not_requested",
+    follow_up_required: false,
+    correlation_id: "companyless-phone-fallback-correlation",
+    metadata: {},
+    created_at: "2026-08-24T00:00:00.000Z",
+    updated_at: "2026-08-24T00:01:00.000Z",
+  };
   const emptySnapshot = {
-    leadIntakeRecords: [],
-    callRecords: [],
+    leadIntakeRecords: [ihcLeadIntake],
+    callRecords: [companylessPhoneFallbackCall],
     communicationProviderEvents: [],
-    customers: [],
+    customers: [weathertechSharedContact, ihcSharedContact],
     documents: [],
     emailMessages: [],
     integrationSyncLogs: [],
@@ -477,6 +719,7 @@ try {
     jobs: [],
     leadAccountability: [],
     leads: [],
+    properties: [],
     scheduleEvents: [],
     calendarEventSyncs: [],
     businessPhoneNumbers: [businessPhoneNumber, ihcBusinessPhoneNumber],
@@ -489,7 +732,10 @@ try {
   };
   const smsInboxItems = communications.buildUnifiedInboxItems(
     emptySnapshot,
-    new Map([[company.id, company]]),
+    new Map([
+      [company.id, company],
+      [ihcCompany.id, ihcCompany],
+    ]),
   );
   const smsInboxItem = smsInboxItems.find((item) => item.id === "sms-tucson-sms");
   const fallbackSmsInboxItem = smsInboxItems.find(
@@ -500,6 +746,12 @@ try {
   );
   const crossCompanyPhoneInboxItem = smsInboxItems.find(
     (item) => item.id === "sms-cross-company-phone-sms",
+  );
+  const ihcLeadIntakeInboxItem = smsInboxItems.find(
+    (item) => item.id === "lead-intake-ihc-shared-contact-intake",
+  );
+  const companylessCallInboxItem = smsInboxItems.find(
+    (item) => item.id === "call-companyless-phone-fallback-call",
   );
   check(smsInboxItem, "Primary Tucson SMS inbox item is present");
   check(fallbackSmsInboxItem, "Fallback Tucson SMS inbox item is present");
@@ -547,6 +799,79 @@ try {
       `${label} cannot display or assign the IHC route to a WeatherTech message`,
     );
   }
+  check(ihcLeadIntakeInboxItem, "IHC shared-contact intake item is present");
+  equal(
+    ihcLeadIntakeInboxItem.customerId,
+    ihcSharedContact.id,
+    "Fallback phone/email matching stays within the intake company",
+  );
+  equal(
+    ihcLeadIntakeInboxItem.customerName,
+    ihcSharedContact.display_name,
+    "A same-contact WeatherTech customer cannot overwrite IHC identity",
+  );
+  check(companylessCallInboxItem, "Companyless phone-fallback call is present for review");
+  equal(
+    companylessCallInboxItem.businessPhoneNumberId,
+    null,
+    "A phone-only business-route match fails closed without company identity",
+  );
+  equal(
+    companylessCallInboxItem.companyId,
+    "",
+    "A companyless call cannot inherit IHC company identity from phone alone",
+  );
+  check(
+    !companylessCallInboxItem.sourceAccount?.includes("IHC") &&
+      companylessCallInboxItem.assignedTo !== "ihc-painting",
+    "A companyless call cannot inherit IHC route labeling or queue assignment",
+  );
+
+  const sharedConversationBase = {
+    id: "weathertech-thread-item",
+    companyId: company.id,
+    customerId: null,
+    leadId: null,
+    phone: sharedContactPhone,
+    email: sharedContactEmail,
+  };
+  check(
+    communications.communicationItemsShareConversation(
+      sharedConversationBase,
+      { ...sharedConversationBase, id: "weathertech-thread-candidate" },
+    ),
+    "Same-company communications can group by shared phone/email",
+  );
+  check(
+    !communications.communicationItemsShareConversation(
+      sharedConversationBase,
+      {
+        ...sharedConversationBase,
+        id: "ihc-thread-candidate",
+        companyId: ihcCompany.id,
+      },
+    ),
+    "Matching phone/email cannot merge WeatherTech and IHC histories",
+  );
+  check(
+    !communications.communicationItemsShareConversation(
+      { ...sharedConversationBase, customerId: "shared-customer-id" },
+      {
+        ...sharedConversationBase,
+        id: "ihc-shared-customer-candidate",
+        companyId: ihcCompany.id,
+        customerId: "shared-customer-id",
+      },
+    ),
+    "Even an inconsistent shared CRM ID cannot cross the company boundary",
+  );
+  check(
+    !communications.communicationItemsShareConversation(
+      sharedConversationBase,
+      { ...sharedConversationBase, id: "companyless-candidate", companyId: "" },
+    ),
+    "Companyless communications cannot join a company-scoped conversation",
+  );
 
   console.log(`Twilio route identity and inbox labeling: PASS (${assertionCount} assertions)`);
 } finally {

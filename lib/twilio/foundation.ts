@@ -139,12 +139,9 @@ export function matchesTwilioBusinessRouteTemplate(
 
   const communicationChannelMatches =
     capability === "voice"
-      ? template.key === "weathertech-tucson" &&
-        route.communication_channel === "sms_voice"
-      : template.communicationChannel === "sms_voice"
-        ? route.communication_channel === "sms" ||
-          route.communication_channel === "sms_voice"
-        : route.communication_channel === template.communicationChannel;
+      ? route.communication_channel === "sms_voice"
+      : route.communication_channel === "sms" ||
+        route.communication_channel === "sms_voice";
 
   return (
     route.routing_key === template.key &&
@@ -176,21 +173,21 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
   },
   {
     id: "voice",
-    label: "Tucson inbound voice webhook",
+    label: "Inbound voice webhook",
     path: "/api/integrations/twilio/voice",
     method: "POST",
     liveEnabled: false,
     summary:
-      "Returns signed Tucson-only call-forwarding TwiML after the protected gate, exact route, destination, and loop checks pass.",
+      "Returns signed route-specific call-forwarding TwiML after protected gates, exact identity, destination, and graph-wide loop checks pass.",
   },
   {
     id: "voice_status",
-    label: "Tucson voice status callback",
+    label: "Voice status callback",
     path: "/api/integrations/twilio/voice/status",
     method: "POST",
     liveEnabled: false,
     summary:
-      "Stores bounded signed Tucson forwarding status evidence; it does not enable recording, transcription, or another business route.",
+      "Stores bounded signed route-specific forwarding status evidence; it does not enable recording, transcription, or another business route.",
   },
   {
     id: "recording",
@@ -211,8 +208,9 @@ export const twilioInboundGuardrails = [
   "The receiving E.164 number, Twilio account, active connection, and company must match exactly.",
   "Provider MessageSid deduplication prevents duplicate inbox or CRM records.",
   "Unknown or ambiguous senders remain safely unmatched for owner review.",
-  "Only the exact Tucson sms_voice route may return forwarding TwiML, and the protected destination is never exposed to the browser.",
-  "Phoenix and IHC voice, recording, transcription, auto-replies, and automatic lead creation remain disabled.",
+  "Only an exact enabled sms_voice route may return forwarding TwiML, and protected source and destination numbers are never exposed unmasked.",
+  "Every destination must differ from every Twilio ingress, public carrier source, and caller; a shared terminal is allowed only as an owner-attested sink.",
+  "Recording, transcription, auto-replies, and automatic lead creation remain disabled for every route.",
   "Outbound SMS is locked in the application and remains disabled by production configuration.",
 ];
 
@@ -222,7 +220,7 @@ export const twilioLiveFoundationChecklist = [
   "Verify Twilio account ownership, Auth Token signature validation, and the canonical HTTPS webhook URL.",
   "Configure the signed inbound SMS webhook URL in Twilio Console.",
   "Run one controlled live inbound test before marking the mapped number validated.",
-  "Keep Tucson voice forwarding blocked until its protected destination, exact sms_voice route, and loop guard all pass readiness.",
-  "Configure only the Tucson incoming Voice URL after readiness passes; never place a real test call without separate owner approval.",
+  "Keep each voice route blocked until its protected source and destination, exact sms_voice identity, owner terminal attestation, and graph-wide loop guard pass readiness.",
+  "Configure an incoming Voice URL only for the exact ready Twilio ingress; never place a real test call without separate owner approval.",
   "Keep outbound SMS disabled until a separate owner-approved sprint.",
 ];
