@@ -16,6 +16,7 @@ const envNames = [
   "TWILIO_MESSAGING_SERVICE_SID",
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_OUTBOUND_SMS_ENABLED",
+  "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
@@ -154,6 +155,7 @@ try {
     "MG11111111111111111111111111111111";
   process.env.TWILIO_PUBLIC_BASE_URL = publicBaseUrl;
   process.env.TWILIO_OUTBOUND_SMS_ENABLED = "false";
+  process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
   process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = phoenixNumber;
   process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER = tucsonNumber;
   process.env.TWILIO_IHC_NUMBER = ihcNumber;
@@ -254,6 +256,11 @@ try {
   response = await invokeHandler(webhooks, "voice_inbound", voicePath, voiceUrl, inboundVoiceParams());
   equal(response.status, 503, "Disabled Tucson voice gate returns 503 without dialing");
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "true";
+
+  process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "false";
+  response = await invokeHandler(webhooks, "voice_inbound", voicePath, voiceUrl, inboundVoiceParams());
+  equal(response.status, 503, "Missing Tucson terminal attestation returns 503 without dialing");
+  process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
 
   delete process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO;
   response = await invokeHandler(webhooks, "voice_inbound", voicePath, voiceUrl, inboundVoiceParams());

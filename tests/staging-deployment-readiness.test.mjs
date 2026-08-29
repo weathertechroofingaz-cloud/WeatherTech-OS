@@ -36,7 +36,9 @@ const baseEnv = {
   TWILIO_INBOUND_SMS_ENABLED: "false",
   TWILIO_OUTBOUND_SMS_ENABLED: "false",
   TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
+  TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
   TWILIO_IHC_VOICE_FORWARDING_ENABLED: "false",
+  TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
   TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED: "false",
   TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED: "false",
   GOOGLE_GMAIL_SEND_ENABLED: "false",
@@ -232,8 +234,14 @@ try {
       ) &&
       readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
         "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+      ) &&
+      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
+        "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+      ) &&
+      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
+        "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
       ),
-    "Every route-specific Twilio voice gate and terminal confirmation is part of staging safety checks",
+    "Every route-specific Twilio voice gate and terminal attestation is part of staging safety checks",
   );
   assert(
     readinessModule.STAGING_PROVIDER_SECRET_ACTIVATORS.includes(

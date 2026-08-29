@@ -18,6 +18,7 @@ const envNames = [
   "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
   "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
   "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+  "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
@@ -25,6 +26,7 @@ const envNames = [
   "TWILIO_IHC_PUBLIC_NUMBER",
   "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
   "TWILIO_IHC_VOICE_FORWARD_TO",
+  "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
 ];
 const envSnapshot = new Map(envNames.map((name) => [name, process.env[name]]));
@@ -134,7 +136,11 @@ try {
     ["voiceForwarding?.webhookUrl", "Canonical voice webhook URL is rendered"],
     ["voiceForwarding?.statusCallbackUrl", "Canonical status callback URL is rendered"],
     ["voiceForwarding?.graphValid", "Graph-wide loop readiness is rendered"],
-    ["voiceForwarding?.sharedDestination", "Shared terminal state is rendered"],
+    ["voiceForwarding?.sharedDestination", "Informational terminal topology is rendered"],
+    ["Terminal topology", "Owner sees shared-versus-route-specific destination topology"],
+    ["Configured route-specific sinks", "Independent route destinations are an explicit supported state"],
+    ["Terminal attestations", "Aggregate route-attestation state is rendered"],
+    ["Terminal attestation", "Each route renders its own terminal attestation"],
     ["terminalForwardingDisabledConfirmed", "Owner terminal attestation state is rendered"],
     ["Exact next action", "Owner receives an explicit next action"],
     ["Recording,", "Recording remains explicitly disabled"],
@@ -338,11 +344,14 @@ try {
   process.env.TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER = "+14805550111";
   process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = "true";
   process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = "+16235550101";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED =
+    "true";
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "true";
-  process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "+16235550101";
+  process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = "+16235550102";
   process.env.TWILIO_IHC_PUBLIC_NUMBER = "+14805550112";
   process.env.TWILIO_IHC_VOICE_FORWARDING_ENABLED = "true";
   process.env.TWILIO_IHC_VOICE_FORWARD_TO = "+16235550101";
+  process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
   process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
 
   const expectedNumbers = serverClient.getTwilioExpectedBusinessNumbers();
@@ -378,7 +387,7 @@ try {
   equal(
     validVoiceCheck.sharedDestination,
     true,
-    "Readiness confirms the three routes share a terminal without exposing it",
+    "Readiness reports an explicit Phoenix/IHC shared sink without reusing Tucson",
   );
   equal(validVoiceCheck.routes.length, 3, "All three voice routes have independent readiness");
   for (const route of validVoiceCheck.routes) {
@@ -388,8 +397,17 @@ try {
     equal(route.destinationValid, true, `${route.label} valid E.164 destination is recognized`);
     equal(route.loopDetected, false, `${route.label} does not trigger the graph loop guard`);
     equal(route.routeExact, true, `${route.label} exact database identity is required`);
+    equal(
+      route.terminalForwardingDisabledConfirmed,
+      true,
+      `${route.label} uses its own protected terminal attestation`,
+    );
     equal(route.ready, true, `${route.label} protected configuration is ready`);
-    equal(route.maskedDestination, "****0101", `${route.label} destination is masked`);
+    equal(
+      route.maskedDestination,
+      route.routeKey === "weathertech-tucson" ? "****0102" : "****0101",
+      `${route.label} destination is masked`,
+    );
   }
   const phoenixVoiceCheck = validVoiceCheck.routes.find(
     (route) => route.routeKey === "weathertech-phoenix",
@@ -410,6 +428,7 @@ try {
   equal(ihcVoiceCheck.maskedPublicSource, "****0112", "IHC source is masked");
   check(
     !JSON.stringify(validVoiceCheck).includes("+16235550101") &&
+      !JSON.stringify(validVoiceCheck).includes("+16235550102") &&
       !JSON.stringify(validVoiceCheck).includes("+14805550111") &&
       !JSON.stringify(validVoiceCheck).includes("+14805550112"),
     "Readiness never returns a raw forwarding destination or carrier source",

@@ -52516,6 +52516,11 @@ function TwilioLiveFoundationPanel() {
   const allVoiceRoutesReady =
     voiceRoutes.length === twilioBusinessNumberRouteTemplates.length &&
     voiceRoutes.every((route) => route.ready);
+  const allVoiceDestinationsConfigured =
+    voiceRoutes.length === twilioBusinessNumberRouteTemplates.length &&
+    voiceRoutes.every(
+      (route) => route.destinationConfigured && route.destinationValid,
+    );
 
   return (
     <section
@@ -52573,8 +52578,9 @@ function TwilioLiveFoundationPanel() {
               Protected inbound voice routing graph
             </p>
             <p className="mt-1 text-sm leading-6 text-sky-950">
-              Public carrier numbers and forwarding destinations remain server-only.
-              This owner view exposes only boolean state and masked last four digits.
+              Public carrier numbers and independently chosen forwarding destinations
+              remain server-only. The verified assistant line is Tucson-only. This owner
+              view exposes only boolean state and masked last four digits.
             </p>
           </div>
           <ProviderStatusBadge
@@ -52589,15 +52595,21 @@ function TwilioLiveFoundationPanel() {
             value={voiceForwarding?.graphValid ? "Acyclic" : "Blocked / incomplete"}
           />
           <ProfileStat
-            label="Shared terminal"
-            value={voiceForwarding?.sharedDestination ? "Verified shared sink" : "Not verified"}
+            label="Terminal topology"
+            value={
+              !allVoiceDestinationsConfigured
+                ? "Incomplete"
+                : voiceForwarding?.sharedDestination
+                  ? "Configured shared sink"
+                  : "Configured route-specific sinks"
+            }
           />
           <ProfileStat
-            label="Terminal forwarding"
+            label="Terminal attestations"
             value={
               voiceForwarding?.terminalForwardingDisabledConfirmed
-                ? "Owner confirmed disabled"
-                : "Owner confirmation required"
+                ? "All configured terminals confirmed"
+                : "Route confirmation required"
             }
           />
           <ProfileStat
@@ -52693,6 +52705,14 @@ function TwilioLiveFoundationPanel() {
                   <ProfileStat
                     label="Route identity"
                     value={voiceRoute?.routeExact ? "Exact sms_voice" : "Not voice-ready"}
+                  />
+                  <ProfileStat
+                    label="Terminal attestation"
+                    value={
+                      voiceRoute?.terminalForwardingDisabledConfirmed
+                        ? "Owner confirmed disabled"
+                        : "Owner confirmation required"
+                    }
                   />
                 </div>
 

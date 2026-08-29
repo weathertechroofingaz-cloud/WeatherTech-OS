@@ -63,10 +63,29 @@ for (const [needle, message] of [
   ['leadSource: "Phone - WeatherTech Tucson"', "Exact Tucson lead source is seeded"],
   ['leadSource: "Phone - IHC"', "Exact IHC lead source is seeded"],
   ['communication_channel: "sms_voice"', "Every synthetic route is voice capable"],
+  ["PHOENIX_FORWARD_DESTINATION", "Phoenix uses its own synthetic terminal"],
+  ["TUCSON_FORWARD_DESTINATION", "Tucson uses its own synthetic terminal"],
+  ["IHC_FORWARD_DESTINATION", "IHC uses its own synthetic terminal"],
+  ["three distinct terminal destinations", "Synthetic terminals must remain distinct"],
+  ["hasExactRouteDialTwiML", "Every successful route verifies exact-only Dial TwiML"],
   ["TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER", "Phoenix public source stays protected"],
   ["TWILIO_IHC_PUBLIC_NUMBER", "IHC public source stays protected"],
+  [
+    "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+    "Phoenix terminal attestation is independent",
+  ],
+  [
+    "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+    "IHC terminal attestation is independent",
+  ],
+  [
+    "IHC route cannot inherit another terminal attestation",
+    "A route cannot inherit another route's terminal attestation",
+  ],
   ["graph-wide public-source loop", "Graph-wide public-source loops are rejected"],
-  ["shared terminal caller loop", "Calls originating from the terminal are rejected"],
+  ["terminalCallerAttempts = VOICE_ROUTES.flatMap", "Every route-terminal caller pair is exercised"],
+  ["callerTerminal: callerRoute.destination", "Cross-route terminal callers use exact route fixtures"],
+  ["terminal caller loop", "Calls originating from any configured terminal are rejected"],
   ["retry recovery after partial call claim", "Partial persistence retry is exercised"],
   ["POST-CLAIM MATCH DRIFT", "CRM match drift after claim is exercised"],
   ["same-company known caller", "Known same-company contact matching is exercised"],
@@ -83,7 +102,9 @@ for (const [needle, message] of [
   ["new ingress blocked after sms-only rollback", "Every route rollback blocks new Dial authorization"],
   ["provider_dial_status", "Bounded provider outcome evidence is verified"],
   ["expectedAnsweredAt", "Answered time derivation is verified"],
-  ["!storedEvidence.includes(FORWARD_DESTINATION)", "Raw destination storage is prohibited"],
+  ["FORWARD_DESTINATIONS.every", "Every raw route terminal is prohibited from storage"],
+  ["destination: route.destination", "Stored proofs bind to each exact route terminal"],
+  ["new Set(storedDestinationProofs).size", "Stored terminal proofs remain route-distinct"],
   ["!storedEvidence.includes(PHOENIX_PUBLIC_SOURCE)", "Raw Phoenix public source storage is prohibited"],
   ["!storedEvidence.includes(IHC_PUBLIC_SOURCE)", "Raw IHC public source storage is prohibited"],
   ["recording_status === \"not_requested\"", "Recording remains not requested"],
@@ -142,7 +163,9 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
     "ihc-primary",
   ]);
   assert.equal(report.exactRouteLifecycles, 3);
-  assert.equal(report.sharedTerminalVerified, true);
+  assert.equal(report.distinctTerminalsVerified, true);
+  assert.equal(report.exactRouteTwiMLVerified, true);
+  assert.equal(report.independentTerminalAttestationsVerified, true);
   assert.equal(report.graphWideLoopRejected, true);
   assert.equal(report.terminalCallerLoopRejected, true);
   assert.equal(report.exactCompanyAndBranchIsolationVerified, true);
@@ -173,7 +196,7 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.outboundSmsCreated, false);
   assert.equal(report.providerNetworkRequests, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 37;
+  assertionCount += 39;
   console.log("Twilio multi-route voice hosted regression execution: PASS");
 } else {
   console.log(

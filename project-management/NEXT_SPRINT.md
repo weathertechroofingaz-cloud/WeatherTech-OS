@@ -19,9 +19,9 @@ Preserve the waiting state for work after the current approved carrier-forwarded
 ## Active-Sprint Boundary
 
 - The active sprint may generalize the completed signed voice foundation to exact Phoenix and IHC hidden Twilio ingress routes and make Unified Inbox communication identity company-safe.
-- The active sprint may prepare a protected common assistant terminal and a disabled-first deployment, but carrier forwarding, Twilio number saves, protected live configuration, database route activation, and real calls remain separately gated as recorded in CURRENT_SPRINT.
+- The active sprint may preserve the verified assistant terminal for Tucson only and prepare independently configurable protected Phoenix/IHC terminals plus a disabled-first deployment. Phoenix and IHC terminal values remain owner choices; a shared sink may be used only if explicitly selected and independently verified, never inferred. Carrier forwarding, Twilio number saves, protected live configuration, database route activation, and real calls remain separately gated as recorded in CURRENT_SPRINT.
 - Public carrier SMS ingestion, hosted messaging, A2P submission, outbound SMS, number purchase/port/transfer/release, recording, transcription, and automatic CRM creation remain outside the active sprint.
-- WeatherTech Tucson's customer-facing number, signed webhook, SMS path, and completed evidence remain closed work. Only its protected terminal destination may later change under the exact active-sprint safety sequence.
+- WeatherTech Tucson's customer-facing number, signed webhook, SMS path, and completed evidence remain closed work. Its protected assistant terminal is Tucson-only and must not be reused for Phoenix; any later destination change remains subject to the exact active-sprint safety sequence.
 
 ## Owner-Approved Scope
 

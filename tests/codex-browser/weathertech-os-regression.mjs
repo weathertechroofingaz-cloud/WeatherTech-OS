@@ -11567,8 +11567,8 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("outbound sms disabled") &&
         text.includes("inbound not validated") &&
         text.includes("protected inbound voice routing graph") &&
-        text.includes("shared terminal") &&
-        text.includes("terminal forwarding") &&
+        text.includes("terminal topology") &&
+        text.includes("terminal attestations") &&
         text.includes("owner confirmation required") &&
         text.includes("voice gate") &&
         text.includes("twilio ingress") &&

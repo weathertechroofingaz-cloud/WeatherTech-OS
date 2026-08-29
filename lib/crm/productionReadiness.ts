@@ -609,9 +609,10 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
       "Verify each company-controlled Twilio number before creating its exact active company mapping.",
       "Configure the signed inbound SMS callback URL for each mapped number.",
       "Complete one controlled live inbound SMS test before marking inbound messaging validated.",
-      "Verify every forwarding, simultaneous-ring, and hunt-group path on the assistant terminal is disabled, then record only the protected boolean attestation.",
+      "Keep the verified assistant terminal and its legacy protected attestation Tucson-only; never reuse that destination or attestation for Phoenix or IHC.",
+      "Independently choose the Phoenix and IHC protected terminals, verify every forwarding, simultaneous-ring, hunt-group, and other ring path on each exact terminal is disabled, then record only that route's protected attestation.",
       "Enter Phoenix and IHC public carrier sources and all route destinations only in protected Production configuration; never send them through chat.",
-      "Move Tucson to the verified terminal only through the disabled-first route sequence; do not change its existing Twilio webhook or SMS path.",
+      "Keep Tucson on its verified Tucson-only assistant through the disabled-first route sequence; do not change its existing Twilio webhook or SMS path.",
       "Sign in to Twilio and configure only the exact ready Phoenix and IHC ingress Voice webhooks after their independent readiness checks are green.",
       "Configure carrier voice forwarding from each public Phoenix/IHC line to its distinct hidden Twilio ingress only after that route is ready.",
       "Approve each real Tucson, Phoenix, or IHC validation call separately after configuration is verified.",
@@ -624,7 +625,7 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
       "Send signed sandbox webhook payloads.",
       "Run one controlled live inbound SMS test for each company actually mapped.",
       "Run provider-isolated voice lifecycles for Tucson, Phoenix, and IHC with every route-specific gate disabled outside the fixture.",
-      "Verify the protected graph, shared terminal sink attestation, exact sms_voice rows, and route-specific readiness without placing a call.",
+      "Verify the protected route-destination topology, separate terminal attestations, exact sms_voice rows, and route-specific readiness without placing a call; destination equality is informational, not required.",
       "Activate one carrier/provider route at a time and stop for separate approval before each real call.",
       "Enable outbound SMS only in a later owner-approved activation sprint.",
     ],
@@ -1104,13 +1105,13 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       id: "twilio",
       label: "Twilio",
       status: "controlled_testing_required",
-      summary: "Inbound SMS remains exact and outbound SMS remains unavailable. Tucson, Phoenix, and IHC voice forwarding use one signed canonical handler with separate protected gates, exact branch identity, an acyclic routing graph, and an owner-attested terminal sink.",
+      summary: "Inbound SMS remains exact and outbound SMS remains unavailable. Tucson, Phoenix, and IHC voice forwarding use one signed canonical handler with separate protected gates, independently configured destinations and terminal attestations, exact branch identity, and an acyclic routing graph. The verified assistant line is Tucson-only.",
       setupDocumentPath: setupDocumentPaths.twilio,
       requiredBeforeActivation: productionActivationGuides[0].requiredOwnerActions,
       requiredMappings: [
         "Each connected Twilio number must map to exactly one verified company, branch identity, and active connection",
         "Each enabled voice ingress must have its own exact sms_voice company and branch route",
-        "Phoenix and IHC public carrier sources must remain distinct from every Twilio ingress and the protected terminal",
+        "Every protected terminal must remain distinct from every Twilio ingress and every public carrier source; the Tucson-only assistant cannot authorize or receive Phoenix/IHC routing",
         "Carrier call forwarding does not forward SMS sent to the existing public Verizon or AT&T numbers",
         "Unverified or unavailable company numbers remain unconfigured",
       ],
@@ -1120,6 +1121,10 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
         twilioEnvVars.outboundSmsEnabled ?? "TWILIO_OUTBOUND_SMS_ENABLED",
         twilioEnvVars.voiceTerminalForwardingDisabledConfirmed ??
           "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+        twilioEnvVars.weatherTechPhoenixTerminalForwardingDisabledConfirmed ??
+          "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+        twilioEnvVars.ihcTerminalForwardingDisabledConfirmed ??
+          "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
         twilioEnvVars.weatherTechPhoenixVoiceForwardingEnabled ??
           "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
         twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled ??
@@ -1501,6 +1506,14 @@ export function buildProductionEnvironmentInventory(
         { name: twilioEnvVars.outboundSmsEnabled, classification: "disabled_safety_flag" },
         {
           name: twilioEnvVars.voiceTerminalForwardingDisabledConfirmed,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: twilioEnvVars.weatherTechPhoenixTerminalForwardingDisabledConfirmed,
+          classification: "disabled_safety_flag",
+        },
+        {
+          name: twilioEnvVars.ihcTerminalForwardingDisabledConfirmed,
           classification: "disabled_safety_flag",
         },
         {
