@@ -67,6 +67,7 @@ export type TwilioVoiceRouteServerConfig = {
   destinationE164: string | null;
   loopDetected: boolean;
   terminalForwardingAttestationRequired: boolean;
+  terminalForwardingDisabledConfirmed: boolean;
   configurationReady: boolean;
 };
 
@@ -74,7 +75,9 @@ export type TwilioVoiceForwardingServerConfig = {
   webhookUrl: string | null;
   statusCallbackUrl: string | null;
   graphValid: boolean;
+  /** Informational only; true when Phoenix and IHC use one explicit shared sink. */
   sharedDestination: boolean;
+  /** Aggregate compatibility state for valid, independently attested configured terminals. */
   terminalForwardingDisabledConfirmed: boolean;
   routes: TwilioVoiceRouteServerConfig[];
 };
@@ -104,7 +107,9 @@ export type TwilioVoiceForwardingCheckResult = {
   webhookUrl: string | null;
   statusCallbackUrl: string | null;
   graphValid: boolean;
+  /** Informational only; route activation does not require one shared destination. */
   sharedDestination: boolean;
+  /** Aggregate compatibility state; route readiness uses its route-specific value. */
   terminalForwardingDisabledConfirmed: boolean;
   routes: TwilioVoiceRouteCheckResult[];
 };
@@ -343,24 +348,31 @@ const twilioVoiceRouteEnvDefinitions = [
     enabledEnv: twilioEnvVars.weatherTechPhoenixVoiceForwardingEnabled,
     destinationEnv: twilioEnvVars.weatherTechPhoenixVoiceForwardTo,
     publicSourceEnv: twilioEnvVars.weatherTechPhoenixPublicNumber,
+    terminalAttestationEnv:
+      twilioEnvVars.weatherTechPhoenixTerminalForwardingDisabledConfirmed,
   },
   {
     routeKey: "weathertech-tucson",
     enabledEnv: twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled,
     destinationEnv: twilioEnvVars.weatherTechTucsonVoiceForwardTo,
     publicSourceEnv: null,
+    terminalAttestationEnv:
+      twilioEnvVars.voiceTerminalForwardingDisabledConfirmed,
   },
   {
     routeKey: "ihc-primary",
     enabledEnv: twilioEnvVars.ihcVoiceForwardingEnabled,
     destinationEnv: twilioEnvVars.ihcVoiceForwardTo,
     publicSourceEnv: twilioEnvVars.ihcPublicNumber,
+    terminalAttestationEnv:
+      twilioEnvVars.ihcTerminalForwardingDisabledConfirmed,
   },
 ] as const satisfies ReadonlyArray<{
   routeKey: TwilioBusinessRouteKey;
   enabledEnv: string;
   destinationEnv: string;
   publicSourceEnv: string | null;
+  terminalAttestationEnv: string;
 }>;
 
 function countConfiguredValue(values: Array<string | null>, expected: string) {
@@ -382,9 +394,6 @@ export function getTwilioServerConfig(): TwilioServerConfig {
   const statusCallbackUrl = getTwilioWebhookUrl(
     publicBaseUrl,
     twilioEnvVars.voiceStatusCallbackPath,
-  );
-  const terminalForwardingDisabledConfirmed = getBooleanEnvValue(
-    twilioEnvVars.voiceTerminalForwardingDisabledConfirmed,
   );
   const routeDrafts = twilioVoiceRouteEnvDefinitions.map((definition) => {
     const expected = expectedBusinessNumbers.find(
@@ -416,6 +425,9 @@ export function getTwilioServerConfig(): TwilioServerConfig {
       publicSourceE164,
       destinationPresent: Boolean(destinationRaw),
       destinationE164,
+      terminalForwardingDisabledConfirmed: getBooleanEnvValue(
+        definition.terminalAttestationEnv,
+      ),
     };
   });
   const ingressNumbers = routeDrafts.map((route) => route.ingressNumberE164);
@@ -425,11 +437,21 @@ export function getTwilioServerConfig(): TwilioServerConfig {
       (value): value is string => Boolean(value),
     ),
   );
-  const carrierForwardedTopologyConfigured = routeDrafts.some(
-    (route) =>
-      route.routeKey !== "weathertech-tucson" &&
-      (route.enabled || route.publicSourcePresent || route.destinationPresent),
-  );
+  const tucsonTerminal = routeDrafts.find(
+    (route) => route.routeKey === "weathertech-tucson",
+  )?.destinationE164;
+  const tucsonTerminalCollisionRouteKeys = new Set<TwilioBusinessRouteKey>();
+  if (tucsonTerminal) {
+    for (const route of routeDrafts) {
+      if (
+        route.routeKey !== "weathertech-tucson" &&
+        route.destinationE164 === tucsonTerminal
+      ) {
+        tucsonTerminalCollisionRouteKeys.add("weathertech-tucson");
+        tucsonTerminalCollisionRouteKeys.add(route.routeKey);
+      }
+    }
+  }
   const routeLoopStates = routeDrafts.map((route) => {
     const ingressDuplicated = Boolean(
       route.ingressNumberE164 &&
@@ -453,21 +475,21 @@ export function getTwilioServerConfig(): TwilioServerConfig {
       ingressDuplicated ||
       publicSourceDuplicated ||
       publicSourceMatchesIngress ||
-      destinationMatchesProtectedSource
+      destinationMatchesProtectedSource ||
+      tucsonTerminalCollisionRouteKeys.has(route.routeKey)
     );
   });
   const graphValid = routeLoopStates.every((loopDetected) => !loopDetected);
-  const validDestinations = routeDrafts
+  const carrierRouteDestinations = routeDrafts
+    .filter((route) => route.routeKey !== "weathertech-tucson")
     .map((route) => route.destinationE164)
     .filter((value): value is string => Boolean(value));
   const sharedDestination =
-    validDestinations.length === routeDrafts.length &&
-    new Set(validDestinations).size === 1;
+    carrierRouteDestinations.length === 2 &&
+    new Set(carrierRouteDestinations).size === 1;
   const voiceRoutes: TwilioVoiceRouteServerConfig[] = routeDrafts.map(
     (route, index) => {
-      const terminalForwardingAttestationRequired =
-        route.routeKey !== "weathertech-tucson" ||
-        carrierForwardedTopologyConfigured;
+      const terminalForwardingAttestationRequired = true;
       const publicSourceReady =
         !route.publicSourceRequired ||
         (route.publicSourcePresent && Boolean(route.publicSourceE164));
@@ -492,14 +514,22 @@ export function getTwilioServerConfig(): TwilioServerConfig {
             route.destinationPresent &&
             route.destinationE164 &&
             graphValid &&
-            (!carrierForwardedTopologyConfigured || sharedDestination) &&
-            (!terminalForwardingAttestationRequired ||
-              terminalForwardingDisabledConfirmed) &&
+            route.terminalForwardingDisabledConfirmed &&
             !outboundSmsEnabled
         ),
       };
     },
   );
+  const configuredTerminalRoutes = voiceRoutes.filter(
+    (route) => route.destinationPresent,
+  );
+  const terminalForwardingDisabledConfirmed =
+    configuredTerminalRoutes.length > 0 &&
+    configuredTerminalRoutes.every(
+      (route) =>
+        Boolean(route.destinationE164) &&
+        route.terminalForwardingDisabledConfirmed,
+    );
   const tucsonVoiceRoute = voiceRoutes.find(
     (route) => route.routeKey === "weathertech-tucson",
   );
@@ -683,24 +713,11 @@ function getTwilioVoiceRouteNextAction(
   if (!config.voiceForwarding.graphValid || route.loopDetected) {
     return "Correct the protected routing graph so no destination or carrier source can re-enter a Twilio ingress.";
   }
-  const carrierForwardedTopologyConfigured = config.voiceForwarding.routes.some(
-    (candidate) =>
-      candidate.routeKey !== "weathertech-tucson" &&
-      (candidate.enabled ||
-        candidate.publicSourcePresent ||
-        candidate.destinationPresent),
-  );
-  if (
-    carrierForwardedTopologyConfigured &&
-    !config.voiceForwarding.sharedDestination
-  ) {
-    return "Configure all three protected route destinations as the same verified terminal sink.";
-  }
   if (
     route.terminalForwardingAttestationRequired &&
-    !config.voiceForwarding.terminalForwardingDisabledConfirmed
+    !route.terminalForwardingDisabledConfirmed
   ) {
-    return "Verify every forwarding path on the terminal line is disabled, then record the protected owner attestation.";
+    return `Verify every forwarding path on the ${route.label} terminal line is disabled, then record that route's protected owner attestation.`;
   }
   if (config.outboundSmsEnabled) {
     return "Disable outbound SMS before enabling inbound voice forwarding.";
@@ -755,7 +772,7 @@ export function getTwilioVoiceForwardingCheckResult({
         terminalForwardingAttestationRequired:
           route.terminalForwardingAttestationRequired,
         terminalForwardingDisabledConfirmed:
-          config.voiceForwarding.terminalForwardingDisabledConfirmed,
+          route.terminalForwardingDisabledConfirmed,
         routeExact,
         ready,
         nextAction: getTwilioVoiceRouteNextAction(route, routeExact, config),

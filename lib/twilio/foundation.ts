@@ -209,7 +209,7 @@ export const twilioInboundGuardrails = [
   "Provider MessageSid deduplication prevents duplicate inbox or CRM records.",
   "Unknown or ambiguous senders remain safely unmatched for owner review.",
   "Only an exact enabled sms_voice route may return forwarding TwiML, and protected source and destination numbers are never exposed unmasked.",
-  "Every destination must differ from every Twilio ingress, public carrier source, and caller; a shared terminal is allowed only as an owner-attested sink.",
+  "Every destination must differ from every Twilio ingress, public carrier source, and caller; each shared or route-specific terminal requires owner attestation that it is a sink.",
   "Recording, transcription, auto-replies, and automatic lead creation remain disabled for every route.",
   "Outbound SMS is locked in the application and remains disabled by production configuration.",
 ];

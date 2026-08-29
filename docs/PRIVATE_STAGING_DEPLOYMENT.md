@@ -52,8 +52,10 @@ These flags must remain `false` or unset for private staging unless a later spri
 
 - `TWILIO_OUTBOUND_SMS_ENABLED`
 - `TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED`
+- `TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED`
 - `TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED`
 - `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED`
+- `TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED`
 - `TWILIO_IHC_VOICE_FORWARDING_ENABLED`
 - `GOOGLE_GMAIL_SEND_ENABLED`
 - `GOOGLE_CALENDAR_WRITE_ENABLED`
@@ -78,7 +80,7 @@ These flags must remain `false` or unset for private staging unless a later spri
 
 If any of these are set to `true`, `/api/readiness` must report staging as blocked.
 
-Do not copy real Phoenix/IHC public sources or the real assistant destination into private staging. Ordinary staging keeps the terminal confirmation and all three route gates false. Multi-route voice behavior is exercised only by the guarded synthetic runner against the pinned regression project; that runner cannot contact Twilio or a carrier.
+Do not copy real Phoenix/IHC public sources or any real route terminal into private staging. Ordinary staging keeps all three terminal attestations and all three route gates false. Multi-route voice behavior is exercised only by the guarded synthetic runner against the pinned regression project; that runner cannot contact Twilio or a carrier.
 
 ## Supabase Configuration
 

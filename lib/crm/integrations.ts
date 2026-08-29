@@ -79,6 +79,8 @@ export const twilioEnvVars = {
     "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
   weatherTechPhoenixVoiceForwardTo:
     "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+  weatherTechPhoenixTerminalForwardingDisabledConfirmed:
+    "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   weatherTechTucsonNumber: "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   weatherTechTucsonVoiceForwardingEnabled:
     "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
@@ -88,6 +90,8 @@ export const twilioEnvVars = {
   ihcPublicNumber: "TWILIO_IHC_PUBLIC_NUMBER",
   ihcVoiceForwardingEnabled: "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
   ihcVoiceForwardTo: "TWILIO_IHC_VOICE_FORWARD_TO",
+  ihcTerminalForwardingDisabledConfirmed:
+    "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   voiceTerminalForwardingDisabledConfirmed:
     "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   messagesEndpoint: "https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json",

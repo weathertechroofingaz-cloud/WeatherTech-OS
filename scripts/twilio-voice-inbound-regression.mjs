@@ -29,7 +29,7 @@ const VOICE_PATH = "/api/integrations/twilio/voice";
 const STATUS_PATH = "/api/integrations/twilio/voice/status";
 const LOCAL_ORIGIN = "http://127.0.0.1:3000";
 const TUCSON_NUMBER = "+12025550131";
-const FORWARD_DESTINATION = "+12025550132";
+const TUCSON_FORWARD_DESTINATION = "+12025550132";
 const CALLER_NUMBER = "+12025550133";
 const CONFLICTING_CALLER_NUMBER = "+12025550134";
 const PHOENIX_NUMBER = "+12025550135";
@@ -38,9 +38,16 @@ const KNOWN_CALLER_NUMBER = "+12025550137";
 const AMBIGUOUS_CALLER_NUMBER = "+12025550138";
 const PHOENIX_PUBLIC_SOURCE = "+12025550139";
 const IHC_PUBLIC_SOURCE = "+12025550140";
+const PHOENIX_FORWARD_DESTINATION = "+12025550141";
+const IHC_FORWARD_DESTINATION = "+12025550142";
+const FORWARD_DESTINATIONS = [
+  PHOENIX_FORWARD_DESTINATION,
+  TUCSON_FORWARD_DESTINATION,
+  IHC_FORWARD_DESTINATION,
+];
 const SYNTHETIC_PHONE_NUMBERS = [
   TUCSON_NUMBER,
-  FORWARD_DESTINATION,
+  ...FORWARD_DESTINATIONS,
   CALLER_NUMBER,
   CONFLICTING_CALLER_NUMBER,
   PHOENIX_NUMBER,
@@ -59,6 +66,8 @@ const HANDLER_ENV_NAMES = [
   "TWILIO_MESSAGING_SERVICE_SID",
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+  "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+  "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_INBOUND_SMS_ENABLED",
   "TWILIO_OUTBOUND_SMS_ENABLED",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
@@ -87,6 +96,7 @@ const VOICE_ROUTES = [
     leadSource: "Phone - WeatherTech Phoenix",
     gateEnv: "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
     destinationEnv: "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+    destination: PHOENIX_FORWARD_DESTINATION,
     namespaceStem: "weathertech-phoenix",
   },
   {
@@ -101,6 +111,7 @@ const VOICE_ROUTES = [
     leadSource: "Phone - WeatherTech Tucson",
     gateEnv: "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
     destinationEnv: "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
+    destination: TUCSON_FORWARD_DESTINATION,
     namespaceStem: "tucson",
   },
   {
@@ -115,6 +126,7 @@ const VOICE_ROUTES = [
     leadSource: "Phone - IHC",
     gateEnv: "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
     destinationEnv: "TWILIO_IHC_VOICE_FORWARD_TO",
+    destination: IHC_FORWARD_DESTINATION,
     namespaceStem: "ihc-primary",
   },
 ];
@@ -405,19 +417,20 @@ function installHandlerEnvironment(environment, fixture) {
   process.env.TWILIO_MESSAGING_SERVICE_SID = fixture.messagingServiceSid;
   process.env.TWILIO_PUBLIC_BASE_URL = PUBLIC_BASE_URL;
   process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED =
+    "true";
+  process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
   process.env.TWILIO_INBOUND_SMS_ENABLED = "false";
   process.env.TWILIO_OUTBOUND_SMS_ENABLED = "false";
   process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = PHOENIX_NUMBER;
   process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER = TUCSON_NUMBER;
   process.env.TWILIO_IHC_NUMBER = IHC_NUMBER;
   process.env.TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER = PHOENIX_PUBLIC_SOURCE;
-  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = "true";
-  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = FORWARD_DESTINATION;
-  process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "true";
-  process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = FORWARD_DESTINATION;
   process.env.TWILIO_IHC_PUBLIC_NUMBER = IHC_PUBLIC_SOURCE;
-  process.env.TWILIO_IHC_VOICE_FORWARDING_ENABLED = "true";
-  process.env.TWILIO_IHC_VOICE_FORWARD_TO = FORWARD_DESTINATION;
+  for (const route of VOICE_ROUTES) {
+    process.env[route.gateEnv] = "true";
+    process.env[route.destinationEnv] = route.destination;
+  }
 }
 
 function createSignedRequest(pathname, authToken, values) {
@@ -476,6 +489,22 @@ async function invokeRoute(post, request, label, expectedStatus, protectedValues
     requireCondition(!body.includes(protectedValue), `${label} exposed protected evidence.`);
   }
   return { case: label, status: response.status, body };
+}
+
+function hasExactRouteDialTwiML(body, route) {
+  return (
+    body.includes("<Dial") &&
+    body.includes(route.destination) &&
+    VOICE_ROUTES.filter((candidate) => candidate.key !== route.key).every(
+      (candidate) => !body.includes(candidate.destination),
+    )
+  );
+}
+
+function getOtherRouteDestinations(route) {
+  return VOICE_ROUTES.filter((candidate) => candidate.key !== route.key).map(
+    (candidate) => candidate.destination,
+  );
 }
 
 async function setRouteChannel(
@@ -543,8 +572,12 @@ export async function runTwilioVoiceInboundRegression({
     ihcChildCallSid: syntheticSid("CA", runId, "ihc-child-call"),
     ihcAlternateChildCallSid: syntheticSid("CA", runId, "ihc-alternate-child-call"),
     ihcRejectedParentCallSid: syntheticSid("CA", runId, "ihc-rejected-parent-call"),
+    ihcMissingAttestationParentCallSid: syntheticSid(
+      "CA",
+      runId,
+      "ihc-missing-terminal-attestation-call",
+    ),
     graphLoopParentCallSid: syntheticSid("CA", runId, "graph-loop-parent-call"),
-    terminalCallerParentCallSid: syntheticSid("CA", runId, "terminal-caller-parent-call"),
     startedAt: new Date(now - 5 * 60 * 1000).toISOString(),
     endedAt: new Date(now).toISOString(),
   };
@@ -632,6 +665,14 @@ export async function runTwilioVoiceInboundRegression({
     "wtos:twilio:ihc-primary-voice-inbound-event:v1",
     fixture.ihcRejectedParentCallSid,
   );
+  const ihcMissingAttestationCallId = deterministicUuid(
+    "wtos:twilio:ihc-primary-call:v1",
+    fixture.ihcMissingAttestationParentCallSid,
+  );
+  const ihcMissingAttestationInboundEventId = deterministicUuid(
+    "wtos:twilio:ihc-primary-voice-inbound-event:v1",
+    fixture.ihcMissingAttestationParentCallSid,
+  );
   const graphLoopCallId = deterministicUuid(
     "wtos:twilio:tucson-call:v1",
     fixture.graphLoopParentCallSid,
@@ -640,13 +681,28 @@ export async function runTwilioVoiceInboundRegression({
     "wtos:twilio:tucson-voice-inbound-event:v1",
     fixture.graphLoopParentCallSid,
   );
-  const terminalCallerCallId = deterministicUuid(
-    "wtos:twilio:tucson-call:v1",
-    fixture.terminalCallerParentCallSid,
-  );
-  const terminalCallerInboundEventId = deterministicUuid(
-    "wtos:twilio:tucson-voice-inbound-event:v1",
-    fixture.terminalCallerParentCallSid,
+  const terminalCallerAttempts = VOICE_ROUTES.flatMap((targetRoute) =>
+    VOICE_ROUTES.map((callerRoute) => {
+      const parentCallSid = syntheticSid(
+        "CA",
+        runId,
+        `${targetRoute.key}-caller-${callerRoute.key}-terminal`,
+      );
+      return {
+        targetRouteKey: targetRoute.key,
+        callerRouteKey: callerRoute.key,
+        callerTerminal: callerRoute.destination,
+        parentCallSid,
+        callId: deterministicUuid(
+          `wtos:twilio:${targetRoute.namespaceStem}-call:v1`,
+          parentCallSid,
+        ),
+        inboundEventId: deterministicUuid(
+          `wtos:twilio:${targetRoute.namespaceStem}-voice-inbound-event:v1`,
+          parentCallSid,
+        ),
+      };
+    }),
   );
   const knownLeadId = randomUUID();
   const knownIhcLeadId = randomUUID();
@@ -667,8 +723,9 @@ export async function runTwilioVoiceInboundRegression({
       ihcInboundEventId,
       ihcStatusEventId,
       ihcRejectedInboundEventId,
+      ihcMissingAttestationInboundEventId,
       graphLoopInboundEventId,
-      terminalCallerInboundEventId,
+      ...terminalCallerAttempts.map((attempt) => attempt.inboundEventId),
     ],
     call_records: [
       callId,
@@ -679,8 +736,9 @@ export async function runTwilioVoiceInboundRegression({
       phoenixRejectedCallId,
       ihcCallId,
       ihcRejectedCallId,
+      ihcMissingAttestationCallId,
       graphLoopCallId,
-      terminalCallerCallId,
+      ...terminalCallerAttempts.map((attempt) => attempt.callId),
     ],
     business_phone_numbers: [phoenixNumberId, tucsonNumberId, ihcNumberId],
     integration_connections: [weatherTechConnectionId, ihcConnectionId],
@@ -777,9 +835,26 @@ export async function runTwilioVoiceInboundRegression({
     ];
     requireCondition(
       routeLifecycles.every(
-        (route) => route.key && route.company && route.ingressNumber && route.numberId,
+        (route) =>
+          route.key &&
+          route.company &&
+          route.ingressNumber &&
+          route.destination &&
+          route.numberId,
       ),
       "Synthetic voice route definitions are incomplete.",
+    );
+    requireCondition(
+      new Set(routeLifecycles.map((route) => route.destination)).size ===
+        routeLifecycles.length,
+      "Synthetic voice routes must use three distinct terminal destinations.",
+    );
+    const tucsonRouteLifecycle = routeLifecycles.find(
+      (route) => route.key === "weathertech-tucson",
+    );
+    requireCondition(
+      tucsonRouteLifecycle,
+      "Synthetic Tucson voice route is unavailable.",
     );
 
     await Promise.all([
@@ -959,6 +1034,25 @@ export async function runTwilioVoiceInboundRegression({
     );
 
     const requests = [];
+    process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "false";
+    requests.push(
+      await invokeRoute(
+        ingressRoute.POST,
+        createSignedRequest(
+          VOICE_PATH,
+          fixture.authToken,
+          ingressValues(fixture, {
+            CallSid: fixture.ihcMissingAttestationParentCallSid,
+            To: IHC_NUMBER,
+          }),
+        ),
+        "IHC route cannot inherit another terminal attestation",
+        503,
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
+      ).then(({ case: label, status }) => ({ case: label, status })),
+    );
+    process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
+
     process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = IHC_PUBLIC_SOURCE;
     requests.push(
       await invokeRoute(
@@ -970,26 +1064,37 @@ export async function runTwilioVoiceInboundRegression({
         ),
         "graph-wide public-source loop",
         503,
-        [fixture.authToken, FORWARD_DESTINATION, IHC_PUBLIC_SOURCE],
+        [fixture.authToken, ...FORWARD_DESTINATIONS, IHC_PUBLIC_SOURCE],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
-    process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = FORWARD_DESTINATION;
-    requests.push(
-      await invokeRoute(
-        ingressRoute.POST,
-        createSignedRequest(
-          VOICE_PATH,
-          fixture.authToken,
-          ingressValues(fixture, {
-            CallSid: fixture.terminalCallerParentCallSid,
-            From: FORWARD_DESTINATION,
-          }),
-        ),
-        "shared terminal caller loop",
-        403,
-        [fixture.authToken, FORWARD_DESTINATION],
-      ).then(({ case: label, status }) => ({ case: label, status })),
-    );
+    process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO =
+      PHOENIX_FORWARD_DESTINATION;
+    for (const attempt of terminalCallerAttempts) {
+      const targetRoute = routeLifecycles.find(
+        (route) => route.key === attempt.targetRouteKey,
+      );
+      requireCondition(
+        targetRoute,
+        `Missing target route for ${attempt.targetRouteKey} terminal caller test.`,
+      );
+      requests.push(
+        await invokeRoute(
+          ingressRoute.POST,
+          createSignedRequest(
+            VOICE_PATH,
+            fixture.authToken,
+            ingressValues(fixture, {
+              CallSid: attempt.parentCallSid,
+              From: attempt.callerTerminal,
+              To: targetRoute.ingressNumber,
+            }),
+          ),
+          `${targetRoute.key} rejects ${attempt.callerRouteKey} terminal caller loop`,
+          403,
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
+        ).then(({ case: label, status }) => ({ case: label, status })),
+      );
+    }
     await insertRows(client, "leads", [
       {
         id: knownLeadId,
@@ -1145,7 +1250,7 @@ export async function runTwilioVoiceInboundRegression({
 
     const destinationProof = webhooks.createTwilioVoiceDestinationProof({
       parentCallSid: fixture.parentCallSid,
-      destination: FORWARD_DESTINATION,
+      destination: tucsonRouteLifecycle.destination,
     });
     const initialFingerprint = webhooks.createTwilioVoicePayloadFingerprint({
       kind: "voice_inbound",
@@ -1229,11 +1334,11 @@ export async function runTwilioVoiceInboundRegression({
       createSignedRequest(VOICE_PATH, fixture.authToken, ingressValues(fixture)),
       "retry recovery after partial call claim",
       200,
-      [fixture.authToken],
+      [fixture.authToken, ...getOtherRouteDestinations(tucsonRouteLifecycle)],
     );
     requireCondition(
-      recovered.body.includes("<Dial") && recovered.body.includes(FORWARD_DESTINATION),
-      "Recovered ingress did not return the expected SDK Dial TwiML.",
+      hasExactRouteDialTwiML(recovered.body, tucsonRouteLifecycle),
+      "Recovered ingress did not return only the exact Tucson SDK Dial destination.",
     );
     requests.push({ case: recovered.case, status: recovered.status });
     const recoveredCalls = await requireRows(
@@ -1268,26 +1373,32 @@ export async function runTwilioVoiceInboundRegression({
           createSignedRequest(VOICE_PATH, fixture.authToken, ingressValues(fixture)),
           `concurrent exact ingress ${index + 1}`,
           200,
-          [fixture.authToken],
+          [fixture.authToken, ...getOtherRouteDestinations(tucsonRouteLifecycle)],
         ),
       ),
     );
     requireCondition(
-      concurrentIngress.every(
-        (result) => result.body.includes("<Dial") && result.body.includes(FORWARD_DESTINATION),
+      concurrentIngress.every((result) =>
+        hasExactRouteDialTwiML(result.body, tucsonRouteLifecycle),
       ),
-      "Concurrent ingress did not converge on identical SDK Dial TwiML.",
+      "Concurrent Tucson ingress did not converge on its exact SDK Dial destination.",
     );
     requests.push(...concurrentIngress.map(({ case: label, status }) => ({ case: label, status })));
-    requests.push(
-      await invokeRoute(
-        ingressRoute.POST,
-        createSignedRequest(VOICE_PATH, fixture.authToken, ingressValues(fixture)),
-        "exact ingress replay",
-        200,
-        [fixture.authToken],
-      ).then(({ case: label, status }) => ({ case: label, status })),
+    const exactTucsonIngressReplay = await invokeRoute(
+      ingressRoute.POST,
+      createSignedRequest(VOICE_PATH, fixture.authToken, ingressValues(fixture)),
+      "exact ingress replay",
+      200,
+      [fixture.authToken, ...getOtherRouteDestinations(tucsonRouteLifecycle)],
     );
+    requireCondition(
+      hasExactRouteDialTwiML(exactTucsonIngressReplay.body, tucsonRouteLifecycle),
+      "Exact Tucson ingress replay did not return only its route destination.",
+    );
+    requests.push({
+      case: exactTucsonIngressReplay.case,
+      status: exactTucsonIngressReplay.status,
+    });
     requests.push(
       await invokeRoute(
         ingressRoute.POST,
@@ -1298,7 +1409,7 @@ export async function runTwilioVoiceInboundRegression({
         ),
         "changed same parent ingress conflict",
         409,
-        [fixture.authToken, FORWARD_DESTINATION],
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
 
@@ -1319,36 +1430,41 @@ export async function runTwilioVoiceInboundRegression({
             ),
             `${route.key} concurrent exact ingress ${index + 1}`,
             200,
-            [fixture.authToken],
+            [fixture.authToken, ...getOtherRouteDestinations(route)],
           ),
         ),
       );
       requireCondition(
-        concurrentRouteIngress.every(
-          (result) =>
-            result.body.includes("<Dial") && result.body.includes(FORWARD_DESTINATION),
+        concurrentRouteIngress.every((result) =>
+          hasExactRouteDialTwiML(result.body, route),
         ),
-        `${route.label} concurrent ingress did not converge on identical SDK Dial TwiML.`,
+        `${route.label} concurrent ingress did not converge on its exact SDK Dial destination.`,
       );
       requests.push(
         ...concurrentRouteIngress.map(({ case: label, status }) => ({ case: label, status })),
       );
-      requests.push(
-        await invokeRoute(
-          ingressRoute.POST,
-          createSignedRequest(
-            VOICE_PATH,
-            fixture.authToken,
-            ingressValues(fixture, {
-              CallSid: route.parentCallSid,
-              To: route.ingressNumber,
-            }),
-          ),
-          `${route.key} exact ingress replay`,
-          200,
-          [fixture.authToken],
-        ).then(({ case: label, status }) => ({ case: label, status })),
+      const exactRouteIngressReplay = await invokeRoute(
+        ingressRoute.POST,
+        createSignedRequest(
+          VOICE_PATH,
+          fixture.authToken,
+          ingressValues(fixture, {
+            CallSid: route.parentCallSid,
+            To: route.ingressNumber,
+          }),
+        ),
+        `${route.key} exact ingress replay`,
+        200,
+        [fixture.authToken, ...getOtherRouteDestinations(route)],
       );
+      requireCondition(
+        hasExactRouteDialTwiML(exactRouteIngressReplay.body, route),
+        `${route.label} exact ingress replay did not return only its route destination.`,
+      );
+      requests.push({
+        case: exactRouteIngressReplay.case,
+        status: exactRouteIngressReplay.status,
+      });
       requests.push(
         await invokeRoute(
           ingressRoute.POST,
@@ -1363,7 +1479,7 @@ export async function runTwilioVoiceInboundRegression({
           ),
           `${route.key} changed same parent ingress conflict`,
           409,
-          [fixture.authToken, FORWARD_DESTINATION],
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
         ).then(({ case: label, status }) => ({ case: label, status })),
       );
     }
@@ -1378,7 +1494,7 @@ export async function runTwilioVoiceInboundRegression({
         ),
         "status without exact parent claim",
         403,
-        [fixture.authToken, FORWARD_DESTINATION],
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
     requests.push(
@@ -1387,7 +1503,7 @@ export async function runTwilioVoiceInboundRegression({
         createSignedRequest(STATUS_PATH, "forged-regression-signature-token", statusValues(fixture)),
         "forged voice status signature",
         403,
-        [fixture.authToken, FORWARD_DESTINATION],
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
     requests.push(
@@ -1400,7 +1516,7 @@ export async function runTwilioVoiceInboundRegression({
         ),
         "cross-company IHC status route",
         403,
-        [fixture.authToken, FORWARD_DESTINATION],
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
     requests.push(
@@ -1413,7 +1529,7 @@ export async function runTwilioVoiceInboundRegression({
         ),
         "forged parent caller identity",
         403,
-        [fixture.authToken, FORWARD_DESTINATION],
+        [fixture.authToken, ...FORWARD_DESTINATIONS],
       ).then(({ case: label, status }) => ({ case: label, status })),
     );
 
@@ -1439,7 +1555,7 @@ export async function runTwilioVoiceInboundRegression({
               ),
               `${route.key} rollback-safe concurrent status ${index + 1}`,
               200,
-              [fixture.authToken, FORWARD_DESTINATION],
+              [fixture.authToken, ...FORWARD_DESTINATIONS],
             ),
         ),
       );
@@ -1456,7 +1572,7 @@ export async function runTwilioVoiceInboundRegression({
           ),
           `${route.key} exact status replay after rollback`,
           200,
-          [fixture.authToken, FORWARD_DESTINATION],
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
         ).then(({ case: label, status }) => ({ case: label, status })),
       );
       requests.push(
@@ -1472,7 +1588,7 @@ export async function runTwilioVoiceInboundRegression({
           ),
           `${route.key} different child status conflict`,
           409,
-          [fixture.authToken, FORWARD_DESTINATION],
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
         ).then(({ case: label, status }) => ({ case: label, status })),
       );
       requests.push(
@@ -1490,12 +1606,12 @@ export async function runTwilioVoiceInboundRegression({
           ),
           `${route.key} different terminal status conflict`,
           409,
-          [fixture.authToken, FORWARD_DESTINATION],
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
         ).then(({ case: label, status }) => ({ case: label, status })),
       );
 
       process.env[route.gateEnv] = "true";
-      process.env[route.destinationEnv] = FORWARD_DESTINATION;
+      process.env[route.destinationEnv] = route.destination;
       requests.push(
         await invokeRoute(
           ingressRoute.POST,
@@ -1509,7 +1625,7 @@ export async function runTwilioVoiceInboundRegression({
           ),
           `${route.key} new ingress blocked after sms-only rollback`,
           403,
-          [fixture.authToken, FORWARD_DESTINATION],
+          [fixture.authToken, ...FORWARD_DESTINATIONS],
         ).then(({ case: label, status }) => ({ case: label, status })),
       );
     }
@@ -1589,6 +1705,7 @@ export async function runTwilioVoiceInboundRegression({
         accountEvents.every((row) => events.some((event) => event.id === row.id)),
       "Voice regression created an unexpected provider event.",
     );
+    const storedDestinationProofs = [];
     for (const route of routeLifecycles) {
       const routeCall = calls.find((candidate) => candidate.id === route.callId);
       const routeInboundEvent = events.find(
@@ -1646,12 +1763,26 @@ export async function runTwilioVoiceInboundRegression({
       );
       requireCondition(
         routeCall.metadata?.forward_destination_proof ===
+          webhooks.createTwilioVoiceDestinationProof({
+            routeKey: route.key,
+            parentCallSid: route.parentCallSid,
+            destination: route.destination,
+          }) &&
+          /^[a-f0-9]{64}$/.test(
+            routeCall.metadata?.forward_destination_proof ?? "",
+          ) &&
+        routeCall.metadata?.forward_destination_proof ===
           routeInboundEvent.response_summary?.forward_destination_proof &&
           routeCall.metadata?.forward_destination_proof ===
             routeStatusEvent.payload_summary?.forward_destination_proof,
-        `${route.label} destination proof did not remain consistent.`,
+        `${route.label} destination proof did not remain exact and consistent.`,
       );
+      storedDestinationProofs.push(routeCall.metadata.forward_destination_proof);
     }
+    requireCondition(
+      new Set(storedDestinationProofs).size === routeLifecycles.length,
+      "Distinct route terminals did not produce distinct bounded destination proofs.",
+    );
     const call = calls.find((candidate) => candidate.id === callId);
     const inboundEvent = events.find((event) => event.id === inboundEventId);
     const statusEvent = events.find((event) => event.id === statusEventId);
@@ -1700,10 +1831,12 @@ export async function runTwilioVoiceInboundRegression({
     );
     const storedEvidence = JSON.stringify({ calls, events });
     requireCondition(
-      !storedEvidence.includes(FORWARD_DESTINATION) &&
+      FORWARD_DESTINATIONS.every(
+        (destination) => !storedEvidence.includes(destination),
+      ) &&
         !storedEvidence.includes(PHOENIX_PUBLIC_SOURCE) &&
         !storedEvidence.includes(IHC_PUBLIC_SOURCE),
-      "Stored voice evidence contains a raw protected destination or public source.",
+      "Stored voice evidence contains a raw route terminal or public source.",
     );
     requireCondition(
       /^[a-f0-9]{64}$/.test(call.metadata?.forward_destination_proof ?? "") &&
@@ -1730,7 +1863,9 @@ export async function runTwilioVoiceInboundRegression({
       providerEvents: events.length,
       routeKeys: routeLifecycles.map((route) => route.key),
       exactRouteLifecycles: routeLifecycles.length,
-      sharedTerminalVerified: true,
+      distinctTerminalsVerified: true,
+      exactRouteTwiMLVerified: true,
+      independentTerminalAttestationsVerified: true,
       graphWideLoopRejected: true,
       terminalCallerLoopRejected: true,
       exactCompanyAndBranchIsolationVerified: true,
