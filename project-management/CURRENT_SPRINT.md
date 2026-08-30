@@ -1,12 +1,12 @@
 # Current Sprint
 
-This file records the currently owner-approved WeatherTech OS sprint. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
+This file records the most recently owner-approved WeatherTech OS sprint and its lifecycle status. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
 
 ## Approval Status
 
-Approved
+Completed
 
-The owner made the final routing decision on 2026-08-29: WeatherTech Phoenix and IHC remain direct carrier voice lines and must not be routed through Twilio. Tucson remains the only WeatherTech OS voice route. This approval authorizes the narrow repository, Vercel, Twilio inspection, validation, commit, pull-request, merge, deployment, and documentation work needed to reconcile the already implemented multi-route foundation with that final architecture. It does not authorize a real call, carrier forwarding, porting, number ownership changes, outbound messaging, recording, transcription, automatic replies, or automatic CRM creation.
+The owner made the final routing decision on 2026-08-29: WeatherTech Phoenix and IHC remain direct carrier voice lines and must not be routed through Twilio. Tucson remains the only WeatherTech OS voice route. This approval authorized the narrow repository, Vercel, Twilio inspection, validation, commit, pull-request, merge, deployment, and documentation work needed to reconcile the already implemented multi-route foundation with that final architecture. It did not authorize a real call, carrier forwarding, porting, number ownership changes, outbound messaging, recording, transcription, automatic replies, or automatic CRM creation.
 
 ## Sprint Name
 
@@ -96,11 +96,25 @@ Joe Harris
 - Original carrier-forwarding foundation merge: `b5331540d3816476f83358f942fb3dfc6f5f82b8`.
 - Distinct-terminal corrective implementation: `f18f6cb20836060b00a0a58f1ec477a9e5209a0e`.
 - Distinct-terminal corrective merge: `e71642014634f3ab5020d1fa7cf7778d7666dc80`.
-- Final Tucson-only reconciliation implementation, merge, deployment, and closeout: pending.
+- Final Tucson-only reconciliation implementation commits: `d72b1512f0195d3186dda91f04641c343855d407` and `8d22457362008492fab69e7ed6bee929f74103bc`.
+- Pull request: `#18`.
+- Final Tucson-only reconciliation merge: `690c22083165ebd55882b51172c9ac92e1f745f8`.
+
+## Completion Evidence
+
+- Main CI run `33284946637` completed successfully, including repository-validation job `99186398668` and isolated-Supabase job `99186677967`.
+- The final environment-cleanup Production deployment is `dpl_ESK8ZVaXyRuqG3k2AHkfLdBuSCPi`. Canonical `/api/health` returns HTTP `200` and reports exact merge SHA `690c22083165ebd55882b51172c9ac92e1f745f8`; `/api/readiness` remains truthfully HTTP `503` under the existing broad production-approval controls.
+- Production Supabase remains exact at `51/51` local/remote migrations with no mismatch and no sprint database write.
+- Final routing is exact: `weathertech-phoenix` remains active `sms` with direct Verizon carrier voice; `weathertech-tucson` remains active `sms_voice` with the sole signed Twilio Voice route to its protected verified assistant destination; and `ihc-primary` remains active `sms` with direct AT&T carrier voice. Phoenix and IHC Twilio Voice handling remains blank.
+- Historical evidence is unchanged: Tucson retains two completed call rows, two `voice_inbound` events, two `voice_status` events, two inbound SMS messages, and two inbound SMS events; Phoenix retains one inbound SMS message and one inbound SMS event; IHC remains at zero messages and zero events. There are zero active or outbound calls, outbound SMS, recording events or artifacts, transcript artifacts, automatic replies, automatic lead flags, or voice CRM links.
+- The earlier full isolated Browser run `20260829235055033` recorded `29/31`; its two unrelated transient groups then passed the isolated `2/2` confirmation run `20260830001525831`. The later definitive frozen-tree full run `20260830015820614` satisfied the unchanged completion gate: all `24/24` groups and `31/31` assertions passed, console errors/warnings were `0/0`, harness cleanup reported `residueVerified: true`, and independent `verify-residue` passed with `0` residue on the approved regression target. Targeted Settings and Production Readiness Browser validation also passed without console errors or residue.
+- Six obsolete Production Vercel variable names were removed: `TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER`, `TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED`, `TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED`, `TWILIO_IHC_PUBLIC_NUMBER`, `TWILIO_IHC_VOICE_FORWARDING_ENABLED`, and `TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED`.
+- Exactly twelve required Production Twilio variable names remain: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID`, `TWILIO_PUBLIC_BASE_URL`, `TWILIO_INBOUND_SMS_ENABLED`, `TWILIO_OUTBOUND_SMS_ENABLED`, `TWILIO_WEATHERTECH_PHOENIX_NUMBER`, `TWILIO_WEATHERTECH_TUCSON_NUMBER`, `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED`, `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO`, `TWILIO_IHC_NUMBER`, and `TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED`. No values are recorded here.
+- No live call or message was placed, and no Twilio-provider, carrier, phone-number, or Production database mutation occurred. The Twilio number configuration remained exact: Tucson retained its working Voice webhook, while Phoenix and IHC retained blank Voice handling and their existing SMS configuration.
 
 ## Final Status
 
-Approved final architecture reconciliation in progress. No owner-only Phoenix or IHC destination, carrier-forwarding, Twilio Voice, or live-call action remains.
+Completed. The owner-approved Tucson-only Twilio Voice architecture is deployed, healthy, database-verified, and closed. No owner-only Phoenix or IHC destination, carrier-forwarding, Twilio Voice, or live-call action remains, and no subsequent sprint is active.
 
 ## Notes
 
