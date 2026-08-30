@@ -36,10 +36,6 @@ const baseEnv = {
   TWILIO_INBOUND_SMS_ENABLED: "false",
   TWILIO_OUTBOUND_SMS_ENABLED: "false",
   TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
-  TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
-  TWILIO_IHC_VOICE_FORWARDING_ENABLED: "false",
-  TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED: "false",
-  TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED: "false",
   TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED: "false",
   GOOGLE_GMAIL_SEND_ENABLED: "false",
   GOOGLE_CALENDAR_WRITE_ENABLED: "false",
@@ -224,24 +220,18 @@ try {
   );
   assert(
     readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
-      "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
+      "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
     ) &&
       readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
-        "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
-      ) &&
-      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
-        "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
-      ) &&
-      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
         "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-      ) &&
-      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
-        "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-      ) &&
-      readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.includes(
-        "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
       ),
-    "Every route-specific Twilio voice gate and terminal attestation is part of staging safety checks",
+    "The Tucson-only voice gate and terminal attestation are part of staging safety checks",
+  );
+  assert(
+    !readinessModule.STAGING_PROVIDER_SAFETY_FLAGS.some((name) =>
+      /TWILIO_(?:WEATHERTECH_PHOENIX|IHC).*(?:VOICE|TERMINAL)/.test(name),
+    ),
+    "Direct-carrier Phoenix and IHC have no staging voice configuration requirements",
   );
   assert(
     readinessModule.STAGING_PROVIDER_SECRET_ACTIVATORS.includes(

@@ -9368,8 +9368,8 @@ async function testUnifiedInboxSearchAndFilters(
           text.includes("business phone") &&
           text.includes("twilio inbound safety") &&
         text.includes("outbound sms disabled") &&
-        text.includes("phoenix, tucson, and ihc inbound calls use separate protected") &&
-        text.includes("carrier call forwarding does not forward sms") &&
+        text.includes("tucson inbound calls use the separate protected tucson voice route") &&
+        text.includes("public voice for phoenix and ihc stays with their existing carriers") &&
         text.includes("weathertech roofing llc - phoenix") &&
         text.includes("weathertech roofing llc - tucson") &&
         text.includes("ihc painting - scottsdale")
@@ -11528,15 +11528,8 @@ async function testSettingsIntegrationCenter(tab) {
       const cards = [
         ...(section?.querySelectorAll('[data-testid="integration-provider-card"]') ?? []),
       ];
-      const voiceGraph = section?.querySelector('[data-testid="twilio-voice-routing-graph"]');
-      const phoenixVoice = section?.querySelector(
-        '[data-testid="twilio-phoenix-voice-readiness"]',
-      );
       const tucsonVoice = section?.querySelector(
         '[data-testid="twilio-tucson-voice-readiness"]',
-      );
-      const ihcVoice = section?.querySelector(
-        '[data-testid="twilio-ihc-voice-readiness"]',
       );
 
       return (
@@ -11563,22 +11556,19 @@ async function testSettingsIntegrationCenter(tab) {
         (text.includes("connect gmail oauth later before enabling live send or mailbox sync") ||
         text.includes("gmail mailbox is saved for")) &&
         text.includes("twilio live integration foundation") &&
-        text.includes("inbound sms and company-safe voice forwarding") &&
+        text.includes("inbound sms and tucson voice forwarding") &&
         text.includes("outbound sms disabled") &&
         text.includes("inbound not validated") &&
-        text.includes("protected inbound voice routing graph") &&
-        text.includes("terminal topology") &&
-        text.includes("terminal attestations") &&
-        text.includes("owner confirmation required") &&
+        text.includes("weathertech tucson inbound voice") &&
         text.includes("voice gate") &&
-        text.includes("twilio ingress") &&
-        text.includes("public source") &&
         text.includes("destination") &&
         text.includes("loop guard") &&
-        text.includes("route identity") &&
+        text.includes("tucson route") &&
         text.includes("exact next action") &&
-        text.includes("standard carrier call forwarding does not deliver") &&
-        text.includes("sms sent to the public verizon or at&t numbers") &&
+        text.includes("tucson is the only twilio voice route") &&
+        text.includes("public voice for phoenix and ihc remains direct") &&
+        text.includes("twilio ingresses stay sms-only") &&
+        text.includes("voice handling stays blank") &&
         text.includes("business number routing") &&
         text.includes("twilio webhooks and callbacks") &&
         text.includes("owner setup checklist") &&
@@ -11692,7 +11682,7 @@ async function testSettingsIntegrationCenter(tab) {
         ].every((capability) => text.includes(capability)) &&
         Boolean(section?.querySelector('[data-testid="quickbooks-online-foundation"]')) &&
         Boolean(section?.querySelector('[data-testid="electronic-signatures-foundation"]')) &&
-        Boolean(voiceGraph && phoenixVoice && tucsonVoice && ihcVoice) &&
+        Boolean(tucsonVoice) &&
         cards.length >= 11
       );
     },

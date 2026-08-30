@@ -633,7 +633,9 @@ async function resolveVerifiedVoiceRoute(
   | { status: "forbidden" | "conflict" | "retryable" }
 > {
   const configuredCandidates = getTwilioExpectedBusinessNumbers().filter(
-    (candidate) => candidate.phoneNumberE164 === payload.to,
+    (candidate) =>
+      candidate.voiceHandling === "twilio_forwarding" &&
+      candidate.phoneNumberE164 === payload.to,
   );
 
   if (configuredCandidates.length !== 1) {
@@ -756,11 +758,15 @@ function isTwilioVoiceProtectedNode(
   config: TwilioServerConfig,
   phoneNumber: string,
 ) {
-  return config.voiceForwarding.routes.some(
-    (route) =>
-      route.ingressNumberE164 === phoneNumber ||
-      route.publicSourceE164 === phoneNumber ||
-      route.destinationE164 === phoneNumber,
+  return (
+    getTwilioExpectedBusinessNumbers().some(
+      (route) => route.phoneNumberE164 === phoneNumber,
+    ) ||
+    config.voiceForwarding.routes.some(
+      (route) =>
+        route.publicSourceE164 === phoneNumber ||
+        route.destinationE164 === phoneNumber,
+    )
   );
 }
 

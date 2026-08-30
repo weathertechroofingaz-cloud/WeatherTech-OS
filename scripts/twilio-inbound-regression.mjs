@@ -30,13 +30,16 @@ const CANONICAL_PUBLIC_BASE_URL = "https://twilio-regression.weathertech.invalid
 const LOCAL_REQUEST_URL =
   "http://127.0.0.1:3000/api/integrations/twilio/webhook";
 const WEBHOOK_PATH = "/api/integrations/twilio/webhook";
-const WEATHERTECH_NUMBER = "+12025550101";
-const IHC_UNMAPPED_NUMBER = "+12025550102";
+const PHOENIX_NUMBER = "+12025550101";
+const TUCSON_NUMBER = "+12025550102";
+const IHC_NUMBER = "+12025550103";
+const UNMAPPED_NUMBER = "+12025550104";
 const KNOWN_CUSTOMER_SENDER = "+12025550110";
 const KNOWN_SENDER = "+12025550111";
 const UNKNOWN_SENDER = "+12025550112";
 const AMBIGUOUS_SENDER = "+12025550113";
 const IHC_ONLY_SENDER = "+12025550114";
+const TUCSON_ONLY_SENDER = "+12025550115";
 
 const HANDLER_ENV_NAMES = [
   "NEXT_PUBLIC_SUPABASE_URL",
@@ -46,21 +49,43 @@ const HANDLER_ENV_NAMES = [
   "TWILIO_MESSAGING_SERVICE_SID",
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-  "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_INBOUND_SMS_ENABLED",
   "TWILIO_OUTBOUND_SMS_ENABLED",
-  "TWILIO_IHC_PUBLIC_NUMBER",
-  "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
-  "TWILIO_IHC_VOICE_FORWARD_TO",
-  "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
-  "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
-  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
+];
+
+const SMS_ROUTE_IDENTITIES = [
+  {
+    key: "weathertech-phoenix",
+    companyKey: "weathertech",
+    ingressNumber: PHOENIX_NUMBER,
+    businessLocation: "Phoenix",
+    teamQueue: "weathertech-roofing-phoenix",
+    leadSource: "Phone - WeatherTech Phoenix",
+    communicationChannel: "sms",
+  },
+  {
+    key: "weathertech-tucson",
+    companyKey: "weathertech",
+    ingressNumber: TUCSON_NUMBER,
+    businessLocation: "Tucson",
+    teamQueue: "weathertech-roofing-tucson",
+    leadSource: "Phone - WeatherTech Tucson",
+    communicationChannel: "sms_voice",
+  },
+  {
+    key: "ihc-primary",
+    companyKey: "ihc",
+    ingressNumber: IHC_NUMBER,
+    businessLocation: "Scottsdale",
+    teamQueue: "ihc-painting",
+    leadSource: "Phone - IHC",
+    communicationChannel: "sms",
+  },
 ];
 
 function requireCondition(condition, message) {
@@ -314,22 +339,13 @@ function installHandlerEnvironment(environment, fixture) {
   process.env.TWILIO_MESSAGING_SERVICE_SID = fixture.messagingServiceSid;
   process.env.TWILIO_PUBLIC_BASE_URL = CANONICAL_PUBLIC_BASE_URL;
   process.env.TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "false";
-  process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "false";
   process.env.TWILIO_INBOUND_SMS_ENABLED = "true";
   process.env.TWILIO_OUTBOUND_SMS_ENABLED = "false";
-  process.env.TWILIO_IHC_VOICE_FORWARDING_ENABLED = "false";
-  delete process.env.TWILIO_IHC_PUBLIC_NUMBER;
-  delete process.env.TWILIO_IHC_VOICE_FORWARD_TO;
-  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = "false";
-  process.env.TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED =
-    "false";
-  delete process.env.TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER;
-  delete process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO;
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "false";
   delete process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO;
-  process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = WEATHERTECH_NUMBER;
-  delete process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER;
-  process.env.TWILIO_IHC_NUMBER = IHC_UNMAPPED_NUMBER;
+  process.env.TWILIO_WEATHERTECH_PHOENIX_NUMBER = PHOENIX_NUMBER;
+  process.env.TWILIO_WEATHERTECH_TUCSON_NUMBER = TUCSON_NUMBER;
+  process.env.TWILIO_IHC_NUMBER = IHC_NUMBER;
 }
 
 function signedInboundRequest(fixture, overrides = {}, { reverseOrder = false } = {}) {
@@ -456,6 +472,7 @@ async function verifyStoredCase({
   expectedCustomerId,
   expectedLeadId,
   expectedContactStatus,
+  expectedBusinessPhoneNumberId,
 }) {
   const messages = await requireRows(
     client
@@ -468,6 +485,10 @@ async function verifyStoredCase({
   const message = messages[0];
   requireCondition(message.id === expectedMessageId(fixture.messageSid), "Inbound message ID was not deterministic.");
   requireCondition(message.company_id === expectedCompanyId, "Inbound message company routing was incorrect.");
+  requireCondition(
+    message.business_phone_number_id === expectedBusinessPhoneNumberId,
+    "Inbound message business-number routing was incorrect.",
+  );
   requireCondition(message.lead_id === expectedLeadId, "Inbound message lead association was incorrect.");
   requireCondition(message.customer_id === expectedCustomerId, "Inbound message customer association was incorrect.");
   requireCondition(message.direction === "inbound", "Stored Twilio message was not inbound.");
@@ -488,6 +509,10 @@ async function verifyStoredCase({
   const event = events[0];
   requireCondition(event.id === expectedEventId(fixture.messageSid), "Inbound provider-event ID was not deterministic.");
   requireCondition(event.company_id === expectedCompanyId, "Provider-event company routing was incorrect.");
+  requireCondition(
+    event.business_phone_number_id === expectedBusinessPhoneNumberId,
+    "Provider-event business-number routing was incorrect.",
+  );
   requireCondition(event.sms_message_id === message.id, "Provider event was not linked to its message.");
   requireCondition(event.lead_id === expectedLeadId, "Provider-event lead association was incorrect.");
   requireCondition(event.customer_id === expectedCustomerId, "Provider-event customer association was incorrect.");
@@ -585,21 +610,27 @@ export async function runTwilioInboundRegression({
       "messaging-service",
     ),
   };
-  const connectionId = randomUUID();
-  const numberId = randomUUID();
+  const weatherTechConnectionId = randomUUID();
+  const ihcConnectionId = randomUUID();
+  const connectionId = weatherTechConnectionId;
+  const phoenixNumberId = randomUUID();
+  const tucsonNumberId = randomUUID();
+  const ihcNumberId = randomUUID();
+  const numberId = phoenixNumberId;
   const knownCustomerId = randomUUID();
   const knownLeadId = randomUUID();
   const ambiguousLeadIds = [randomUUID(), randomUUID()];
   const ihcLeadId = randomUUID();
   const retryDriftLeadId = randomUUID();
-  const routingKey = "weathertech-phoenix";
   const messageSids = {
     known: syntheticSid("SM", runId, "known"),
     knownCustomer: syntheticSid("SM", runId, "known-customer"),
     unknown: syntheticSid("SM", runId, "unknown"),
     ambiguous: syntheticSid("SM", runId, "ambiguous"),
     crossCompany: syntheticSid("SM", runId, "cross-company"),
-    rejectedIhcRoute: syntheticSid("SM", runId, "rejected-ihc-route"),
+    tucsonExact: syntheticSid("SM", runId, "tucson-exact"),
+    ihcExact: syntheticSid("SM", runId, "ihc-exact"),
+    rejectedUnmappedRoute: syntheticSid("SM", runId, "rejected-unmapped-route"),
     disabledConnection: syntheticSid("SM", runId, "disabled-connection"),
     concurrent: syntheticSid("SM", runId, "concurrent"),
     retryRecovery: syntheticSid("SM", runId, "retry-recovery"),
@@ -610,8 +641,8 @@ export async function runTwilioInboundRegression({
       expectedEventId(sid),
     ),
     sms_messages: allMessageSids.map((sid) => expectedMessageId(sid)),
-    business_phone_numbers: [numberId],
-    integration_connections: [connectionId],
+    business_phone_numbers: [phoenixNumberId, tucsonNumberId, ihcNumberId],
+    integration_connections: [weatherTechConnectionId, ihcConnectionId],
     customers: [knownCustomerId],
     leads: [knownLeadId, ...ambiguousLeadIds, ihcLeadId, retryDriftLeadId],
   };
@@ -660,8 +691,25 @@ export async function runTwilioInboundRegression({
         client
           .from("business_phone_numbers")
           .select("id")
-          .or(`id.in.(${numberId}),routing_key.eq.${routingKey},phone_number_e164.eq.${WEATHERTECH_NUMBER}`),
-        "Twilio number/routing collision",
+          .in("id", capturedIds.business_phone_numbers),
+        "Twilio business-number ID collision",
+      ),
+      assertNoRows(
+        client
+          .from("business_phone_numbers")
+          .select("id")
+          .in("routing_key", SMS_ROUTE_IDENTITIES.map((identity) => identity.key)),
+        "Twilio exact routing-key collision",
+      ),
+      assertNoRows(
+        client
+          .from("business_phone_numbers")
+          .select("id")
+          .in(
+            "phone_number_e164",
+            SMS_ROUTE_IDENTITIES.map((identity) => identity.ingressNumber),
+          ),
+        "Twilio exact ingress-number collision",
       ),
       assertNoRows(
         client.from("leads").select("id").in("id", capturedIds.leads),
@@ -675,14 +723,14 @@ export async function runTwilioInboundRegression({
         client
           .from("leads")
           .select("id")
-          .in("phone", [KNOWN_CUSTOMER_SENDER, KNOWN_SENDER, UNKNOWN_SENDER, AMBIGUOUS_SENDER, IHC_ONLY_SENDER]),
+          .in("phone", [KNOWN_CUSTOMER_SENDER, KNOWN_SENDER, UNKNOWN_SENDER, AMBIGUOUS_SENDER, IHC_ONLY_SENDER, TUCSON_ONLY_SENDER]),
         "Twilio sender/lead collision",
       ),
       assertNoRows(
         client
           .from("customers")
           .select("id")
-          .in("phone", [KNOWN_CUSTOMER_SENDER, KNOWN_SENDER, UNKNOWN_SENDER, AMBIGUOUS_SENDER, IHC_ONLY_SENDER]),
+          .in("phone", [KNOWN_CUSTOMER_SENDER, KNOWN_SENDER, UNKNOWN_SENDER, AMBIGUOUS_SENDER, IHC_ONLY_SENDER, TUCSON_ONLY_SENDER]),
         "Twilio sender/customer collision",
       ),
       assertNoRows(
@@ -699,14 +747,25 @@ export async function runTwilioInboundRegression({
     ]);
     capturedIdsAuthorizedForCleanup = true;
 
-    await insertRows(client, "integration_connections", [
-      {
-        id: connectionId,
-        company_id: weatherTech.id,
+    await insertRows(
+      client,
+      "integration_connections",
+      [
+        {
+          id: weatherTechConnectionId,
+          company_id: weatherTech.id,
+          display_name: `${marker} WEATHERTECH`,
+        },
+        {
+          id: ihcConnectionId,
+          company_id: ihc.id,
+          display_name: `${marker} IHC`,
+        },
+      ].map((connection) => ({
+        ...connection,
         provider: "twilio_sms",
         status: "connected",
         account_email: null,
-        display_name: marker,
         external_account_id: fixture.accountSid,
         provider_account_id: fixture.accountSid,
         scopes: [],
@@ -714,28 +773,44 @@ export async function runTwilioInboundRegression({
         credential_reference: null,
         disabled_at: null,
         settings: { regression_marker: marker, inbound_only: true },
-      },
-    ]);
-    await insertRows(client, "business_phone_numbers", [
-      {
-        id: numberId,
-        company_id: weatherTech.id,
-        integration_connection_id: connectionId,
+      })),
+    );
+    const smsRouteFixtures = SMS_ROUTE_IDENTITIES.map((identity) => ({
+      ...identity,
+      company: identity.companyKey === "ihc" ? ihc : weatherTech,
+      connectionId:
+        identity.companyKey === "ihc"
+          ? ihcConnectionId
+          : weatherTechConnectionId,
+      numberId:
+        identity.key === "weathertech-phoenix"
+          ? phoenixNumberId
+          : identity.key === "weathertech-tucson"
+            ? tucsonNumberId
+            : ihcNumberId,
+    }));
+    await insertRows(
+      client,
+      "business_phone_numbers",
+      smsRouteFixtures.map((identity) => ({
+        id: identity.numberId,
+        company_id: identity.company.id,
+        integration_connection_id: identity.connectionId,
         provider: "twilio",
         provider_account_sid: fixture.accountSid,
         messaging_service_sid: fixture.messagingServiceSid,
-        phone_number_e164: WEATHERTECH_NUMBER,
-        display_name: marker,
-        routing_key: routingKey,
-        business_location: "Phoenix",
-        team_queue: "weathertech-roofing-phoenix",
-        lead_source: "Phone - WeatherTech Phoenix",
-        communication_channel: "sms",
+        phone_number_e164: identity.ingressNumber,
+        display_name: `${marker} ${identity.key}`,
+        routing_key: identity.key,
+        business_location: identity.businessLocation,
+        team_queue: identity.teamQueue,
+        lead_source: identity.leadSource,
+        communication_channel: identity.communicationChannel,
         time_zone: "America/Phoenix",
         routing_status: "active",
         settings: { regression_marker: marker },
-      },
-    ]);
+      })),
+    );
     await insertRows(client, "customers", [
       {
         id: knownCustomerId,
@@ -810,7 +885,7 @@ export async function runTwilioInboundRegression({
     const baseFixture = {
       ...fixture,
       from: KNOWN_SENDER,
-      to: WEATHERTECH_NUMBER,
+      to: PHOENIX_NUMBER,
       body: `${marker} KNOWN MESSAGE`,
       messageSid: messageSids.known,
     };
@@ -904,17 +979,47 @@ export async function runTwilioInboundRegression({
         200,
       ),
     );
-    const rejectedIhcFixture = {
-      ...crossCompanyFixture,
-      to: IHC_UNMAPPED_NUMBER,
-      body: `${marker} UNMAPPED IHC ROUTE`,
-      messageSid: messageSids.rejectedIhcRoute,
+    const tucsonExactFixture = {
+      ...baseFixture,
+      from: TUCSON_ONLY_SENDER,
+      to: TUCSON_NUMBER,
+      body: `${marker} EXACT TUCSON ROUTE`,
+      messageSid: messageSids.tucsonExact,
     };
     requests.push(
       await invokeWebhook(
         route.POST,
-        rejectedIhcFixture,
-        "unmapped IHC route",
+        tucsonExactFixture,
+        "exact Tucson SMS identity",
+        200,
+      ),
+    );
+    const ihcExactFixture = {
+      ...baseFixture,
+      from: IHC_ONLY_SENDER,
+      to: IHC_NUMBER,
+      body: `${marker} EXACT IHC ROUTE`,
+      messageSid: messageSids.ihcExact,
+    };
+    requests.push(
+      await invokeWebhook(
+        route.POST,
+        ihcExactFixture,
+        "exact IHC SMS identity",
+        200,
+      ),
+    );
+    const rejectedUnmappedFixture = {
+      ...crossCompanyFixture,
+      to: UNMAPPED_NUMBER,
+      body: `${marker} UNMAPPED ROUTE`,
+      messageSid: messageSids.rejectedUnmappedRoute,
+    };
+    requests.push(
+      await invokeWebhook(
+        route.POST,
+        rejectedUnmappedFixture,
+        "unmapped route",
         403,
       ),
     );
@@ -1046,6 +1151,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: null,
       expectedLeadId: knownLeadId,
       expectedContactStatus: "matched_lead",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     requireCondition(
       known.message.body === baseFixture.body,
@@ -1058,6 +1164,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: knownCustomerId,
       expectedLeadId: null,
       expectedContactStatus: "matched_customer",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     await verifyStoredCase({
       client,
@@ -1066,6 +1173,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: null,
       expectedLeadId: null,
       expectedContactStatus: "unmatched",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     await verifyStoredCase({
       client,
@@ -1074,6 +1182,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: null,
       expectedLeadId: null,
       expectedContactStatus: "ambiguous",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     const crossCompany = await verifyStoredCase({
       client,
@@ -1082,6 +1191,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: null,
       expectedLeadId: null,
       expectedContactStatus: "unmatched",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     requireCondition(
       crossCompany.message.lead_id !== ihcLeadId &&
@@ -1090,11 +1200,30 @@ export async function runTwilioInboundRegression({
     );
     await verifyStoredCase({
       client,
+      fixture: tucsonExactFixture,
+      expectedCompanyId: weatherTech.id,
+      expectedCustomerId: null,
+      expectedLeadId: null,
+      expectedContactStatus: "unmatched",
+      expectedBusinessPhoneNumberId: tucsonNumberId,
+    });
+    await verifyStoredCase({
+      client,
+      fixture: ihcExactFixture,
+      expectedCompanyId: ihc.id,
+      expectedCustomerId: null,
+      expectedLeadId: ihcLeadId,
+      expectedContactStatus: "matched_lead",
+      expectedBusinessPhoneNumberId: ihcNumberId,
+    });
+    await verifyStoredCase({
+      client,
       fixture: concurrentFixture,
       expectedCompanyId: weatherTech.id,
       expectedCustomerId: null,
       expectedLeadId: knownLeadId,
       expectedContactStatus: "matched_lead",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     const recovered = await verifyStoredCase({
       client,
@@ -1103,6 +1232,7 @@ export async function runTwilioInboundRegression({
       expectedCustomerId: null,
       expectedLeadId: knownLeadId,
       expectedContactStatus: "matched_lead",
+      expectedBusinessPhoneNumberId: phoenixNumberId,
     });
     requireCondition(
       recovered.message.metadata?.ingestion_status === "complete" &&
@@ -1111,8 +1241,8 @@ export async function runTwilioInboundRegression({
     );
     await verifyNoSidResidue(
       client,
-      messageSids.rejectedIhcRoute,
-      "Unmapped IHC route",
+      messageSids.rejectedUnmappedRoute,
+      "Unmapped route",
     );
 
     const [currentMessages, currentEvents, currentLeads, currentCustomers] = await Promise.all([
@@ -1139,8 +1269,8 @@ export async function runTwilioInboundRegression({
         "Read current-run Twilio customers",
       ),
     ]);
-    requireCondition(currentMessages.length === 7, "Twilio regression did not persist exactly seven accepted messages.");
-    requireCondition(currentEvents.length === 7, "Twilio regression did not persist exactly seven accepted provider events.");
+    requireCondition(currentMessages.length === 9, "Twilio regression did not persist exactly nine accepted messages.");
+    requireCondition(currentEvents.length === 9, "Twilio regression did not persist exactly nine accepted provider events.");
     requireCondition(currentLeads.length === 5, "Inbound SMS created or removed a synthetic lead unexpectedly.");
     requireCondition(currentCustomers.length === 1, "Inbound SMS created or removed a synthetic customer unexpectedly.");
     requireCondition(
@@ -1171,6 +1301,8 @@ export async function runTwilioInboundRegression({
       requests,
       acceptedMessages: currentMessages.length,
       acceptedProviderEvents: currentEvents.length,
+      routeKeys: SMS_ROUTE_IDENTITIES.map((identity) => identity.key),
+      allThreeSmsIdentitiesVerified: true,
       duplicateRowsCreated: 0,
       duplicateSurvivedCrmMatchDrift: true,
       conflictingDuplicateRejected: true,
@@ -1178,7 +1310,7 @@ export async function runTwilioInboundRegression({
       unknownSenderPreservedUnmatched: true,
       ambiguousSenderPreservedUnmatched: true,
       crossCompanyLeadAssociationBlocked: true,
-      unmappedIhcRouteRejected: true,
+      unmappedRouteRejected: true,
       disabledConnectionRejected: true,
       concurrentDuplicatesConverged: true,
       retryRecoveryCompleted: true,

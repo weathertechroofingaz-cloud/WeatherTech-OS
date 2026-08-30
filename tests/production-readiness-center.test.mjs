@@ -385,6 +385,26 @@ try {
     "AI Tools controlled pilot",
   ].forEach((label) => assert(guideLabels.includes(label), `${label} guide is present`));
 
+  const twilioGuide = center.activationGuides.find((guide) => guide.label === "Twilio");
+  assert(twilioGuide, "Twilio activation guide is present");
+  const twilioGuideText = JSON.stringify(twilioGuide);
+  assert(
+    twilioGuide.requiredOwnerActions.some(
+      (action) => action.includes("existing Verizon line") && action.includes("existing AT&T line"),
+    ) &&
+      twilioGuide.requiredOwnerActions.some(
+        (action) =>
+          action.includes("Phoenix and IHC Twilio ingress Voice handling blank") &&
+          action.includes("SMS-only"),
+      ),
+    "Twilio guidance preserves Phoenix/IHC direct-carrier voice and SMS-only ingresses",
+  );
+  assert(
+    !twilioGuideText.includes("choose the Phoenix and IHC protected terminals") &&
+      !twilioGuideText.includes("carrier voice forwarding from each public Phoenix/IHC line"),
+    "Twilio guidance does not request retired Phoenix/IHC voice destinations or forwarding",
+  );
+
   const requiredCredentialNames = center.activationGuides.flatMap(
     (guide) => guide.requiredCredentials,
   );
@@ -402,7 +422,16 @@ try {
   ].forEach((envName) =>
     assert(requiredCredentialNames.includes(envName), `${envName} is included in owner setup`),
   );
-
+  const retiredVoiceEnvNames = [
+    "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
+    "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+    "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
+    "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+    "TWILIO_IHC_PUBLIC_NUMBER",
+    "TWILIO_IHC_VOICE_FORWARD_TO",
+    "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
+    "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
+  ];
   const providerLabels = center.providerChecks.map((check) => check.label);
   [
     "Twilio",
@@ -572,6 +601,12 @@ try {
       `${envName} is included in the staging environment inventory`,
     ),
   );
+  assert(
+    retiredVoiceEnvNames.every(
+      (envName) => !unknownEnvironmentInventory.some((check) => check.name === envName),
+    ),
+    "Retired Phoenix/IHC voice variables are absent from environment readiness",
+  );
 
   const validatedEnvironmentInventory = readinessModule.buildProductionEnvironmentInventory({
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
@@ -585,6 +620,12 @@ try {
     WEBSITE_INTAKE_ENABLED: "true",
   });
   const validatedChecks = validatedEnvironmentInventory.flatMap((group) => group.checks);
+  assert(
+    retiredVoiceEnvNames.every(
+      (envName) => !validatedChecks.some((check) => check.name === envName),
+    ),
+    "Validated readiness never requests retired Phoenix/IHC voice variables",
+  );
   assert(
     validatedChecks.some(
       (check) =>

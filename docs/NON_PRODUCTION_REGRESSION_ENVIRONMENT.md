@@ -86,11 +86,7 @@ GOOGLE_GMAIL_SEND_ENABLED
 GOOGLE_CALENDAR_WRITE_ENABLED
 TWILIO_OUTBOUND_SMS_ENABLED
 TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED
-TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED
-TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED
 TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED
-TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED
-TWILIO_IHC_VOICE_FORWARDING_ENABLED
 QUICKBOOKS_SYNC_ENABLED
 QUICKBOOKS_ACCOUNTING_WRITES_ENABLED
 QUICKBOOKS_PAYMENT_PROCESSING_ENABLED
@@ -105,7 +101,7 @@ The harness fetches the local server's raw HTML before opening the application a
 
 Source-specific provider flags are also false. Ordinary regression must not contain live provider credentials merely because a corresponding gate is false.
 
-The dedicated Twilio voice runner is the sole exception to those three voice-gate values. It compiles and invokes the Production webhook code locally, injects only synthetic ingress, public-source, shared-terminal, account, and signing values into that Node process, and permits network traffic only to the positively verified regression Supabase origin. It exercises all three exact route identities, signed ingress and status replay/concurrency, graph-wide loop refusal, route rollback, bounded evidence, company isolation, and captured-ID cleanup. It never calls Twilio, a carrier, or the synthetic terminal. The ordinary browser server and the SMS-only runner keep every voice gate false.
+The dedicated Twilio voice runner is the sole exception to the Tucson voice-gate values. It compiles and invokes the Production webhook code locally, injects only synthetic Tucson ingress, terminal, account, and signing values into that Node process, and permits network traffic only to the positively verified regression Supabase origin. It exercises the exact Tucson voice identity, signed ingress and status replay/concurrency, configured-number and terminal-origin loop refusal, route rollback, bounded evidence, company isolation, explicit Phoenix/IHC voice rejection, and captured-ID cleanup. It never calls Twilio, a carrier, or the synthetic terminal. The ordinary browser server and the SMS-only runner keep Tucson voice disabled; Phoenix and IHC have no voice gate or destination configuration.
 
 Run the two Twilio hosted contracts only with the permission-restricted external file selected and no Supabase credentials already present in the parent process:
 

@@ -441,14 +441,10 @@ assert(
     layout.includes("data-wtos-provider-side-effects") &&
     regressionSafety.includes("REGRESSION_SIDE_EFFECT_FLAGS") &&
     regressionSafety.includes("GHL_SYNC_ENABLED") &&
-    regressionSafety.includes("TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED") &&
-    regressionSafety.includes(
-      "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-    ) &&
     regressionSafety.includes("TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED") &&
-    regressionSafety.includes("TWILIO_IHC_VOICE_FORWARDING_ENABLED") &&
-    regressionSafety.includes("TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED") &&
-    regressionSafety.includes("TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED"),
+    regressionSafety.includes("TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED") &&
+    !regressionSafety.includes("TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED") &&
+    !regressionSafety.includes("TWILIO_IHC_VOICE_FORWARDING_ENABLED"),
   "The browser verifies the raw and rendered app markers for disabled demo fallback and provider side effects",
 );
 assert(

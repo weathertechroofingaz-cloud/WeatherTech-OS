@@ -21,6 +21,7 @@ export type TwilioBusinessNumberRouteTemplate = {
   teamQueue: string;
   leadSource: string;
   communicationChannel: "sms" | "sms_voice";
+  voiceHandling: "direct_carrier" | "twilio_forwarding";
   timeZone: "America/Phoenix";
   routingStatus: "configuration_required";
   phoneNumberConfigured: false;
@@ -91,6 +92,7 @@ export const twilioBusinessNumberRouteTemplates: TwilioBusinessNumberRouteTempla
     teamQueue: "weathertech-roofing-phoenix",
     leadSource: "Phone - WeatherTech Phoenix",
     communicationChannel: "sms",
+    voiceHandling: "direct_carrier",
     timeZone: "America/Phoenix",
     routingStatus: "configuration_required",
     phoneNumberConfigured: false,
@@ -102,6 +104,7 @@ export const twilioBusinessNumberRouteTemplates: TwilioBusinessNumberRouteTempla
     teamQueue: "weathertech-roofing-tucson",
     leadSource: "Phone - WeatherTech Tucson",
     communicationChannel: "sms_voice",
+    voiceHandling: "twilio_forwarding",
     timeZone: "America/Phoenix",
     routingStatus: "configuration_required",
     phoneNumberConfigured: false,
@@ -113,6 +116,7 @@ export const twilioBusinessNumberRouteTemplates: TwilioBusinessNumberRouteTempla
     teamQueue: "ihc-painting",
     leadSource: "Phone - IHC",
     communicationChannel: "sms",
+    voiceHandling: "direct_carrier",
     timeZone: "America/Phoenix",
     routingStatus: "configuration_required",
     phoneNumberConfigured: false,
@@ -137,11 +141,17 @@ export function matchesTwilioBusinessRouteTemplate(
     return false;
   }
 
+  if (capability === "voice" && template.voiceHandling !== "twilio_forwarding") {
+    return false;
+  }
+
   const communicationChannelMatches =
     capability === "voice"
       ? route.communication_channel === "sms_voice"
-      : route.communication_channel === "sms" ||
-        route.communication_channel === "sms_voice";
+      : template.voiceHandling === "twilio_forwarding"
+        ? route.communication_channel === "sms" ||
+          route.communication_channel === "sms_voice"
+        : route.communication_channel === template.communicationChannel;
 
   return (
     route.routing_key === template.key &&
@@ -178,7 +188,7 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
     method: "POST",
     liveEnabled: false,
     summary:
-      "Returns signed route-specific call-forwarding TwiML after protected gates, exact identity, destination, and graph-wide loop checks pass.",
+      "Returns signed Tucson-only call-forwarding TwiML after its protected gate, exact identity, destination, and all-ingress loop checks pass.",
   },
   {
     id: "voice_status",
@@ -187,7 +197,7 @@ export const twilioWebhookEndpoints: TwilioWebhookEndpoint[] = [
     method: "POST",
     liveEnabled: false,
     summary:
-      "Stores bounded signed route-specific forwarding status evidence; it does not enable recording, transcription, or another business route.",
+      "Stores bounded signed Tucson forwarding status evidence; it does not enable recording, transcription, or another business route.",
   },
   {
     id: "recording",
