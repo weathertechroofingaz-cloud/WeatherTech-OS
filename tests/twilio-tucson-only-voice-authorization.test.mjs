@@ -140,8 +140,17 @@ try {
       phoenixTemplate,
       "sms",
     ),
+    false,
+    "Phoenix sms_voice database drift must fail SMS readiness until restored to sms",
+  );
+  equal(
+    foundation.matchesTwilioBusinessRouteTemplate(
+      exactRouteFor(tucsonTemplate, "sms_voice"),
+      tucsonTemplate,
+      "sms",
+    ),
     true,
-    "Phoenix SMS remains valid if historical data is temporarily sms_voice",
+    "Tucson inbound SMS remains valid on its reviewed sms_voice route",
   );
   equal(
     foundation.matchesTwilioBusinessRouteTemplate(

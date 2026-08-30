@@ -148,8 +148,10 @@ export function matchesTwilioBusinessRouteTemplate(
   const communicationChannelMatches =
     capability === "voice"
       ? route.communication_channel === "sms_voice"
-      : route.communication_channel === "sms" ||
-        route.communication_channel === "sms_voice";
+      : template.voiceHandling === "twilio_forwarding"
+        ? route.communication_channel === "sms" ||
+          route.communication_channel === "sms_voice"
+        : route.communication_channel === template.communicationChannel;
 
   return (
     route.routing_key === template.key &&

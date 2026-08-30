@@ -202,6 +202,14 @@ try {
     foundation.matchesTwilioBusinessRouteTemplate(
       { ...tucsonSmsRoute, communication_channel: "sms_voice" },
       tucsonTemplate,
+      "sms",
+    ),
+    "Tucson inbound SMS remains exact while its reviewed route is sms_voice",
+  );
+  check(
+    foundation.matchesTwilioBusinessRouteTemplate(
+      { ...tucsonSmsRoute, communication_channel: "sms_voice" },
+      tucsonTemplate,
       "voice",
     ),
     "Only the reviewed sms_voice Tucson route can report voice ready",
@@ -246,12 +254,12 @@ try {
     time_zone: "America/Phoenix",
   };
   check(
-    foundation.matchesTwilioBusinessRouteTemplate(
+    !foundation.matchesTwilioBusinessRouteTemplate(
       phoenixSmsVoiceDrift,
       phoenixTemplate,
       "sms",
     ),
-    "Phoenix SMS remains accepted through temporary sms_voice database drift",
+    "Phoenix sms_voice database drift must fail SMS readiness until restored to sms",
   );
   check(
     !foundation.matchesTwilioBusinessRouteTemplate(
@@ -285,12 +293,12 @@ try {
     time_zone: "America/Phoenix",
   };
   check(
-    foundation.matchesTwilioBusinessRouteTemplate(
+    !foundation.matchesTwilioBusinessRouteTemplate(
       ihcSmsVoiceDrift,
       ihcTemplate,
       "sms",
     ),
-    "IHC SMS remains accepted through temporary sms_voice database drift",
+    "IHC sms_voice database drift must fail SMS readiness until restored to sms",
   );
   check(
     !foundation.matchesTwilioBusinessRouteTemplate(
