@@ -193,6 +193,7 @@ export type TwilioExpectedBusinessNumber = {
   teamQueue: string;
   leadSource: string;
   communicationChannel: TwilioBusinessNumberRouteTemplate["communicationChannel"];
+  voiceHandling: TwilioBusinessNumberRouteTemplate["voiceHandling"];
   timeZone: TwilioBusinessNumberRouteTemplate["timeZone"];
   envVar: string;
   phoneNumberE164: string | null;
@@ -320,6 +321,7 @@ export function getTwilioExpectedBusinessNumbers(): TwilioExpectedBusinessNumber
       teamQueue: template.teamQueue,
       leadSource: template.leadSource,
       communicationChannel: template.communicationChannel,
+      voiceHandling: template.voiceHandling,
       timeZone: template.timeZone,
     };
   });
@@ -344,28 +346,12 @@ function getBusinessNumberConfig(): TwilioBusinessNumberConfig[] {
 
 const twilioVoiceRouteEnvDefinitions = [
   {
-    routeKey: "weathertech-phoenix",
-    enabledEnv: twilioEnvVars.weatherTechPhoenixVoiceForwardingEnabled,
-    destinationEnv: twilioEnvVars.weatherTechPhoenixVoiceForwardTo,
-    publicSourceEnv: twilioEnvVars.weatherTechPhoenixPublicNumber,
-    terminalAttestationEnv:
-      twilioEnvVars.weatherTechPhoenixTerminalForwardingDisabledConfirmed,
-  },
-  {
     routeKey: "weathertech-tucson",
     enabledEnv: twilioEnvVars.weatherTechTucsonVoiceForwardingEnabled,
     destinationEnv: twilioEnvVars.weatherTechTucsonVoiceForwardTo,
     publicSourceEnv: null,
     terminalAttestationEnv:
       twilioEnvVars.voiceTerminalForwardingDisabledConfirmed,
-  },
-  {
-    routeKey: "ihc-primary",
-    enabledEnv: twilioEnvVars.ihcVoiceForwardingEnabled,
-    destinationEnv: twilioEnvVars.ihcVoiceForwardTo,
-    publicSourceEnv: twilioEnvVars.ihcPublicNumber,
-    terminalAttestationEnv:
-      twilioEnvVars.ihcTerminalForwardingDisabledConfirmed,
   },
 ] as const satisfies ReadonlyArray<{
   routeKey: TwilioBusinessRouteKey;
@@ -430,7 +416,9 @@ export function getTwilioServerConfig(): TwilioServerConfig {
       ),
     };
   });
-  const ingressNumbers = routeDrafts.map((route) => route.ingressNumberE164);
+  const ingressNumbers = expectedBusinessNumbers.map(
+    (number) => number.phoneNumberE164,
+  );
   const publicSourceNumbers = routeDrafts.map((route) => route.publicSourceE164);
   const protectedSourceNodes = new Set(
     [...ingressNumbers, ...publicSourceNumbers].filter(

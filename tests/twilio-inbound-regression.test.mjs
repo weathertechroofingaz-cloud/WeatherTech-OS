@@ -58,17 +58,22 @@ for (const [needle, message] of [
   ["unknown sender", "Unknown sender behavior is exercised"],
   ["ambiguous sender", "Ambiguous sender behavior is exercised"],
   ["cross-company sender isolation", "Cross-company contact isolation is exercised"],
-  ["unmapped IHC route", "Unmapped IHC routing is rejected"],
   ["disabled connection", "Disabled connection rejection is exercised"],
   ["concurrent duplicate", "Concurrent duplicate deliveries are exercised"],
   ["retry recovery after message claim", "Retry recovery is exercised"],
   ["evidence_proof", "Signed evidence proof is verified"],
   ["TWILIO_OUTBOUND_SMS_ENABLED = \"false\"", "Outbound SMS is locked false"],
-  ["TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED =", "Phoenix terminal attestation stays disabled during SMS regression"],
-  ["TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = \"false\"", "Phoenix voice stays disabled during SMS regression"],
+  ["SMS_ROUTE_IDENTITIES", "All three exact SMS route identities are declared"],
+  ['key: "weathertech-phoenix"', "Phoenix SMS identity is preserved"],
+  ['key: "weathertech-tucson"', "Tucson SMS identity is preserved"],
+  ['key: "ihc-primary"', "IHC SMS identity is preserved"],
+  ['communicationChannel: "sms_voice"', "Tucson retains its voice-capable SMS identity"],
+  ['communicationChannel: "sms"', "Phoenix and IHC are SMS-only"],
+  ["exact Tucson SMS identity", "Tucson signed inbound SMS is exercised"],
+  ["exact IHC SMS identity", "IHC signed inbound SMS is exercised"],
+  ["expectedBusinessPhoneNumberId", "Stored SMS evidence binds to each exact business number"],
   ["TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = \"false\"", "Tucson voice stays disabled during SMS regression"],
-  ["TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = \"false\"", "IHC terminal attestation stays disabled during SMS regression"],
-  ["TWILIO_IHC_VOICE_FORWARDING_ENABLED = \"false\"", "IHC voice stays disabled during SMS regression"],
+  ["unmapped route", "An unknown ingress remains fail-closed"],
   ["providerNetworkRequests: 0", "The report requires zero provider network requests"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
   ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
@@ -86,6 +91,20 @@ check(
     !source.includes("dotenv") &&
     !source.includes("env-cmd"),
   "Runner has no repository-local environment loading fallback",
+);
+check(
+  !source.includes("TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD") &&
+    !source.includes("TWILIO_IHC_VOICE_FORWARD") &&
+    !source.includes("TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER") &&
+    !source.includes("TWILIO_IHC_PUBLIC_NUMBER") &&
+    !source.includes("TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED") &&
+    !source.includes("TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED"),
+  "SMS regression has no obsolete Phoenix/IHC voice configuration requirement",
+);
+check(
+  (source.match(/communicationChannel: "sms",/g) ?? []).length === 2 &&
+    (source.match(/communicationChannel: "sms_voice",/g) ?? []).length === 1,
+  "The SMS fixture graph keeps Phoenix/IHC sms and Tucson sms_voice",
 );
 check(
   !/\.delete\(\)[\s\S]{0,80}\.(?:like|ilike|neq)\(/.test(source),
@@ -107,8 +126,14 @@ if (process.env[TWILIO_INBOUND_REGRESSION_RUN] === "true") {
   const report = await runTwilioInboundRegression({ cwd });
   assert.equal(report.result, "PASS");
   assert.equal(report.target, "hygtnhmmaoboduqghhwg");
-  assert.equal(report.acceptedMessages, 7);
-  assert.equal(report.acceptedProviderEvents, 7);
+  assert.equal(report.acceptedMessages, 9);
+  assert.equal(report.acceptedProviderEvents, 9);
+  assert.deepEqual(report.routeKeys, [
+    "weathertech-phoenix",
+    "weathertech-tucson",
+    "ihc-primary",
+  ]);
+  assert.equal(report.allThreeSmsIdentitiesVerified, true);
   assert.equal(report.duplicateRowsCreated, 0);
   assert.equal(report.duplicateSurvivedCrmMatchDrift, true);
   assert.equal(report.conflictingDuplicateRejected, true);
@@ -116,7 +141,7 @@ if (process.env[TWILIO_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.unknownSenderPreservedUnmatched, true);
   assert.equal(report.ambiguousSenderPreservedUnmatched, true);
   assert.equal(report.crossCompanyLeadAssociationBlocked, true);
-  assert.equal(report.unmappedIhcRouteRejected, true);
+  assert.equal(report.unmappedRouteRejected, true);
   assert.equal(report.disabledConnectionRejected, true);
   assert.equal(report.concurrentDuplicatesConverged, true);
   assert.equal(report.retryRecoveryCompleted, true);
@@ -124,7 +149,7 @@ if (process.env[TWILIO_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.outboundMessages, 0);
   assert.equal(report.providerNetworkRequests, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 19;
+  assertionCount += 21;
   console.log("Twilio inbound hosted regression execution: PASS");
 } else {
   console.log(

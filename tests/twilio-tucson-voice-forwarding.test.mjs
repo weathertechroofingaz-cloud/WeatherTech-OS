@@ -18,8 +18,16 @@ const envNames = [
   "TWILIO_OUTBOUND_SMS_ENABLED",
   "TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_WEATHERTECH_PHOENIX_NUMBER",
+  "TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED",
+  "TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO",
+  "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_WEATHERTECH_TUCSON_NUMBER",
   "TWILIO_IHC_NUMBER",
+  "TWILIO_IHC_PUBLIC_NUMBER",
+  "TWILIO_IHC_VOICE_FORWARDING_ENABLED",
+  "TWILIO_IHC_VOICE_FORWARD_TO",
+  "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED",
   "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
 ];
@@ -161,6 +169,15 @@ try {
   process.env.TWILIO_IHC_NUMBER = ihcNumber;
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = "true";
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = forwardDestination;
+  process.env.TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER = "+16025550127";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED = "true";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARD_TO = "+16235550127";
+  process.env.TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED =
+    "true";
+  process.env.TWILIO_IHC_PUBLIC_NUMBER = "+14805556931";
+  process.env.TWILIO_IHC_VOICE_FORWARDING_ENABLED = "true";
+  process.env.TWILIO_IHC_VOICE_FORWARD_TO = "+16235556931";
+  process.env.TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED = "true";
 
   const webhooksPath = join(outDir, "lib", "twilio", "webhooks.js");
   const voiceRoutePath = join(
@@ -280,14 +297,21 @@ try {
   }
   process.env.TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO = forwardDestination;
 
-  response = await invokeHandler(
-    webhooks,
-    "voice_inbound",
-    voicePath,
-    voiceUrl,
-    inboundVoiceParams({ From: forwardDestination }),
-  );
-  equal(response.status, 403, "A call originating from the forward destination is rejected as a self-dial loop");
+  for (const [protectedCaller, label] of [
+    [forwardDestination, "forward destination"],
+    [tucsonNumber, "Tucson ingress"],
+    [phoenixNumber, "Phoenix ingress"],
+    [ihcNumber, "IHC ingress"],
+  ]) {
+    response = await invokeHandler(
+      webhooks,
+      "voice_inbound",
+      voicePath,
+      voiceUrl,
+      inboundVoiceParams({ From: protectedCaller }),
+    );
+    equal(response.status, 403, `A call originating from the ${label} is rejected as a loop`);
+  }
 
   response = await invokeHandler(
     webhooks,
@@ -298,8 +322,8 @@ try {
   );
   equal(
     response.status,
-    503,
-    "Signed Phoenix voice ingress remains disabled until its exact protected route is configured",
+    403,
+    "Signed Phoenix voice ingress is rejected even when stale legacy Voice configuration is enabled",
   );
   response = await invokeHandler(
     webhooks,
@@ -310,8 +334,8 @@ try {
   );
   equal(
     response.status,
-    503,
-    "Signed IHC voice ingress remains disabled until its exact protected route is configured",
+    403,
+    "Signed IHC voice ingress is rejected even when stale legacy Voice configuration is enabled",
   );
 
   const wrongAccountParams = inboundVoiceParams({
@@ -461,9 +485,17 @@ try {
   );
   equal(
     response.status,
-    503,
-    "A Phoenix status callback cannot persist without its exact claimed parent and storage route",
+    403,
+    "A Phoenix status callback is rejected before persistence",
   );
+  response = await invokeHandler(
+    webhooks,
+    "voice_status",
+    statusPath,
+    statusUrl,
+    voiceStatusParams({ To: ihcNumber }),
+  );
+  equal(response.status, 403, "An IHC status callback is rejected before persistence");
   response = await invokeHandler(webhooks, "voice_status", statusPath, statusUrl, statusParams);
   equal(response.status, 503, "A valid status callback cannot report success before durable storage");
 

@@ -352,8 +352,11 @@ export async function GET() {
       routingKey: number.routing_key,
     }));
   const outboundDisabled = !rawConfig.outboundSmsEnabled;
+  const expectedVoiceNumbers = expectedNumbers.filter(
+    (expected) => expected.voiceHandling === "twilio_forwarding",
+  );
   const voiceRouteExactByKey = Object.fromEntries(
-    expectedNumbers.map((expected) => {
+    expectedVoiceNumbers.map((expected) => {
       const storedRoutes = expected.phoneNumberE164
         ? businessNumbers.filter(
             (number) =>
@@ -381,7 +384,7 @@ export async function GET() {
     config: rawConfig,
   });
   const ownerVoiceRouteKeys = new Set(
-    expectedNumbers.map((number) => number.routeKey),
+    expectedVoiceNumbers.map((number) => number.routeKey),
   );
   const voiceForwarding = {
     ...fullVoiceForwarding,

@@ -62,49 +62,52 @@ for (const [needle, message] of [
   ['leadSource: "Phone - WeatherTech Phoenix"', "Exact Phoenix lead source is seeded"],
   ['leadSource: "Phone - WeatherTech Tucson"', "Exact Tucson lead source is seeded"],
   ['leadSource: "Phone - IHC"', "Exact IHC lead source is seeded"],
-  ['communication_channel: "sms_voice"', "Every synthetic route is voice capable"],
-  ["PHOENIX_FORWARD_DESTINATION", "Phoenix uses its own synthetic terminal"],
+  ['communicationChannel: "sms_voice"', "Tucson alone is voice capable"],
+  ['communicationChannel: "sms"', "Phoenix and IHC remain SMS-only"],
+  ["routeFixtures.map", "All three exact routing identities are seeded"],
+  ["communication_channel: route.communicationChannel", "Seeded capabilities follow the final routing architecture"],
   ["TUCSON_FORWARD_DESTINATION", "Tucson uses its own synthetic terminal"],
-  ["IHC_FORWARD_DESTINATION", "IHC uses its own synthetic terminal"],
-  ["three distinct terminal destinations", "Synthetic terminals must remain distinct"],
-  ["hasExactRouteDialTwiML", "Every successful route verifies exact-only Dial TwiML"],
-  ["TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER", "Phoenix public source stays protected"],
-  ["TWILIO_IHC_PUBLIC_NUMBER", "IHC public source stays protected"],
+  ["const routeLifecycles = tucsonFixture", "The full voice lifecycle is Tucson-only"],
+  ["hasExactRouteDialTwiML", "Successful Tucson requests verify exact-only Dial TwiML"],
+  ["signed sms-only voice ingress", "Signed Phoenix/IHC voice ingress is rejected"],
+  ["signed sms-only voice status", "Signed Phoenix/IHC voice status is rejected"],
+  ["Phoenix/IHC sms-only voice ingress persistence", "Rejected SMS-only ingress proves zero persistence"],
+  ["Phoenix/IHC sms-only voice status persistence", "Rejected SMS-only status proves zero persistence"],
+  ["deliberately stale", "Retired Phoenix/IHC voice variables are deliberately poisoned"],
+  ["TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER", "Stale Phoenix public-source state is ignored"],
+  ["TWILIO_IHC_PUBLIC_NUMBER", "Stale IHC public-source state is ignored"],
   [
     "TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-    "Phoenix terminal attestation is independent",
+    "Stale Phoenix terminal attestation is ignored",
   ],
   [
     "TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED",
-    "IHC terminal attestation is independent",
+    "Stale IHC terminal attestation is ignored",
   ],
-  [
-    "IHC route cannot inherit another terminal attestation",
-    "A route cannot inherit another route's terminal attestation",
-  ],
-  ["graph-wide public-source loop", "Graph-wide public-source loops are rejected"],
-  ["terminalCallerAttempts = VOICE_ROUTES.flatMap", "Every route-terminal caller pair is exercised"],
-  ["callerTerminal: callerRoute.destination", "Cross-route terminal callers use exact route fixtures"],
-  ["terminal caller loop", "Calls originating from any configured terminal are rejected"],
+  ["ingressLoopAttempts = VOICE_ROUTES.map", "Every exact ingress is exercised as a forbidden Tucson destination"],
+  ["destination: route.ingressNumber", "Loop tests use all three exact ingress nodes"],
+  ["protectedCallerAttempts", "All exact ingress callers and the Tucson terminal are exercised"],
+  ["callerNumber: route.ingressNumber", "Every ingress caller is rejected"],
+  ["tucson-terminal", "The Tucson terminal caller loop is rejected"],
   ["retry recovery after partial call claim", "Partial persistence retry is exercised"],
   ["POST-CLAIM MATCH DRIFT", "CRM match drift after claim is exercised"],
   ["same-company known caller", "Known same-company contact matching is exercised"],
   ["ambiguous same-company caller", "Ambiguous same-company matching is exercised"],
-  ["concurrent exact ingress", "Concurrent ingress convergence is exercised for every route"],
+  ["concurrent exact ingress", "Concurrent Tucson ingress convergence is exercised"],
   ["changed same parent ingress conflict", "Changed parent replay is rejected"],
   ["status without exact parent claim", "Parentless status is rejected"],
   ["forged voice status signature", "Forged status signatures are rejected"],
   ["cross-company IHC status route", "Cross-company status routing is rejected"],
   ["forged parent caller identity", "Changed parent identity is rejected"],
-  ["rollback-safe concurrent status", "Every route's in-flight status survives sms_voice to sms rollback"],
+  ["rollback-safe concurrent status", "The Tucson in-flight status survives sms_voice to sms rollback"],
   ["different child status conflict", "A second child leg conflicts"],
   ["different terminal status conflict", "A changed terminal result conflicts"],
-  ["new ingress blocked after sms-only rollback", "Every route rollback blocks new Dial authorization"],
+  ["new ingress blocked after sms-only rollback", "Tucson rollback blocks new Dial authorization"],
   ["provider_dial_status", "Bounded provider outcome evidence is verified"],
   ["expectedAnsweredAt", "Answered time derivation is verified"],
-  ["FORWARD_DESTINATIONS.every", "Every raw route terminal is prohibited from storage"],
-  ["destination: route.destination", "Stored proofs bind to each exact route terminal"],
-  ["new Set(storedDestinationProofs).size", "Stored terminal proofs remain route-distinct"],
+  ["FORWARD_DESTINATIONS.every", "Every raw legacy or active terminal is prohibited from storage"],
+  ["destination: route.destination", "Stored proof binds to the exact Tucson terminal"],
+  ["storedDestinationProofs.length === 1", "Exactly one Tucson destination proof is stored"],
   ["!storedEvidence.includes(PHOENIX_PUBLIC_SOURCE)", "Raw Phoenix public source storage is prohibited"],
   ["!storedEvidence.includes(IHC_PUBLIC_SOURCE)", "Raw IHC public source storage is prohibited"],
   ["recording_status === \"not_requested\"", "Recording remains not requested"],
@@ -131,6 +134,11 @@ check(
   "Cleanup has no pattern or inequality deletion",
 );
 check(
+  (source.match(/communicationChannel: "sms",/g) ?? []).length === 2 &&
+    (source.match(/communicationChannel: "sms_voice",/g) ?? []).length === 1,
+  "The fixture graph has exactly two SMS-only routes and one Tucson voice route",
+);
+check(
   /\.delete\(\)\.in\("id", ids\)/.test(source),
   "Cleanup deletes captured exact ID sets only",
 );
@@ -155,19 +163,18 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   const report = await runTwilioVoiceInboundRegression({ cwd });
   assert.equal(report.result, "PASS");
   assert.equal(report.target, "hygtnhmmaoboduqghhwg");
-  assert.equal(report.parentCalls, 3);
-  assert.equal(report.providerEvents, 6);
-  assert.deepEqual(report.routeKeys, [
-    "weathertech-tucson",
-    "weathertech-phoenix",
-    "ihc-primary",
-  ]);
-  assert.equal(report.exactRouteLifecycles, 3);
-  assert.equal(report.distinctTerminalsVerified, true);
+  assert.equal(report.parentCalls, 1);
+  assert.equal(report.providerEvents, 2);
+  assert.deepEqual(report.routeKeys, ["weathertech-tucson"]);
+  assert.equal(report.exactRouteLifecycles, 1);
+  assert.equal(report.tucsonOnlyVoiceLifecycleVerified, true);
+  assert.equal(report.phoenixAndIhcSmsOnlyRoutesVerified, true);
   assert.equal(report.exactRouteTwiMLVerified, true);
-  assert.equal(report.independentTerminalAttestationsVerified, true);
-  assert.equal(report.graphWideLoopRejected, true);
-  assert.equal(report.terminalCallerLoopRejected, true);
+  assert.equal(report.smsOnlyVoiceIngressRejected, true);
+  assert.equal(report.smsOnlyVoiceStatusRejected, true);
+  assert.equal(report.staleLegacyVoiceEnvironmentIgnored, true);
+  assert.equal(report.allThreeIngressDestinationLoopsRejected, true);
+  assert.equal(report.protectedCallerLoopsRejected, true);
   assert.equal(report.exactCompanyAndBranchIsolationVerified, true);
   assert.equal(report.partialClaimRetryRecovered, true);
   assert.equal(report.crmMatchDriftPreservedOriginalClaim, true);
@@ -181,7 +188,7 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.crossCompanyStatusRejected, true);
   assert.equal(report.forgedParentIdentityRejected, true);
   assert.equal(report.rollbackStatusReconciled, true);
-  assert.equal(report.everyRouteRollbackVerified, true);
+  assert.equal(report.tucsonRollbackVerified, true);
   assert.equal(report.concurrentStatusConverged, true);
   assert.equal(report.conflictingChildRejected, true);
   assert.equal(report.conflictingStatusRejected, true);
@@ -196,12 +203,12 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.outboundSmsCreated, false);
   assert.equal(report.providerNetworkRequests, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 39;
-  console.log("Twilio multi-route voice hosted regression execution: PASS");
+  assertionCount += 42;
+  console.log("Twilio Tucson-only voice hosted regression execution: PASS");
 } else {
   console.log(
-    `Twilio multi-route voice hosted regression execution: NOT RUN (set ${TWILIO_VOICE_INBOUND_REGRESSION_RUN}=true with the secure external regression environment to execute it)`,
+    `Twilio Tucson-only voice hosted regression execution: NOT RUN (set ${TWILIO_VOICE_INBOUND_REGRESSION_RUN}=true with the secure external regression environment to execute it)`,
   );
 }
 
-console.log(`Twilio multi-route voice regression runner contract: PASS (${assertionCount} assertions)`);
+console.log(`Twilio Tucson-only voice regression runner contract: PASS (${assertionCount} assertions)`);
