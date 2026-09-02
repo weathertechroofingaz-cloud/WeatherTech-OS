@@ -13,7 +13,7 @@ There is no registered action for sending email or SMS, placing a call, changing
 
 ## Current Rollout State
 
-The reviewed AI/automation/Mighty release set is `66/66` in the repository and on the isolated regression target. Production remains at the previously deployed `51/51` ledger. The fifteen-migration automation/Mighty release suffix runs from `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`; it, the canonical Mighty Apes endpoint/registry behavior, scheduler secret, AI price ceilings, and per-company AI policy rows are pending Production rollout. No paid Production AI smoke test has been run, and this document does not authorize one.
+Production, the repository, and the isolated regression target are exact at `66/66` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`. The fifteen-migration automation/Mighty suffix beginning with `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` was applied to Production once by the normal ordered migration push after the deferred-trigger compatibility fix; the repeat dry-run reported zero pending migrations and database lint reported zero errors. The canonical Mighty Apes endpoint/registry behavior, Production-only AI environment variables, price ceilings, and server-only scheduler secret are deployed. Deployment `dpl_CKoXgxtMpDcRC1ekTZ3YSAxaKC5t` is `READY` at exact main merge `76eba068d1c08a87f09899f84f4931cd1fc07d35`, and canonical health returned HTTP 200. No paid Production AI smoke test or real provider/customer action was run, and this document does not authorize one.
 
 ## Data Model
 
@@ -90,7 +90,9 @@ Required server-only environment variables:
 
 Neither value may use a `NEXT_PUBLIC_` name, appear in browser output, or be committed.
 
-At the current Production preflight, `CRON_SECRET` and the two AI provider price-ceiling variables are absent, and `ai_usage_limits` has zero rows. Those are rollout gates, not evidence that the worker or reviewed AI path is deployed.
+Production has a generated server-only `CRON_SECRET`, the two conservative AI provider price-ceiling variables, and the approved Production-only AI environment variables. The existing OpenAI key was preserved without reading or exposing it, and `AI_ACTION_EXECUTION_ENABLED=false`. Exactly two company policy rows exist: WeatherTech and IHC are independently disabled with `openai` / `gpt-5.6-terra`, request bounds of `500`, `32000` maximum request tokens, `15000` ms timeout, retry limit `1`, and a `$0` monthly budget. Neither company can make a paid provider call until the owner separately approves its enablement and positive monthly budget.
+
+The first natural Production scheduler tick recorded exactly `14` `task.due` events and `14` matching audit entries (`10` WeatherTech and `4` IHC). The second and later ticks created no duplicate events, executions, attempts, or new tasks. Provider requests, AI usage, cost, business rows, and provider rows remained unchanged.
 
 ## Owner Control Center
 
@@ -114,7 +116,7 @@ The UI has no manual run-all button and no workflow builder. Non-owner/admin use
 
 ## Validation And Rollout
 
-Before Production activation (current Production is still `51/51`; the reviewed release checkpoint is `66/66` in the repository/regression):
+The Production activation completed on 2026-09-02 using this gate sequence. Steps 1-8 and the configuration/seeding portion of step 9 are complete for this release; per-company enablement and positive monthly budgets remain owner decisions:
 
 1. Freeze the exact fifteen-migration release set and register every SHA-256 in migration integrity tests.
 2. Apply the migration set to the pinned non-Production regression project.

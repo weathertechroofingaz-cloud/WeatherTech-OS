@@ -10,7 +10,7 @@ The completed workflow upgrades an approved estimate into an immutable customer-
 - Merge and Production implementation deployment commit: `7186001eec28177a32b454168e5fd05b43af9937`
 - Approved additive migration: `20260824044610_native_proposal_esign_sold_job_gate.sql`
 - Migration SHA-256: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
-- Final local, regression, and Production migration state: `51/51`
+- Release-checkpoint local, regression, and Production migration state: `51/51`; the later AI/automation rollout advanced all three to `66/66`.
 - Targeted native-signing Browser run `20260824223608414`: passed the deposit and no-deposit paths, signed-session renewal, and exact receipt recovery.
 - Complete isolated Browser run `20260824231426642`: `24/24` groups and `31/31` assertions passed with zero console errors, zero console warnings, bounded cleanup, and zero residue.
 - Release safety: no proposal/signature request was sent to a real customer, and no real acceptance, deposit, payment, invoice, or sold job was created for validation.
@@ -87,7 +87,7 @@ It extends document categories to support:
 
 It does not delete production data, remove policies, weaken RLS, grant authenticated delete access, activate providers, or apply remote database changes by itself.
 
-The approved additive migration `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` operationalizes native signing and the sold-job gate. It adds private signing-request, session, receipt, synthetic-cleanup-guard, and native-RPC-guard tables; exact immutable evidence links; guarded finalization, signing, receipt, deposit-invoice, and sold-job operations; and additive proposal/document/signature/acceptance/job/invoice columns. It does not backfill or mutate existing business records or Storage objects. Its SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`, and the verified final migration state is `51/51` in local, regression, and Production.
+The approved additive migration `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` operationalizes native signing and the sold-job gate. It adds private signing-request, session, receipt, synthetic-cleanup-guard, and native-RPC-guard tables; exact immutable evidence links; guarded finalization, signing, receipt, deposit-invoice, and sold-job operations; and additive proposal/document/signature/acceptance/job/invoice columns. It does not backfill or mutate existing business records or Storage objects. Its SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`; the verified migration state at that release checkpoint was `51/51` in local, regression, and Production, and the later AI/automation rollout advanced all three to exact `66/66`.
 
 ## Operational Activation Still Required
 
