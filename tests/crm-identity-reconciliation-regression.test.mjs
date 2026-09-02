@@ -99,6 +99,11 @@ for (const [needle, message] of [
   ["Verify created customer", "Reviewed creation is read back by exact ID"],
   ["providerOrFinancialEffects: 0", "Provider and financial tables remain unchanged"],
   ["blockedExternalRequests === 0", "Provider network side effects remain zero"],
+  ["createBrowserCompatibleRegressionRunId", "Cleanup uses the approved 17-digit Browser run envelope"],
+  ['const sourceMarker = `TEST WTOS REGRESSION ${runId}`', "The exact cleanup source marker is canonical"],
+  ['const marker = `${sourceMarker} CRM RECONCILIATION`', "Readable CRM labels suffix the canonical source marker"],
+  ["cleanupSyntheticAutomationRegressionLedger", "Immutable automation evidence uses the protected shared cleanup"],
+  ["report.automationLedgerCleanup = automationCleanup", "The exact cleanup receipt is retained in the report"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
   ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
   ['deleteExactIds(client, "lead_accountability_events", eventIds)', "Immutable accountability events are deleted before current accountability state"],
@@ -122,6 +127,18 @@ check(
 check(
   source.includes('.delete().in("id", [...new Set(ids)])'),
   "Business cleanup deletes only captured exact ID sets",
+);
+const automationCleanupIndex = source.lastIndexOf(
+  "automationCleanup = await cleanupSyntheticAutomationRegressionLedger({",
+);
+const firstBusinessDeleteIndex = source.lastIndexOf(
+  "await deleteExactIds(service, AUDIT_TABLE, ids.crm_identity_reconciliation_events)",
+);
+check(
+  automationCleanupIndex >= 0 &&
+    firstBusinessDeleteIndex >= 0 &&
+    automationCleanupIndex < firstBusinessDeleteIndex,
+  "Automation cleanup is awaited before the first reconciliation or business-row deletion",
 );
 check(
   source.indexOf('deleteExactIds(client, "lead_accountability_events", eventIds)') <
@@ -160,8 +177,9 @@ if (process.env[CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN] === "true") {
   assert.equal(report.auditImmutableForAuthenticatedUsers, true);
   assert.equal(report.providerOrFinancialEffects, 0);
   assert.equal(report.providerNetworkRequests, 0);
+  assert.equal(report.automationLedgerCleanup?.databaseResidueCount, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 28;
+  assertionCount += 29;
   console.log("CRM identity reconciliation hosted regression execution: PASS");
 } else {
   console.log(

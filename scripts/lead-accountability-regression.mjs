@@ -15,11 +15,14 @@ import {
   runRegressionEnvironmentCommand,
   validateRegressionEnvironment,
 } from "./regression-environment.mjs";
+import {
+  cleanupSyntheticAutomationRegressionLedger,
+  createBrowserCompatibleRegressionRunId,
+} from "./synthetic-automation-regression-cleanup.mjs";
 
 export const LEAD_ACCOUNTABILITY_REGRESSION_RUN =
   "WTOS_LEAD_ACCOUNTABILITY_REGRESSION_RUN";
 
-const MARKER_PREFIX = "TEST WTOS LEAD ACCOUNTABILITY REGRESSION:";
 const NETWORK_TIMEOUT_MS = 20_000;
 
 function requireCondition(condition, message) {
@@ -210,14 +213,14 @@ async function readSyntheticProposalCleanupGraph(service, proposalRevisionId) {
       requireRows(
         service
           .from("invoices")
-          .select("id")
+          .select("id,title")
           .eq("proposal_revision_id", proposalRevisionId),
         "Discover exact synthetic proposal invoices",
       ),
       requireRows(
         service
           .from("jobs")
-          .select("id")
+          .select("id,title")
           .eq("proposal_revision_id", proposalRevisionId),
         "Discover exact synthetic proposal jobs",
       ),
@@ -228,14 +231,14 @@ async function readSyntheticProposalCleanupGraph(service, proposalRevisionId) {
   const [deliveryEmails, metadataEmails] = await Promise.all([
     deliveryEmailIds.length
       ? requireRows(
-          service.from("email_messages").select("id").in("id", deliveryEmailIds),
+          service.from("email_messages").select("id,subject").in("id", deliveryEmailIds),
           "Discover exact synthetic proposal delivery emails",
         )
       : [],
     requireRows(
       service
         .from("email_messages")
-        .select("id")
+        .select("id,subject")
         .contains("metadata", {
           draftType: "proposal_signature_request",
           proposalRevisionId,
@@ -257,6 +260,26 @@ async function readSyntheticProposalCleanupGraph(service, proposalRevisionId) {
       ).values(),
     ],
   };
+}
+
+function proposalAutomationSourceCandidates(pendingProposalGraphs) {
+  return pendingProposalGraphs.flatMap(({ graph }) => [
+    ...graph.jobs.map((row) => ({
+      sourceTable: "jobs",
+      sourceId: row.id,
+      title: row.title,
+    })),
+    ...graph.invoices.map((row) => ({
+      sourceTable: "invoices",
+      sourceId: row.id,
+      title: row.title,
+    })),
+    ...graph.emails.map((row) => ({
+      sourceTable: "email_messages",
+      sourceId: row.id,
+      subject: row.subject,
+    })),
+  ]);
 }
 
 async function removeSyntheticProposalDocumentObjects(
@@ -293,8 +316,9 @@ async function removeSyntheticProposalDocumentObjects(
 async function cleanupSyntheticProposalRevision({
   service,
   ownerUserId,
-  marker,
+  proposalMarker,
   proposalRevisionId,
+  proposalGraph,
 }) {
   const revisions = await requireRows(
     service
@@ -310,10 +334,11 @@ async function cleanupSyntheticProposalRevision({
   if (!revisions.length) return;
 
   const companyId = revisions[0].company_id;
-  const graph = await readSyntheticProposalCleanupGraph(
-    service,
-    proposalRevisionId,
+  requireCondition(
+    proposalGraph && typeof proposalGraph === "object",
+    "Synthetic proposal cleanup requires the pre-automation exact graph snapshot.",
   );
+  const graph = proposalGraph;
   await removeSyntheticProposalDocumentObjects(
     service,
     companyId,
@@ -327,7 +352,7 @@ async function cleanupSyntheticProposalRevision({
       operationKey: randomUUID(),
       regressionOwnerUserId: ownerUserId,
       companyId,
-      marker,
+      marker: proposalMarker,
       proposalRevisionId,
       acceptanceIds: graph.acceptances.map((row) => row.id).sort(),
       signingRequestIds: graph.requests.map((row) => row.id).sort(),
@@ -581,8 +606,10 @@ export async function runLeadAccountabilityRegression({
     guardedFetch,
   );
   const ownerRace = ownerRaceSession.client;
-  const runId = randomUUID();
-  const marker = `${MARKER_PREFIX}${runId}`;
+  const runId = createBrowserCompatibleRegressionRunId();
+  const sourceMarker = `TEST WTOS REGRESSION ${runId}`;
+  const marker = `${sourceMarker} LEAD ACCOUNTABILITY`;
+  const proposalMarker = `TEST WTOS LEAD ACCOUNTABILITY REGRESSION:${randomUUID()}`;
   const safeKey = `accountability_${runId.replaceAll("-", "_")}`;
   const ids = {
     customers: [],
@@ -606,6 +633,7 @@ export async function runLeadAccountabilityRegression({
   let report = null;
   let primaryError = null;
   let cleanupError = null;
+  let automationCleanup = null;
 
   try {
     const companies = await requireRows(
@@ -1387,14 +1415,14 @@ export async function runLeadAccountabilityRegression({
         template_id: null,
         proposal_number: `WTOS-${runId}`,
         revision_number: 1,
-        title: `${marker} NAN PROPOSAL`,
+        title: `${proposalMarker} NAN PROPOSAL`,
         status: "sent",
         brand_name: "WeatherTech Roofing LLC",
         base_total: 12002,
         accepted_total: 12002,
         sent_at: new Date().toISOString(),
         immutable_after_at: new Date().toISOString(),
-        source_snapshot: { test_marker: marker },
+        source_snapshot: { test_marker: proposalMarker },
       }).select("id"),
       "Create NaN proposal-acceptance revision fixture",
     );
@@ -1444,7 +1472,7 @@ export async function runLeadAccountabilityRegression({
       terms_accepted: true,
       acceptance_method: "internal_recorded",
       signature_status: "not_configured",
-      audit_metadata: { test_marker: marker },
+      audit_metadata: { test_marker: proposalMarker },
     };
     for (const [label, overrides] of [
       [
@@ -1531,7 +1559,7 @@ export async function runLeadAccountabilityRegression({
         terms_accepted: true,
         acceptance_method: "internal_recorded",
         signature_status: "not_configured",
-        audit_metadata: { test_marker: marker },
+        audit_metadata: { test_marker: proposalMarker },
       });
     requireCondition(
       nanAcceptanceError &&
@@ -1604,14 +1632,14 @@ export async function runLeadAccountabilityRegression({
           template_id: null,
           proposal_number: `WTOS-VALID-${runId}`,
           revision_number: 1,
-          title: `${marker} VALID ACCEPTED PROPOSAL`,
+          title: `${proposalMarker} VALID ACCEPTED PROPOSAL`,
           status: "sent",
           brand_name: "WeatherTech Roofing LLC",
           base_total: 12000,
           accepted_total: 12000,
           sent_at: new Date().toISOString(),
           immutable_after_at: new Date().toISOString(),
-          source_snapshot: { test_marker: marker },
+          source_snapshot: { test_marker: proposalMarker },
         })
         .select("id"),
       "Create valid accepted-proposal revision fixture",
@@ -1634,7 +1662,7 @@ export async function runLeadAccountabilityRegression({
           terms_accepted: true,
           acceptance_method: "internal_recorded",
           signature_status: "not_configured",
-          audit_metadata: { test_marker: marker },
+          audit_metadata: { test_marker: proposalMarker },
         })
         .select("id"),
       "Create valid company-scoped accepted proposal",
@@ -1745,7 +1773,6 @@ export async function runLeadAccountabilityRegression({
       priority: "normal",
       next_follow_up: "2026-08-25",
       notes: marker,
-      received_at: "2026-08-11T16:00:00.000Z",
     };
     const repeat = await callRpc(sales, "wtos_create_repeat_opportunity", "opportunity_request", repeatRequest);
     ids.leads.push(repeat.lead_id);
@@ -1769,6 +1796,32 @@ export async function runLeadAccountabilityRegression({
         repeatLeadBeforeConflict?.property_id === propertyId &&
         repeatAccountability.company_id === weatherTech.id,
       "Same-company repeat opportunity did not converge with canonical repeat source/detail/provider and reviewed links.",
+    );
+    const dashboardRepeatOperationKey = randomUUID();
+    const dashboardRepeatReceivedAt = "2026-08-11T16:00:00.000Z";
+    const dashboardRepeat = await callRpc(
+      service,
+      "wtos_create_repeat_opportunity",
+      "opportunity_request",
+      {
+        ...repeatRequest,
+        operation_key: dashboardRepeatOperationKey,
+        received_at: dashboardRepeatReceivedAt,
+      },
+    );
+    ids.leads.push(dashboardRepeat.lead_id);
+    ids.lead_accountability.push(dashboardRepeat.accountability_id);
+    const dashboardRepeatAccountability = await readAccountability(
+      service,
+      dashboardRepeat.lead_id,
+      "Read dashboard-only repeat accountability timestamp",
+    );
+    const dashboardRepeatReceivedAtMs = Date.parse(dashboardRepeatReceivedAt);
+    requireCondition(
+      dashboardRepeat.lead_id !== repeat.lead_id &&
+        new Date(dashboardRepeatAccountability.received_at).getTime() ===
+          dashboardRepeatReceivedAtMs,
+      "Dashboard-only repeat opportunity did not retain its exact service-authored August timestamp.",
     );
     const advancedCustomerAt = new Date(
       new Date(repeatCustomer.updated_at).getTime() + 1_000,
@@ -2222,6 +2275,21 @@ export async function runLeadAccountabilityRegression({
     requireCondition(
       metrics.untracked_legacy_lead_count === 0,
       "Isolated accountable cohort unexpectedly included an untracked legacy lead in KPI state.",
+    );
+
+    const augustRepeatDashboard = await callRpc(
+      owner,
+      "wtos_get_marketing_accountability_dashboard",
+      "report_request",
+      {
+        company_id: weatherTech.id,
+        month: "2026-08-01",
+        source_key: "repeat_customer",
+      },
+    );
+    requireCondition(
+      augustRepeatDashboard.metrics.lead_count === 1,
+      `Dashboard expected exactly one August repeat opportunity, got ${augustRepeatDashboard.metrics.lead_count}.`,
     );
 
     const googleDashboard = await callRpc(
@@ -2795,6 +2863,25 @@ export async function runLeadAccountabilityRegression({
   } finally {
     if (cleanupAuthorized) {
       try {
+        const pendingProposalGraphs = await Promise.all(
+          [...new Set(ids.estimate_proposal_revisions.filter(Boolean))].map(
+            async (proposalRevisionId) => ({
+              proposalRevisionId,
+              graph: await readSyntheticProposalCleanupGraph(
+                service,
+                proposalRevisionId,
+              ),
+            }),
+          ),
+        );
+        automationCleanup = await cleanupSyntheticAutomationRegressionLedger({
+          service,
+          ownerEmail: loaded.config.ownerEmail,
+          runId,
+          sourceMarker,
+          additionalSourceCandidates:
+            proposalAutomationSourceCandidates(pendingProposalGraphs),
+        });
         const markedLeads = await requireRows(
           service.from("leads").select("id").like("contact_name", `${marker}%`),
           "Discover marked accountability leads",
@@ -2854,14 +2941,13 @@ export async function runLeadAccountabilityRegression({
           );
         }
 
-        for (const proposalRevisionId of [
-          ...new Set(ids.estimate_proposal_revisions.filter(Boolean)),
-        ]) {
+        for (const { proposalRevisionId, graph } of pendingProposalGraphs) {
           await cleanupSyntheticProposalRevision({
             service,
             ownerUserId,
-            marker,
+            proposalMarker,
             proposalRevisionId,
+            proposalGraph: graph,
           });
         }
         await deleteExactIds(service, "inspections", ids.inspections);
@@ -2901,7 +2987,10 @@ export async function runLeadAccountabilityRegression({
           fetchImpl: guardedFetch,
         });
         requireCondition(finalVerification.residueCount === 0, "Final lead accountability zero-residue verification failed.");
-        if (report) report.cleanupResidue = 0;
+        if (report) {
+          report.automationLedgerCleanup = automationCleanup;
+          report.cleanupResidue = 0;
+        }
       } catch (error) {
         cleanupError = error;
       }
