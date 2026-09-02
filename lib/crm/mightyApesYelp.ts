@@ -55,8 +55,7 @@ export type MightyApesYelpFailureCode =
   | "malformed_json"
   | "invalid_payload"
   | "unsupported_version"
-  | "unsupported_event"
-  | "unsupported_campaign";
+  | "unsupported_event";
 
 export type MightyApesYelpFailure = {
   ok: false;
@@ -80,11 +79,12 @@ export type MightyApesYelpPayloadResult =
   | MightyApesYelpFailure;
 
 export const mightyApesYelpWebhookEndpointPath =
+  "/api/integrations/mighty-apes/webhook";
+export const mightyApesYelpLegacyWebhookEndpointPath =
   "/api/integrations/mighty-apes/yelp/webhook";
 export const mightyApesYelpWebhookSecretEnvVar =
   "MIGHTY_APES_YELP_WEBHOOK_SECRET";
 export const mightyApesYelpWebhookUserAgent = "MightyApes-Webhook/1";
-export const mightyApesYelpCampaignId = "00LZA1SuPKX0yUnsdthgLg";
 export const mightyApesYelpReplayWindowSeconds = 300;
 export const mightyApesYelpMaxPayloadBytes = 32_000;
 export const mightyApesYelpMaxMessageBytes = 28_000;
@@ -453,14 +453,6 @@ export function parseMightyApesYelpPayload(
 
   if (!campaignId || !campaignName) {
     return failure(400, "invalid_payload", "Request payload is invalid.");
-  }
-
-  if (campaignId !== mightyApesYelpCampaignId) {
-    return failure(
-      422,
-      "unsupported_campaign",
-      "Mighty Apes campaign is not authorized.",
-    );
   }
 
   if (

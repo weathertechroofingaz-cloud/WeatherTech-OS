@@ -12,6 +12,7 @@ import type {
   Database,
   MightyApesYelpIngestResult,
 } from "../../../../../../lib/crm/types";
+import { readBoundedTextBody } from "../../../../../../lib/http/boundedJson";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -194,20 +195,28 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let rawBody: Uint8Array;
+  const rawBodyResult = await readBoundedTextBody(
+    request,
+    mightyApesYelpMaxPayloadBytes,
+  );
 
-  try {
-    rawBody = new Uint8Array(await request.arrayBuffer());
-  } catch {
+  if (!rawBodyResult.ok) {
     return jsonResponse(
       {
         ok: false,
-        code: "invalid_body",
-        message: "Request body could not be read.",
+        code:
+          rawBodyResult.reason === "too_large"
+            ? "payload_too_large"
+            : "invalid_body",
+        message:
+          rawBodyResult.reason === "too_large"
+            ? "Request body is too large."
+            : "Request body could not be read.",
       },
-      400,
+      rawBodyResult.reason === "too_large" ? 413 : 400,
     );
   }
+  const rawBody = rawBodyResult.value;
 
   const verification = verifyMightyApesYelpRequest({
     rawBody,
@@ -252,6 +261,17 @@ export async function POST(request: NextRequest) {
     );
 
     if (error) {
+      if (error.code === "42501") {
+        return jsonResponse(
+          {
+            ok: false,
+            code: "campaign_not_authorized",
+            message: "Mighty Apes campaign is not authorized for ingestion.",
+          },
+          403,
+        );
+      }
+
       if (
         error.code === "23505" &&
         error.message.includes("MIGHTY_APES_YELP_DELIVERY_CONFLICT")

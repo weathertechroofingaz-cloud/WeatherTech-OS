@@ -1,20 +1,26 @@
-# AI Tools 2.1 - Live Provider Pilot
+# AI Command Center 3.0 - Live Provider and Reviewed Actions
 
 ## Purpose
 
-AI Tools 2.1 extends the existing AI Tools workspace into a controlled live-provider pilot for WeatherTech Roofing LLC and IHC Painting. It keeps the AI workspace, Scope Writer, Estimate Assistant, Proposal Review, Inspection, Sales, Operations, Financial, Communications, Weather, Marketing, and Document assistant surfaces in one place.
+AI Command Center 3.0 extends the existing AI Tools workspace with a controlled live-provider adapter and reviewed-action boundary for WeatherTech Roofing LLC and IHC Painting. It keeps the AI workspace, Scope Writer, Estimate Assistant, Proposal Review, Inspection, Sales, Operations, Financial, Communications, Weather, Marketing, and Document assistant surfaces in one place.
 
 ## Current-State Note
 
-AI Command Center 3.0 is already implemented on top of this pilot foundation in commit `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`. Future sessions must not propose rebuilding it as a new sprint. Live model-provider credentials, production activation, or executable actions remain separate owner-controlled decisions.
+AI Command Center 3.0 was implemented on top of this provider foundation in commit `8f6fda8f12ce7808bb9b3c4669cc8f0d120656b6`. Future sessions must not propose rebuilding it as a new sprint. The centralized automation foundation adds a narrow reviewed path for safe internal follow-up tasks; it does not authorize customer-facing or arbitrary CRM/provider actions.
 
-The pilot is designed for grounded internal assistance only. It prepares server-side OpenAI or Anthropic connectivity, structured answers, cost controls, context retrieval, prompt-safety checks, and approval-gated action previews without enabling production AI automation.
+The command center is designed for grounded internal assistance. It uses server-side OpenAI or Anthropic connectivity, structured answers, cost controls, context retrieval, prompt-safety checks, durable per-preview audit references, and approval-gated actions without authorizing customer-facing or arbitrary provider automation.
 
 ## Current Production State
 
-- Live provider execution is disabled unless owner-controlled server environment variables are configured.
-- External writes remain blocked.
-- Action execution remains disabled in code and configuration.
+- Production remains at the historical `51/51` migration ledger. The AI/automation release set is `65/65` in the repository and on the isolated regression target and is pending Production rollout.
+- Provider/model credentials and bounded global controls are present server-side, but Production contains zero `ai_usage_limits` rows. The new runtime therefore cannot authorize an exact-company provider call until one policy row exists for that company.
+- The two conservative provider price-ceiling variables are not yet configured in Production. Their values must come from the authoritative price for the exact selected model; they must not be guessed.
+- No paid Production provider smoke test has been run or authorized by this release.
+- External writes and customer-facing sends remain blocked.
+- `AI_ACTION_EXECUTION_ENABLED` remains false; it is not the authorization mechanism for the safe internal path.
+- Every returned action preview must have its own durable audit reference before it reaches the browser.
+- Only an exact-company, authorized review of `create_follow_up_draft` may create one internal office task through the centralized automation engine.
+- `draft_email` remains preview/reject-only until exact recipient, subject, and body are included in a server-side fingerprinted action contract; it never creates or sends a message through AI review.
 - Customer communications are not sent.
 - Estimates, proposal changes, invoices, schedules, payments, migrations, provider settings, and deployments are not changed automatically.
 - AI output is labeled as verified facts, calculated findings, recommendations, assumptions, missing data, proposed actions, and required approval.
@@ -35,7 +41,13 @@ The provider layer supports:
 - Action-preview generation with confirmation requirements.
 - Provider health, timeout, retry, usage, and cost metadata.
 
-The endpoint [route.ts](../app/api/ai-tools/command/route.ts) accepts authenticated AI command requests and returns the provider-neutral command result. It never returns secrets and does not execute action previews.
+The command endpoint [route.ts](../app/api/ai-tools/command/route.ts) accepts authenticated AI command requests, verifies exact-company membership before a provider call, durably records the request and each returned action preview, and returns the provider-neutral command result without secrets.
+
+Before any provider request, the route requires exactly one enabled `ai_usage_limits` row for the selected company, with an allowed provider/model and complete positive request, token, timeout, retry, and monthly-budget controls. Missing, duplicate, disabled, or incomplete policy state fails closed before a paid call.
+
+The service-role-only quota RPC reserves the request atomically before provider access. It counts global, company, and user requests; reserves a conservative retry-inclusive cost using the configured input/output ceilings and maximum response allowance; enforces both the global daily and company monthly budgets; and replays the same request ID idempotently.
+
+The review endpoint [route.ts](../app/api/ai-tools/actions/review/route.ts) reloads the stored proposal, rechecks company authorization and target identity, verifies the stored payload fingerprint and contract version, and submits a bounded approve or reject decision. It does not trust action data supplied again by the browser.
 
 The UI remains in the existing AI Tools view in [CrmApp.tsx](../components/CrmApp.tsx). No second AI command center or duplicate AI navigation item exists.
 
@@ -72,25 +84,29 @@ Required controls:
 - `AI_PER_COMPANY_DAILY_REQUEST_LIMIT`
 - `AI_MAX_REQUEST_TOKENS`
 - `AI_MAX_RESPONSE_TOKENS`
+- `AI_MAX_INPUT_COST_USD_PER_1K_TOKENS`
+- `AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS`
 - `AI_TIMEOUT_MS`
 - `AI_RETRY_LIMIT`
 - `AI_STREAMING_ENABLED`
 - `AI_STRUCTURED_OUTPUT_ENABLED`
 - `AI_ACTION_EXECUTION_ENABLED`
 
-`AI_ACTION_EXECUTION_ENABLED` must remain `false` until a future owner-approved automation sprint defines specific executable tools, permissions, audit rules, and rollback behavior.
+`AI_ACTION_EXECUTION_ENABLED` remains `false`. Customer communications, arbitrary CRM mutation, provider writes, financial actions, and scheduling changes are not part of the internal action registry. Safe internal follow-up-task approval is authorized through the stored audit contract and the centralized automation engine instead of this global flag.
+
+Production rollout also requires exactly one `ai_usage_limits` row for each company. Rows may be seeded disabled without a billing decision. Enabling WeatherTech or IHC and assigning its positive monthly budget are separate owner decisions; one company must not inherit the other's approval or limit.
 
 ## Context Retrieval
 
-AI Tools 2.1 retrieves only authorized internal context from the existing CRM snapshot. Context is ranked and limited before provider prompts are built.
+AI Command Center 3.0 retrieves only authorized internal context from the existing CRM snapshot. Context is ranked and limited before provider prompts are built.
 
 Supported context includes customers, leads, Customer 360 activity, inspections, estimates, proposals, jobs, schedules, communications, invoices, payments, documents, photo metadata, integration logs, and readiness blockers.
 
 Retrieved content is treated as untrusted data. Emails, website submissions, Yelp messages, customer notes, documents, photo captions, and provider payloads cannot override system rules, permissions, company isolation, approval gates, or secret handling.
 
-## Action Previews
+## Reviewed Actions
 
-AI Tools may propose action previews such as:
+AI Command Center 3.0 may propose action previews such as:
 
 - Save scope draft.
 - Save estimate draft.
@@ -105,35 +121,41 @@ AI Tools may propose action previews such as:
 - Prepare customer summary.
 - Prepare job summary.
 
-Every preview displays the action type, target record, company, reason, fields affected, before/after preview, required permission, confirmation requirement, provider dependency, audit reference, and preview-only status.
+Every preview displays the action type, target record, company, reason, fields affected, before/after preview, required permission, confirmation requirement, provider dependency, and its own durable audit reference.
 
-Approving a preview in AI Tools 2.1 marks the preview as reviewed only. It does not execute a workflow action.
+- Rejecting any stored preview records a durable rejection and creates no action.
+- Approving `create_follow_up_draft` creates or replays exactly one company-bound internal office task through the automation engine.
+- `draft_email` can be prepared and rejected, but cannot be approved or persisted through AI review until the exact draft is fingerprinted and created server-side.
+- Other preview types cannot be approved for execution. They remain recommendations or drafts until a separately owner-approved action contract exists.
+- Repeated review requests are idempotent and return the existing decision/execution receipt; conflicting decisions fail closed.
 
 ## Saved Work And Audit Logging
 
-Migration [0033_ai_tools_operating_brain.sql](../supabase/migrations/0033_ai_tools_operating_brain.sql) adds persistence for saved analyses, audit events, and usage limits. AI Tools 2.1 can write safe audit metadata only when the migration is available in the environment.
+Migration [0033_ai_tools_operating_brain.sql](../supabase/migrations/0033_ai_tools_operating_brain.sql) adds persistence for saved analyses, audit events, and usage limits. Migration [20260902024804_automation_engine_foundation.sql](../supabase/migrations/20260902024804_automation_engine_foundation.sql) adds the fingerprint/review contract and the safe internal execution path.
 
-Codex did not apply migration 0033 remotely during this sprint.
-
-Future migration verification steps:
+Migration verification steps:
 
 ```bash
 npx supabase migration list --linked
 npx supabase db push --linked
 ```
 
-Only run the commands above after verifying the linked project, owner approval, migration history, and rollback plan.
+Only run the commands above after verifying the linked project, migration history, and rollback plan. Never use a Production project as the ordinary write-capable regression target.
 
 ## Controlled Pilot Procedure
 
-1. Verify migration 0033 is applied to the intended Supabase project.
+1. Verify migration 0033 and the exact current release migration set are applied to the intended Supabase project; Production currently has 0033 but not `20260902024804`.
 2. Configure server-only provider credentials in the approved hosting environment.
-3. Set strict daily budget, request, per-user, per-company, token, timeout, and retry limits.
+3. Configure authoritative input/output price ceilings and exactly one explicit policy row per company. Keep unapproved company rows disabled and require an owner-approved positive monthly budget before enabling either company.
 4. Keep `AI_ACTION_EXECUTION_ENABLED=false`.
-5. Use test prompts from the AI Tools workspace.
-6. Confirm source records, missing data, assumptions, provider health, usage, and action previews are visible.
-7. Confirm no customer communication, financial action, schedule change, migration, deployment, or provider write occurs.
-8. Review audit events and usage metadata.
+5. Use grounded commands for one selected, authorized company in the AI workspace.
+6. Confirm source records, missing data, assumptions, provider health, usage, and per-preview audit references are visible.
+7. Approve one synthetic internal follow-up in the isolated regression environment and prove exactly one office task plus an idempotent review receipt.
+8. Reject a separate preview and prove it creates no execution.
+9. Confirm no customer communication, financial action, schedule change, deployment, or provider write occurs.
+10. Review AI audit, automation execution, attempt, and approval history.
+
+Steps 5-10 describe isolated regression and a separately authorized controlled pilot. They do not authorize a paid Production smoke test.
 
 ## Rollback
 
@@ -143,25 +165,27 @@ To disable the pilot:
 2. Remove server-side provider API keys from the runtime environment.
 3. Keep `AI_ACTION_EXECUTION_ENABLED=false`.
 4. Restart the application runtime.
-5. Confirm AI Tools returns provider-disabled or provider-not-configured readiness.
+5. Disable the reviewed internal follow-up rule in the Automation Control Center if internal AI task execution must also pause.
+6. Confirm the command center returns provider-disabled or provider-not-configured readiness and that queued safe work follows the rule's disabled/cancellation policy.
 
 No database rollback is required to disable live provider calls.
 
 ## Validation
 
-AI Tools 2.1 is covered by:
+AI Command Center 3.0 is covered by:
 
 - [ai-tools-live-provider.test.mjs](../tests/ai-tools-live-provider.test.mjs)
+- [ai-action-review-boundary.test.mjs](../tests/ai-action-review-boundary.test.mjs)
 - [ai-tools-operating-brain.test.mjs](../tests/ai-tools-operating-brain.test.mjs)
 - [supabase-migration-integrity.test.mjs](../tests/supabase-migration-integrity.test.mjs)
 - The `ai-tools` group in [weathertech-os-regression.mjs](../tests/codex-browser/weathertech-os-regression.mjs)
 
-Regression must continue to prove provider-disabled honesty, mocked OpenAI and Anthropic adapter behavior, company isolation, prompt-injection blocking, usage-limit blocking, action-preview approval gates, no fake AI output, and no live provider activation during normal validation.
+Regression must continue to prove provider-disabled honesty, mocked OpenAI and Anthropic adapter behavior, company isolation before provider access, prompt-injection blocking, usage-limit blocking, durable per-preview audit references, exact target/fingerprint review, idempotent safe internal action receipts, no fake AI output, and no customer/provider activation during normal validation.
 
 ## Known Limitations
 
-- Real provider calls require owner-controlled credentials and explicit runtime configuration.
-- Migration 0033 must be applied before durable saved work and audit logging are fully available.
+- Real provider calls require owner-controlled credentials, authoritative price ceilings, and explicit per-company policy/budget approval.
+- Production already contains migration 0033. The reviewed-action and automation additions in `20260902024804` remain pending Production rollout; do not describe them as deployed until the linked ledger and exact deployment prove it.
 - Streaming is represented in provider readiness and configuration, but the current UI consumes complete responses.
-- Action previews are review-only. Executable AI tools require a future approved sprint.
+- Only the reviewed internal follow-up task is executable. Draft email remains internal-draft-only, and every customer/provider action requires a future explicit owner-approved contract.
 - Image analysis is not active; photo-related statements must remain metadata-based unless a future approved vision provider is configured.

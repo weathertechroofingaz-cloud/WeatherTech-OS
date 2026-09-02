@@ -75,6 +75,9 @@ for (const [needle, message] of [
   ["TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED = \"false\"", "Tucson voice stays disabled during SMS regression"],
   ["unmapped route", "An unknown ingress remains fail-closed"],
   ["providerNetworkRequests: 0", "The report requires zero provider network requests"],
+  ["createBrowserCompatibleRegressionRunId", "Cleanup uses the guarded RPC's exact 17-digit marker family"],
+  ["cleanupTwilioSyntheticAutomationLedger", "Immutable automation cleanup uses the guarded database RPC"],
+  ["const sourceMarker = `TEST WTOS REGRESSION ${runId}`", "The exact generic cleanup marker is separate from the Inbound label"],
   ["deleteExactIds", "Cleanup uses captured exact IDs"],
   ["deleteLeadAccountabilityForExactLeadIds", "Cleanup discovers accountability rows only through exact synthetic lead IDs"],
   ['deleteExactIds(client, "lead_accountability_events", eventIds)', "Immutable accountability events are deleted before current accountability state"],
@@ -115,6 +118,11 @@ check(
   "Cleanup deletes only captured exact ID sets",
 );
 check(
+  source.lastIndexOf("cleanupTwilioSyntheticAutomationLedger({") <
+    source.lastIndexOf('deleteExactIds(\n          client,\n          "communication_provider_events"'),
+  "Guarded automation cleanup runs before any ordinary inbound source deletion",
+);
+check(
   source.indexOf('deleteExactIds(client, "lead_accountability_events", eventIds)') <
     source.indexOf('deleteExactIds(client, "lead_accountability", accountabilityIds)') &&
     source.indexOf("deleteLeadAccountabilityForExactLeadIds(") <
@@ -148,8 +156,10 @@ if (process.env[TWILIO_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.evidenceProofVerified, true);
   assert.equal(report.outboundMessages, 0);
   assert.equal(report.providerNetworkRequests, 0);
+  assert.equal(report.automationCleanup?.invoked, true);
+  assert.equal(report.automationCleanup?.databaseResidueCount, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 21;
+  assertionCount += 23;
   console.log("Twilio inbound hosted regression execution: PASS");
 } else {
   console.log(

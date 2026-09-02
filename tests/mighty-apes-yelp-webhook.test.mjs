@@ -11,6 +11,10 @@ const routePath = join(
   cwd,
   "app/api/integrations/mighty-apes/yelp/webhook/route.ts",
 );
+const aliasRoutePath = join(
+  cwd,
+  "app/api/integrations/mighty-apes/webhook/route.ts",
+);
 const typesPath = join(cwd, "lib/crm/types.ts");
 let assertionCount = 0;
 
@@ -103,8 +107,15 @@ try {
 
   assertEqual(
     helpers.mightyApesYelpWebhookEndpointPath,
-    "/api/integrations/mighty-apes/yelp/webhook",
+    "/api/integrations/mighty-apes/webhook",
     "The public endpoint path is stable",
+  );
+  const aliasRouteSource = readFileSync(aliasRoutePath, "utf8");
+  assert(
+    aliasRouteSource.includes('export const dynamic = "force-dynamic"') &&
+      aliasRouteSource.includes('export const runtime = "nodejs"') &&
+      aliasRouteSource.includes('export { GET, POST } from "../yelp/webhook/route"'),
+    "The owner-approved Mighty Apes endpoint must use statically analyzable route config and reuse the exact verified handlers",
   );
   assertEqual(
     helpers.mightyApesYelpWebhookSecretEnvVar,
@@ -439,11 +450,18 @@ try {
 
   const unsupportedCampaign = structuredClone(fixture);
   unsupportedCampaign.campaign.yelp_id = "another-campaign";
-  assertFailure(
-    helpers.parseMightyApesYelpPayload(JSON.stringify(unsupportedCampaign)),
-    "unsupported_campaign",
-    422,
-    "Unauthorized campaign ID",
+  const parsedUnknownCampaign = helpers.parseMightyApesYelpPayload(
+    JSON.stringify(unsupportedCampaign),
+  );
+  assertEqual(
+    parsedUnknownCampaign.ok,
+    true,
+    "Syntactically valid campaign IDs reach the database authorization registry",
+  );
+  assertEqual(
+    parsedUnknownCampaign.payload.campaign.yelp_id,
+    unsupportedCampaign.campaign.yelp_id,
+    "The parser preserves an unknown campaign ID for fail-closed registry authorization",
   );
 
   const payloadWithEmail = structuredClone(fixture);
@@ -547,11 +565,11 @@ try {
   );
   assert(
     routeSource.indexOf("hasJsonContentType(request)") <
-      routeSource.indexOf("request.arrayBuffer()"),
+    routeSource.indexOf("readBoundedTextBody("),
     "Content-Type is validated before the body is read",
   );
   assert(
-    routeSource.indexOf("request.arrayBuffer()") <
+    routeSource.indexOf("readBoundedTextBody(") <
       routeSource.indexOf("parseMightyApesYelpPayload(rawBody)"),
     "The raw body is read and authenticated before JSON parsing",
   );
@@ -572,6 +590,12 @@ try {
   assert(
     routeSource.includes('"wtos_ingest_mighty_apes_yelp"'),
     "The route uses the transaction-safe service-role RPC",
+  );
+  assert(
+    routeSource.includes('error.code === "42501"') &&
+      routeSource.includes('code: "campaign_not_authorized"') &&
+      routeSource.includes("403"),
+    "Unknown or disabled campaigns fail closed at the authoritative database registry",
   );
   assert(
     routeSource.includes("SUPABASE_SERVICE_ROLE_KEY") &&

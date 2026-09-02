@@ -72,6 +72,7 @@ export function scopeCrmSnapshotByCompany(
 
   return {
     companies,
+    companyLocations: byCompany(snapshot.companyLocations ?? [], companyId),
     properties,
     leads,
     marketingCampaigns: byCompany(snapshot.marketingCampaigns, companyId),
@@ -149,6 +150,14 @@ export function scopeCrmSnapshotByCompany(
     notifications: byCompany(snapshot.notifications, companyId),
     integrationConnections: byCompany(snapshot.integrationConnections, companyId),
     integrationSyncLogs: byCompany(snapshot.integrationSyncLogs, companyId),
+    automationRules: byCompany(snapshot.automationRules ?? [], companyId),
+    automationEvents: byCompany(snapshot.automationEvents ?? [], companyId),
+    automationExecutions: byCompany(snapshot.automationExecutions ?? [], companyId),
+    automationAttempts: byCompany(snapshot.automationAttempts ?? [], companyId),
+    automationAuditEvents: byCompany(
+      snapshot.automationAuditEvents ?? [],
+      companyId,
+    ),
     aiSavedAnalyses: byCompany(snapshot.aiSavedAnalyses, companyId),
     aiAuditEvents: byCompany(snapshot.aiAuditEvents, companyId),
     aiUsageLimits: byCompany(snapshot.aiUsageLimits, companyId),

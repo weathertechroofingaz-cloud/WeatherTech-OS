@@ -418,6 +418,104 @@ assert.match(
 );
 assert.match(
   source,
+  /function createBrowserRegressionRunId\(now = new Date\(\)\)[\s\S]*?\^\[0-9\]\{17\}\$[\s\S]*?return runId/,
+  "Job-photo lifecycle uses the canonical 17-digit Browser run identity required by guarded automation cleanup",
+);
+assert.match(
+  source,
+  /title: `TEST WTOS REGRESSION \$\{runId\} \$\{titleSuffix\}`/,
+  "Every lifecycle job source carries the exact canonical Browser marker",
+);
+const lifecycleJobInsertSource = source.slice(
+  source.indexOf('const weatherTechJob = await insertJob('),
+  source.indexOf('const storageMarker = `test-wtos-regression-${runId}`'),
+);
+assert.ok(
+  lifecycleJobInsertSource.indexOf('"WEATHERTECH PHOTO JOB"') <
+    lifecycleJobInsertSource.indexOf('"IHC PHOTO JOB"'),
+  "Lifecycle job inserts settle sequentially before any cleanup can begin",
+);
+assert.doesNotMatch(
+  lifecycleJobInsertSource,
+  /Promise\.all/,
+  "A rejected lifecycle insert cannot leave a sibling source request in flight past cleanup",
+);
+const lifecycleAutomationCleanupSource = source.slice(
+  source.indexOf("async function discoverJobPhotoLifecycleAutomationGraph"),
+  source.indexOf("async function jobPhotoStorageLifecycleProbe"),
+);
+for (const completeGraphBoundary of [
+  '"automation_events"',
+  '"causation_event_id"',
+  '"automation_executions"',
+  '"automation_attempts"',
+  '"automation_audit_events"',
+  '"office_tasks"',
+]) {
+  assert.match(
+    lifecycleAutomationCleanupSource,
+    new RegExp(completeGraphBoundary),
+    `Lifecycle cleanup discovers the complete source-qualified ${completeGraphBoundary} graph`,
+  );
+}
+assert.match(
+  lifecycleAutomationCleanupSource,
+  /assertOwnedRegressionUser\([\s\S]*?findRegressionOwner\(config, fetchImpl\)[\s\S]*?wtos_cleanup_synthetic_automation_fixture/,
+  "Lifecycle cleanup binds the existing guarded RPC to the exactly verified regression owner",
+);
+assert.match(
+  lifecycleAutomationCleanupSource,
+  /cleanupResult\?\.ok !== true[\s\S]*?cleanupResult\?\.status !== "cleaned"[\s\S]*?cleanupResult\?\.databaseResidueCount !== 0[\s\S]*?Object\.entries\(expectedCounts\)\.every/,
+  "Lifecycle cleanup accepts only an exact sanitized count receipt with database zero",
+);
+assert.match(
+  lifecycleAutomationCleanupSource,
+  /exactResidueCount !== 0[\s\S]*?did not reach exact graph zero/,
+  "Lifecycle cleanup independently proves every captured ledger ID is absent",
+);
+const jobPhotoLifecycleSource = source.slice(
+  source.indexOf("async function jobPhotoStorageLifecycleProbe"),
+  source.indexOf("async function lifecycleProbe"),
+);
+assert.ok(
+  jobPhotoLifecycleSource.indexOf(
+    "await cleanupJobPhotoLifecycleAutomationLedger",
+  ) < jobPhotoLifecycleSource.indexOf(
+    "await deleteExactJobPhotoLifecycleSources",
+  ),
+  "Lifecycle cleanup removes immutable automation evidence before deleting either source job",
+);
+assert.match(
+  jobPhotoLifecycleSource,
+  /if \(!automationLedgerCleanupVerified\)[\s\S]*?Refusing to delete job-photo lifecycle source jobs before exact automation-ledger cleanup succeeds/,
+  "A failed or inexact guarded cleanup preserves source jobs for bounded recovery",
+);
+assert.match(
+  source,
+  /const JOB_PHOTO_SOURCE_DELETE_MAX_ATTEMPTS = 3/,
+  "Lifecycle source deletion uses a fixed three-attempt bound",
+);
+const lifecycleSourceDeleteHelper = source.slice(
+  source.indexOf("async function deleteExactJobPhotoLifecycleSources"),
+  source.indexOf("async function jobPhotoStorageLifecycleProbe"),
+);
+assert.match(
+  lifecycleSourceDeleteHelper,
+  /\.from\("jobs"\)\.delete\(\)\.in\("id", exactSourceIds\)/,
+  "Lifecycle source deletion is limited to the two captured exact job IDs",
+);
+assert.match(
+  lifecycleSourceDeleteHelper,
+  /\.from\("jobs"\)\.select\("id"\)\.in\("id", exactSourceIds\)/,
+  "Every lifecycle source deletion attempt reads back only the same exact job IDs",
+);
+assert.match(
+  lifecycleSourceDeleteHelper,
+  /attempt <= JOB_PHOTO_SOURCE_DELETE_MAX_ATTEMPTS[\s\S]*?attempt \* 250[\s\S]*?did not reach zero after three attempts/,
+  "Lifecycle source deletion retries with bounded backoff and fails closed without exact zero",
+);
+assert.match(
+  source,
   /customerDocumentContract\(customerDocumentBucketBefore\)/,
   "Hosted lifecycle proves the customer-documents bucket contract is unchanged",
 );
@@ -484,6 +582,29 @@ assert.match(
   source,
   /"provider_lead_id",\s+"TEST WTOS MIGHTY APES REGRESSION:\*"/,
   "Mighty Apes provider-lead markers participate in zero-residue verification",
+);
+for (const automationProbe of [
+  'counts["automation_events.exact-source-or-orphan"]',
+  'counts["automation_executions.exact-source-or-orphan"]',
+  'counts["automation_attempts.exact-source-or-orphan"]',
+  'counts["automation_audit_events.dynamic"]',
+  'counts["office_tasks.automation_execution_id"]',
+]) {
+  assert.match(
+    source,
+    new RegExp(automationProbe.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    `Independent residue verification includes ${automationProbe}`,
+  );
+}
+assert.match(
+  source,
+  /"automation_audit_events",\s+"select=id&audit_type=neq\.rule_seeded"/,
+  "Rule-seed audit history remains while every dynamic automation audit is release-blocking residue",
+);
+assert.match(
+  source,
+  /"office_tasks",\s+"select=id&automation_execution_id=not\.is\.null"/,
+  "Automation-created office-task linkage cannot survive an isolated regression run",
 );
 assert.doesNotMatch(source, /readFile(?:Sync)?\s*\(/);
 const cleanupSource = source.slice(source.indexOf("async function cleanupOwner"));

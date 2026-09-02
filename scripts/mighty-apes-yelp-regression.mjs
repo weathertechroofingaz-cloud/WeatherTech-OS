@@ -378,6 +378,214 @@ async function discoverRunRows(service, providerMarker, leadNameMarker, ids) {
   return auditRows;
 }
 
+function sortedUniqueIds(rows) {
+  return [...new Set(rows.map((row) => row?.id).filter(Boolean))].sort();
+}
+
+async function findRegressionOwnerIdentity(service, ownerEmail) {
+  const matches = [];
+
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await service.auth.admin.listUsers({ page, perPage: 100 });
+    if (error) {
+      throw new Error(`Verify Mighty Apes regression owner failed: ${error.message}`);
+    }
+
+    const users = data?.users ?? [];
+    matches.push(
+      ...users.filter((user) => user.email?.toLowerCase() === ownerEmail.toLowerCase()),
+    );
+    if (users.length < 100) break;
+  }
+
+  requireCondition(
+    matches.length === 1,
+    "The exact synthetic Mighty Apes regression owner is missing or ambiguous.",
+  );
+  const [owner] = matches;
+  requireCondition(
+    owner.id === "2150c43d-c5b6-4560-9ecb-142561ba1dc2" &&
+      owner.app_metadata?.wt_os_regression_marker ===
+      "weathertech-os-regression-owner-v1" &&
+      owner.app_metadata?.wt_os_regression_project_ref ===
+        REGRESSION_SUPABASE_PROJECT_REF &&
+      owner.app_metadata?.provider === "email" &&
+      JSON.stringify(owner.app_metadata?.providers) === JSON.stringify(["email"]),
+    "The Mighty Apes regression owner does not carry the pinned project markers.",
+  );
+
+  return owner;
+}
+
+async function discoverAutomationLedgerGraph(service, sourceRecords) {
+  const byTable = new Map();
+  for (const source of sourceRecords) {
+    const ids = byTable.get(source.sourceTable) ?? [];
+    ids.push(source.sourceId);
+    byTable.set(source.sourceTable, ids);
+  }
+
+  const baseEvents = [];
+  for (const [sourceTable, sourceIds] of byTable) {
+    baseEvents.push(
+      ...(await requireRows(
+        service
+          .from("automation_events")
+          .select("id,company_id,source_table,source_id,causation_event_id")
+          .eq("source_table", sourceTable)
+          .in("source_id", [...new Set(sourceIds)]),
+        `Discover ${sourceTable} automation events`,
+      )),
+    );
+  }
+
+  const eventsById = new Map(baseEvents.map((event) => [event.id, event]));
+  let frontier = sortedUniqueIds(baseEvents);
+  while (frontier.length) {
+    const children = await requireRows(
+      service
+        .from("automation_events")
+        .select("id,company_id,source_table,source_id,causation_event_id")
+        .in("causation_event_id", frontier),
+      "Discover recursive Mighty Apes automation events",
+    );
+    const next = [];
+    for (const child of children) {
+      if (!eventsById.has(child.id)) {
+        eventsById.set(child.id, child);
+        next.push(child.id);
+      }
+    }
+    requireCondition(
+      eventsById.size <= 2000,
+      "Mighty Apes automation graph exceeds its cleanup bound.",
+    );
+    frontier = next;
+  }
+
+  const eventIds = [...eventsById.keys()].sort();
+  const executions = eventIds.length
+    ? await requireRows(
+        service
+          .from("automation_executions")
+          .select("id,company_id,event_id")
+          .in("event_id", eventIds),
+        "Discover Mighty Apes automation executions",
+      )
+    : [];
+  const executionIds = sortedUniqueIds(executions);
+  const attempts = executionIds.length
+    ? await requireRows(
+        service
+          .from("automation_attempts")
+          .select("id,company_id,execution_id")
+          .in("execution_id", executionIds),
+        "Discover Mighty Apes automation attempts",
+      )
+    : [];
+  const [eventAudits, executionAudits, engineTasks] = await Promise.all([
+    eventIds.length
+      ? requireRows(
+          service
+            .from("automation_audit_events")
+            .select("id,company_id,event_id,execution_id,audit_type")
+            .in("event_id", eventIds),
+          "Discover Mighty Apes event audits",
+        )
+      : [],
+    executionIds.length
+      ? requireRows(
+          service
+            .from("automation_audit_events")
+            .select("id,company_id,event_id,execution_id,audit_type")
+            .in("execution_id", executionIds),
+          "Discover Mighty Apes execution audits",
+        )
+      : [],
+    executionIds.length
+      ? requireRows(
+          service
+            .from("office_tasks")
+            .select("id,company_id,automation_execution_id")
+            .in("automation_execution_id", executionIds),
+          "Discover Mighty Apes automation office tasks",
+        )
+      : [],
+  ]);
+
+  return {
+    eventIds,
+    executionIds,
+    attemptIds: sortedUniqueIds(attempts),
+    auditIds: sortedUniqueIds([
+      ...new Map(
+        [...eventAudits, ...executionAudits].map((audit) => [audit.id, audit]),
+      ).values(),
+    ]),
+    taskIds: sortedUniqueIds(engineTasks),
+  };
+}
+
+async function cleanupSyntheticAutomationLedger({
+  service,
+  ownerEmail,
+  runId,
+  providerMarker,
+  leadNameMarker,
+  sourceRecords,
+}) {
+  if (!sourceRecords.length) {
+    return { invoked: false, databaseResidueCount: 0 };
+  }
+
+  const graph = await discoverAutomationLedgerGraph(service, sourceRecords);
+  if (!graph.eventIds.length) {
+    return { invoked: false, databaseResidueCount: 0 };
+  }
+  requireCondition(
+    graph.auditIds.length > 0,
+    "Mighty Apes automation events are missing immutable audit evidence.",
+  );
+  const owner = await findRegressionOwnerIdentity(service, ownerEmail);
+  const { data: receipt, error } = await service.rpc(
+    "wtos_cleanup_synthetic_automation_fixture",
+    {
+      cleanup_request: {
+        operationKey: randomUUID(),
+        regressionOwnerUserId: owner.id,
+        markerFamily: "mighty",
+        runId,
+        sourceMarker: leadNameMarker,
+        providerMarker,
+        sourceRecords,
+        ...graph,
+      },
+    },
+  );
+  if (error) {
+    throw new Error(`Mighty Apes automation ledger cleanup failed: ${error.message}`);
+  }
+
+  const expectedCounts = {
+    auditEvents: graph.auditIds.length,
+    attempts: graph.attemptIds.length,
+    tasks: graph.taskIds.length,
+    executions: graph.executionIds.length,
+    events: graph.eventIds.length,
+  };
+  requireCondition(
+    receipt?.ok === true &&
+      receipt?.status === "cleaned" &&
+      receipt?.databaseResidueCount === 0 &&
+      Object.entries(expectedCounts).every(
+        ([key, count]) => receipt?.counts?.[key] === count,
+      ),
+    "Mighty Apes automation cleanup returned an inexact sanitized receipt.",
+  );
+
+  return { invoked: true, ...receipt };
+}
+
 export async function runMightyApesYelpRegression({
   cwd = process.cwd(),
   runtimeEnv = process.env,
@@ -1004,6 +1212,7 @@ export async function runMightyApesYelpRegression({
       privateAuditLedgerVerified: true,
       providerOrFinancialEffects: 0,
       providerNetworkRequests: 0,
+      automationCleanup: null,
       cleanupResidue: null,
     };
   } catch (error) {
@@ -1020,6 +1229,29 @@ export async function runMightyApesYelpRegression({
             )
           : [];
         ids.office_tasks.push(...officeTasks.map((row) => row.id));
+
+        const sourceRecords = [
+          ...leadIds.map((sourceId) => ({ sourceTable: "leads", sourceId })),
+          ...officeTasks.map((task) => ({
+            sourceTable: "office_tasks",
+            sourceId: task.id,
+          })),
+        ].sort((left, right) =>
+          `${left.sourceTable}:${left.sourceId}`.localeCompare(
+            `${right.sourceTable}:${right.sourceId}`,
+          ),
+        );
+        const automationCleanup = await cleanupSyntheticAutomationLedger({
+          service,
+          ownerEmail: loaded.config.ownerEmail,
+          runId,
+          providerMarker,
+          leadNameMarker,
+          sourceRecords,
+        });
+        if (report) {
+          report.automationCleanup = automationCleanup;
+        }
 
         await deleteExactIds(service, AUDIT_TABLE, ids.mighty_apes_yelp_webhook_events);
         const accountabilityCleanup = await deleteLeadAccountabilityForExactLeadIds(

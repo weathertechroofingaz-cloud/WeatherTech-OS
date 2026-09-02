@@ -281,6 +281,24 @@ function getDirection(record: ProviderRecord): "inbound" | "outbound" | null {
   return null;
 }
 
+function assertGoHighLevelProviderIdentityScope(
+  existing: {
+    company_id: string | null;
+    integration_connection_id: string | null;
+  },
+  connection: IntegrationConnectionRecord,
+  resourceLabel: "communication" | "call",
+) {
+  if (
+    existing.company_id !== connection.company_id ||
+    existing.integration_connection_id !== connection.id
+  ) {
+    throw new Error(
+      `HighLevel ${resourceLabel} provider identity belongs to another company or connection.`,
+    );
+  }
+}
+
 type LocalMatch = { customerId: string | null; leadId: string | null };
 
 async function loadLocalMatches(serviceClient: CrmClient, companyId: string) {
@@ -494,7 +512,10 @@ export async function persistGoHighLevelCommunication({
     return { saved: false, ignored: true };
   }
 
-  const direction = getDirection(record) ?? "inbound";
+  const direction = getDirection(record);
+  if (!direction) {
+    return { saved: false, ignored: true };
+  }
   const eventType: CommunicationProviderEventInput["event_type"] =
     channel === "sms"
       ? direction === "inbound"
@@ -532,29 +553,58 @@ export async function persistGoHighLevelCommunication({
     response_summary: { persistedBy: "gohighlevel_phase_2" },
     occurred_at: occurredAt,
   };
-  const { data: existingEvent, error: existingEventError } = await serviceClient
+  const loadExistingEvent = () => serviceClient
     .from("communication_provider_events")
-    .select("id")
+    .select("id, company_id, integration_connection_id")
     .eq("provider", "gohighlevel")
     .eq("event_type", eventType)
     .eq("provider_event_sid", providerEventSid)
     .maybeSingle();
+  const updateExistingEvent = async (existingEvent: {
+    id: string;
+    company_id: string | null;
+    integration_connection_id: string | null;
+  }) => {
+    assertGoHighLevelProviderIdentityScope(
+      existingEvent,
+      connection,
+      "communication",
+    );
+    const { data: updatedEvent, error } = await serviceClient
+      .from("communication_provider_events")
+      .update(eventPayload)
+      .eq("id", existingEvent.id)
+      .eq("company_id", connection.company_id)
+      .eq("integration_connection_id", connection.id)
+      .eq("provider", "gohighlevel")
+      .eq("event_type", eventType)
+      .eq("provider_event_sid", providerEventSid)
+      .select("id")
+      .maybeSingle();
+    if (error || !updatedEvent) {
+      throw new Error("HighLevel communication metadata update failed.");
+    }
+  };
+  const { data: existingEvent, error: existingEventError } = await loadExistingEvent();
   if (existingEventError) {
     throw new Error("HighLevel communication idempotency lookup failed.");
   }
 
   if (existingEvent) {
-    const { error } = await serviceClient
-      .from("communication_provider_events")
-      .update(eventPayload)
-      .eq("id", existingEvent.id);
-    if (error) throw new Error("HighLevel communication metadata update failed.");
+    await updateExistingEvent(existingEvent);
   } else {
     const { error } = await serviceClient
       .from("communication_provider_events")
       .insert(eventPayload);
-    if (error?.code !== "23505") {
-      if (error) throw new Error("HighLevel communication metadata insert failed.");
+    if (error?.code === "23505") {
+      const { data: collidingEvent, error: collisionLookupError } =
+        await loadExistingEvent();
+      if (collisionLookupError || !collidingEvent) {
+        throw new Error("HighLevel communication metadata insert failed.");
+      }
+      await updateExistingEvent(collidingEvent);
+    } else if (error) {
+      throw new Error("HighLevel communication metadata insert failed.");
     }
   }
 
@@ -585,26 +635,50 @@ export async function persistGoHighLevelCommunication({
       follow_up_required: normalizeCallStatus(record) === "missed",
       metadata: summary,
     };
-    const { data: existingCall, error: existingCallError } = await serviceClient
+    const loadExistingCall = () => serviceClient
       .from("call_records")
-      .select("id")
+      .select("id, company_id, integration_connection_id")
       .eq("provider", "gohighlevel")
       .eq("provider_call_sid", providerEventSid)
       .maybeSingle();
+    const updateExistingCall = async (existingCall: {
+      id: string;
+      company_id: string | null;
+      integration_connection_id: string | null;
+    }) => {
+      assertGoHighLevelProviderIdentityScope(existingCall, connection, "call");
+      const { data: updatedCall, error } = await serviceClient
+        .from("call_records")
+        .update(callPayload)
+        .eq("id", existingCall.id)
+        .eq("company_id", connection.company_id)
+        .eq("integration_connection_id", connection.id)
+        .eq("provider", "gohighlevel")
+        .eq("provider_call_sid", providerEventSid)
+        .select("id")
+        .maybeSingle();
+      if (error || !updatedCall) {
+        throw new Error("HighLevel call metadata update failed.");
+      }
+    };
+    const { data: existingCall, error: existingCallError } = await loadExistingCall();
     if (existingCallError) {
       throw new Error("HighLevel call idempotency lookup failed.");
     }
 
     if (existingCall) {
-      const { error } = await serviceClient
-        .from("call_records")
-        .update(callPayload)
-        .eq("id", existingCall.id);
-      if (error) throw new Error("HighLevel call metadata update failed.");
+      await updateExistingCall(existingCall);
     } else {
       const { error } = await serviceClient.from("call_records").insert(callPayload);
-      if (error?.code !== "23505") {
-        if (error) throw new Error("HighLevel call metadata insert failed.");
+      if (error?.code === "23505") {
+        const { data: collidingCall, error: collisionLookupError } =
+          await loadExistingCall();
+        if (collisionLookupError || !collidingCall) {
+          throw new Error("HighLevel call metadata insert failed.");
+        }
+        await updateExistingCall(collidingCall);
+      } else if (error) {
+        throw new Error("HighLevel call metadata insert failed.");
       }
     }
   }

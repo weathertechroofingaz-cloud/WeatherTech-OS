@@ -82,9 +82,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "customers",
     externalRecord: "GoHighLevel contacts",
     phaseOneMode: "dry_run_preview",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Maps WeatherTech OS customers to GoHighLevel contacts with duplicate and conflict checks.",
+      "Reads GoHighLevel contact metadata into a dry-run mapping with duplicate and conflict checks; it performs no provider write.",
   },
   {
     key: "leads",
@@ -92,9 +92,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "leads",
     externalRecord: "GoHighLevel opportunities",
     phaseOneMode: "dry_run_preview",
-    direction: "weathertech_to_provider",
+    direction: "provider_to_weathertech",
     description:
-      "Prepares lead-to-opportunity mapping without automatically moving pipeline stages.",
+      "Reads provider opportunity metadata for comparison without automatically moving stages or writing to GoHighLevel.",
   },
   {
     key: "companies",
@@ -102,9 +102,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "companies",
     externalRecord: "GoHighLevel locations",
     phaseOneMode: "metadata_only",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Keeps WeatherTech Roofing LLC and IHC location/account metadata separate.",
+      "Reads location/account metadata while keeping WeatherTech Roofing LLC and IHC separate.",
   },
   {
     key: "opportunities",
@@ -112,9 +112,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "estimates and pipeline stages",
     externalRecord: "GoHighLevel opportunities",
     phaseOneMode: "metadata_only",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Tracks pipeline and stage mapping before any automatic opportunity updates.",
+      "Reads pipeline and stage metadata without automatic opportunity updates.",
   },
   {
     key: "notes",
@@ -122,9 +122,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "customer and job notes",
     externalRecord: "GoHighLevel notes",
     phaseOneMode: "metadata_only",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Prepares note sync while keeping internal-only content out of customer-facing automation.",
+      "Reads note metadata while keeping internal-only content out of customer-facing automation.",
   },
   {
     key: "tags",
@@ -132,9 +132,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "customer and lead tags",
     externalRecord: "GoHighLevel tags",
     phaseOneMode: "metadata_only",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Prepares tag mapping for source, service type, status, and company identity.",
+      "Reads tag metadata for source, service type, status, and company identity mapping.",
   },
   {
     key: "tasks",
@@ -142,9 +142,9 @@ export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
     localRecord: "follow-ups and assignments",
     externalRecord: "GoHighLevel tasks",
     phaseOneMode: "metadata_only",
-    direction: "two_way",
+    direction: "provider_to_weathertech",
     description:
-      "Prepares task mapping for follow-up work without assigning live automations.",
+      "Reads task metadata for follow-up comparison without assigning live provider automations.",
   },
 ];
 

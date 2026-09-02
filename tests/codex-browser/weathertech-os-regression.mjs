@@ -41,7 +41,7 @@ const MIGHTY_APES_CAMPAIGN_YELP_ID = "00LZA1SuPKX0yUnsdthgLg";
 const MIGHTY_APES_CAMPAIGN_NAME =
   "Weather Tech Roofing - Scottsdale, AZ 85255";
 const MIGHTY_APES_WEBHOOK_PATH =
-  "/api/integrations/mighty-apes/yelp/webhook";
+  "/api/integrations/mighty-apes/webhook";
 const JOB_PHOTO_STORAGE_BUCKET = "job-photos";
 const JOB_PHOTO_TEST_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -497,6 +497,283 @@ function mergeRowsById(...groups) {
   ];
 }
 
+function sortedUniqueIds(rows) {
+  return [...new Set(rows.map((row) => row?.id).filter(Boolean))].sort();
+}
+
+function exactSourceRecords(groups) {
+  return [...new Map(
+    groups
+      .flatMap(({ sourceTable, rows }) =>
+        rows.map((row) => ({ sourceTable, sourceId: row.id })),
+      )
+      .map((record) => [`${record.sourceTable}:${record.sourceId}`, record]),
+  ).values()].sort((left, right) =>
+    `${left.sourceTable}:${left.sourceId}`.localeCompare(
+      `${right.sourceTable}:${right.sourceId}`,
+    ),
+  );
+}
+
+async function findRowsByForeignIds(
+  env,
+  table,
+  column,
+  ids,
+  select,
+) {
+  const exactIds = [...new Set(ids.filter(Boolean))];
+
+  if (!exactIds.length) {
+    return [];
+  }
+
+  return restRequest(
+    env,
+    `${table}?select=${encodeURIComponent(select)}&${column}=in.${encodeURIComponent(`(${exactIds.join(",")})`)}`,
+  );
+}
+
+async function findRegressionOwnerIdentity(env) {
+  const credentials = getBrowserRegressionAuthCredentials(env);
+
+  if (!credentials?.email) {
+    throw new Error("The exact synthetic Browser regression owner email is required for ledger cleanup.");
+  }
+
+  const service = createRegressionServiceClient(env);
+  const matches = [];
+
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await service.auth.admin.listUsers({ page, perPage: 100 });
+
+    if (error) {
+      throw new Error(`Unable to verify the isolated regression owner: ${error.message}`);
+    }
+
+    const users = data?.users ?? [];
+    matches.push(
+      ...users.filter(
+        (user) => user.email?.toLowerCase() === credentials.email.toLowerCase(),
+      ),
+    );
+
+    if (users.length < 100) {
+      break;
+    }
+  }
+
+  if (matches.length !== 1) {
+    throw new Error("The exact synthetic Browser regression owner identity is missing or ambiguous.");
+  }
+
+  const [owner] = matches;
+  if (
+    owner.id !== "2150c43d-c5b6-4560-9ecb-142561ba1dc2" ||
+    owner.app_metadata?.wt_os_regression_marker !==
+      "weathertech-os-regression-owner-v1" ||
+    owner.app_metadata?.wt_os_regression_project_ref !==
+      WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF ||
+    owner.app_metadata?.provider !== "email" ||
+    JSON.stringify(owner.app_metadata?.providers) !== JSON.stringify(["email"])
+  ) {
+    throw new Error("The Browser regression owner does not carry the pinned project identity markers.");
+  }
+
+  return { id: owner.id };
+}
+
+async function discoverAutomationLedgerGraph(env, sourceRecords) {
+  const baseEvents = [];
+  const sourceIdsByTable = new Map();
+
+  for (const source of sourceRecords) {
+    const ids = sourceIdsByTable.get(source.sourceTable) ?? [];
+    ids.push(source.sourceId);
+    sourceIdsByTable.set(source.sourceTable, ids);
+  }
+
+  for (const [sourceTable, sourceIds] of sourceIdsByTable) {
+    baseEvents.push(
+      ...(await restRequest(
+        env,
+        `automation_events?select=${encodeURIComponent("id,company_id,source_table,source_id,causation_event_id")}&source_table=eq.${encodeURIComponent(sourceTable)}&source_id=in.${encodeURIComponent(`(${sourceIds.join(",")})`)}`,
+      )),
+    );
+  }
+
+  const eventsById = new Map(baseEvents.map((event) => [event.id, event]));
+  let frontier = sortedUniqueIds(baseEvents);
+
+  while (frontier.length) {
+    const children = await findRowsByForeignIds(
+      env,
+      "automation_events",
+      "causation_event_id",
+      frontier,
+      "id,company_id,source_table,source_id,causation_event_id",
+    );
+    const next = [];
+
+    for (const child of children) {
+      if (!eventsById.has(child.id)) {
+        eventsById.set(child.id, child);
+        next.push(child.id);
+      }
+    }
+
+    if (eventsById.size > 2000) {
+      throw new Error("Browser regression automation graph exceeds its cleanup bound.");
+    }
+    frontier = next;
+  }
+
+  const eventIds = [...eventsById.keys()].sort();
+  const executions = await findRowsByForeignIds(
+    env,
+    "automation_executions",
+    "event_id",
+    eventIds,
+    "id,company_id,event_id",
+  );
+  const executionIds = sortedUniqueIds(executions);
+  const attempts = await findRowsByForeignIds(
+    env,
+    "automation_attempts",
+    "execution_id",
+    executionIds,
+    "id,company_id,execution_id",
+  );
+  const [eventAudits, executionAudits, tasks] = await Promise.all([
+    findRowsByForeignIds(
+      env,
+      "automation_audit_events",
+      "event_id",
+      eventIds,
+      "id,company_id,event_id,execution_id,audit_type",
+    ),
+    findRowsByForeignIds(
+      env,
+      "automation_audit_events",
+      "execution_id",
+      executionIds,
+      "id,company_id,event_id,execution_id,audit_type",
+    ),
+    findRowsByForeignIds(
+      env,
+      "office_tasks",
+      "automation_execution_id",
+      executionIds,
+      "id,company_id,automation_execution_id",
+    ),
+  ]);
+
+  return {
+    eventIds,
+    executionIds,
+    attemptIds: sortedUniqueIds(attempts),
+    auditIds: sortedUniqueIds(mergeRowsById(eventAudits, executionAudits)),
+    taskIds: sortedUniqueIds(tasks),
+  };
+}
+
+async function cleanupSyntheticAutomationLedger(
+  env,
+  { runId, sourceRecords },
+) {
+  if (!sourceRecords.length) {
+    return {
+      invoked: false,
+      counts: { auditEvents: 0, attempts: 0, tasks: 0, executions: 0, events: 0 },
+      databaseResidueCount: 0,
+    };
+  }
+
+  const graph = await discoverAutomationLedgerGraph(env, sourceRecords);
+
+  if (!graph.eventIds.length) {
+    return {
+      invoked: false,
+      counts: { auditEvents: 0, attempts: 0, tasks: 0, executions: 0, events: 0 },
+      databaseResidueCount: 0,
+    };
+  }
+
+  if (!graph.auditIds.length) {
+    throw new Error("Browser regression automation graph has events without immutable audit evidence.");
+  }
+
+  const owner = await findRegressionOwnerIdentity(env);
+  const receipt = await restRequest(
+    env,
+    "rpc/wtos_cleanup_synthetic_automation_fixture",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        cleanup_request: {
+          operationKey: randomUUID(),
+          regressionOwnerUserId: owner.id,
+          markerFamily: "browser",
+          runId,
+          sourceMarker: `${TEST_PREFIX} ${runId}`,
+          providerMarker: `${MIGHTY_APES_TEST_PREFIX} ${runId}`,
+          sourceRecords,
+          ...graph,
+        },
+      }),
+    },
+  );
+  const expectedCounts = {
+    auditEvents: graph.auditIds.length,
+    attempts: graph.attemptIds.length,
+    tasks: graph.taskIds.length,
+    executions: graph.executionIds.length,
+    events: graph.eventIds.length,
+  };
+
+  if (
+    receipt?.ok !== true ||
+    receipt?.status !== "cleaned" ||
+    receipt?.databaseResidueCount !== 0 ||
+    !Object.entries(expectedCounts).every(
+      ([key, count]) => receipt?.counts?.[key] === count,
+    )
+  ) {
+    throw new Error("Browser regression automation cleanup returned an inexact sanitized receipt.");
+  }
+
+  return { invoked: true, ...receipt };
+}
+
+async function findAutomationLedgerResidue(env) {
+  const [events, executions, attempts, dynamicAudits, linkedTasks] =
+    await Promise.all([
+      restRequest(env, "automation_events?select=id"),
+      restRequest(env, "automation_executions?select=id"),
+      restRequest(env, "automation_attempts?select=id"),
+      restRequest(
+        env,
+        "automation_audit_events?select=id&audit_type=neq.rule_seeded",
+      ),
+      restRequest(
+        env,
+        "office_tasks?select=id&automation_execution_id=not.is.null",
+      ),
+    ]);
+  const counts = {
+    events: events.length,
+    executions: executions.length,
+    attempts: attempts.length,
+    dynamicAudits: dynamicAudits.length,
+    linkedTasks: linkedTasks.length,
+  };
+
+  return {
+    counts,
+    count: Object.values(counts).reduce((total, count) => total + count, 0),
+  };
+}
+
 async function findJobPhotosForCleanup(
   env,
   {
@@ -590,7 +867,7 @@ async function findMightyApesSyncLogsForRun(env, runId) {
 async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
   const runMarker = buildRegressionRunMarker(runId, TEST_PREFIX);
   const derivedInvoiceMarker = `Invoice for ${runMarker}`;
-  const checks = await Promise.all([
+  const [checks, automationLedger] = await Promise.all([Promise.all([
     findByLikeIfPresent(env, "jobs", "title", runMarker),
     findByLikeIfPresent(
       env,
@@ -641,11 +918,14 @@ async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
     findNotificationsForRun(env, runMarker),
     findMightyApesEventsForRun(env, runId),
     findMightyApesSyncLogsForRun(env, runId),
-  ]);
-  const count = checks.reduce((total, rows) => total + rows.length, 0);
+  ]), findAutomationLedgerResidue(env)]);
+  const markerCount = checks.reduce((total, rows) => total + rows.length, 0);
+  const count = markerCount + automationLedger.count;
 
   return {
     count,
+    markerCount,
+    automationLedger: automationLedger.counts,
     residueVerified: count === 0,
   };
 }
@@ -655,7 +935,7 @@ async function assertNoRegressionMarkerResidue(env, runId, leadNameColumn) {
 
   if (!residue.residueVerified) {
     throw new Error(
-      `Browser regression run marker already exists in ${residue.count} record(s); refusing to clean or reuse a potentially concurrent run.`,
+      `Browser regression isolation has ${residue.count} exact-marker or automation-ledger residue record(s); refusing to clean or reuse a potentially concurrent run.`,
     );
   }
 
@@ -963,8 +1243,20 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
       findByForeignIdsIfPresent(env, "office_tasks", "inspection_id", inspectionIds),
       findByForeignIdsIfPresent(env, "office_tasks", "estimate_id", estimateIds),
       findByForeignIdsIfPresent(env, "office_tasks", "job_id", jobIds),
+      findByLikeIfPresent(env, "office_tasks", "title", runMarker),
+      findByLikeIfPresent(env, "office_tasks", "notes", runMarker),
     ])),
   );
+  const [callRecords, providerEvents, emailMessages] = await Promise.all([
+    findByLikeIfPresent(env, "call_records", "correlation_id", runMarker),
+    findByLikeIfPresent(
+      env,
+      "communication_provider_events",
+      "correlation_id",
+      runMarker,
+    ),
+    findByLikeIfPresent(env, "email_messages", "subject", runMarker),
+  ]);
   const invoiceIdFilter = encodeURIComponent(`(${invoiceIds.join(",")})`);
   const payments = invoiceIds.length
     ? await restRequest(
@@ -1003,6 +1295,25 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
   }
 
   assertRegressionCleanupSafe({ payments, stripeMappings });
+
+  // Immutable automation evidence must be removed while every exact marked
+  // source row still exists. The database RPC independently re-derives and
+  // locks the complete graph before permitting any ledger delete.
+  const automationCleanup = await cleanupSyntheticAutomationLedger(env, {
+    runId,
+    sourceRecords: exactSourceRecords([
+      { sourceTable: "jobs", rows: jobs },
+      { sourceTable: "estimates", rows: estimates },
+      { sourceTable: "inspections", rows: inspections },
+      { sourceTable: "invoices", rows: invoices },
+      { sourceTable: "leads", rows: leads },
+      { sourceTable: "customers", rows: customers },
+      { sourceTable: "office_tasks", rows: officeTasks },
+      { sourceTable: "call_records", rows: callRecords },
+      { sourceTable: "communication_provider_events", rows: providerEvents },
+      { sourceTable: "email_messages", rows: emailMessages },
+    ]),
+  });
 
   const communicationCleanup = {
     mightyApesEventsDeleted: mightyApesEvents.length,
@@ -1219,6 +1530,7 @@ async function cleanupTestRecords(env, runId, leadNameColumn = null) {
     marketingSpendDeleted: marketingSpend.length,
     notificationsDeleted: notifications.length,
     officeTasksDeleted: officeTasks.length,
+    automationCleanup,
     ...communicationCleanup,
     residueVerified: true,
   };
@@ -4897,6 +5209,40 @@ async function testAiToolsOperatingBrain(browser, tab) {
     15000,
   );
 
+  const allCompanyGate = await tab.playwright
+    .locator('[data-testid="ai-command-bar"]')
+    .evaluate((form) => {
+      const input = form.querySelector("#ai-command-input");
+      const analyze = Array.from(form.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Analyze"),
+      );
+      const note = form.querySelector('[data-testid="ai-exact-company-required"]');
+      return {
+        inputDisabled: input?.tagName === "INPUT" && input.disabled,
+        analyzeDisabled: analyze?.tagName === "BUTTON" && analyze.disabled,
+        note: note?.textContent?.toLowerCase() ?? "",
+      };
+    });
+  if (
+    !allCompanyGate.inputDisabled ||
+    !allCompanyGate.analyzeDisabled ||
+    !allCompanyGate.note.includes("select weathertech roofing llc or ihc painting") ||
+    !allCompanyGate.note.includes("combined workspace below remains read-only")
+  ) {
+    throw new Error("AI all-company scope did not fail closed with an exact-company instruction.");
+  }
+
+  await clickCompanyScope(tab, "WeatherTech Roofing LLC");
+  await waitFor(
+    tab,
+    () => {
+      const input = document.querySelector("#ai-command-input");
+      return input?.tagName === "INPUT" && !input.disabled;
+    },
+    "AI exact WeatherTech company scope",
+    10000,
+  );
+
   await tab.playwright.locator("#ai-command-input").fill("Show overdue invoices.");
   await buttonContainingText(tab, "Analyze").click({ timeoutMs: 10000 });
   await waitFor(
@@ -4909,7 +5255,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
         text.includes("grounded response") &&
         text.includes("show overdue invoices") &&
         text.includes("read-only") &&
-        text.includes("production disabled") &&
+        text.includes("external actions disabled") &&
         text.includes("supporting records") &&
         text.includes("missing information") &&
         text.includes("recommended actions")
@@ -6748,43 +7094,71 @@ async function testSecureJobPhotoWorkflow(
       "Copied photo link",
     );
 
-    const visiblePhotoTabsBeforeOpen = new Set(
-      (await browser.user.openTabs()).map((entry) => entry.providerTabId),
+    const openControl = tab.playwright.locator(
+      `[data-testid="job-photo-open"][data-photo-id="${photo.id}"]`,
     );
+    await waitForUniqueLocator(openControl, "native temporary job-photo link");
+    const openControlState = await openControl.evaluate((element) => ({
+      tagName: element.tagName,
+      href: element.getAttribute("href") ?? "",
+      resolvedHref: "href" in element ? String(element.href) : "",
+      target: element.getAttribute("target") ?? "",
+      rel: element.getAttribute("rel") ?? "",
+    }));
+    const openControlRelTokens = new Set(
+      openControlState.rel.toLowerCase().split(/\s+/).filter(Boolean),
+    );
+
+    if (
+      openControlState.tagName !== "A" ||
+      openControlState.href !== "about:blank" ||
+      openControlState.resolvedHref !== "about:blank" ||
+      openControlState.target !== "_blank" ||
+      !openControlRelTokens.has("noopener") ||
+      !openControlRelTokens.has("noreferrer") ||
+      openControlState.href === photo.file_path ||
+      openControlState.href === photo.file_url
+    ) {
+      throw new Error(
+        "The secure photo Open control did not preserve its safe native-link contract.",
+      );
+    }
+    // The in-app Browser suppresses window.open and exposes no mutable popup
+    // hook. Source-level security coverage pins Open's synchronous,
+    // opener-severed placeholder and click-time SDK signing. Here, the
+    // adjacent Copy action exercises that same signer at runtime so the
+    // controlled Browser tab can validate the fresh private URL and bytes.
+    const refreshedOpenPhotoUrl = copiedUrl;
+
+    assertPrivateJobPhotoSignedUrl(
+      refreshedOpenPhotoUrl,
+      photo.file_path,
+      "Fresh SDK-signed Open photo link",
+    );
+    await assertSignedJobPhotoFixtureResponse(
+      refreshedOpenPhotoUrl,
+      photo.file_path,
+      "Opened photo link",
+    );
+
     let openedPhotoTab = null;
-    let openedPhotoProviderTabId = null;
 
     try {
-      await clickUnique(
-        tab.playwright.locator(
-          `[data-testid="job-photo-open"][data-photo-id="${photo.id}"]`,
-        ),
-        "open temporary job-photo link",
-      );
-      const opened = await waitForAsync(async () => {
-        const tabs = await browser.user.openTabs();
-
-        return (
-          tabs.find(
-            (entry) =>
-              !visiblePhotoTabsBeforeOpen.has(entry.providerTabId) &&
-              typeof entry.url === "string" &&
-              entry.url.includes(
-                `/storage/v1/object/sign/${JOB_PHOTO_STORAGE_BUCKET}/`,
-              ),
-          ) ?? null
-        );
-      }, "temporary job-photo open", 15000);
-      assertPrivateJobPhotoSignedUrl(
-        opened.url,
-        photo.file_path,
-        "Opened photo link",
-      );
-      openedPhotoProviderTabId = opened.providerTabId;
-      openedPhotoTab = await browser.user.claimTab(opened);
+      // The in-app Browser suppresses target=_blank popups. The native-link
+      // contract and fresh SDK signing are proven before this controlled navigation.
+      openedPhotoTab = await browser.tabs.new();
+      try {
+        await openedPhotoTab.goto(refreshedOpenPhotoUrl);
+      } catch (error) {
+        if (!String(error).includes("ERR_ABORTED (-3)")) {
+          throw error;
+        }
+      }
       await waitForAsync(async () => {
         try {
-          return (await openedPhotoTab.url()) === opened.url ? true : null;
+          return (await openedPhotoTab.url()) === refreshedOpenPhotoUrl
+            ? true
+            : null;
         } catch (error) {
           if (
             String(error).includes(
@@ -6796,7 +7170,7 @@ async function testSecureJobPhotoWorkflow(
 
           throw error;
         }
-      }, "temporary job-photo claimed URL", 15000);
+      }, "controlled temporary job-photo URL", 15000);
       await new Promise((resolve) => setTimeout(resolve, 250));
     } finally {
       if (openedPhotoTab) {
@@ -6863,24 +7237,12 @@ async function testSecureJobPhotoWorkflow(
           );
         }
 
-        if (!openedPhotoProviderTabId) {
-          throw new Error(
-            "The temporary job-photo tab is missing its exact provider identity.",
-          );
-        }
-
         await waitForAsync(async () => {
-          const [controlledTabs, userTabs] = await Promise.all([
-            browser.tabs.list(),
-            browser.user.openTabs(),
-          ]);
+          const controlledTabs = await browser.tabs.list();
 
           return controlledTabs.some(
             (entry) => entry.id === openedPhotoControlledTabId,
-          ) ||
-            userTabs.some(
-              (entry) => entry.providerTabId === openedPhotoProviderTabId,
-            )
+          )
             ? null
             : true;
         }, "temporary job-photo tab cleanup", 5000);
@@ -10947,10 +11309,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     "150",
     "duplicate estimate labor price",
   );
-  await clickVisibleDomSubmitByText(
-    tab,
-    "Create estimate",
+  await clickUnique(
+    estimateSubmit,
     "Create duplicate estimate",
+    { retryTransientClick: true },
   );
   await waitFor(
     tab,
@@ -11690,6 +12052,103 @@ async function testSettingsIntegrationCenter(tab) {
     15000,
   );
 
+  await waitFor(
+    tab,
+    () => {
+      const center = document.querySelector(
+        '[data-testid="automation-control-center"]',
+      );
+      const text = center?.textContent?.toLowerCase() ?? "";
+
+      return (
+        text.includes("automation control center") &&
+        text.includes("rules, approvals, and execution history") &&
+        text.includes("database-authorized controls") &&
+        text.includes("available rules") &&
+        text.includes("execution history") &&
+        text.includes("weathertech roofing llc") &&
+        text.includes("ihc painting") &&
+        text.includes("cannot send provider or customer communications")
+      );
+    },
+    "database-authorized Automation Control Center",
+    15000,
+  );
+
+  const automationState = await tab.playwright.evaluate(() => {
+    const center = document.querySelector(
+      '[data-testid="automation-control-center"]',
+    );
+    const ruleCards = [
+      ...(center?.querySelectorAll('[data-testid^="automation-rule-"]') ?? []),
+    ];
+    const companies = ["WeatherTech Roofing LLC", "IHC Painting"];
+    const rulesByCompany = Object.fromEntries(
+      companies.map((company) => [
+        company,
+        ruleCards
+          .filter((card) => card.textContent?.includes(company))
+          .map((card) => card.getAttribute("data-testid"))
+          .filter(Boolean)
+          .sort(),
+      ]),
+    );
+    const ruleButtons = ruleCards.map((card) =>
+      [...card.querySelectorAll("button")].find((button) =>
+        ["Enable", "Disable"].includes(button.textContent?.trim() ?? ""),
+      ),
+    );
+    const executionCards = [
+      ...(center?.querySelectorAll('[data-testid^="automation-execution-"]') ?? []),
+    ];
+    const centerText = center?.textContent ?? "";
+
+    return {
+      visible: Boolean(center),
+      ruleCount: ruleCards.length,
+      rulesByCompany,
+      everyRuleHasExactCompany: ruleCards.every((card) =>
+        companies.filter((company) => card.textContent?.includes(company)).length === 1,
+      ),
+      everyRuleManageable:
+        ruleButtons.length === ruleCards.length &&
+        ruleButtons.every(
+          (button) => button?.tagName === "BUTTON" && !button.disabled,
+        ),
+      executionCount: executionCards.length,
+      executionCompaniesExact: executionCards.every((card) =>
+        companies.filter((company) => card.textContent?.includes(company)).length === 1,
+      ),
+      emptyHistoryTruth:
+        executionCards.length > 0 ||
+        centerText.includes("No automation executions are visible yet."),
+      providerCommunicationBlocked: centerText.includes(
+        "cannot send provider or customer communications",
+      ),
+      databaseAuthorized: centerText.includes("Database-authorized controls"),
+    };
+  });
+  const weatherTechRuleKeys =
+    automationState.rulesByCompany["WeatherTech Roofing LLC"] ?? [];
+  const ihcRuleKeys = automationState.rulesByCompany["IHC Painting"] ?? [];
+
+  if (
+    !automationState.visible ||
+    automationState.ruleCount === 0 ||
+    weatherTechRuleKeys.length === 0 ||
+    JSON.stringify(weatherTechRuleKeys) !== JSON.stringify(ihcRuleKeys) ||
+    !automationState.everyRuleHasExactCompany ||
+    !automationState.everyRuleManageable ||
+    !automationState.executionCompaniesExact ||
+    !automationState.emptyHistoryTruth ||
+    !automationState.providerCommunicationBlocked ||
+    !automationState.databaseAuthorized
+  ) {
+    throw new Error(
+      `Automation Control Center company, history, or management truth is inexact: ${JSON.stringify(automationState)}`,
+    );
+  }
+
   await clickUnique(
     tab.playwright.locator(
       'xpath=//*[@data-provider-id="twilio"]//button[normalize-space(.)="Connection wizard"]',
@@ -11739,7 +12198,7 @@ async function testSettingsIntegrationCenter(tab) {
     "Close integration connection dialog",
   );
 
-  return result;
+  return { ...result, automation: automationState };
 }
 
 async function testProductionReadinessCenter(browser, tab, baseUrl) {
@@ -12047,39 +12506,100 @@ async function testWebsiteMarketingFoundation(browser, tab) {
   );
   await clickCompanyScope(tab, "All companies");
 
-  await clickVisibleDomButtonByText(
-    tab,
-    "Provider setup",
-    "marketing provider setup quick action",
-  );
-  await waitFor(
-    tab,
-    () => {
-      const text = document.body.innerText.toLowerCase();
-      return (
-        text.includes("integration hub") &&
-        text.includes("real-world service connections") &&
-        text.includes("production scheduling foundation") &&
-        text.includes("weathertech os remains") &&
-        (text.includes("live writes disabled") || text.includes("live writes enabled")) &&
-        text.includes("owner approval required for every live change") &&
-        text.includes("connected calendars") &&
-        text.includes("event payload preview") &&
-        (text.includes("prepare connection") || text.includes("discover calendars")) &&
-        text.includes("connect calendar") &&
-        text.includes("gmail / google workspace email foundation") &&
-        text.includes("production google workspace foundation") &&
-        text.includes("server-side oauth") &&
-        (text.includes("live send disabled") || text.includes("live send enabled")) &&
-        text.includes("/api/integrations/google-workspace/oauth/callback") &&
-        text.includes("check readiness") &&
-        text.includes("connect with google") &&
-        text.includes("gmail activity")
-      );
-    },
-    "marketing provider setup navigation",
-    10000,
-  );
+  const waitForMarketingProviderSetupDestination = () =>
+    waitFor(
+      tab,
+      () => {
+        const text = document.body.innerText.toLowerCase();
+        return (
+          text.includes("integration hub") &&
+          text.includes("real-world service connections") &&
+          text.includes("production scheduling foundation") &&
+          text.includes("weathertech os remains") &&
+          (text.includes("live writes disabled") || text.includes("live writes enabled")) &&
+          text.includes("owner approval required for every live change") &&
+          text.includes("connected calendars") &&
+          text.includes("event payload preview") &&
+          (text.includes("prepare connection") || text.includes("discover calendars")) &&
+          text.includes("connect calendar") &&
+          text.includes("gmail / google workspace email foundation") &&
+          text.includes("production google workspace foundation") &&
+          text.includes("server-side oauth") &&
+          (text.includes("live send disabled") || text.includes("live send enabled")) &&
+          text.includes("/api/integrations/google-workspace/oauth/callback") &&
+          text.includes("check readiness") &&
+          text.includes("connect with google") &&
+          text.includes("gmail activity")
+        );
+      },
+      "marketing provider setup navigation",
+      10000,
+    );
+
+  for (
+    let providerSetupAttempt = 0;
+    providerSetupAttempt < 2;
+    providerSetupAttempt += 1
+  ) {
+    if (providerSetupAttempt > 0) {
+      const retryState = await tab.playwright.evaluate(() => {
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+        const viewEntry = location.search
+          .replace(/^\?/, "")
+          .split("&")
+          .find((entry) => entry.startsWith("view="));
+        const visibleEnabledButtons = [...document.querySelectorAll("button")]
+          .filter((button) =>
+            normalize(button.textContent) === "Provider setup" &&
+            button.tagName === "BUTTON" &&
+            !button.disabled &&
+            button.getClientRects().length > 0 &&
+            getComputedStyle(button).visibility !== "hidden",
+          );
+        const visibleErrors = [...document.querySelectorAll('[role="alert"]')]
+          .filter((alert) =>
+            normalize(alert.textContent).length > 0 &&
+            alert.getClientRects().length > 0 &&
+            getComputedStyle(alert).visibility !== "hidden",
+          );
+
+        return {
+          view: viewEntry?.slice("view=".length) ?? "",
+          workspaceVisible: Boolean(
+            document.querySelector('[data-testid="website-marketing-foundation"]'),
+          ),
+          buttonCount: visibleEnabledButtons.length,
+          errorCount: visibleErrors.length,
+        };
+      });
+
+      if (
+        retryState.view !== "marketing" ||
+        !retryState.workspaceVisible ||
+        retryState.buttonCount !== 1 ||
+        retryState.errorCount !== 0
+      ) {
+        throw new Error(
+          `Marketing provider setup retry refused: ${JSON.stringify(retryState)}`,
+        );
+      }
+    }
+
+    await clickVisibleDomButtonByText(
+      tab,
+      "Provider setup",
+      "marketing provider setup quick action",
+    );
+
+    try {
+      await waitForMarketingProviderSetupDestination();
+      break;
+    } catch (error) {
+      if (providerSetupAttempt === 1) {
+        throw error;
+      }
+    }
+  }
   const calendarFoundationState = await tab.playwright.evaluate(() => {
     const section = document.querySelector('[data-testid="google-calendar-scheduling-foundation"]');
     const text = section?.textContent?.toLowerCase() ?? "";

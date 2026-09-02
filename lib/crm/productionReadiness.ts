@@ -217,7 +217,8 @@ export type ProductionReadinessCenter = {
   blockers: string[];
 };
 
-const latestRequiredMigration = "0033_ai_tools_operating_brain.sql";
+const latestRequiredMigration =
+  "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql";
 
 const providerIdsForActivation = new Set<IntegrationProviderId>([
   "twilio",
@@ -319,12 +320,15 @@ const providerGuideEnv = {
     "AI_PER_COMPANY_DAILY_REQUEST_LIMIT",
     "AI_MAX_REQUEST_TOKENS",
     "AI_MAX_RESPONSE_TOKENS",
+    "AI_MAX_INPUT_COST_USD_PER_1K_TOKENS",
+    "AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS",
     "AI_TIMEOUT_MS",
     "AI_RETRY_LIMIT",
     "AI_STREAMING_ENABLED",
     "AI_STRUCTURED_OUTPUT_ENABLED",
     "AI_ACTION_EXECUTION_ENABLED",
   ],
+  automation: ["CRON_SECRET"],
 };
 
 const setupDocumentPaths = {
@@ -337,6 +341,7 @@ const setupDocumentPaths = {
   quickbooks: "docs/QUICKBOOKS_ONLINE_PHASE_1_SETUP.md",
   signatures: "docs/ELECTRONIC_SIGNATURES_PHASE_1_SETUP.md",
   aiTools: "docs/AI_TOOLS_2_LIVE_PROVIDER_PILOT.md",
+  automation: "docs/AUTOMATION_ENGINE.md",
   production: "docs/PRODUCTION_ACTIVATION_READINESS.md",
 };
 
@@ -577,6 +582,161 @@ const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
     remoteStatus: "remote_status_unknown",
     requiredAction: "Verify AI saved analyses, audit events, and usage limit tables before controlled live-provider testing.",
   },
+  {
+    id: "automation-engine-foundation",
+    filename: "20260902024804_automation_engine_foundation.sql",
+    area: "Central automation engine and company locations",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify company/location RLS, rule controls, event/execution history, retries, and the service-only worker before scheduler activation.",
+  },
+  {
+    id: "gohighlevel-webhook-durable-state-machine",
+    filename: "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+    area: "GoHighLevel webhook durability",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify exact delivery identity, leases, bounded retry, terminal receipts, uninstall, and owner requeue before enabling GoHighLevel sync.",
+  },
+  {
+    id: "mighty-apes-legacy-service-routing-correction",
+    filename: "20260902043624_mighty_apes_legacy_service_routing_correction.sql",
+    area: "Mighty Apes company/location/service routing",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify only authoritative enabled campaign routes can create a correctly scoped company/location/service-scoped lead.",
+  },
+  {
+    id: "gohighlevel-webhook-uninstall-guardrails",
+    filename: "20260902044154_gohighlevel_webhook_uninstall_guardrails.sql",
+    area: "GoHighLevel uninstall isolation",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify uninstall scope and owner requeue evidence remain exact and company-bound.",
+  },
+  {
+    id: "legacy-lead-dynamic-insert-lint-correction",
+    filename: "20260902044714_legacy_lead_dynamic_insert_lint_correction.sql",
+    area: "Legacy lead schema compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the legacy lead identity path remains compatible without weakening company routing.",
+  },
+  {
+    id: "canonical-lead-dynamic-insert-lint-correction",
+    filename: "20260902045112_canonical_lead_dynamic_insert_lint_correction.sql",
+    area: "Canonical lead schema compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the canonical lead identity path remains compatible without weakening company routing.",
+  },
+  {
+    id: "automation-synthetic-regression-cleanup",
+    filename: "20260902053037_automation_synthetic_regression_cleanup.sql",
+    area: "Pinned non-Production regression cleanup",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the cleanup RPC remains unusable outside the exact pinned regression project and synthetic owner graph.",
+  },
+  {
+    id: "automation-synthetic-cleanup-lead-source-correction",
+    filename: "20260902054334_automation_synthetic_cleanup_lead_source_correction.sql",
+    area: "Pinned regression lead-source cleanup correction",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify exact marked lead sources participate in the guarded cleanup graph and all immutable ledgers return to zero residue.",
+  },
+  {
+    id: "gohighlevel-inbound-automation-bridge",
+    filename: "20260902061135_gohighlevel_inbound_automation_bridge.sql",
+    area: "GoHighLevel inbound automation bridge",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify only explicitly inbound, matched records from an exact connected same-company GoHighLevel connection emit automation events.",
+  },
+  {
+    id: "legacy-twilio-synthetic-automation-orphan-cleanup",
+    filename: "20260902065509_legacy_twilio_synthetic_automation_orphan_cleanup.sql",
+    area: "Pinned regression legacy Twilio orphan cleanup",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the UUID-only orphan cleanup remains restricted to exact absent synthetic lead roots on the pinned regression project.",
+  },
+  {
+    id: "legacy-twilio-browser-voice-orphan-cleanup",
+    filename: "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+    area: "Pinned regression Browser Voice orphan cleanup",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the 17-digit Browser Voice recovery remains restricted to exact absent synthetic lead roots on the pinned regression project.",
+  },
+  {
+    id: "lead-automation-event-legacy-schema-compatibility",
+    filename: "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
+    area: "Lead automation event schema compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify canonical and legacy lead writes emit exact company/location-scoped automation events without inferring missing identity fields.",
+  },
+  {
+    id: "gohighlevel-reconciliation-automation-transition-fix",
+    filename: "20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql",
+    area: "GoHighLevel reconciliation automation transition fix",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify unmatched inbound SMS and missed-call rows emit exactly once only after an exact same-company connected GoHighLevel reconciliation changes them to matched.",
+  },
+  {
+    id: "gohighlevel-reconciliation-event-recovery-twilio-compatibility",
+    filename:
+      "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
+    area: "GoHighLevel reconciliation recovery and Twilio compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify a previously invalid matched GoHighLevel row emits exactly once after its binding is corrected, while Twilio SMS remains insert-only and Twilio calls emit on missed-status transitions only.",
+  },
 ];
 
 export function launchControlStateLabel(status: LaunchControlState) {
@@ -709,23 +869,30 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
     label: "Yelp",
     providers: ["yelp"],
     requiredOwnerActions: [
-      "Confirm Yelp partner/API access path.",
-      "Map WeatherTech Phoenix, WeatherTech Tucson, and IHC business IDs.",
-      "Approve lead conversation/reply behavior only after partner access is verified.",
+      "Keep the verified Mighty Apes Phoenix campaign enabled only through its exact company/location registry route.",
+      "Provide the authoritative Mighty Apes campaign IDs for WeatherTech Tucson and IHC before either route is individually enabled.",
+      "Use Mighty Apes Send Test Delivery for audit-only lead.test evidence, then observe the first real lead.created exactly once.",
+      "Treat direct Yelp API/OAuth and any lead conversation or reply behavior as a separate partner-access approval path.",
     ],
     requiredCredentials: providerGuideEnv.yelp,
-    oauthSetup: ["Configure Yelp OAuth/client credentials only after official partner access is available."],
-    externalApprovals: ["Yelp partner or approved business access is required for live lead conversations."],
+    oauthSetup: [
+      "Mighty Apes inbound delivery uses the server-only HMAC secret and company/location campaign registry; OAuth is not used.",
+      "Configure Yelp OAuth/client credentials only if separate official direct-Yelp partner access is later approved.",
+    ],
+    externalApprovals: [
+      "Mighty Apes must supply the authoritative Tucson and IHC campaign identities and send the official test delivery.",
+      "Yelp partner or approved business access is separately required for direct API lead conversations.",
+    ],
     testingSequence: [
-      "Run dry-run Yelp lead intake.",
-      "Validate account routing and duplicate prevention.",
-      "Run signed endpoint tests.",
-      "Keep live sync disabled until Yelp access and owner approval are complete.",
+      "Verify the canonical /api/integrations/mighty-apes/webhook receiver and its compatibility alias use the same signed handler.",
+      "Send lead.test through Mighty Apes and prove it records audit evidence without creating a CRM lead or workflow.",
+      "Observe the first real lead.created and prove exact company/location routing, service classification, and exactly-once CRM automation.",
+      "Keep unknown, disabled, Tucson, and IHC campaign identities fail-closed until each authoritative mapping is supplied and enabled.",
     ],
     rollbackProcedure: [
-      "Disable Yelp live sync and outbound messaging gates.",
-      "Pause Yelp connection records.",
-      "Remove live webhook subscriptions if configured later.",
+      "Disable the affected Mighty Apes campaign-registry row or rotate/remove its inbound secret and redeploy.",
+      "Keep Yelp direct live sync and outbound messaging gates disabled.",
+      "Preserve durable audit and CRM evidence; do not delete it as a rollback shortcut.",
     ],
   },
   {
@@ -804,31 +971,60 @@ export const productionActivationGuides: ProductionActivationGuide[] = [
   },
   {
     id: "ai-tools",
-    label: "AI Tools controlled pilot",
+    label: "AI Command Center 3.0",
     providers: [],
     requiredOwnerActions: [
-      "Approve the AI provider, model, and controlled internal pilot users.",
+      "Approve the AI provider, model, and authorized internal users.",
       "Configure server-only AI credentials in the approved hosting environment.",
-      "Approve strict budget, request, token, timeout, retry, and audit controls before testing.",
+      "Approve strict budget, request, token, timeout, retry, and audit controls before Production use.",
     ],
     requiredCredentials: providerGuideEnv.ai,
     oauthSetup: [
-      "OAuth is not used by the current AI Tools pilot; server-side provider API keys and disabled-by-default action gates are required.",
+      "OAuth is not used by the current AI provider adapter; server-side provider API keys and disabled external-action gates are required.",
     ],
     externalApprovals: [
-      "Provider account access, internal pilot approval, data-usage review, and migration 0033 verification are required before testing.",
+      "Provider account access, data-usage review, migration verification, and the owner-approved internal-use boundary are required.",
     ],
     testingSequence: [
-      "Apply and verify migration 0033 in the correct Supabase project after owner approval.",
+      "Verify migrations 0033 and the centralized automation foundation in the exact Supabase project.",
       "Set provider credentials and limits in the server runtime.",
-      "Run controlled prompts against company-scoped records.",
-      "Verify usage logging, prompt-safety blocking, and preview-only action gates.",
+      "Run grounded prompts against one exact authorized company at a time.",
+      "Verify per-preview audit logging, prompt-safety blocking, and exact target validation.",
+      "Verify only reviewed safe internal follow-up tasks can enter the automation engine.",
     ],
     rollbackProcedure: [
       "Set AI_ENABLED=false.",
       "Remove provider API keys from the hosting environment.",
       "Keep AI_ACTION_EXECUTION_ENABLED=false.",
-      "Confirm AI Tools returns provider-disabled or provider-not-configured readiness.",
+      "Disable the AI-reviewed internal follow-up rule if its bounded execution path must be paused.",
+    ],
+  },
+  {
+    id: "automation-engine",
+    label: "Automation Engine",
+    providers: [],
+    requiredOwnerActions: [
+      "Use the Automation Control Center to keep only intended internal rules enabled.",
+      "Approve any future customer-facing automation rule separately before it is implemented or activated.",
+    ],
+    requiredCredentials: providerGuideEnv.automation,
+    oauthSetup: [
+      "OAuth is not used. The scheduler uses a server-only random CRON_SECRET and a service-role-only bounded worker RPC.",
+    ],
+    externalApprovals: [
+      "No provider approval is required for internal office-task actions. Customer-facing and provider actions remain outside the executable action registry.",
+    ],
+    testingSequence: [
+      "Apply the exact automation migration to the isolated regression project.",
+      "Prove company/location isolation, rule disablement, idempotency, approval, retry, cancellation, and zero residue.",
+      "Verify the scheduler secret is server-only and at least 32 random characters.",
+      "Verify one due safe internal rule produces exactly one existing office-task record and no provider request.",
+    ],
+    rollbackProcedure: [
+      "Disable the affected rule in the Automation Control Center.",
+      "Remove or rotate CRON_SECRET and redeploy to pause scheduled processing globally.",
+      "Preserve the immutable event, execution, attempt, and audit history.",
+      "Do not delete CRM or office-task records as a rollback shortcut.",
     ],
   },
 ];
@@ -959,12 +1155,23 @@ const baseActivationSequence: ProductionActivationStep[] = [
     order: 11,
     label: "Yelp",
     status: "external_approval_required",
-    summary: "Yelp live lead sync depends on official partner/API access and verified business mappings.",
-    dependencies: ["Yelp partner approval", "Business/account IDs", "Webhook setup"],
-    ownerActions: ["Confirm Yelp access path and business identifiers."],
-    codexResponsibilities: ["Keep manual/test intake separate from live Yelp API claims."],
+    summary:
+      "Mighty Apes inbound lead intake uses a signed company/location campaign registry: the verified Phoenix route is seeded, while Tucson and IHC remain fail-closed until their authoritative campaign IDs are supplied. Direct Yelp API/OAuth remains a separate disabled path.",
+    dependencies: [
+      "Mighty Apes signing secret",
+      "Authoritative per-branch campaign IDs",
+      "Official lead.test delivery",
+      "First real lead.created evidence",
+    ],
+    ownerActions: [
+      "Obtain the authoritative Tucson and IHC campaign IDs from Mighty Apes and use the provider's Send Test Delivery control.",
+    ],
+    codexResponsibilities: [
+      "Keep lead.test audit-only, enforce exact company/location routing and deduplication, and keep unknown campaigns plus outbound Yelp behavior disabled.",
+    ],
     evidenceFields: productionEvidenceFields,
-    nextAction: "Use manual or test intake until live Yelp partner access is verified.",
+    nextAction:
+      "Validate the seeded Phoenix route with an official audit-only provider test; add Tucson or IHC only after each authoritative campaign identity is supplied.",
   },
   {
     id: "google-business-profile",
@@ -1065,7 +1272,9 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
         "Do not delete production CRM records.",
         "Preserve imported records even if provider activation is paused.",
       ],
-      disabledSafetyFlags: ["No remote migrations are applied by this sprint."],
+      disabledSafetyFlags: [
+        "Exact remote migration evidence must be verified for this release before activation.",
+      ],
       evidenceFields: productionEvidenceFields,
     },
     {
@@ -1091,7 +1300,9 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
         "Disable provider webhooks before reverting provider tests if needed.",
         "Keep database records intact.",
       ],
-      disabledSafetyFlags: ["No deployment is performed by this sprint."],
+      disabledSafetyFlags: [
+        "Exact deployment and canonical health evidence must be verified for this release.",
+      ],
       evidenceFields: productionEvidenceFields,
     },
     {
@@ -1169,10 +1380,15 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       id: "yelp",
       label: "Yelp",
       status: "external_approval_required",
-      summary: "Yelp foundation exists, but live leads require official access, business IDs, OAuth or partner setup, and owner approval.",
+      summary:
+        "The signed Mighty Apes receiver and campaign registry are distinct from direct Yelp OAuth: Phoenix is the only seeded route, while Tucson and IHC require authoritative campaign IDs and provider test evidence.",
       setupDocumentPath: setupDocumentPaths.yelp,
       requiredBeforeActivation: productionActivationGuides[4].requiredOwnerActions,
-      requiredMappings: ["WeatherTech Phoenix Yelp business", "WeatherTech Tucson Yelp business", "IHC Yelp business"],
+      requiredMappings: [
+        "Verified Mighty Apes Phoenix campaign route",
+        "Authoritative Mighty Apes Tucson campaign route",
+        "Authoritative Mighty Apes IHC campaign route",
+      ],
       controlledTestPlan: productionActivationGuides[4].testingSequence,
       rollbackSummary: productionActivationGuides[4].rollbackProcedure,
       disabledSafetyFlags: ["YELP_LIVE_SYNC_ENABLED", "YELP_OUTBOUND_MESSAGING_ENABLED"],
@@ -1245,14 +1461,14 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
     },
     {
       id: "ai-tools",
-      label: "AI Tools controlled pilot",
+      label: "AI Command Center 3.0",
       status: "controlled_testing_required",
       summary:
-        "AI Tools 2.1 can use a server-side provider only after migration 0033, credentials, model selection, usage limits, and explicit owner-controlled testing are configured.",
+        "AI Command Center 3.0 uses a bounded server-side provider with exact-company authorization, usage limits, durable per-action audit evidence, and reviewed internal actions. External action execution remains disabled.",
       setupDocumentPath: setupDocumentPaths.aiTools,
       requiredBeforeActivation: [
-        "Apply and verify migration 0033.",
-        "Choose OpenAI, Anthropic, or another owner-approved provider.",
+        "Apply and verify migrations 0033 and the centralized automation foundation.",
+        "Choose the owner-approved OpenAI, Anthropic, or other provider.",
         "Configure server-only API credentials in hosting.",
         "Set daily budget, request limits, token limits, timeout, and retry limits.",
         "Keep external action execution disabled.",
@@ -1264,17 +1480,39 @@ function buildProviderActivationCards(): ProductionProviderActivationCard[] {
       ],
       controlledTestPlan: [
         "Run provider readiness without exposing credentials.",
-        "Ask grounded commands for each company scope.",
+        "Ask grounded commands for one exact company scope at a time.",
         "Verify prompt-injection blocks.",
-        "Verify action previews require approval and do not execute.",
-        "Verify AI audit logging after migration 0033 is applied.",
+        "Verify invalid, ambiguous, and cross-company action targets fail before provider/action execution.",
+        "Verify each action preview has a durable audit reference.",
+        "Verify only a reviewed safe internal follow-up can enqueue an office-task action.",
       ],
       rollbackSummary: [
         "Set AI_ENABLED=false.",
         "Remove provider API keys from hosting environment.",
         "Do not delete AI audit records unless the owner approves a retention action.",
       ],
-      disabledSafetyFlags: ["AI_ENABLED", "AI_ACTION_EXECUTION_ENABLED"],
+      disabledSafetyFlags: ["AI_ACTION_EXECUTION_ENABLED"],
+      evidenceFields: productionEvidenceFields,
+    },
+    {
+      id: "automation-engine",
+      label: "Automation Engine",
+      status: "migration_verification_required",
+      summary:
+        "The central event, rule, approval, execution, attempt, retry, cancellation, and audit foundation requires exact migration and scheduler verification before Production processing.",
+      setupDocumentPath: setupDocumentPaths.automation,
+      requiredBeforeActivation: productionActivationGuides[9].requiredOwnerActions,
+      requiredMappings: [
+        "WeatherTech Roofing LLC company with Phoenix/Scottsdale and Tucson locations",
+        "IHC Painting company with its IHC location",
+        "Owner/admin company memberships for rule controls",
+      ],
+      controlledTestPlan: productionActivationGuides[9].testingSequence,
+      rollbackSummary: productionActivationGuides[9].rollbackProcedure,
+      disabledSafetyFlags: [
+        "Customer/provider action types are not registered",
+        "AI_ACTION_EXECUTION_ENABLED remains false",
+      ],
       evidenceFields: productionEvidenceFields,
     },
   ];
@@ -1356,6 +1594,10 @@ function classifyEnvironmentVariable(
 
   if (value === null) {
     return "unknown";
+  }
+
+  if (name === "CRON_SECRET" && value.length < 32) {
+    return "invalid";
   }
 
   if (classification === "disabled_safety_flag") {
@@ -1478,6 +1720,17 @@ export function buildProductionEnvironmentInventory(
       env,
     ),
     buildEnvironmentGroup(
+      "automation-engine",
+      "Automation Engine",
+      [
+        {
+          name: "CRON_SECRET",
+          classification: "required_before_deployment" as const,
+        },
+      ],
+      env,
+    ),
+    buildEnvironmentGroup(
       "twilio",
       "Twilio",
       [
@@ -1592,7 +1845,7 @@ export function buildProductionEnvironmentInventory(
           name,
           classification: name.includes("API_KEY")
             ? "required_before_provider_connection" as const
-            : name === "AI_ENABLED" || name === "AI_ACTION_EXECUTION_ENABLED"
+            : name === "AI_ACTION_EXECUTION_ENABLED"
               ? "disabled_safety_flag" as const
               : "required_before_provider_connection" as const,
         })),
@@ -1643,7 +1896,7 @@ function buildLaunchGates(): ProductionLaunchGate[] {
         "Production environment variables configured server-side",
       ],
       blockingReasons: [
-        "Production deployment has not been run.",
+        "Exact Production deployment evidence has not been verified by this browser view.",
         "Production environment status is not verified by this browser view.",
         "Remote migration status is unknown until CLI verification.",
       ],
@@ -2147,7 +2400,7 @@ function buildBlockers(
   migrationStatus: ProductionReadinessCheck,
 ) {
   const blockers = [
-    "Production deployment has not been run from this sprint.",
+    "Exact Production deployment evidence must be verified for this release.",
     "Live provider credentials are not configured or verified in this repository.",
     "Live integrations remain disabled by design.",
     "Owner must verify production Supabase migration history before activation.",
@@ -2235,7 +2488,7 @@ export function buildProductionReadinessCenter(snapshot: CrmSnapshot): Productio
     scoreLabel: `${score}%`,
     overallStatus: blockers.length ? "production_disabled" : "ready_for_activation",
     overallSummary:
-      "WeatherTech OS has a strong internal operating-system foundation, but production deployment and live integration activation remain gated by owner setup, migration verification, credentials, OAuth, webhooks, monitoring, and final regression evidence.",
+      "WeatherTech OS has a strong internal operating-system foundation, but exact release deployment evidence and live integration activation remain gated by owner setup, migration verification, credentials, OAuth, webhooks, monitoring, and final regression evidence.",
     stagingDeploymentMetadata: buildPrivateStagingEnvironmentMetadata(),
     environmentStatus,
     migrationStatus,

@@ -18,6 +18,10 @@ import {
   runRegressionEnvironmentCommand,
   validateRegressionEnvironment,
 } from "./regression-environment.mjs";
+import {
+  cleanupTwilioSyntheticAutomationLedger,
+  createBrowserCompatibleRegressionRunId,
+} from "./twilio-automation-cleanup.mjs";
 
 export const TWILIO_VOICE_INBOUND_REGRESSION_RUN =
   "WTOS_TWILIO_VOICE_INBOUND_REGRESSION_RUN";
@@ -556,8 +560,9 @@ export async function runTwilioVoiceInboundRegression({
   );
 
   const compiled = compileVoiceRoutes(repositoryPath);
-  const runId = randomUUID();
-  const marker = `TEST WTOS REGRESSION TWILIO VOICE ${runId}`;
+  const runId = createBrowserCompatibleRegressionRunId();
+  const sourceMarker = `TEST WTOS REGRESSION ${runId}`;
+  const marker = `${sourceMarker} TWILIO VOICE`;
   const now = Date.now();
   const fixture = {
     accountSid: syntheticSid("AC", runId, "account"),
@@ -712,6 +717,12 @@ export async function runTwilioVoiceInboundRegression({
   const ambiguousLeadIds = [randomUUID(), randomUUID()];
   const ambiguousIhcLeadId = randomUUID();
   const driftLeadId = randomUUID();
+  const contactFixtureLeadIds = [
+    knownLeadId,
+    knownIhcLeadId,
+    ...ambiguousLeadIds,
+    ambiguousIhcLeadId,
+  ];
   const capturedIds = {
     communication_provider_events: [
       inboundEventId,
@@ -745,13 +756,7 @@ export async function runTwilioVoiceInboundRegression({
     integration_connections: [weatherTechConnectionId, ihcConnectionId],
     sms_messages: [],
     customers: [],
-    leads: [
-      knownLeadId,
-      knownIhcLeadId,
-      ...ambiguousLeadIds,
-      ambiguousIhcLeadId,
-      driftLeadId,
-    ],
+    leads: [...contactFixtureLeadIds, driftLeadId],
   };
   const environmentSnapshot = snapshotEnvironment(HANDLER_ENV_NAMES);
   const originalFetch = globalThis.fetch;
@@ -1284,15 +1289,6 @@ export async function runTwilioVoiceInboundRegression({
       ambiguousInboundEventId,
     ]);
     await deleteExactIds(client, "call_records", [knownCallId, ambiguousCallId]);
-    const contactFixtureLeadIds = [
-      knownLeadId,
-      knownIhcLeadId,
-      ...ambiguousLeadIds,
-      ambiguousIhcLeadId,
-    ];
-    await deleteLeadAccountabilityForExactLeadIds(client, contactFixtureLeadIds);
-    await deleteExactIds(client, "leads", contactFixtureLeadIds);
-
     const destinationProof = webhooks.createTwilioVoiceDestinationProof({
       parentCallSid: fixture.parentCallSid,
       destination: tucsonRouteLifecycle.destination,
@@ -1406,8 +1402,21 @@ export async function runTwilioVoiceInboundRegression({
         recoveredEvents[0].payload_summary?.contact_match_status === "unmatched",
       "Partial call retry adopted mutable CRM contact drift instead of its stored claim.",
     );
-    await deleteLeadAccountabilityForExactLeadIds(client, [driftLeadId]);
-    await deleteExactIds(client, "leads", [driftLeadId]);
+    const neutralizedDriftLeads = await requireRows(
+      client
+        .from("leads")
+        .update({ phone: null })
+        .eq("id", driftLeadId)
+        .eq("contact_name", `${marker} POST-CLAIM MATCH DRIFT`)
+        .select("id,phone"),
+      "Neutralize the retained post-claim drift fixture",
+    );
+    requireCondition(
+      neutralizedDriftLeads.length === 1 &&
+        neutralizedDriftLeads[0].id === driftLeadId &&
+        neutralizedDriftLeads[0].phone === null,
+      "Post-claim drift fixture was not retained in a non-matching state for guarded cleanup.",
+    );
 
     await deleteExactIds(client, "communication_provider_events", [inboundEventId]);
     await deleteExactIds(client, "call_records", [callId]);
@@ -1801,8 +1810,12 @@ export async function runTwilioVoiceInboundRegression({
       "Voice regression observed recording, transcription, or automatic lead behavior.",
     );
     requireCondition(
-      customers.length === 0 && leads.length === 0 && smsFrom.length === 0 && smsTo.length === 0,
-      "Voice regression created a customer, lead, or SMS side effect.",
+      customers.length === 0 &&
+        leads.length === contactFixtureLeadIds.length &&
+        contactFixtureLeadIds.every((id) => leads.some((lead) => lead.id === id)) &&
+        smsFrom.length === 0 &&
+        smsTo.length === 0,
+      "Voice regression created an unexpected customer, lead, or SMS side effect.",
     );
     const storedEvidence = JSON.stringify({ calls, events });
     requireCondition(
@@ -1873,6 +1886,7 @@ export async function runTwilioVoiceInboundRegression({
       outboundCallRecords: 0,
       outboundSmsCreated: false,
       providerNetworkRequests: 0,
+      automationCleanup: null,
       cleanupResidue: null,
     };
   } catch (error) {
@@ -1881,6 +1895,22 @@ export async function runTwilioVoiceInboundRegression({
     try {
       if (capturedIdsAuthorizedForCleanup) {
         await discoverExactPhoneSideEffects(client, capturedIds);
+        const automationCleanup = await cleanupTwilioSyntheticAutomationLedger({
+          service: client,
+          ownerEmail: loaded.config.ownerEmail,
+          runId,
+          sourceMarker,
+          capturedSourceIds: {
+            leads: capturedIds.leads,
+            customers: capturedIds.customers,
+            call_records: capturedIds.call_records,
+            communication_provider_events:
+              capturedIds.communication_provider_events,
+          },
+        });
+        if (report) {
+          report.automationCleanup = automationCleanup;
+        }
         await deleteExactIds(
           client,
           "communication_provider_events",

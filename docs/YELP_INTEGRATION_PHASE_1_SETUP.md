@@ -7,9 +7,10 @@ This document records both the earlier direct-Yelp application foundation and th
 - Completed sprint: Live Yelp Lead Intake via Mighty Apes.
 - Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST AND REAL-LEAD EVIDENCE NOT YET RECORDED.
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; deployed READY at `https://weathertech-os.vercel.app`.
-- Receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
-- Schema: local and Production Supabase ledgers match all `48/48` committed migrations.
-- Production evidence: `GET` safely returns HTTP 405 with `Allow: POST` and no-store caching. No production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row exists.
+- Historical deployed receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
+- Pending canonical receiver: after the current reviewed release is deployed, Mighty Apes should use `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/webhook`. The historical path remains a compatibility alias to the same handler so an existing provider configuration is not broken during the transition.
+- Schema checkpoints: the original Yelp release was exact at `48/48`. Production is now exact at `51/51`; the reviewed AI/automation/Mighty release set is `65/65` in the repository and on the isolated regression target but has not been applied to Production.
+- Production evidence: at the original release checkpoint, `GET` on the historical receiver safely returned HTTP 405 with `Allow: POST` and no-store caching. No Production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row has since been recorded.
 - Required secret: current server-side readiness redacts `MIGHTY_APES_YELP_WEBHOOK_SECRET` as present. Its value was not read; it must remain server-only and must be reverified with the exact deployed revision before an official provider test.
 - Outbound Yelp messaging: not implemented and disabled.
 - Separate legacy foundation: `/api/leads/yelp` and its direct Yelp API/OAuth gates remain disabled and are not activated by the Mighty Apes receiver.
@@ -21,9 +22,9 @@ This document records both the earlier direct-Yelp application foundation and th
 - Signature: `X-MightyApes-Signature: sha256=<HMAC-SHA256 of the raw body>`.
 - Replay controls: `X-MightyApes-Timestamp` is a Unix timestamp within the accepted five-minute window; `X-MightyApes-Delivery` is tracked as immutable delivery evidence.
 - Payload: version `1`, event `lead.test` or `lead.created`, exact approved campaign Yelp ID, campaign name, and a lead object containing stable `lead.id`, name, E.164 phone, ZIP, optional job category, multiline message, and provider `created_at`. Yelp supplies no email.
-- Routing: the approved campaign routes only to WeatherTech Roofing LLC/WeatherTech Phoenix. Request fields cannot select IHC or another company.
+- Routing: the signed campaign identity is resolved through the server-owned company/location registry. Only the previously verified WeatherTech Phoenix campaign is seeded and enabled. Tucson and IHC have no inferred campaign identity and fail closed until authoritative IDs are supplied and separately enabled. Request fields cannot select a company or location.
 - `lead.test`: authenticated tests record non-sensitive immutable audit evidence only. They create no CRM lead, salesperson task, customer, notification, communication, or sync-log row.
-- `lead.created`: one transaction creates the WeatherTech CRM lead, unified intake record, integration sync log, in-app notification, immutable delivery evidence, and normal new-lead office task. Stable provider lead ID and delivery locks prevent duplicate or concurrent creation.
+- `lead.created`: one transaction creates or replays exactly one WeatherTech CRM lead, unified intake record, integration sync log, in-app notification, and immutable delivery event. The centralized automation rule then creates the normal company/location-bound internal qualification task exactly once. Stable provider lead ID, delivery locks, and event idempotency prevent duplicate or concurrent creation.
 - Audit boundary: raw bodies, HMAC signatures, secrets, customer name, phone, ZIP, and questionnaire text are not stored in the webhook audit ledger or request-summary logs.
 
 ## Separate Direct Yelp API Capability Boundary
@@ -60,6 +61,8 @@ WeatherTech OS supports three Yelp account slots through the provider registry:
 | `ihc` | IHC Painting | IHC | Painting lead intake and Request-a-Quote review |
 
 Routing must use trusted provider account or business identifiers. Customer-entered text alone must not silently assign a lead to a company.
+
+For the Mighty Apes receiver, these display slots are not authorization. Migration `20260902024804_automation_engine_foundation.sql` creates the company/location-bound campaign registry and seeds only the already verified Phoenix route. Tucson and IHC remain absent and fail closed pending authoritative provider IDs and an explicit enablement decision.
 
 ## Server-Side Environment Placeholders
 
@@ -109,7 +112,7 @@ Do not add Yelp usernames or passwords. Do not expose these values with `NEXT_PU
 The foundation intentionally uses the existing Unified Lead Intake Hub:
 
 - Dedicated Mighty Apes raw-body HMAC receiver and strict version/event/payload validator.
-- WeatherTech-only campaign routing that refuses request-selected or cross-company assignment.
+- Company/location registry routing that seeds only the verified Phoenix campaign and refuses request-selected, unregistered, disabled, or cross-company assignment.
 - Immutable, company-scoped, non-PII webhook delivery evidence.
 - Atomic and concurrency-safe provider lead deduplication through the existing `lead_intake_records` provider identity.
 - Audit-only authenticated `lead.test` behavior.
@@ -120,6 +123,7 @@ The foundation intentionally uses the existing Unified Lead Intake Hub:
 - Existing customer matching without creating duplicate leads.
 - Existing lead/provider ID duplicate detection.
 - New unmatched intake path that creates one lead and one follow-up when production intake is enabled.
+- Legacy-schema correction in `20260902043624_mighty_apes_legacy_service_routing_correction.sql`, which propagates the registry-owned location and requested service to the linked lead before deferred automation runs. It does not invent a Tucson/IHC campaign or broaden the Phoenix authorization.
 - Safe route-level audit logging for rejected or skipped signed submissions.
 - Sanitized integration log summaries that avoid raw credentials, raw tokens, and unnecessary full-message storage.
 - Integration Center provider readiness copy that does not claim live connectivity.
@@ -127,12 +131,12 @@ The foundation intentionally uses the existing Unified Lead Intake Hub:
 
 ## Mighty Apes Production Receiver Boundary
 
-The receiver code, database schema, and deployment are complete. Production is not yet provider-validated because no official provider `lead.test` or real `lead.created` evidence has been recorded. Do not issue a synthetic production `lead.created` to work around that evidence boundary.
+The original receiver code, schema, and historical-path deployment are complete. The canonical endpoint, company/location registry, centralized exact-once task path, and legacy service correction are validated in the current local/regression release set but remain pending Production rollout. Production is not provider-validated because no official provider `lead.test` or real `lead.created` evidence has been recorded. Do not issue a synthetic Production `lead.created` to work around that evidence boundary.
 
 Under a separately authorized provider-test operation, the exact sequence is:
 
 1. Reverify that `MIGHTY_APES_YELP_WEBHOOK_SECRET` is a **Sensitive**, server-only Vercel Production variable without reading or exposing its value.
-2. Verify the exact intended Production deployment; redeploy only if the credential or intended revision changed.
+2. Verify that the exact reviewed migration set is present and the canonical receiver is on the intended Production deployment; redeploy only from the exact merge revision.
 3. Use Mighty Apes' **Send Test Delivery** action.
 
 The signed `lead.test` must return success and create exactly one immutable audit-only event with no lead, intake record, sync log, notification, office task, customer, or communication. After that external test succeeds, monitor the first real `lead.created` and prove that it persists exactly once before describing the integration as live or connected.
@@ -187,7 +191,7 @@ For the approved Mighty Apes receiver:
 - [x] Exact raw-body signing, timestamp, delivery, version, event, and payload contract implemented.
 - [x] Atomic, idempotent, WeatherTech-only persistence and immutable non-PII audit schema deployed.
 - [x] Isolated signed `lead.test`, `lead.created`, retry, duplicate, concurrency, ACL/RLS, CRM visibility, and zero-residue regression passed.
-- [x] Production migrations match `48/48`; the receiver implementation is deployed and health is HTTP 200.
+- [x] At the original Yelp release checkpoint, Production migrations matched `48/48`; the historical receiver implementation was deployed and health was HTTP 200. Production later advanced to `51/51` without recording an official Mighty Apes delivery.
 - [x] Safe production `GET` proves the route is deployed without sending a webhook or creating CRM data.
 - [ ] Under separate authorization, reverify the Sensitive Production credential and exact deployment, then run Mighty Apes' official Send Test Delivery.
 - [ ] Verify that official `lead.test` remains audit-only.

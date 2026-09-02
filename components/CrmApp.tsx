@@ -1,6 +1,7 @@
 "use client";
 
 import type { SupabaseClient, User } from "@supabase/supabase-js";
+import AutomationControlCenter from "./AutomationControlCenter";
 import StripeInvoicePayment from "./StripeInvoicePayment";
 import StripeInvoiceRefund from "./StripeInvoiceRefund";
 import {
@@ -338,7 +339,6 @@ import {
   type EstimateTemplate,
 } from "../lib/crm/estimateTemplates";
 import {
-  buildAiGeneratedEmailDraft,
   buildGoogleWorkspaceEmailDraft,
   type GoogleWorkspaceEmailDraftKind,
 } from "../lib/googleWorkspace/emailDrafts";
@@ -7291,7 +7291,16 @@ function CrmWorkspace({
           ) : null}
 
           {view === "settings" ? (
-            <SettingsView snapshot={snapshot} onViewChange={onViewChange} />
+            <SettingsView
+              client={client}
+              isDemoMode={isDemoMode}
+              snapshot={snapshot}
+              userId={user?.id ?? null}
+              onReload={onScrollPreservingReload}
+              onNotice={onNotice}
+              onError={onError}
+              onViewChange={onViewChange}
+            />
           ) : null}
         </section>
       </div>
@@ -26838,11 +26847,11 @@ function EstimatesView({
         });
       }
 
+      await onReload();
       updateUiPreservingScrollPosition(() =>
         setSelectedEstimateId(savedEstimate.id),
       );
       onViewChange("estimates", { type: "estimate", id: savedEstimate.id });
-      await onReload();
       onNotice(
         selectedEstimate
           ? "Estimate updated."
@@ -37750,10 +37759,18 @@ function PhotosView({
   };
 
   const openPhoto = async (photo: JobPhotoRecord) => {
+    let pendingPhotoWindow: Window | null = null;
+
     try {
+      pendingPhotoWindow = window.open("about:blank", "_blank");
+      if (!pendingPhotoWindow) {
+        throw new Error("The secure photo window was blocked.");
+      }
+      pendingPhotoWindow.opener = null;
       const signedUrl = await getJobPhotoFileSignedUrl(client, photo);
-      window.open(signedUrl, "_blank", "noopener,noreferrer");
+      pendingPhotoWindow.location.replace(signedUrl);
     } catch {
+      pendingPhotoWindow?.close();
       onError("Unable to open the photo securely.");
     }
   };
@@ -37974,16 +37991,21 @@ function PhotosView({
                     <Copy className="h-4 w-4" />
                     Copy temporary link
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void openPhoto(photo)}
+                  <a
+                    href="about:blank"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openPhoto(photo);
+                    }}
                     data-testid="job-photo-open"
                     data-photo-id={photo.id}
                     className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                   >
                     <Camera className="h-4 w-4" />
                     Open
-                  </button>
+                  </a>
                 </div>
               </div>
             </article>
@@ -39795,6 +39817,18 @@ type AiCommandCenterFilterState = {
   propertyKey: string;
 };
 
+type AiActionReviewReceipt = {
+  aiAuditEventId: string;
+  decision: "approve" | "reject";
+  executionId: string | null;
+  executionStatus: string;
+  officeTaskId: string | null;
+  idempotent: boolean;
+};
+
+const aiAuditReferencePattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function AiToolsView({
   client,
   snapshot,
@@ -39818,9 +39852,8 @@ function AiToolsView({
   const [aiPilotResult, setAiPilotResult] = useState<AiPilotCommandResult | null>(null);
   const [aiPilotError, setAiPilotError] = useState("");
   const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
-  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
-  const [previousAiResponseId, setPreviousAiResponseId] = useState<string | null>(null);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
+  const [reviewingActionId, setReviewingActionId] = useState<string | null>(null);
   const [activeAiAdvisor, setActiveAiAdvisor] = useState<AiAdvisorModeKey>("owner");
   const [aiCommandCenterFilters, setAiCommandCenterFilters] =
     useState<AiCommandCenterFilterState>({
@@ -39830,6 +39863,8 @@ function AiToolsView({
       propertyKey: "all",
     });
   const aiCommandAbortRef = useRef<AbortController | null>(null);
+  const aiReviewAbortRef = useRef<AbortController | null>(null);
+  const activeAiCompanyRef = useRef<CompanyScopeId>(activeCompanyId);
 
   const aiWorkspace = useMemo(
     () =>
@@ -39840,6 +39875,7 @@ function AiToolsView({
       }),
     [activeCompanyId, companyMap, snapshot],
   );
+  const exactAiCompanySelected = activeCompanyId !== "all";
 
   useEffect(() => {
     if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
@@ -39864,6 +39900,18 @@ function AiToolsView({
   }, [estimateSourceId, snapshot.estimates]);
 
   useEffect(() => {
+    aiCommandAbortRef.current?.abort();
+    aiReviewAbortRef.current?.abort();
+    aiCommandAbortRef.current = null;
+    aiReviewAbortRef.current = null;
+    activeAiCompanyRef.current = activeCompanyId;
+    setAiCommand("");
+    setAiResponses([]);
+    setAiPilotResult(null);
+    setAiPilotError("");
+    setIsAiCommandRunning(false);
+    setReviewedActionIds({});
+    setReviewingActionId(null);
     setAiCommandCenterFilters({
       customerId: "all",
       jobId: "all",
@@ -39871,6 +39919,14 @@ function AiToolsView({
       propertyKey: "all",
     });
   }, [activeCompanyId]);
+
+  useEffect(
+    () => () => {
+      aiCommandAbortRef.current?.abort();
+      aiReviewAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const selectedTemplate = snapshot.scopeTemplates.find(
     (template) => template.id === scopeTemplateId,
@@ -39938,8 +39994,8 @@ function AiToolsView({
             ?.jobLabel ?? "No job context selected",
       },
       {
-        label: "Previous AI responses",
-        value: `${aiResponses.length} in this session`,
+        label: "Local answer history",
+        value: `${aiResponses.length} stateless answer${aiResponses.length === 1 ? "" : "s"} shown`,
       },
     ],
     [aiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
@@ -39950,7 +40006,17 @@ function AiToolsView({
     if (!cleanPrompt || isAiCommandRunning) {
       return;
     }
+    if (!exactAiCompanySelected) {
+      setAiPilotError(
+        "Select one company in Company Scope before running audited AI. No provider request was made.",
+      );
+      return;
+    }
 
+    const requestCompanyId = activeCompanyId;
+    aiReviewAbortRef.current?.abort();
+    aiReviewAbortRef.current = null;
+    setReviewingActionId(null);
     setAiPilotError("");
     setIsAiCommandRunning(true);
     const controller = new AbortController();
@@ -39960,7 +40026,7 @@ function AiToolsView({
       prompt: cleanPrompt,
       snapshot,
       options: {
-        companyId: activeCompanyId,
+        companyId: requestCompanyId,
         companyMap,
         userRole: "office",
       },
@@ -39974,9 +40040,7 @@ function AiToolsView({
         },
         body: JSON.stringify({
           prompt: cleanPrompt,
-          companyId: activeCompanyId,
-          conversationId: aiConversationId,
-          previousResponseId: previousAiResponseId,
+          companyId: requestCompanyId,
         }),
         signal: controller.signal,
       });
@@ -39986,13 +40050,21 @@ function AiToolsView({
       }
 
       const result = (await response.json()) as AiPilotCommandResult;
+      if (
+        controller.signal.aborted ||
+        activeAiCompanyRef.current !== requestCompanyId ||
+        result.companyId !== requestCompanyId
+      ) {
+        return;
+      }
       setAiPilotResult(result);
-      setAiConversationId(result.conversation.id);
-      setPreviousAiResponseId(result.conversation.previousResponseId);
       setAiResponses((current) => [result.response, ...current].slice(0, 6));
       setReviewedActionIds({});
     } catch (currentError) {
       if (controller.signal.aborted) {
+        if (activeAiCompanyRef.current !== requestCompanyId) {
+          return;
+        }
         setAiPilotError("AI request canceled. No action was taken.");
       } else {
         setAiPilotError(
@@ -40005,8 +40077,8 @@ function AiToolsView({
     } finally {
       if (aiCommandAbortRef.current === controller) {
         aiCommandAbortRef.current = null;
+        setIsAiCommandRunning(false);
       }
-      setIsAiCommandRunning(false);
     }
   };
 
@@ -40028,48 +40100,143 @@ function AiToolsView({
     action: AiRecommendedAction,
     decision: "approved" | "rejected",
   ) => {
-    if (decision === "rejected" || action.type !== "draft_email") {
-      setReviewedActionIds((current) => ({ ...current, [action.id]: decision }));
-      return;
-    }
-
-    const response = aiResponses[0];
-    if (!response) {
-      onError("Run an AI email drafting command before creating a review draft.");
-      return;
-    }
-
-    const companyId = action.companyId;
-    const gmailConnection = snapshot.integrationConnections.find(
-      (connection) =>
-        connection.provider === "gmail" && connection.company_id === companyId,
+    const reviewCompanyId = activeCompanyId;
+    const preview = aiPilotResult?.actionPreviews.find(
+      (candidate) => candidate.id === action.id,
     );
-    const plan = buildAiGeneratedEmailDraft({
-      snapshot,
-      action,
-      response,
-      integrationConnectionId: gmailConnection?.id ?? null,
-    });
 
-    if (!plan.ok) {
-      onError(plan.error);
+    if (!preview || !aiAuditReferencePattern.test(preview.auditReference)) {
+      onError(
+        "This AI preview does not have durable audit evidence and cannot be reviewed.",
+      );
+      return;
+    }
+    if (action.auditReference !== preview.auditReference) {
+      onError("The AI action and preview do not share the same audit evidence.");
+      return;
+    }
+    if (
+      reviewCompanyId === "all" ||
+      activeAiCompanyRef.current !== reviewCompanyId ||
+      aiPilotResult?.companyId !== reviewCompanyId ||
+      action.companyId !== reviewCompanyId ||
+      preview.companyId !== reviewCompanyId
+    ) {
+      onError(
+        "This AI preview belongs to a different company scope. Run the command again in the active company.",
+      );
       return;
     }
 
+    if (
+      decision === "approved" &&
+      action.type !== "create_follow_up_draft"
+    ) {
+      onError("This action remains preview-only and cannot be approved for execution.");
+      return;
+    }
+    if (
+      decision === "approved" &&
+      !window.confirm(
+        "Approve this exact AI preview and enqueue one company-scoped internal follow-up task?",
+      )
+    ) {
+      return;
+    }
+
+    setReviewingActionId(action.id);
+    onError("");
+    const reviewController = new AbortController();
+    aiReviewAbortRef.current?.abort();
+    aiReviewAbortRef.current = reviewController;
     try {
-      await createEmailMessage(client, {
-        ...plan.input,
-        from_email: gmailConnection?.account_email ?? null,
+      const reviewDecision = decision === "approved" ? "approve" : "reject";
+      const reviewResponse = await fetch("/api/ai-tools/actions/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          auditReference: preview.auditReference,
+          decision: reviewDecision,
+          reason:
+            decision === "approved"
+              ? "Approved in the AI Command Center."
+              : "Rejected in the AI Command Center.",
+        }),
+        signal: reviewController.signal,
       });
-      setReviewedActionIds((current) => ({ ...current, [action.id]: "approved" }));
-      await onReload();
-      onNotice(
-        "AI email draft created in Communications. Owner approval is still required before Gmail delivery.",
-      );
+      const reviewPayload = (await reviewResponse.json().catch(() => ({}))) as
+        | AiActionReviewReceipt
+        | { error?: unknown };
+
+      if (!reviewResponse.ok) {
+        const reviewError =
+          "error" in reviewPayload && typeof reviewPayload.error === "string"
+            ? reviewPayload.error
+            : null;
+        throw new Error(
+          reviewError ?? "The AI action review was not accepted.",
+        );
+      }
+      const receipt = reviewPayload as AiActionReviewReceipt;
+      if (
+        reviewController.signal.aborted ||
+        activeAiCompanyRef.current !== reviewCompanyId
+      ) {
+        return;
+      }
+      if (
+        receipt.aiAuditEventId !== preview.auditReference ||
+        receipt.decision !== reviewDecision ||
+        typeof receipt.executionStatus !== "string" ||
+        typeof receipt.idempotent !== "boolean"
+      ) {
+        throw new Error("The AI action review returned an invalid receipt.");
+      }
+
+      if (decision === "rejected") {
+        if (
+          receipt.executionStatus !== "rejected" ||
+          receipt.executionId !== null ||
+          receipt.officeTaskId !== null
+        ) {
+          throw new Error("The AI rejection receipt did not preserve the no-execution boundary.");
+        }
+        await onReload();
+        setReviewedActionIds((current) => ({ ...current, [action.id]: decision }));
+        onNotice("AI action rejected and recorded in durable audit history.");
+        return;
+      }
+
+      if (action.type === "create_follow_up_draft") {
+        if (
+          receipt.executionStatus !== "succeeded" ||
+          !receipt.executionId ||
+          !receipt.officeTaskId
+        ) {
+          throw new Error("The AI follow-up approval returned an invalid task receipt.");
+        }
+        await onReload();
+        setReviewedActionIds((current) => ({ ...current, [action.id]: decision }));
+        onNotice(
+          receipt.idempotent
+            ? "This AI follow-up was already reviewed; no duplicate task was created."
+            : "AI follow-up approved and routed to the company-scoped internal task queue.",
+        );
+        return;
+      }
+      throw new Error("Only internal follow-up tasks can be approved for execution.");
     } catch (currentError) {
+      if (reviewController.signal.aborted) {
+        return;
+      }
       onError(
-        getCaughtErrorMessage(currentError, "Unable to create the AI email draft."),
+        getCaughtErrorMessage(currentError, "Unable to record the AI action review."),
       );
+    } finally {
+      if (aiReviewAbortRef.current === reviewController) {
+        aiReviewAbortRef.current = null;
+        setReviewingActionId(null);
+      }
     }
   };
 
@@ -40274,7 +40441,8 @@ function AiToolsView({
               Company-aware intelligence for owner priorities, advisor modes, grounded
               recommendations, proposal and scope drafting, production, communications,
               documents, readiness, and finance. Built on the existing AI Tools 2.1
-              foundation with action execution disabled.
+              foundation with one bounded, audited internal follow-up action; all
+              customer-facing and provider actions remain disabled.
             </p>
           </div>
           <AiProviderCard model={aiWorkspace} readiness={aiPilotResult?.readiness ?? null} />
@@ -40295,13 +40463,18 @@ function AiToolsView({
                 id="ai-command-input"
                 value={aiCommand}
                 onChange={(event) => setAiCommand(event.target.value)}
+                disabled={!exactAiCompanySelected}
                 className="min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
-                placeholder="Ask: What needs my attention today?"
+                placeholder={
+                  exactAiCompanySelected
+                    ? "Ask: What needs my attention today?"
+                    : "Select one company to run audited AI"
+                }
               />
             </div>
             <button
               type="submit"
-              disabled={isAiCommandRunning}
+              disabled={isAiCommandRunning || !exactAiCompanySelected}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
             >
               <WandSparkles className="h-4 w-4" />
@@ -40329,13 +40502,22 @@ function AiToolsView({
                 key={prompt}
                 type="button"
                 onClick={() => void runAiCommandPrompt(prompt)}
-                disabled={isAiCommandRunning}
+                disabled={isAiCommandRunning || !exactAiCompanySelected}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-sky-200 hover:text-sky-700"
               >
                 {prompt}
               </button>
             ))}
           </div>
+          {!exactAiCompanySelected ? (
+            <p
+              className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+              data-testid="ai-exact-company-required"
+            >
+              Select WeatherTech Roofing LLC or IHC Painting in Company Scope to run
+              audited AI. The combined workspace below remains read-only.
+            </p>
+          ) : null}
         </form>
 
         {aiPilotError ? (
@@ -40363,6 +40545,7 @@ function AiToolsView({
           response={aiResponses[0] ?? null}
           actionPreviews={aiPilotResult?.actionPreviews ?? []}
           reviewedActionIds={reviewedActionIds}
+          reviewingActionId={reviewingActionId}
           onReviewAction={markActionReviewed}
         />
       </section>
@@ -41233,7 +41416,7 @@ function AiPilotControlPanel({
             tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
           />
           <AiStatusBadge
-            label={readiness?.productionDisabled === false ? "production enabled" : "production disabled"}
+            label={readiness?.productionDisabled === false ? "external actions enabled" : "external actions disabled"}
             tone="slate"
           />
         </div>
@@ -41247,14 +41430,17 @@ function AiPilotControlPanel({
           <span>Request tokens: {usage?.estimatedRequestTokens ?? 0}</span>
           <span>Max response: {usage?.maxResponseTokens ?? 0}</span>
           <span>Budget: ${usage?.dailyBudgetUsd ?? 0}</span>
-          <span>Estimated: ${usage?.estimatedCostUsd ?? 0}</span>
+          <span>One attempt: ${usage?.estimatedCostUsd ?? 0}</span>
+          <span>Max attempts: {usage?.maxProviderAttempts ?? 0}</span>
+          <span>Max reservation: ${usage?.maxReservedRequestCostUsd ?? 0}</span>
+          <span>Reserved today: ${usage?.reservedCostUsdToday ?? 0}</span>
         </div>
       </div>
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Controlled test mode</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {sourceCount} source record{sourceCount === 1 ? "" : "s"} prepared for grounded answering.
-          Actions remain preview-only and cannot send, schedule, invoice, deploy, or apply migrations.
+          A reviewed follow-up may create one internal office task. Customer or provider actions cannot send, schedule, invoice, deploy, or apply migrations.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AiStatusBadge label="approval gates active" tone="amber" />
@@ -41269,11 +41455,13 @@ function AiGroundedResponsePanel({
   response,
   actionPreviews = [],
   reviewedActionIds = {},
+  reviewingActionId = null,
   onReviewAction,
 }: {
   response: AiGroundedResponse | null;
   actionPreviews?: AiActionPreview[];
   reviewedActionIds?: Record<string, "approved" | "rejected">;
+  reviewingActionId?: string | null;
   onReviewAction?: (
     action: AiRecommendedAction,
     decision: "approved" | "rejected",
@@ -41305,7 +41493,7 @@ function AiGroundedResponsePanel({
           <AiStatusBadge label={response.mode.replace(/_/g, " ")} tone="blue" />
           <AiStatusBadge label={response.readOnly ? "Read-only" : "Write action"} tone="slate" />
           {response.approvalRequired ? <AiStatusBadge label="Approval required" tone="amber" /> : null}
-          {response.productionDisabled ? <AiStatusBadge label="Production disabled" tone="amber" /> : null}
+          {response.productionDisabled ? <AiStatusBadge label="External actions disabled" tone="amber" /> : null}
         </div>
       </div>
       <pre className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
@@ -41325,6 +41513,7 @@ function AiGroundedResponsePanel({
           actions={response.actions}
           actionPreviews={actionPreviews}
           reviewedActionIds={reviewedActionIds}
+          reviewingActionId={reviewingActionId}
           onReviewAction={onReviewAction}
         />
       </div>
@@ -41499,11 +41688,13 @@ function AiActionList({
   actions,
   actionPreviews = [],
   reviewedActionIds = {},
+  reviewingActionId = null,
   onReviewAction,
 }: {
   actions: AiRecommendedAction[];
   actionPreviews?: AiActionPreview[];
   reviewedActionIds?: Record<string, "approved" | "rejected">;
+  reviewingActionId?: string | null;
   onReviewAction?: (
     action: AiRecommendedAction,
     decision: "approved" | "rejected",
@@ -41519,6 +41710,11 @@ function AiActionList({
           {actions.map((actionItem) => {
             const preview = previewsById.get(actionItem.id);
             const reviewedState = reviewedActionIds[actionItem.id];
+            const isReviewing = reviewingActionId === actionItem.id;
+            const isApprovable = actionItem.type === "create_follow_up_draft";
+            const hasDurableAudit = Boolean(
+              preview && aiAuditReferencePattern.test(preview.auditReference),
+            );
 
             return (
             <li key={actionItem.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -41530,24 +41726,41 @@ function AiActionList({
               {preview ? (
                 <div className="mt-2 rounded-lg bg-white p-2 text-xs text-slate-600">
                   <p>Fields affected: {preview.fieldsAffected.join(", ") || "none"}</p>
-                  <p>Status: {reviewedState ? `${reviewedState} preview only` : preview.status.replace(/_/g, " ")}</p>
+                  <p>
+                    Status:{" "}
+                    {reviewedState === "rejected"
+                      ? "rejected and audited"
+                      : reviewedState === "approved" &&
+                          actionItem.type === "create_follow_up_draft"
+                        ? "approved internal task"
+                        : preview.status.replace(/_/g, " ")}
+                  </p>
                 </div>
               ) : null}
               {onReviewAction ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
+                    disabled={
+                      !hasDurableAudit ||
+                      !isApprovable ||
+                      Boolean(reviewedState) ||
+                      isReviewing
+                    }
                     onClick={() => void onReviewAction(actionItem, "approved")}
-                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {actionItem.type === "draft_email"
-                      ? "Create approval draft"
-                      : "Approve preview"}
+                    {isReviewing
+                      ? "Recording…"
+                      : actionItem.type === "create_follow_up_draft"
+                          ? "Approve internal task"
+                          : "Preview only"}
                   </button>
                   <button
                     type="button"
+                    disabled={!hasDurableAudit || Boolean(reviewedState) || isReviewing}
                     onClick={() => void onReviewAction(actionItem, "rejected")}
-                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Reject
                   </button>
@@ -54104,10 +54317,22 @@ function IntegrationCenterSection({
 }
 
 function SettingsView({
+  client,
+  isDemoMode,
   snapshot,
+  userId,
+  onReload,
+  onNotice,
+  onError,
   onViewChange,
 }: {
+  client: CrmClient;
+  isDemoMode: boolean;
   snapshot: CrmSnapshot;
+  userId: string | null;
+  onReload: () => Promise<void>;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
   onViewChange: (view: WorkspaceView) => void;
 }) {
   const workflowSettingsByCompany = new Map(
@@ -54142,6 +54367,16 @@ function SettingsView({
           onClose={() => setConnectionDialog(null)}
         />
       ) : null}
+
+      <AutomationControlCenter
+        client={client}
+        snapshot={snapshot}
+        userId={userId}
+        isDemoMode={isDemoMode}
+        onReload={onReload}
+        onNotice={onNotice}
+        onError={onError}
+      />
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-950">Multi-company settings</h2>
