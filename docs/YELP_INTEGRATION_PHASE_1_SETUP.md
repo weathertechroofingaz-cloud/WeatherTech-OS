@@ -9,7 +9,7 @@ This document records both the earlier direct-Yelp application foundation and th
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; deployed READY at `https://weathertech-os.vercel.app`.
 - Historical deployed receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
 - Pending canonical receiver: after the current reviewed release is deployed, Mighty Apes should use `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/webhook`. The historical path remains a compatibility alias to the same handler so an existing provider configuration is not broken during the transition.
-- Schema checkpoints: the original Yelp release was exact at `48/48`. Production is now exact at `51/51`; the reviewed AI/automation/Mighty release set is `63/63` locally and on the isolated regression target but has not been applied to Production.
+- Schema checkpoints: the original Yelp release was exact at `48/48`. Production is now exact at `51/51`; the reviewed AI/automation/Mighty release set is `65/65` in the repository and on the isolated regression target but has not been applied to Production.
 - Production evidence: at the original release checkpoint, `GET` on the historical receiver safely returned HTTP 405 with `Allow: POST` and no-store caching. No Production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row has since been recorded.
 - Required secret: current server-side readiness redacts `MIGHTY_APES_YELP_WEBHOOK_SECRET` as present. Its value was not read; it must remain server-only and must be reverified with the exact deployed revision before an official provider test.
 - Outbound Yelp messaging: not implemented and disabled.

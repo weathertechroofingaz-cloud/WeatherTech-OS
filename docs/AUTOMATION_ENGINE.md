@@ -13,7 +13,7 @@ There is no registered action for sending email or SMS, placing a call, changing
 
 ## Current Rollout State
 
-The reviewed AI/automation/Mighty release set is `63/63` locally and on the isolated regression target. Production remains at the previously deployed `51/51` ledger. The twelve-migration automation/Mighty release suffix, canonical Mighty Apes endpoint/registry behavior, scheduler secret, AI price ceilings, and per-company AI policy rows are pending Production rollout. No paid Production AI smoke test has been run, and this document does not authorize one.
+The reviewed AI/automation/Mighty release set is `65/65` in the repository and on the isolated regression target. Production remains at the previously deployed `51/51` ledger. The fourteen-migration automation/Mighty release suffix, canonical Mighty Apes endpoint/registry behavior, scheduler secret, AI price ceilings, and per-company AI policy rows are pending Production rollout. No paid Production AI smoke test has been run, and this document does not authorize one.
 
 ## Data Model
 
@@ -30,6 +30,10 @@ Migration [20260902024804_automation_engine_foundation.sql](../supabase/migratio
 Migration [20260902043624_mighty_apes_legacy_service_routing_correction.sql](../supabase/migrations/20260902043624_mighty_apes_legacy_service_routing_correction.sql) preserves the validated foundation while ensuring a legacy-schema Mighty Apes lead receives the registry-owned company location and requested service before deferred automation runs.
 
 Migration [20260902102714_lead_automation_event_legacy_schema_compatibility.sql](../supabase/migrations/20260902102714_lead_automation_event_legacy_schema_compatibility.sql) keeps deferred lead-event emission compatible with both canonical and supported legacy lead schemas while preserving exact persisted company/location identity and source normalization.
+
+Migration [20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql](../supabase/migrations/20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql) makes the existing inbound SMS and missed-call triggers observe match-reconciliation updates. An unmatched source emits nothing; the same row emits exactly once when it becomes matched under an exact connected same-company provider binding; later eligible replays remain idempotent.
+
+Migration [20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql](../supabase/migrations/20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql) is the forward-only compatibility correction after the prior migration was applied to regression. A GHL row that was already marked matched under an invalid paused or cross-company binding can emit exactly once after its source binding becomes valid; replay suppression is backed by the company-scoped stable event key instead of the old row shape. Provider-specific triggers preserve the predecessor Twilio contract: SMS remains insert-only, and call updates emit only when call status transitions into missed. The final guarded hosted regression passed 81 assertions with zero provider-network requests and zero cleanup residue.
 
 Authenticated users receive company-scoped read access through RLS. Direct browser writes to engine tables are revoked. Owner/admin controls call `SECURITY DEFINER` RPCs that recheck database authorization, company scope, current version, status, and bounded reason. The service role can run only the bounded worker entry point.
 
@@ -108,9 +112,9 @@ The UI has no manual run-all button and no workflow builder. Non-owner/admin use
 
 ## Validation And Rollout
 
-Before Production activation (current Production is still `51/51`; the reviewed release checkpoint is `63/63` locally/regression):
+Before Production activation (current Production is still `51/51`; the reviewed release checkpoint is `65/65` in the repository/regression):
 
-1. Freeze the exact twelve-migration release set and register every SHA-256 in migration integrity tests.
+1. Freeze the exact fourteen-migration release set and register every SHA-256 in migration integrity tests.
 2. Apply the migration set to the pinned non-Production regression project.
 3. Prove company/location RLS, stale-version rejection, rule disablement, approval, idempotency, retries, cancellation, due-task exact-once behavior, AI review, inbound-event privacy, and zero provider calls.
 4. Run independent zero-residue verification and Supabase security/performance advisors.

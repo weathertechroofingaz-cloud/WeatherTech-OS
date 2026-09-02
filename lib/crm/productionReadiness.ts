@@ -218,7 +218,7 @@ export type ProductionReadinessCenter = {
 };
 
 const latestRequiredMigration =
-  "20260902102714_lead_automation_event_legacy_schema_compatibility.sql";
+  "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql";
 
 const providerIdsForActivation = new Set<IntegrationProviderId>([
   "twilio",
@@ -713,6 +713,29 @@ const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
     remoteStatus: "remote_status_unknown",
     requiredAction:
       "Verify canonical and legacy lead writes emit exact company/location-scoped automation events without inferring missing identity fields.",
+  },
+  {
+    id: "gohighlevel-reconciliation-automation-transition-fix",
+    filename: "20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql",
+    area: "GoHighLevel reconciliation automation transition fix",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify unmatched inbound SMS and missed-call rows emit exactly once only after an exact same-company connected GoHighLevel reconciliation changes them to matched.",
+  },
+  {
+    id: "gohighlevel-reconciliation-event-recovery-twilio-compatibility",
+    filename:
+      "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
+    area: "GoHighLevel reconciliation recovery and Twilio compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify a previously invalid matched GoHighLevel row emits exactly once after its binding is corrected, while Twilio SMS remains insert-only and Twilio calls emit on missed-status transitions only.",
   },
 ];
 

@@ -149,7 +149,9 @@ async function loadSourceAutomationEvents(client, sourceTable, sourceId) {
   return requireData(
     await client
       .from("automation_events")
-      .select("id,company_id,company_location_id,event_type,source_table,source_id,recorded_at")
+      .select(
+        "id,company_id,company_location_id,event_type,source_table,source_id,idempotency_key,recorded_at",
+      )
       .eq("source_table", sourceTable)
       .eq("source_id", sourceId)
       .order("recorded_at", { ascending: true }),
@@ -205,6 +207,11 @@ export async function runAutomationEngineRegression({
   const activePhoneB = randomUUID();
   const communicationSourceIds = {
     ghlLocated: randomUUID(),
+    ghlReconciled: randomUUID(),
+    ghlReconciledPaused: randomUUID(),
+    ghlReconciledCrossCompany: randomUUID(),
+    ghlReconciledOutbound: randomUUID(),
+    ghlReconciledWrongType: randomUUID(),
     ghlNoLocation: randomUUID(),
     ghlOutbound: randomUUID(),
     ghlMissingDirection: randomUUID(),
@@ -214,14 +221,22 @@ export async function runAutomationEngineRegression({
     ghlUnmatched: randomUUID(),
     ghlWrongProvider: randomUUID(),
     twilioActive: randomUUID(),
+    twilioReconciled: randomUUID(),
     twilioMissingPhone: randomUUID(),
     twilioInactivePhone: randomUUID(),
   };
   const callSourceIds = {
     ghlLocated: randomUUID(),
+    ghlReconciled: randomUUID(),
+    ghlReconciledPaused: randomUUID(),
+    ghlReconciledCrossCompany: randomUUID(),
+    ghlReconciledOutbound: randomUUID(),
+    ghlReconciledCompleted: randomUUID(),
     ghlCrossCompany: randomUUID(),
     ghlMissingBinding: randomUUID(),
     twilioActive: randomUUID(),
+    twilioReconciled: randomUUID(),
+    twilioStatusTransition: randomUUID(),
     twilioCrossCompanyPhone: randomUUID(),
   };
   const capturedEventIds = [];
@@ -517,24 +532,27 @@ export async function runAutomationEngineRegression({
       connectionId = connectedGhlA,
       phoneId = null,
       leadId = leadEnabled,
+      companyId = companyA,
       routingStatus = "matched",
+      direction = "inbound",
+      callStatus = "missed",
       label,
       providerCallSid = `${marker}:${label}`,
     }) => ({
       id,
-      company_id: companyA,
+      company_id: companyId,
       integration_connection_id: connectionId,
       business_phone_number_id: phoneId,
       lead_id: leadId,
       provider,
       provider_call_sid: providerCallSid,
-      direction: "inbound",
-      call_status: "missed",
+      direction,
+      call_status: callStatus,
       routing_status: routingStatus,
       correlation_id: `${marker} ${label}`,
       started_at: new Date().toISOString(),
       ended_at: new Date().toISOString(),
-      follow_up_required: true,
+      follow_up_required: callStatus === "missed",
       metadata: { synthetic: true },
     });
 
@@ -555,7 +573,9 @@ export async function runAutomationEngineRegression({
       sourceEvents.length === 1 &&
         sourceEvents[0].company_id === companyA &&
         sourceEvents[0].company_location_id === locationA &&
-        sourceEvents[0].event_type === "communication.received",
+        sourceEvents[0].event_type === "communication.received" &&
+        sourceEvents[0].idempotency_key ===
+          `communication-provider-event:${communicationSourceIds.ghlLocated}`,
       "Connected matched GHL SMS must emit exactly one lead-located company event",
     );
     requireRefusal(
@@ -573,6 +593,163 @@ export async function runAutomationEngineRegression({
       communicationSourceIds.ghlLocated,
     );
     check(sourceEvents.length === 1, "Duplicate GHL SMS delivery must leave one automation event");
+
+    const reconciledGhlSms = communicationRow({
+      id: communicationSourceIds.ghlReconciled,
+      routingStatus: "needs_review",
+      leadId: null,
+      label: "GHL SMS RECONCILIATION",
+    });
+    requireData(
+      await service.from("communication_provider_events").insert(reconciledGhlSms),
+      "Unmatched GHL inbound SMS before reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "communication_provider_events",
+        communicationSourceIds.ghlReconciled,
+      )).length === 0,
+      "Unmatched GHL inbound SMS must emit zero automation events before reconciliation",
+    );
+    requireData(
+      await service
+        .from("communication_provider_events")
+        .update({ routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", communicationSourceIds.ghlReconciled),
+      "Reconcile GHL inbound SMS to matched",
+    );
+    sourceEvents = await loadSourceAutomationEvents(
+      service,
+      "communication_provider_events",
+      communicationSourceIds.ghlReconciled,
+    );
+    check(
+      sourceEvents.length === 1 &&
+        sourceEvents[0].company_id === companyA &&
+        sourceEvents[0].company_location_id === locationA &&
+        sourceEvents[0].event_type === "communication.received" &&
+        sourceEvents[0].idempotency_key ===
+          `communication-provider-event:${communicationSourceIds.ghlReconciled}`,
+      "GHL inbound SMS needs_review-to-matched reconciliation must emit exactly once",
+    );
+    requireData(
+      await service
+        .from("communication_provider_events")
+        .update({ routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", communicationSourceIds.ghlReconciled),
+      "Replay matched GHL inbound SMS reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "communication_provider_events",
+        communicationSourceIds.ghlReconciled,
+      )).length === 1,
+      "Repeated eligible GHL SMS reconciliation must remain exactly once",
+    );
+
+    for (const [sourceId, row, label] of [
+      [
+        communicationSourceIds.ghlReconciledPaused,
+        communicationRow({
+          id: communicationSourceIds.ghlReconciledPaused,
+          connectionId: pausedGhlA,
+          routingStatus: "needs_review",
+          label: "GHL SMS RECONCILIATION PAUSED",
+        }),
+        "non-connected",
+      ],
+      [
+        communicationSourceIds.ghlReconciledCrossCompany,
+        communicationRow({
+          id: communicationSourceIds.ghlReconciledCrossCompany,
+          connectionId: connectedGhlB,
+          routingStatus: "needs_review",
+          label: "GHL SMS RECONCILIATION CROSS COMPANY",
+        }),
+        "cross-company",
+      ],
+      [
+        communicationSourceIds.ghlReconciledOutbound,
+        communicationRow({
+          id: communicationSourceIds.ghlReconciledOutbound,
+          direction: "outbound",
+          eventType: "sms_inbound",
+          routingStatus: "needs_review",
+          label: "GHL SMS RECONCILIATION OUTBOUND",
+        }),
+        "outbound",
+      ],
+      [
+        communicationSourceIds.ghlReconciledWrongType,
+        communicationRow({
+          id: communicationSourceIds.ghlReconciledWrongType,
+          eventType: "voice_inbound",
+          routingStatus: "needs_review",
+          label: "GHL SMS RECONCILIATION WRONG TYPE",
+        }),
+        "wrong-type",
+      ],
+    ]) {
+      requireData(
+        await service.from("communication_provider_events").insert(row),
+        `Insert ${label} GHL SMS transition fixture`,
+      );
+      requireData(
+        await service
+          .from("communication_provider_events")
+          .update({ routing_status: "matched", lead_id: leadEnabled })
+          .eq("id", sourceId),
+        `Attempt ${label} GHL SMS reconciliation`,
+      );
+      check(
+        (await loadSourceAutomationEvents(
+          service,
+          "communication_provider_events",
+          sourceId,
+        )).length === 0,
+        `${label} GHL SMS needs_review-to-matched update must emit zero automation events`,
+      );
+
+      if (label === "non-connected" || label === "cross-company") {
+        requireData(
+          await service
+            .from("communication_provider_events")
+            .update({ integration_connection_id: connectedGhlA, lead_id: leadEnabled })
+            .eq("id", sourceId),
+          `Correct ${label} GHL SMS binding after invalid matched state`,
+        );
+        sourceEvents = await loadSourceAutomationEvents(
+          service,
+          "communication_provider_events",
+          sourceId,
+        );
+        check(
+          sourceEvents.length === 1 &&
+            sourceEvents[0].company_id === companyA &&
+            sourceEvents[0].company_location_id === locationA &&
+            sourceEvents[0].event_type === "communication.received" &&
+            sourceEvents[0].idempotency_key === `communication-provider-event:${sourceId}`,
+          `${label} matched GHL SMS must emit exactly once after binding correction`,
+        );
+        requireData(
+          await service
+            .from("communication_provider_events")
+            .update({ integration_connection_id: connectedGhlA, lead_id: leadEnabled })
+            .eq("id", sourceId),
+          `Replay corrected ${label} GHL SMS binding`,
+        );
+        check(
+          (await loadSourceAutomationEvents(
+            service,
+            "communication_provider_events",
+            sourceId,
+          )).length === 1,
+          `${label} corrected GHL SMS replay must remain exactly once`,
+        );
+      }
+    }
 
     requireData(
       await service.from("communication_provider_events").insert(communicationRow({
@@ -705,7 +882,8 @@ export async function runAutomationEngineRegression({
       sourceEvents.length === 1 &&
         sourceEvents[0].company_id === companyA &&
         sourceEvents[0].company_location_id === locationA &&
-        sourceEvents[0].event_type === "missed_call.received",
+        sourceEvents[0].event_type === "missed_call.received" &&
+        sourceEvents[0].idempotency_key === `missed-call:${callSourceIds.ghlLocated}`,
       "Connected matched GHL missed call must emit exactly one lead-located company event",
     );
     requireData(
@@ -718,6 +896,150 @@ export async function runAutomationEngineRegression({
       callSourceIds.ghlLocated,
     );
     check(sourceEvents.length === 1, "GHL missed-call replay update must remain exactly once");
+
+    const reconciledGhlCall = callRow({
+      id: callSourceIds.ghlReconciled,
+      routingStatus: "needs_review",
+      leadId: null,
+      label: "GHL MISSED CALL RECONCILIATION",
+    });
+    requireData(
+      await service.from("call_records").insert(reconciledGhlCall),
+      "Unmatched GHL missed call before reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "call_records",
+        callSourceIds.ghlReconciled,
+      )).length === 0,
+      "Missed + needs_review GHL call must emit zero events before reconciliation",
+    );
+    requireData(
+      await service
+        .from("call_records")
+        .update({ routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", callSourceIds.ghlReconciled),
+      "Reconcile GHL missed call to matched",
+    );
+    sourceEvents = await loadSourceAutomationEvents(
+      service,
+      "call_records",
+      callSourceIds.ghlReconciled,
+    );
+    check(
+      sourceEvents.length === 1 &&
+        sourceEvents[0].company_id === companyA &&
+        sourceEvents[0].company_location_id === locationA &&
+        sourceEvents[0].event_type === "missed_call.received" &&
+        sourceEvents[0].idempotency_key === `missed-call:${callSourceIds.ghlReconciled}`,
+      "GHL missed + needs_review-to-matched reconciliation must emit exactly once",
+    );
+    requireData(
+      await service
+        .from("call_records")
+        .update({ call_status: "missed", routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", callSourceIds.ghlReconciled),
+      "Replay matched GHL missed-call reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "call_records",
+        callSourceIds.ghlReconciled,
+      )).length === 1,
+      "Repeated eligible GHL missed-call reconciliation must remain exactly once",
+    );
+
+    for (const [sourceId, row, label] of [
+      [
+        callSourceIds.ghlReconciledPaused,
+        callRow({
+          id: callSourceIds.ghlReconciledPaused,
+          connectionId: pausedGhlA,
+          routingStatus: "needs_review",
+          label: "GHL MISSED CALL RECONCILIATION PAUSED",
+        }),
+        "non-connected",
+      ],
+      [
+        callSourceIds.ghlReconciledCrossCompany,
+        callRow({
+          id: callSourceIds.ghlReconciledCrossCompany,
+          connectionId: connectedGhlB,
+          routingStatus: "needs_review",
+          label: "GHL MISSED CALL RECONCILIATION CROSS COMPANY",
+        }),
+        "cross-company",
+      ],
+      [
+        callSourceIds.ghlReconciledOutbound,
+        callRow({
+          id: callSourceIds.ghlReconciledOutbound,
+          direction: "outbound",
+          routingStatus: "needs_review",
+          label: "GHL MISSED CALL RECONCILIATION OUTBOUND",
+        }),
+        "outbound",
+      ],
+      [
+        callSourceIds.ghlReconciledCompleted,
+        callRow({
+          id: callSourceIds.ghlReconciledCompleted,
+          callStatus: "completed",
+          routingStatus: "needs_review",
+          label: "GHL COMPLETED CALL RECONCILIATION",
+        }),
+        "not-missed",
+      ],
+    ]) {
+      requireData(
+        await service.from("call_records").insert(row),
+        `Insert ${label} GHL call transition fixture`,
+      );
+      requireData(
+        await service
+          .from("call_records")
+          .update({ routing_status: "matched", lead_id: leadEnabled })
+          .eq("id", sourceId),
+        `Attempt ${label} GHL call reconciliation`,
+      );
+      check(
+        (await loadSourceAutomationEvents(service, "call_records", sourceId)).length === 0,
+        `${label} GHL call needs_review-to-matched update must emit zero automation events`,
+      );
+
+      if (label === "non-connected" || label === "cross-company") {
+        requireData(
+          await service
+            .from("call_records")
+            .update({ integration_connection_id: connectedGhlA, lead_id: leadEnabled })
+            .eq("id", sourceId),
+          `Correct ${label} GHL missed-call binding after invalid matched state`,
+        );
+        sourceEvents = await loadSourceAutomationEvents(service, "call_records", sourceId);
+        check(
+          sourceEvents.length === 1 &&
+            sourceEvents[0].company_id === companyA &&
+            sourceEvents[0].company_location_id === locationA &&
+            sourceEvents[0].event_type === "missed_call.received" &&
+            sourceEvents[0].idempotency_key === `missed-call:${sourceId}`,
+          `${label} matched GHL missed call must emit exactly once after binding correction`,
+        );
+        requireData(
+          await service
+            .from("call_records")
+            .update({ integration_connection_id: connectedGhlA, lead_id: leadEnabled })
+            .eq("id", sourceId),
+          `Replay corrected ${label} GHL missed-call binding`,
+        );
+        check(
+          (await loadSourceAutomationEvents(service, "call_records", sourceId)).length === 1,
+          `${label} corrected GHL missed-call replay must remain exactly once`,
+        );
+      }
+    }
+
     requireRefusal(
       await service.from("call_records").insert({
         ...locatedGhlCall,
@@ -786,6 +1108,15 @@ export async function runAutomationEngineRegression({
         label: "TWILIO ACTIVE ROUTE",
       }),
       communicationRow({
+        id: communicationSourceIds.twilioReconciled,
+        provider: "twilio_sms",
+        connectionId: twilioConnectionA,
+        phoneId: activePhoneA,
+        routingStatus: "needs_review",
+        leadId: null,
+        label: "TWILIO SMS ROUTING RECONCILIATION",
+      }),
+      communicationRow({
         id: communicationSourceIds.twilioMissingPhone,
         provider: "twilio_sms",
         connectionId: twilioConnectionA,
@@ -809,6 +1140,23 @@ export async function runAutomationEngineRegression({
         label: "TWILIO ACTIVE CALL ROUTE",
       }),
       callRow({
+        id: callSourceIds.twilioReconciled,
+        provider: "twilio",
+        connectionId: twilioConnectionA,
+        phoneId: activePhoneA,
+        routingStatus: "needs_review",
+        leadId: null,
+        label: "TWILIO MISSED CALL ROUTING RECONCILIATION",
+      }),
+      callRow({
+        id: callSourceIds.twilioStatusTransition,
+        provider: "twilio",
+        connectionId: twilioConnectionA,
+        phoneId: activePhoneA,
+        callStatus: "incoming",
+        label: "TWILIO CALL STATUS TRANSITION",
+      }),
+      callRow({
         id: callSourceIds.twilioCrossCompanyPhone,
         provider: "twilio",
         connectionId: twilioConnectionA,
@@ -828,6 +1176,85 @@ export async function runAutomationEngineRegression({
         `Active exact-company Twilio source ${sourceId} must retain its existing automation route`,
       );
     }
+
+    for (const [sourceTable, sourceId] of [
+      ["communication_provider_events", communicationSourceIds.twilioReconciled],
+      ["call_records", callSourceIds.twilioReconciled],
+      ["call_records", callSourceIds.twilioStatusTransition],
+    ]) {
+      check(
+        (await loadSourceAutomationEvents(service, sourceTable, sourceId)).length === 0,
+        `Pre-transition Twilio source ${sourceId} must emit zero automation events`,
+      );
+    }
+
+    requireData(
+      await service
+        .from("communication_provider_events")
+        .update({ routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", communicationSourceIds.twilioReconciled),
+      "Attempt Twilio SMS needs_review-to-matched reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "communication_provider_events",
+        communicationSourceIds.twilioReconciled,
+      )).length === 0,
+      "Twilio SMS needs_review-to-matched update must preserve insert-only behavior",
+    );
+
+    requireData(
+      await service
+        .from("call_records")
+        .update({ routing_status: "matched", lead_id: leadEnabled })
+        .eq("id", callSourceIds.twilioReconciled),
+      "Attempt Twilio missed-call needs_review-to-matched reconciliation",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "call_records",
+        callSourceIds.twilioReconciled,
+      )).length === 0,
+      "Twilio missed plus needs_review-to-matched routing update must emit zero events",
+    );
+
+    requireData(
+      await service
+        .from("call_records")
+        .update({ call_status: "missed" })
+        .eq("id", callSourceIds.twilioStatusTransition),
+      "Transition matched Twilio call status to missed",
+    );
+    sourceEvents = await loadSourceAutomationEvents(
+      service,
+      "call_records",
+      callSourceIds.twilioStatusTransition,
+    );
+    check(
+      sourceEvents.length === 1 &&
+        sourceEvents[0].company_id === companyA &&
+        sourceEvents[0].company_location_id === locationA &&
+        sourceEvents[0].event_type === "missed_call.received" &&
+        sourceEvents[0].idempotency_key === `missed-call:${callSourceIds.twilioStatusTransition}`,
+      "Twilio non-missed-to-missed status transition must emit exactly once",
+    );
+    requireData(
+      await service
+        .from("call_records")
+        .update({ call_status: "missed" })
+        .eq("id", callSourceIds.twilioStatusTransition),
+      "Replay Twilio missed-call status transition",
+    );
+    check(
+      (await loadSourceAutomationEvents(
+        service,
+        "call_records",
+        callSourceIds.twilioStatusTransition,
+      )).length === 1,
+      "Repeated Twilio missed status update must remain exactly once",
+    );
     for (const [sourceTable, sourceId] of [
       ["communication_provider_events", communicationSourceIds.twilioMissingPhone],
       ["communication_provider_events", communicationSourceIds.twilioInactivePhone],

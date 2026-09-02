@@ -19,6 +19,7 @@ const JOB_PHOTO_CROSS_UPDATE_BYTES = Buffer.from(
   "utf8",
 );
 const JOB_PHOTO_NONRETRYABLE_REFUSAL_MAX_MS = 10_000;
+const JOB_PHOTO_SOURCE_DELETE_MAX_ATTEMPTS = 3;
 
 export const REQUIRED_DISABLED_SIDE_EFFECT_FLAGS = [
   "AI_ACTION_EXECUTION_ENABLED",
@@ -881,6 +882,371 @@ function jobPhotoRecoveryClaimRow(data, label, expectedStates = null) {
   return row;
 }
 
+function createBrowserRegressionRunId(now = new Date()) {
+  const runId = now.toISOString().replace(/[-:.TZ]/g, "");
+
+  if (!/^[0-9]{17}$/.test(runId)) {
+    throw new Error("Job-photo lifecycle did not generate a canonical Browser run ID.");
+  }
+
+  return runId;
+}
+
+function sortedUniqueRowIds(rows) {
+  return [...new Set(rows.map((row) => row?.id).filter(Boolean))].sort();
+}
+
+function mergeRowsById(...groups) {
+  return [...new Map(
+    groups.flat().map((row) => [row.id, row]),
+  ).values()];
+}
+
+async function findRowsByForeignIds(
+  serviceClient,
+  table,
+  column,
+  ids,
+  select,
+  label,
+) {
+  const exactIds = [...new Set(ids.filter(Boolean))];
+
+  if (!exactIds.length) {
+    return [];
+  }
+
+  return requireSupabaseData(
+    await serviceClient.from(table).select(select).in(column, exactIds),
+    label,
+  );
+}
+
+async function discoverJobPhotoLifecycleAutomationGraph(
+  serviceClient,
+  sourceRows,
+) {
+  const sourceById = new Map(sourceRows.map((source) => [source.id, source]));
+  const sourceIds = [...sourceById.keys()];
+  const baseEvents = await findRowsByForeignIds(
+    serviceClient,
+    "automation_events",
+    "source_id",
+    sourceIds,
+    "id,company_id,source_table,source_id,causation_event_id",
+    "Discover exact job-photo lifecycle automation roots",
+  );
+
+  for (const event of baseEvents) {
+    const source = sourceById.get(event.source_id);
+
+    if (
+      event.source_table !== "jobs" ||
+      !source ||
+      event.company_id !== source.company_id ||
+      event.causation_event_id !== null
+    ) {
+      throw new Error(
+        "Job-photo lifecycle automation root does not match its exact company-scoped job source.",
+      );
+    }
+  }
+
+  const eventsById = new Map(baseEvents.map((event) => [event.id, event]));
+  let frontier = sortedUniqueRowIds(baseEvents);
+
+  while (frontier.length > 0) {
+    const children = await findRowsByForeignIds(
+      serviceClient,
+      "automation_events",
+      "causation_event_id",
+      frontier,
+      "id,company_id,source_table,source_id,causation_event_id",
+      "Discover job-photo lifecycle automation descendants",
+    );
+    const next = [];
+
+    for (const child of children) {
+      const parent = eventsById.get(child.causation_event_id);
+
+      if (!parent || child.company_id !== parent.company_id) {
+        throw new Error(
+          "Job-photo lifecycle automation causation graph crosses or omits an exact company parent.",
+        );
+      }
+
+      if (!eventsById.has(child.id)) {
+        eventsById.set(child.id, child);
+        next.push(child.id);
+      }
+    }
+
+    if (eventsById.size > 2000) {
+      throw new Error("Job-photo lifecycle automation graph exceeds its cleanup bound.");
+    }
+
+    frontier = next;
+  }
+
+  const eventIds = [...eventsById.keys()].sort();
+  const executions = await findRowsByForeignIds(
+    serviceClient,
+    "automation_executions",
+    "event_id",
+    eventIds,
+    "id,company_id,event_id",
+    "Discover exact job-photo lifecycle automation executions",
+  );
+  const executionIds = sortedUniqueRowIds(executions);
+  const attempts = await findRowsByForeignIds(
+    serviceClient,
+    "automation_attempts",
+    "execution_id",
+    executionIds,
+    "id,company_id,execution_id",
+    "Discover exact job-photo lifecycle automation attempts",
+  );
+  const [eventAudits, executionAudits, tasks] = await Promise.all([
+    findRowsByForeignIds(
+      serviceClient,
+      "automation_audit_events",
+      "event_id",
+      eventIds,
+      "id,company_id,event_id,execution_id,audit_type",
+      "Discover exact job-photo lifecycle event audits",
+    ),
+    findRowsByForeignIds(
+      serviceClient,
+      "automation_audit_events",
+      "execution_id",
+      executionIds,
+      "id,company_id,event_id,execution_id,audit_type",
+      "Discover exact job-photo lifecycle execution audits",
+    ),
+    findRowsByForeignIds(
+      serviceClient,
+      "office_tasks",
+      "automation_execution_id",
+      executionIds,
+      "id,company_id,automation_execution_id",
+      "Discover exact job-photo lifecycle automation tasks",
+    ),
+  ]);
+
+  return {
+    eventIds,
+    executionIds,
+    attemptIds: sortedUniqueRowIds(attempts),
+    auditIds: sortedUniqueRowIds(mergeRowsById(eventAudits, executionAudits)),
+    taskIds: sortedUniqueRowIds(tasks),
+  };
+}
+
+async function cleanupJobPhotoLifecycleAutomationLedger({
+  config,
+  fetchImpl,
+  serviceClient,
+  runId,
+  expectedSources,
+}) {
+  const intendedSourceIds = expectedSources.map((source) => source.id);
+  const sourceRows = await findRowsByForeignIds(
+    serviceClient,
+    "jobs",
+    "id",
+    intendedSourceIds,
+    "id,company_id,title",
+    "Read exact job-photo lifecycle automation sources before cleanup",
+  );
+  const expectedById = new Map(expectedSources.map((source) => [source.id, source]));
+
+  for (const source of sourceRows) {
+    const expected = expectedById.get(source.id);
+
+    if (
+      !expected ||
+      source.company_id !== expected.companyId ||
+      source.title !== expected.title
+    ) {
+      throw new Error(
+        "Job-photo lifecycle automation cleanup found a changed or cross-company source job.",
+      );
+    }
+  }
+
+  const graph = await discoverJobPhotoLifecycleAutomationGraph(
+    serviceClient,
+    sourceRows,
+  );
+
+  if (sourceRows.length === 0 && graph.eventIds.length === 0) {
+    return {
+      invoked: false,
+      counts: { auditEvents: 0, attempts: 0, tasks: 0, executions: 0, events: 0 },
+      databaseResidueCount: 0,
+    };
+  }
+
+  if (sourceRows.length === 0 || graph.eventIds.length === 0 || graph.auditIds.length === 0) {
+    throw new Error(
+      "Job-photo lifecycle automation cleanup requires every exact source, event, and immutable audit row.",
+    );
+  }
+
+  const owner = assertOwnedRegressionUser(
+    await findRegressionOwner(config, fetchImpl),
+    config,
+  );
+  const sourceRecords = sourceRows
+    .map((source) => ({ sourceTable: "jobs", sourceId: source.id }))
+    .sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  const cleanupResult = requireSupabaseData(
+    await serviceClient.rpc("wtos_cleanup_synthetic_automation_fixture", {
+      cleanup_request: {
+        operationKey: randomUUID(),
+        regressionOwnerUserId: owner.id,
+        markerFamily: "browser",
+        runId,
+        sourceMarker: `TEST WTOS REGRESSION ${runId}`,
+        providerMarker: `TEST WTOS MIGHTY APES REGRESSION: ${runId}`,
+        sourceRecords,
+        ...graph,
+      },
+    }),
+    "Clean exact job-photo lifecycle automation graph",
+  );
+  const expectedCounts = {
+    auditEvents: graph.auditIds.length,
+    attempts: graph.attemptIds.length,
+    tasks: graph.taskIds.length,
+    executions: graph.executionIds.length,
+    events: graph.eventIds.length,
+  };
+
+  if (
+    cleanupResult?.ok !== true ||
+    cleanupResult?.status !== "cleaned" ||
+    cleanupResult?.databaseResidueCount !== 0 ||
+    !Object.entries(expectedCounts).every(
+      ([key, count]) => cleanupResult?.counts?.[key] === count,
+    )
+  ) {
+    throw new Error(
+      "Job-photo lifecycle automation cleanup returned an inexact sanitized receipt.",
+    );
+  }
+
+  const [eventResidue, executionResidue, attemptResidue, auditResidue, taskResidue] =
+    await Promise.all([
+      findRowsByForeignIds(
+        serviceClient,
+        "automation_events",
+        "id",
+        graph.eventIds,
+        "id",
+        "Verify exact job-photo lifecycle event cleanup",
+      ),
+      findRowsByForeignIds(
+        serviceClient,
+        "automation_executions",
+        "id",
+        graph.executionIds,
+        "id",
+        "Verify exact job-photo lifecycle execution cleanup",
+      ),
+      findRowsByForeignIds(
+        serviceClient,
+        "automation_attempts",
+        "id",
+        graph.attemptIds,
+        "id",
+        "Verify exact job-photo lifecycle attempt cleanup",
+      ),
+      findRowsByForeignIds(
+        serviceClient,
+        "automation_audit_events",
+        "id",
+        graph.auditIds,
+        "id",
+        "Verify exact job-photo lifecycle audit cleanup",
+      ),
+      findRowsByForeignIds(
+        serviceClient,
+        "office_tasks",
+        "id",
+        graph.taskIds,
+        "id",
+        "Verify exact job-photo lifecycle task cleanup",
+      ),
+    ]);
+  const exactResidueCount =
+    eventResidue.length +
+    executionResidue.length +
+    attemptResidue.length +
+    auditResidue.length +
+    taskResidue.length;
+
+  if (exactResidueCount !== 0) {
+    throw new Error(
+      "Job-photo lifecycle automation cleanup did not reach exact graph zero.",
+    );
+  }
+
+  return { invoked: true, ...cleanupResult };
+}
+
+async function deleteExactJobPhotoLifecycleSources(
+  serviceClient,
+  sourceIds,
+) {
+  const exactSourceIds = [...new Set(sourceIds.filter(Boolean))].sort();
+  let lastDeleteError = null;
+  let lastReadError = null;
+
+  if (exactSourceIds.length === 0) {
+    return { attempts: 0, remainingSourceIds: [] };
+  }
+
+  for (
+    let attempt = 1;
+    attempt <= JOB_PHOTO_SOURCE_DELETE_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      requireSupabaseData(
+        await serviceClient.from("jobs").delete().in("id", exactSourceIds),
+        `Delete exact job-photo lifecycle source jobs attempt ${attempt}`,
+      );
+      lastDeleteError = null;
+    } catch (error) {
+      lastDeleteError = error;
+    }
+
+    try {
+      const remainingSources = requireSupabaseData(
+        await serviceClient.from("jobs").select("id").in("id", exactSourceIds),
+        `Read exact job-photo lifecycle source-job residue attempt ${attempt}`,
+      );
+      lastReadError = null;
+
+      if (remainingSources.length === 0) {
+        return { attempts: attempt, remainingSourceIds: [] };
+      }
+    } catch (error) {
+      lastReadError = error;
+    }
+
+    if (attempt < JOB_PHOTO_SOURCE_DELETE_MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+
+  throw new AggregateError(
+    [lastDeleteError, lastReadError].filter(Boolean),
+    "Exact job-photo lifecycle source cleanup did not reach zero after three attempts.",
+  );
+}
+
 async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
   const serviceClient = createIsolatedSupabaseClient(
     config,
@@ -896,7 +1262,7 @@ async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
     (company) => company.name === "WeatherTech Roofing LLC",
   );
   const ihc = companies.find((company) => company.name === "IHC Painting");
-  const runId = randomUUID();
+  const runId = createBrowserRegressionRunId();
   const sharedOperationKey = randomUUID();
   const weatherTechJobId = randomUUID();
   const ihcJobId = randomUUID();
@@ -905,6 +1271,9 @@ async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
   const storagePaths = [];
   let primaryError = null;
   let result = null;
+  let automationLedgerCleanup = null;
+  let automationLedgerCleanupVerified = false;
+  let jobSourceCleanup = null;
 
   const jobPhotoBucket = requireSupabaseData(
     await serviceClient.storage.getBucket(JOB_PHOTO_BUCKET),
@@ -1239,10 +1608,16 @@ async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
       weatherTech,
     );
     const ihcIdentity = await createScopedUser("ihc", ihc);
-    const [weatherTechJob, ihcJob] = await Promise.all([
-      insertJob(weatherTechJobId, weatherTech, "WEATHERTECH PHOTO JOB"),
-      insertJob(ihcJobId, ihc, "IHC PHOTO JOB"),
-    ]);
+    const weatherTechJob = await insertJob(
+      weatherTechJobId,
+      weatherTech,
+      "WEATHERTECH PHOTO JOB",
+    );
+    const ihcJob = await insertJob(
+      ihcJobId,
+      ihc,
+      "IHC PHOTO JOB",
+    );
     const storageMarker = `test-wtos-regression-${runId}`;
     const weatherTechPath = `${weatherTech.id}/job/${weatherTechJob.id}/${sharedOperationKey}-${storageMarker}-same-name.png`;
     const ihcPath = `${ihc.id}/job/${ihcJob.id}/${sharedOperationKey}-${storageMarker}-same-name.png`;
@@ -2774,12 +3149,39 @@ async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
     }
 
     try {
-      requireSupabaseData(
-        await serviceClient
-          .from("jobs")
-          .delete()
-          .in("id", [weatherTechJobId, ihcJobId]),
-        "Delete exact job-photo lifecycle jobs",
+      automationLedgerCleanup = await cleanupJobPhotoLifecycleAutomationLedger({
+        config,
+        fetchImpl,
+        serviceClient,
+        runId,
+        expectedSources: [
+          {
+            id: weatherTechJobId,
+            companyId: weatherTech.id,
+            title: `TEST WTOS REGRESSION ${runId} WEATHERTECH PHOTO JOB`,
+          },
+          {
+            id: ihcJobId,
+            companyId: ihc.id,
+            title: `TEST WTOS REGRESSION ${runId} IHC PHOTO JOB`,
+          },
+        ],
+      });
+      automationLedgerCleanupVerified = true;
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+
+    try {
+      if (!automationLedgerCleanupVerified) {
+        throw new Error(
+          "Refusing to delete job-photo lifecycle source jobs before exact automation-ledger cleanup succeeds.",
+        );
+      }
+
+      jobSourceCleanup = await deleteExactJobPhotoLifecycleSources(
+        serviceClient,
+        [weatherTechJobId, ihcJobId],
       );
     } catch (error) {
       cleanupErrors.push(error);
@@ -2831,7 +3233,7 @@ async function jobPhotoStorageLifecycleProbe(config, fetchImpl, companies) {
     throw new Error("Job-photo Storage lifecycle did not produce a verified result.");
   }
 
-  return result;
+  return { ...result, automationLedgerCleanup, jobSourceCleanup };
 }
 
 async function lifecycleProbe(config, fetchImpl) {

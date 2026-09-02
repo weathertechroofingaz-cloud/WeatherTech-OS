@@ -240,6 +240,14 @@ const expectedMigrations = [
     "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
     "eb1de6aeb9c994530b0c0c92adad0688c3e30809d068eed574325463a423fe64",
   ],
+  [
+    "20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql",
+    "1b6a3dc81b3dd3881b5cebc5e466f19a625a928b0c529d1bd631f2b666533e9d",
+  ],
+  [
+    "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
+    "0bdf73eb47ff56b0a302043be45607879561b6dd6d13cc54d8060c3b6b2f811f",
+  ],
 ];
 
 const files = fs
@@ -403,6 +411,12 @@ const legacyTwilioBrowserVoiceOrphanCleanupIndex = files.indexOf(
 const leadAutomationEventLegacySchemaCompatibilityIndex = files.indexOf(
   "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
 );
+const goHighLevelReconciliationAutomationTransitionFixIndex = files.indexOf(
+  "20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql",
+);
+const goHighLevelReconciliationEventRecoveryIndex = files.indexOf(
+  "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -521,6 +535,8 @@ if (
   legacyTwilioSyntheticOrphanCleanupIndex === -1 ||
   legacyTwilioBrowserVoiceOrphanCleanupIndex === -1 ||
   leadAutomationEventLegacySchemaCompatibilityIndex === -1 ||
+  goHighLevelReconciliationAutomationTransitionFixIndex === -1 ||
+  goHighLevelReconciliationEventRecoveryIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -563,12 +579,16 @@ if (
     legacyTwilioSyntheticOrphanCleanupIndex <
       legacyTwilioBrowserVoiceOrphanCleanupIndex &&
     legacyTwilioBrowserVoiceOrphanCleanupIndex <
-      leadAutomationEventLegacySchemaCompatibilityIndex
+      leadAutomationEventLegacySchemaCompatibilityIndex &&
+    leadAutomationEventLegacySchemaCompatibilityIndex <
+      goHighLevelReconciliationAutomationTransitionFixIndex &&
+    goHighLevelReconciliationAutomationTransitionFixIndex <
+      goHighLevelReconciliationEventRecoveryIndex
   ) ||
-  leadAutomationEventLegacySchemaCompatibilityIndex !== files.length - 1
+  goHighLevelReconciliationEventRecoveryIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, and lead-trigger schema compatibility must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, and the forward-only event-recovery/Twilio compatibility correction must remain in reviewed order.",
   );
 }
 

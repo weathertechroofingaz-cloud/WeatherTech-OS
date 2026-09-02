@@ -12,7 +12,7 @@ The command center is designed for grounded internal assistance. It uses server-
 
 ## Current Production State
 
-- Production remains at the historical `51/51` migration ledger. The AI/automation release set is `63/63` locally and on the isolated regression target and is pending Production rollout.
+- Production remains at the historical `51/51` migration ledger. The AI/automation release set is `65/65` in the repository and on the isolated regression target and is pending Production rollout.
 - Provider/model credentials and bounded global controls are present server-side, but Production contains zero `ai_usage_limits` rows. The new runtime therefore cannot authorize an exact-company provider call until one policy row exists for that company.
 - The two conservative provider price-ceiling variables are not yet configured in Production. Their values must come from the authoritative price for the exact selected model; they must not be guessed.
 - No paid Production provider smoke test has been run or authorized by this release.
