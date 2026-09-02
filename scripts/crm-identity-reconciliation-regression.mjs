@@ -15,6 +15,10 @@ import {
   runRegressionEnvironmentCommand,
   validateRegressionEnvironment,
 } from "./regression-environment.mjs";
+import {
+  cleanupSyntheticAutomationRegressionLedger,
+  createBrowserCompatibleRegressionRunId,
+} from "./synthetic-automation-regression-cleanup.mjs";
 
 export const CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN =
   "WTOS_CRM_IDENTITY_RECONCILIATION_REGRESSION_RUN";
@@ -339,8 +343,9 @@ export async function runCrmIdentityReconciliationRegression({
     loaded.config.ownerPassword,
     guardedFetch,
   );
-  const runId = randomUUID();
-  const marker = `TEST WTOS REGRESSION CRM RECONCILIATION ${runId}`;
+  const runId = createBrowserCompatibleRegressionRunId();
+  const sourceMarker = `TEST WTOS REGRESSION ${runId}`;
+  const marker = `${sourceMarker} CRM RECONCILIATION`;
   const uuidOperationKey = randomUUID();
   const ids = {
     customers: Array.from({ length: 8 }, () => randomUUID()),
@@ -359,6 +364,7 @@ export async function runCrmIdentityReconciliationRegression({
   let report = null;
   let primaryError = null;
   let cleanupError = null;
+  let automationCleanup = null;
 
   try {
     const companies = await requireRows(
@@ -1091,6 +1097,12 @@ export async function runCrmIdentityReconciliationRegression({
   } finally {
     try {
       if (cleanupAuthorized) {
+        automationCleanup = await cleanupSyntheticAutomationRegressionLedger({
+          service,
+          ownerEmail: loaded.config.ownerEmail,
+          runId,
+          sourceMarker,
+        });
         const discoveredEvents = await requireRows(
           service.from(AUDIT_TABLE).select("id,operation_key").in("source_lead_id", ids.leads),
           "Discover source-lead-owned reconciliation events for cleanup",
@@ -1156,6 +1168,7 @@ export async function runCrmIdentityReconciliationRegression({
             "UUID-key reconciliation audit was not discovered through the exact synthetic source lead.",
           );
           report.uuidOperationAuditCleanupVerified = true;
+          report.automationLedgerCleanup = automationCleanup;
           report.cleanupResidue = 0;
         }
       }

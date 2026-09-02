@@ -123,6 +123,10 @@ for (const [needle, message] of [
   ["Lost-to-won terminal outcome reversal", "Lost outcomes cannot be rewritten won"],
   ["Same-company repeat opportunity", "Repeat opportunity is independently attributable"],
   ["canonical repeat source/detail/provider", "Exact repeat retry retains canonical source, null detail, manual provider, and reviewed links"],
+  ["dashboardRepeatOperationKey = randomUUID()", "Dashboard-only repeat uses a fresh opaque operation key"],
+  ['dashboardRepeatReceivedAt = "2026-08-11T16:00:00.000Z"', "Dashboard-only repeat has a fixed August service timestamp"],
+  ["Read dashboard-only repeat accountability timestamp", "Dashboard-only repeat accountability timestamp is read back"],
+  ["Dashboard expected exactly one August repeat opportunity", "Dashboard proves exactly one repeat in the August cohort"],
   ["Exact repeat retry did not converge before stale reviewed-graph checks", "Exact retry reuses its fingerprint before stale graph validation"],
   ["Same operation UUID with changed repeat customer/property review timestamps", "Same-key changed repeat graph input conflicts"],
   ["Conflicting same-key repeat retry changed the original lead links", "Repeat retry conflict preserves original links and immutable ledger"],
@@ -165,6 +169,22 @@ for (const [needle, message] of [
   ["JULY BOUNDARY", "Pre-month Phoenix boundary fixture is present"],
   ["SEPTEMBER BOUNDARY", "Exclusive next-month Phoenix boundary fixture is present"],
   ["provider or financial state", "Provider and financial side effects remain zero"],
+  ["createBrowserCompatibleRegressionRunId", "Cleanup uses the approved 17-digit Browser run envelope"],
+  ['const sourceMarker = `TEST WTOS REGRESSION ${runId}`', "The exact cleanup source marker is canonical"],
+  ['const marker = `${sourceMarker} LEAD ACCOUNTABILITY`', "Readable accountability labels suffix the canonical source marker"],
+  ['const proposalMarker = `TEST WTOS LEAD ACCOUNTABILITY REGRESSION:${randomUUID()}`', "Proposal evidence retains its cleanup RPC's canonical UUID marker"],
+  ['title: `${proposalMarker} NAN PROPOSAL`', "Rejected-value proposal revision uses the proposal cleanup identity"],
+  ['title: `${proposalMarker} VALID ACCEPTED PROPOSAL`', "Accepted proposal revision uses the proposal cleanup identity"],
+  ["marker: proposalMarker", "Protected proposal cleanup receives only its own marker family"],
+  ["cleanupSyntheticAutomationRegressionLedger", "Immutable automation evidence uses the protected shared cleanup"],
+  ["report.automationLedgerCleanup = automationCleanup", "The exact cleanup receipt is retained in the report"],
+  ['.from("invoices")\n          .select("id,title")', "Proposal invoice marker fields are snapshotted before cleanup"],
+  ['.from("jobs")\n          .select("id,title")', "Proposal job marker fields are snapshotted before cleanup"],
+  ['service.from("email_messages").select("id,subject")', "Proposal email marker fields are snapshotted before cleanup"],
+  ["proposalAutomationSourceCandidates", "Every proposal job, invoice, and email becomes an explicit cleanup candidate"],
+  ["additionalSourceCandidates:", "Proposal candidates are passed to the shared exact-graph cleanup"],
+  ["proposalGraph: graph", "The pre-automation proposal snapshot is reused for protected proposal cleanup"],
+  ["Synthetic proposal cleanup requires the pre-automation exact graph snapshot", "Proposal cleanup cannot silently re-read a post-automation graph"],
   ["wtos_cleanup_synthetic_proposal_fixture", "Protected synthetic proposal evidence uses the service-only exact cleanup RPC"],
   ["readSyntheticProposalCleanupGraph", "Proposal cleanup discovers its exact dependent graph before deletion"],
   ["removeSyntheticProposalDocumentObjects", "Proposal Storage bytes are removed before protected metadata cleanup"],
@@ -212,6 +232,40 @@ check(
     !source.includes("OPERATION_MARKER_PREFIX"),
   "Spaced cleanup labels never enter persisted operation keys and public operations remain bare UUIDs",
 );
+const repeatRequestStart = source.indexOf("const repeatRequest = {");
+const repeatRequestEnd = source.indexOf("\n    };", repeatRequestStart);
+const salesRepeatRequest = source.slice(repeatRequestStart, repeatRequestEnd);
+const dashboardRepeatStart = source.indexOf(
+  "const dashboardRepeatOperationKey = randomUUID();",
+);
+const repeatVersionAdvance = source.indexOf("const advancedCustomerAt = new Date(");
+const dashboardRepeatBlock = source.slice(dashboardRepeatStart, repeatVersionAdvance);
+check(
+  repeatRequestStart >= 0 &&
+    repeatRequestEnd > repeatRequestStart &&
+    !salesRepeatRequest.includes("received_at") &&
+    source.includes(
+      'const repeat = await callRpc(sales, "wtos_create_repeat_opportunity", "opportunity_request", repeatRequest);',
+    ),
+  "Authenticated sales repeat coverage remains on the sales client without an ignored received_at field",
+);
+check(
+  dashboardRepeatStart >= 0 &&
+    repeatVersionAdvance > dashboardRepeatStart &&
+    dashboardRepeatBlock.includes("callRpc(\n      service,") &&
+    dashboardRepeatBlock.includes("operation_key: dashboardRepeatOperationKey") &&
+    dashboardRepeatBlock.includes("received_at: dashboardRepeatReceivedAt") &&
+    dashboardRepeatBlock.includes("ids.leads.push(dashboardRepeat.lead_id)") &&
+    dashboardRepeatBlock.includes(
+      "ids.lead_accountability.push(dashboardRepeat.accountability_id)",
+    ) &&
+    dashboardRepeatBlock.includes(
+      "new Date(dashboardRepeatAccountability.received_at).getTime()",
+    ) &&
+    !dashboardRepeatBlock.includes('.from("leads")') &&
+    !dashboardRepeatBlock.includes('.select("id,received_at")'),
+  "The dedicated service repeat is created, captured, and verified before reviewed source versions advance",
+);
 check(
   !/\.delete\(\)[\s\S]{0,80}\.(?:like|ilike|neq)\(/.test(source),
   "Cleanup never deletes by a broad marker or inequality",
@@ -219,6 +273,30 @@ check(
 check(
   source.includes('.delete().in("id", exactIds)'),
   "Business cleanup deletes only captured exact ID sets",
+);
+const automationCleanupIndex = source.lastIndexOf(
+  "automationCleanup = await cleanupSyntheticAutomationRegressionLedger({",
+);
+const proposalSnapshotIndex = source.lastIndexOf(
+  "const pendingProposalGraphs = await Promise.all(",
+);
+const proposalCleanupIndex = source.lastIndexOf(
+  "await cleanupSyntheticProposalRevision({",
+);
+check(
+  proposalSnapshotIndex >= 0 &&
+    automationCleanupIndex >= 0 &&
+    proposalCleanupIndex >= 0 &&
+    proposalSnapshotIndex < automationCleanupIndex &&
+    automationCleanupIndex < proposalCleanupIndex,
+  "Every proposal graph is snapshotted before automation cleanup and reused before any proposal/source deletion",
+);
+check(
+  (source.match(/source_snapshot: \{ test_marker: proposalMarker \}/g) ?? []).length === 2 &&
+    (source.match(/audit_metadata: \{ test_marker: proposalMarker \}/g) ?? []).length === 3 &&
+    !source.includes("source_snapshot: { test_marker: marker }") &&
+    !source.includes("audit_metadata: { test_marker: marker }"),
+  "Proposal revisions and every internal acceptance keep the proposal marker separate from the Browser automation marker",
 );
 check(
   !source.includes(
@@ -296,8 +374,9 @@ if (process.env[LEAD_ACCOUNTABILITY_REGRESSION_RUN] === "true") {
   }
   assert.equal(report.providerOrFinancialEffects, 0);
   assert.equal(report.providerNetworkRequests, 0);
+  assert.equal(report.automationLedgerCleanup?.databaseResidueCount, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 3;
+  assertionCount += 4;
   console.log("Lead accountability hosted regression execution: PASS");
 } else {
   console.log(

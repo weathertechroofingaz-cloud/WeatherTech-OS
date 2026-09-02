@@ -556,6 +556,7 @@ try {
 
   const migrationNames = center.migrationInventory.map((migration) => migration.filename);
   const expectedAutomationMigrationSuffix = [
+    "20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql",
     "20260902024804_automation_engine_foundation.sql",
     "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
     "20260902043624_mighty_apes_legacy_service_routing_correction.sql",
@@ -571,6 +572,11 @@ try {
     "20260902134526_gohighlevel_reconciliation_automation_transition_fix.sql",
     "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
   ];
+  assertEqual(
+    expectedAutomationMigrationSuffix.length,
+    15,
+    "Automation release suffix contains exactly fifteen migrations",
+  );
   [
     "0027_gmail_workspace_email_foundation.sql",
     "0028_google_calendar_scheduling_foundation.sql",
@@ -583,7 +589,9 @@ try {
   assertEqual(
     JSON.stringify(
       migrationNames.slice(
-        migrationNames.indexOf("20260902024804_automation_engine_foundation.sql"),
+        migrationNames.indexOf(
+          "20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql",
+        ),
       ),
     ),
     JSON.stringify(expectedAutomationMigrationSuffix),
