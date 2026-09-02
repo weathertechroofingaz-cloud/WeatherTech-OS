@@ -8,8 +8,9 @@ This document records both the earlier direct-Yelp application foundation and th
 - Status: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST AND REAL-LEAD EVIDENCE NOT YET RECORDED.
 - Implementation commit: `103eddab7f464ca9472e8fb8c2b6cc652e7fc89c`; deployed READY at `https://weathertech-os.vercel.app`.
 - Historical deployed receiver: `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook`.
-- Pending canonical receiver: after the current reviewed release is deployed, Mighty Apes should use `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/webhook`. The historical path remains a compatibility alias to the same handler so an existing provider configuration is not broken during the transition.
-- Schema checkpoints: the original Yelp release was exact at `48/48`. Production is now exact at `51/51`; the reviewed fifteen-migration AI/automation/Mighty release set is `66/66` in the repository and on the isolated regression target, runs from `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`, and has not been applied to Production.
+- Deployed canonical receiver: Mighty Apes should use `POST https://weathertech-os.vercel.app/api/integrations/mighty-apes/webhook`. The historical path remains a compatibility alias to the same handler so an existing provider configuration is not broken during the transition.
+- Schema checkpoints: the original Yelp release was exact at `48/48`. Production, the repository, and the isolated regression target are now exact at `66/66` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`. The fifteen-migration suffix beginning with `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` was applied to Production once by the normal ordered migration push after the deferred-trigger compatibility fix; the repeat dry-run reported zero pending migrations and database lint reported zero errors.
+- Activation deployment evidence: `dpl_CKoXgxtMpDcRC1ekTZ3YSAxaKC5t` is `READY` at exact main merge `76eba068d1c08a87f09899f84f4931cd1fc07d35`, and the canonical health endpoint returned HTTP 200. No official Mighty Apes test, real Yelp lead, outbound provider action, or customer action was sent during this activation.
 - Production evidence: at the original release checkpoint, `GET` on the historical receiver safely returned HTTP 405 with `Allow: POST` and no-store caching. No Production `POST`, official provider test, real Yelp lead, or Mighty Apes/Yelp audit/intake/sync-log/lead row has since been recorded.
 - Required secret: current server-side readiness redacts `MIGHTY_APES_YELP_WEBHOOK_SECRET` as present. Its value was not read; it must remain server-only and must be reverified with the exact deployed revision before an official provider test.
 - Outbound Yelp messaging: not implemented and disabled.
@@ -131,7 +132,7 @@ The foundation intentionally uses the existing Unified Lead Intake Hub:
 
 ## Mighty Apes Production Receiver Boundary
 
-The original receiver code, schema, and historical-path deployment are complete. The canonical endpoint, company/location registry, centralized exact-once task path, and legacy service correction are validated in the current local/regression release set but remain pending Production rollout. Production is not provider-validated because no official provider `lead.test` or real `lead.created` evidence has been recorded. Do not issue a synthetic Production `lead.created` to work around that evidence boundary.
+The receiver code, schema, canonical and historical paths, company/location registry, centralized exact-once task path, and legacy service correction are deployed. Production is still not provider-validated because no official provider `lead.test` or real `lead.created` evidence has been recorded. Do not issue a synthetic Production `lead.created` to work around that evidence boundary.
 
 Under a separately authorized provider-test operation, the exact sequence is:
 
@@ -192,6 +193,7 @@ For the approved Mighty Apes receiver:
 - [x] Atomic, idempotent, WeatherTech-only persistence and immutable non-PII audit schema deployed.
 - [x] Isolated signed `lead.test`, `lead.created`, retry, duplicate, concurrency, ACL/RLS, CRM visibility, and zero-residue regression passed.
 - [x] At the original Yelp release checkpoint, Production migrations matched `48/48`; the historical receiver implementation was deployed and health was HTTP 200. Production later advanced to `51/51` without recording an official Mighty Apes delivery.
+- [x] On 2026-09-02, Production advanced to exact `66/66`, the canonical receiver revision deployed `READY`, and canonical health returned HTTP 200 without an official provider delivery or real customer/provider action.
 - [x] Safe production `GET` proves the route is deployed without sending a webhook or creating CRM data.
 - [ ] Under separate authorization, reverify the Sensitive Production credential and exact deployment, then run Mighty Apes' official Send Test Delivery.
 - [ ] Verify that official `lead.test` remains audit-only.

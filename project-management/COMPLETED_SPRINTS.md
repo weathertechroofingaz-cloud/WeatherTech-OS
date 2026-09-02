@@ -4,6 +4,21 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 
 ## Recent Verified Sprints
 
+### WeatherTech OS — AI 3.0 Production Automation & OS Launch
+
+- Feature release: PR #20 merged as `aba92efeb78459fabfe00862467d9bc1b22128c6`.
+- Migration recovery: PR #21 merged as `76eba068d1c08a87f09899f84f4931cd1fc07d35` from commits `53708d420bcd2f810c1c263045b1bfbbc95cc451` and `5eb89752c10c938f0998f378807cb371bd0a6c2b`.
+- Closeout: this documentation-only change; use Git history for its immutable commit and pull request.
+- Result: Completed, reviewed, merged, exact-SHA deployed, and Production-verified with the company-scoped Automation Engine and owner Automation Control Center active behind preserved approval/provider boundaries.
+- Validation:
+  - All 64 top-level tests, type-check, lint, Production build, high-severity dependency audit, migration integrity, whitespace, hosted regression, complete Browser, and security gates passed.
+  - Production Supabase applied the exact ordered fifteen-migration suffix and now matches repository/regression at `66/66`; repeat dry-run is empty, catalog/RLS/ACL contracts passed, and ERROR-level lint is clean.
+  - Exact Production redeploy `dpl_CKoXgxtMpDcRC1ekTZ3YSAxaKC5t` is `READY` at main SHA `76eba068d1c08a87f09899f84f4931cd1fc07d35`; canonical `/api/health` returned HTTP 200 with that SHA.
+  - Production retained two disabled company AI policies with zero monthly budget and zero AI request, audit, token, cost, saved-work, or action activity.
+  - A natural scheduler tick recorded exactly 14 existing due-task events and matching audits; repeated ticks were idempotent. Automation executions, attempts, and newly created tasks remained zero.
+  - Independent before/after checks found no unexpected business, provider, communications, Stripe, or financial count/fingerprint change and no real provider/customer action.
+- Remaining owner decisions: positive AI budget and per-company enablement; official Mighty Apes test and authoritative Tucson/IHC campaign IDs; IHC inbound SMS validation; electronic-signature legal review; and Production backup/PITR policy. This closeout authorizes none of them.
+
 ### WeatherTech Final Phone Routing Reconciliation — Tucson-Only Twilio Voice
 
 - Implementation commit: `d72b1512f0195d3186dda91f04641c343855d407` (`fix: keep Phoenix and IHC voice carrier-direct`)
@@ -22,7 +37,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Main-push GitHub Actions run `33284946637`: repository-only job `99186398668` and protected isolated-Supabase lifecycle job `99186677967` both succeeded for exact merge SHA `690c22083165ebd55882b51172c9ac92e1f745f8`; every substantive repository and zero-residue lifecycle step passed
   - Post-cleanup Vercel Production deployment `dpl_ESK8ZVaXyRuqG3k2AHkfLdBuSCPi` reached `READY`, owned the canonical Production alias, and served exact merge SHA `690c22083165ebd55882b51172c9ac92e1f745f8`. Canonical `/api/health` returned HTTP 200 and `healthy`; `/api/readiness` truthfully returned HTTP 503 under the broad provider-safety policy while exposing only the enabled inbound-SMS, global terminal-attestation, and Tucson Voice gates, with runtime, environment, staging, auth, Supabase, and activation checks passing and zero Vercel error-level runtime logs since the redeploy.
 - Database, routing, and provider state:
-  - No migration or Production data change was required. Local, regression, and Production migration ledgers remain exact at `51/51`.
+  - No migration or Production data change was required. Local, regression, and Production migration ledgers were exact at `51/51` at that sprint checkpoint.
   - WeatherTech Phoenix public voice remains direct with Verizon, while its distinct Twilio ingress remains SMS-only with Voice handling blank. IHC public voice remains direct with AT&T, while its distinct Twilio ingress remains SMS-only with Voice handling blank. Tucson remains the sole Twilio Voice route, using its protected destination and canonical signed WeatherTech OS Voice POST route; all three SMS identities remain company/branch distinct.
   - Runtime authorization rejects Phoenix/IHC Voice ingress and status requests even if stale environment or database drift reappears; Tucson alone may return SDK-generated `<Dial>` TwiML after exact account, receiving-number, signature, destination, route, gate, and loop validation. Recording, transcription, outbound messaging/calling, automatic replies, and automatic lead creation remain unavailable.
   - Existing Production communications evidence is unchanged: Tucson retains the two previously owner-verified completed call records and four matching voice events; inbound SMS remains Tucson two received/two completed events, Phoenix one/one, and IHC zero/zero. This sprint placed no live call and created no Production call, SMS, lead, customer, job, estimate, task, or provider-event record.
@@ -50,7 +65,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - Main push GitHub Actions run `32802962484`: repository-only job `97667369745` and protected isolated-Supabase lifecycle job `97667830543` both succeeded for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`
   - Gate-on Vercel Production deployment `dpl_BzukHpKwCH1HTWqNMHyxJsNLrAx6` completed `READY` for exact merge SHA `2ace30ba04edfb0743b63ee050c7f3845540fe54`; canonical `/api/health` returned HTTP 200 with that SHA, while `/api/readiness` truthfully remained HTTP 503 under the broad owner/provider safety gate
 - Database and provider state:
-  - No migration was added or applied. Local, regression, and Production ledgers remain exact at `51/51`.
+  - No migration was added or applied. Local, regression, and Production ledgers were exact at `51/51` at that sprint checkpoint.
   - The owner configured the destination only in protected Vercel Production configuration. At that closeout checkpoint, the value had not been recorded in chat, Git, logs, screenshots, governance, browser-visible variables, or ordinary database output.
   - Only `weathertech-tucson` changed from `communication_channel='sms'` to `communication_channel='sms_voice'`. `weathertech-phoenix` and `ihc-primary` remain SMS-only and company/branch distinct.
   - Only the Tucson Twilio number's incoming Voice webhook was set to the canonical WeatherTech OS Tucson Voice POST endpoint. The existing inbound SMS webhook and evidence remained intact; Phoenix and IHC voice settings remained untouched.
@@ -82,7 +97,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 - Database:
   - Historical starting state: local and Production migration ledgers matched all `50/50` committed migrations before this sprint's additive migration.
   - `20260824044610_native_proposal_esign_sold_job_gate.sql` — SHA-256 `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
-  - Exactly that one approved additive migration was applied through the established explicit Production workflow. Local, regression, and Production ledgers match all `51/51` committed migrations, with no pending, remote-only, or mismatched migration.
+  - Exactly that one approved additive migration was applied through the established explicit Production workflow. Local, regression, and Production ledgers matched all `51/51` committed migrations at that sprint checkpoint, with no pending, remote-only, or mismatched migration.
   - Post-apply verification confirmed the expected additive schema, fixed function search paths, restricted execution/table privileges, company-scoped policies, private `customer-documents` Storage, zero new proposal-lifecycle table rows, and unchanged pre-existing business/provider baselines.
 - Notes:
   - Added exact immutable proposal revisions and customer-safe artifacts, truthful owner-approved Gmail delivery, a narrow hashed-token native customer signing lifecycle, auditable signed receipts/certificates, same-company posted-payment deposit enforcement, and atomic idempotent sold-job conversion for both WeatherTech Roofing LLC and IHC Painting.
@@ -108,7 +123,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 - Database:
   - `20260818030913_secure_company_scoped_job_photos.sql` — SHA-256 `eb886e55277c87893d9aaed6affc54f43680235dd6f35e3230d84b47150ed0e3`
   - `20260822054433_job_photo_storage_rollback_retry_correction.sql` — SHA-256 `74a3a130c17e0e8a84f9a1b5dcc544b0c8ea348a98b0f287cc10ca6e7aeeafdb`
-  - The exact additive chain was applied through the normal linked workflow. Local, regression, and Production ledgers match all `50/50` committed migrations.
+  - The exact additive chain was applied through the normal linked workflow. Local, regression, and Production ledgers matched all `50/50` committed migrations at that sprint checkpoint.
   - Production `job-photos` is private with a 25 MiB limit and `image/*` allowlist. Registered reads require company-scoped metadata; uploads require an exact live reservation; rollback deletion is restricted to the immutable original uploader and exact canceling operation; authenticated object update remains denied.
   - Production retained zero `job_photos` metadata rows and zero `job_photo_upload_operations` rows. All job-photo functions retain fixed empty search paths, private base functions remain unexposed, and the correction admits delete preselection only for `storage.object.delete` and `storage.object.delete_many` while preserving genuine serialization failures.
 - Notes:
@@ -137,7 +152,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
   - `20260816122114_lead_attribution_marketing_accountability_phase_1.sql` — SHA-256 `1cd4051f320fdb82253a92d3b440dbc307a72b8dba78d170f6592ca4545b8622`
   - `20260816143152_lead_accountability_nonretryable_stale_errors.sql` — SHA-256 `618cf2b2d7976758edd24a07f531221ea56686fb3d53dbd6c2598851ed02af6a`
   - `20260816164202_lead_accountability_idempotency_integrity_hardening.sql` — SHA-256 `8c976c8cd21f123e5abca4e5987e4a67301091a108044698ed610e99faea2250`
-  - The exact additive chain was applied through the normal linked workflow. Regression and Production ledgers match all `48/48` committed migrations.
+  - The exact additive chain was applied through the normal linked workflow. Regression and Production ledgers matched all `48/48` committed migrations at that sprint checkpoint.
   - Added company-scoped `marketing_campaigns`, `lead_accountability`, immutable non-PII `lead_accountability_events`, `marketing_spend_months`, and the internal non-PII operation-receipt table. All five contain zero Production rows.
 - Notes:
   - Implemented locked first-touch acquisition evidence, source/provider separation, explicit creator versus assigned owner, transactional funnel actions, structured won/lost requirements, same-company repeat opportunities, owner/admin monthly spend, and Phoenix-month accountability formulas with unavailable zero denominators and visible data-quality gaps.
@@ -153,7 +168,7 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 - Closeout: this documentation-only commit; use Git history for its immutable hash.
 - Branch: `main`
 - Remote: `origin/main`
-- Result: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST EXTERNALLY BLOCKED BY SIGNING-SECRET CONFIGURATION.
+- Result at that sprint checkpoint: IMPLEMENTATION/SCHEMA/DEPLOYMENT COMPLETE — OFFICIAL PROVIDER TEST WAS BLOCKED BY SIGNING-SECRET CONFIGURATION.
 - Validation:
   - GitHub Actions run `31865652902`: repository validation and protected isolated-Supabase lifecycle jobs both `success`
   - Hosted isolated Mighty Apes lifecycle and complete isolated browser regression: `pass`, with bounded cleanup and zero residue
@@ -164,9 +179,9 @@ This file records completed WeatherTech OS sprints after validation, commit, pus
 - Notes:
   - The deployed endpoint is `https://weathertech-os.vercel.app/api/integrations/mighty-apes/yelp/webhook` and implements the verified Mighty Apes raw-body HMAC, timestamp, delivery, version, event, and payload contract.
   - Authenticated `lead.test` is audit-only. Valid `lead.created` processing is atomic, concurrency-safe, idempotent on Yelp `lead.id`, WeatherTech-only, visible through the existing CRM workflow, and creates no fabricated email.
-  - Production does not yet contain the signing secret, a provider test delivery, a real Yelp lead delivery, or any Mighty Apes/Yelp webhook audit, intake, sync-log, or CRM lead row. This closeout does not claim the integration is connected, live, or fully production-validated.
+  - Production did not yet contain the signing secret, a provider test delivery, a real Yelp lead delivery, or any Mighty Apes/Yelp webhook audit, intake, sync-log, or CRM lead row at that checkpoint. This closeout did not claim the integration was connected, live, or fully production-validated.
   - Production Yelp connection rows also remained zero; captured business/provider fingerprints were unchanged. Supabase advisors found no new Yelp security issue, only expected unused-index notices on the empty audit table.
-  - The single owner action is to add `MIGHTY_APES_YELP_WEBHOOK_SECRET` as a Sensitive Vercel Production environment variable, redeploy, then run Mighty Apes' Send Test Delivery. The first real `lead.created` remains a separate future evidence step.
+  - The Sensitive server-side credential is now present and preserved. The current owner action is to reverify its metadata and the exact deployed revision under separate authorization, then run Mighty Apes' Send Test Delivery. The first real `lead.created` remains a separate future evidence step; do not add, replace, or expose the credential merely because this historical checkpoint recorded it as absent.
   - `/api/readiness` remains truthfully blocked with HTTP 503. No outbound Yelp messaging, unrelated provider activation, broad production approval, synthetic production CRM data, or `.env.local` change occurred.
   - Preserved `supabase/migrations/0026_property_intelligence_foundation.sql` at SHA-256 `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e` and `.env.local` at SHA-256 `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
 

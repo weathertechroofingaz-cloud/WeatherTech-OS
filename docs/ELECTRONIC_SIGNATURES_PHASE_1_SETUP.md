@@ -20,7 +20,7 @@ Verified release evidence:
 - Merge and Production implementation deployment commit: `7186001eec28177a32b454168e5fd05b43af9937`
 - Production migration: `20260824044610_native_proposal_esign_sold_job_gate.sql`
 - Migration SHA-256: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`
-- Final local, regression, and Production migration state: `51/51`
+- Release-checkpoint local, regression, and Production migration state: `51/51`; the later AI/automation rollout advanced all three to `66/66`.
 - Targeted Browser run `20260824223608414` passed the deposit and no-deposit paths, signed-session renewal, exact receipt recovery, zero console findings, and zero residue.
 - Complete isolated Browser run `20260824231426642` passed `24/24` groups and `31/31` assertions with zero console errors, zero console warnings, bounded cleanup, and zero residue.
 - No proposal/signature request was sent to a real customer, and no real acceptance, deposit, payment, invoice, or sold job was created for validation.
@@ -127,7 +127,7 @@ The migration is:
 
 The existing `signatures.provider` check already supports `native`, `docusign`, and `dropbox_sign` from the Document Storage & Signature Workflow foundation.
 
-`supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` is the approved additive native-signing and sold-job-gate migration. It adds private signing-request, session, receipt, and guard tables; immutable evidence links; guarded native-signing lifecycle functions; deposit-invoice enforcement; and exact sold-job conversion. It does not backfill or mutate existing proposal, document, payment, signature, invoice, job, or Storage records. Its verified SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`; local, regression, and Production ledgers match at `51/51`.
+`supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql` is the approved additive native-signing and sold-job-gate migration. It adds private signing-request, session, receipt, and guard tables; immutable evidence links; guarded native-signing lifecycle functions; deposit-invoice enforcement; and exact sold-job conversion. It does not backfill or mutate existing proposal, document, payment, signature, invoice, job, or Storage records. Its verified SHA-256 is `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`; local, regression, and Production ledgers matched at `51/51` at that release checkpoint and later advanced to exact `66/66`.
 
 ## Owner Setup Still Required
 

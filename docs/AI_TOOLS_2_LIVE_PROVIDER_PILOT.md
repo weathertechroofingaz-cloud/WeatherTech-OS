@@ -12,11 +12,13 @@ The command center is designed for grounded internal assistance. It uses server-
 
 ## Current Production State
 
-- Production remains at the historical `51/51` migration ledger. The fifteen-migration AI/automation release set is `66/66` in the repository and on the isolated regression target and is pending Production rollout from `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`.
-- Provider/model credentials and bounded global controls are present server-side, but Production contains zero `ai_usage_limits` rows. The new runtime therefore cannot authorize an exact-company provider call until one policy row exists for that company.
-- The two conservative provider price-ceiling variables are not yet configured in Production. Their values must come from the authoritative price for the exact selected model; they must not be guessed.
+- Production is exact at `66/66` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`. The fifteen-migration suffix beginning with `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` was applied once by the normal ordered migration push after the deferred-trigger compatibility fix; the repeat dry-run reported zero pending migrations and database lint reported zero errors.
+- Production contains exactly two company-scoped `ai_usage_limits` rows, one for WeatherTech Roofing LLC and one for IHC Painting. Both are disabled and separately bounded to `openai` / `gpt-5.6-terra`, request limits of `500`, `32000` maximum request tokens, `15000` ms timeout, retry limit `1`, and a `$0` monthly budget.
+- The Production-only AI environment variables, conservative input/output price ceilings, and server-only `CRON_SECRET` are configured. The existing OpenAI key was preserved without reading or exposing it, and `AI_ACTION_EXECUTION_ENABLED=false` remains enforced.
+- Deployment `dpl_CKoXgxtMpDcRC1ekTZ3YSAxaKC5t` is `READY` at exact main merge `76eba068d1c08a87f09899f84f4931cd1fc07d35`; the canonical health endpoint returned HTTP 200.
+- The first natural scheduler tick recorded exactly `14` `task.due` events and `14` matching audit entries (`10` WeatherTech and `4` IHC). The second and later ticks created no duplicates, executions, attempts, or new tasks; provider, AI-usage, cost, business-record, and provider-record counts remained unchanged.
 - No paid Production provider smoke test has been run or authorized by this release.
-- External writes and customer-facing sends remain blocked.
+- AI-triggered external writes and customer-facing sends remain blocked.
 - `AI_ACTION_EXECUTION_ENABLED` remains false; it is not the authorization mechanism for the safe internal path.
 - Every returned action preview must have its own durable audit reference before it reaches the browser.
 - Only an exact-company, authorized review of `create_follow_up_draft` may create one internal office task through the centralized automation engine.
@@ -94,7 +96,7 @@ Required controls:
 
 `AI_ACTION_EXECUTION_ENABLED` remains `false`. Customer communications, arbitrary CRM mutation, provider writes, financial actions, and scheduling changes are not part of the internal action registry. Safe internal follow-up-task approval is authorized through the stored audit contract and the centralized automation engine instead of this global flag.
 
-Production rollout also requires exactly one `ai_usage_limits` row for each company. Rows may be seeded disabled without a billing decision. Enabling WeatherTech or IHC and assigning its positive monthly budget are separate owner decisions; one company must not inherit the other's approval or limit.
+Production provider access requires exactly one `ai_usage_limits` row for each company. The deployed rows remain disabled with a zero monthly budget. Enabling WeatherTech or IHC and assigning its positive monthly budget are separate owner decisions; one company must not inherit the other's approval or limit.
 
 ## Context Retrieval
 
@@ -144,9 +146,9 @@ Only run the commands above after verifying the linked project, migration histor
 
 ## Controlled Pilot Procedure
 
-1. Verify migration 0033 and the exact current release migration set are applied to the intended Supabase project; Production currently has 0033 but none of the pending suffix beginning with `20260902024803`.
-2. Configure server-only provider credentials in the approved hosting environment.
-3. Configure authoritative input/output price ceilings and exactly one explicit policy row per company. Keep unapproved company rows disabled and require an owner-approved positive monthly budget before enabling either company.
+1. Reverify that the intended Supabase project remains exact at `66/66` through `20260902140838` before any pilot action.
+2. Reverify the Production-only provider controls and credentials against the exact deployed revision without reading or exposing secret values.
+3. Confirm the two company policy rows remain disabled and at a `$0` monthly budget until the owner separately approves company enablement and a positive budget for each company.
 4. Keep `AI_ACTION_EXECUTION_ENABLED=false`.
 5. Use grounded commands for one selected, authorized company in the AI workspace.
 6. Confirm source records, missing data, assumptions, provider health, usage, and per-preview audit references are visible.
@@ -184,8 +186,8 @@ Regression must continue to prove provider-disabled honesty, mocked OpenAI and A
 
 ## Known Limitations
 
-- Real provider calls require owner-controlled credentials, authoritative price ceilings, and explicit per-company policy/budget approval.
-- Production already contains migration 0033. The deferred-trigger compatibility predecessor in `20260902024803` and the reviewed-action and automation additions beginning in `20260902024804` remain pending Production rollout; do not describe them as deployed until the linked ledger and exact deployment prove it.
+- Real provider calls require explicit per-company enablement and a positive monthly budget approved by the owner; the configured credentials and price ceilings alone do not authorize a paid call.
+- The full release schema is deployed through `20260902140838`, but no paid AI smoke test, real provider/customer action, or customer-facing automation was run as activation evidence.
 - Streaming is represented in provider readiness and configuration, but the current UI consumes complete responses.
 - Only the reviewed internal follow-up task is executable. Draft email remains internal-draft-only, and every customer/provider action requires a future explicit owner-approved contract.
 - Image analysis is not active; photo-related statements must remain metadata-based unless a future approved vision provider is configured.

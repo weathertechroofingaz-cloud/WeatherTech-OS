@@ -1,10 +1,10 @@
 # Current Sprint
 
-This file records the active owner-approved WeatherTech OS sprint and its lifecycle status. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
+This file records the completed owner-approved WeatherTech OS sprint and its lifecycle status. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
 
 ## Approval Status
 
-Approved
+Completed
 
 The owner explicitly approved end-to-end execution on 2026-09-01. The approval authorizes the focused repository, additive Supabase schema/RLS, server execution, owner UI, validation, commit, pull-request, merge, Production migration/deployment, and verification work required to connect the existing AI Command Center 3.0, CRM, office-task automations, provider adapters, and approval architecture into one production operating system. It does not authorize a real customer message, outbound call, number change, carrier change, destructive database operation, invented provider identity, or weakening of any company/security boundary.
 
@@ -29,7 +29,7 @@ Joe Harris
 - Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; starting `main` SHA `bd22060d073f731f813b8e6e7bba5f2b37df693c`.
 - Working branch: `codex/weathertech-ai-3-production-automation-os-launch`; it was created from exact local/remote/live `main` with a clean tree and index and no interrupted Git operation.
 - Canonical Production `/api/health` returns HTTP `200` at the exact starting SHA. `/api/readiness` truthfully remains HTTP `503` under the existing broad provider-safety policy while runtime, environment, auth, and Supabase checks pass.
-- Production Supabase project `gahfcgyjtfwwmsterhzu` is `ACTIVE_HEALTHY` on PostgreSQL 17 with exact local/Production migration parity at `51/51`; latest migration is `20260824044610_native_proposal_esign_sold_job_gate`.
+- At the sprint starting checkpoint, Production Supabase project `gahfcgyjtfwwmsterhzu` was `ACTIVE_HEALTHY` on PostgreSQL 17 with exact local/Production migration parity at `51/51`, ending at `20260824044610_native_proposal_esign_sold_job_gate`. The completed rollout advanced repository, regression, and Production to exact `66/66` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`.
 - AI Command Center 3.0, the OpenAI/Anthropic adapter, grounded company-scoped context, saved work/audit tables, rule-based daily priorities, action previews, and provider usage limits already exist. Executable actions are intentionally hard-disabled in the starting code.
 - The office operations queue already provides company-scoped, RLS-protected, idempotent internal task generation for new leads, inspection events, sent estimates, and job lifecycle events. This sprint must reuse it.
 - GoHighLevel, Twilio, Mighty Apes/Yelp, Stripe, Gmail, Calendar, website intake, and other integrations already have provider/readiness/audit surfaces. They remain adapters behind WeatherTech OS and must not become a second CRM.
@@ -99,14 +99,13 @@ Joe Harris
 
 ## Release Commits
 
-- Implementation: pending.
-- Pull request: pending.
-- Merge: pending.
-- Documentation closeout: pending.
+- Feature implementation: `c33be3cc6635f1d2ef42682474c80c04808110c9`; PR #20 merged as `aba92efeb78459fabfe00862467d9bc1b22128c6`.
+- Migration recovery and hosted-regression hardening: `53708d420bcd2f810c1c263045b1bfbbc95cc451` and `5eb89752c10c938f0998f378807cb371bd0a6c2b`; PR #21 merged as `76eba068d1c08a87f09899f84f4931cd1fc07d35`.
+- Documentation closeout: this documentation-only change; use Git history for its immutable commit and pull request after merge.
 
 ## Final Status
 
-Approved and active. The delta-only audit is complete; implementation and bounded validation of the centralized automation, reviewed internal AI action, and owner control surfaces are in progress. No Production migration, scheduler activation, provider write, or customer-facing action has occurred.
+Completed on 2026-09-02. The centralized automation engine, owner control surface, company-scoped AI safety policy, exact Production migration suffix, and guarded scheduler are deployed and verified. Repository, regression, and Production are exact at `66/66`; the activation deployment was healthy at release merge `76eba068d1c08a87f09899f84f4931cd1fc07d35`. The scheduler recorded the 14 existing due office tasks exactly once without executing a rule or creating another task. Both company AI policies remain disabled with zero monthly budget. No paid AI request, real provider write, customer-facing action, phone/carrier change, charge, refund, or other financial action occurred.
 
 ## Notes
 
