@@ -193,6 +193,10 @@ const expectedMigrations = [
     "703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7",
   ],
   [
+    "20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql",
+    "32a9a852aeb32144d9af6ee43711ad7824bb0847bac969a47ec61300232b4d77",
+  ],
+  [
     "20260902024804_automation_engine_foundation.sql",
     "bfddf783fe462e7c1258c3a3df90f9302c45c7c6830745308097de2c09d8a868",
   ],
@@ -375,6 +379,9 @@ const jobPhotoStorageRollbackRetryCorrectionIndex = files.indexOf(
 const nativeProposalEsignSoldJobGateIndex = files.indexOf(
   "20260824044610_native_proposal_esign_sold_job_gate.sql",
 );
+const deferredInvariantTriggerScopeIndex = files.indexOf(
+  "20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql",
+);
 const automationEngineFoundationIndex = files.indexOf(
   "20260902024804_automation_engine_foundation.sql",
 );
@@ -523,6 +530,7 @@ if (
   secureCompanyScopedJobPhotosIndex === -1 ||
   jobPhotoStorageRollbackRetryCorrectionIndex === -1 ||
   nativeProposalEsignSoldJobGateIndex === -1 ||
+  deferredInvariantTriggerScopeIndex === -1 ||
   automationEngineFoundationIndex === -1 ||
   goHighLevelWebhookStateMachineIndex === -1 ||
   mightyApesLegacyServiceCorrectionIndex === -1 ||
@@ -562,7 +570,8 @@ if (
     secureCompanyScopedJobPhotosIndex <
       jobPhotoStorageRollbackRetryCorrectionIndex &&
     jobPhotoStorageRollbackRetryCorrectionIndex < nativeProposalEsignSoldJobGateIndex &&
-    nativeProposalEsignSoldJobGateIndex < automationEngineFoundationIndex &&
+    nativeProposalEsignSoldJobGateIndex < deferredInvariantTriggerScopeIndex &&
+    deferredInvariantTriggerScopeIndex < automationEngineFoundationIndex &&
     automationEngineFoundationIndex < goHighLevelWebhookStateMachineIndex &&
     goHighLevelWebhookStateMachineIndex < mightyApesLegacyServiceCorrectionIndex &&
     mightyApesLegacyServiceCorrectionIndex < goHighLevelWebhookGuardrailsIndex &&
@@ -588,7 +597,7 @@ if (
   goHighLevelReconciliationEventRecoveryIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, and the forward-only event-recovery/Twilio compatibility correction must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, and the forward-only event-recovery/Twilio compatibility correction must remain in reviewed order.",
   );
 }
 

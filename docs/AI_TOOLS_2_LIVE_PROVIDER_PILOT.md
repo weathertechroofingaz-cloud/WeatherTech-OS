@@ -12,7 +12,7 @@ The command center is designed for grounded internal assistance. It uses server-
 
 ## Current Production State
 
-- Production remains at the historical `51/51` migration ledger. The AI/automation release set is `65/65` in the repository and on the isolated regression target and is pending Production rollout.
+- Production remains at the historical `51/51` migration ledger. The fifteen-migration AI/automation release set is `66/66` in the repository and on the isolated regression target and is pending Production rollout from `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`.
 - Provider/model credentials and bounded global controls are present server-side, but Production contains zero `ai_usage_limits` rows. The new runtime therefore cannot authorize an exact-company provider call until one policy row exists for that company.
 - The two conservative provider price-ceiling variables are not yet configured in Production. Their values must come from the authoritative price for the exact selected model; they must not be guessed.
 - No paid Production provider smoke test has been run or authorized by this release.
@@ -131,7 +131,7 @@ Every preview displays the action type, target record, company, reason, fields a
 
 ## Saved Work And Audit Logging
 
-Migration [0033_ai_tools_operating_brain.sql](../supabase/migrations/0033_ai_tools_operating_brain.sql) adds persistence for saved analyses, audit events, and usage limits. Migration [20260902024804_automation_engine_foundation.sql](../supabase/migrations/20260902024804_automation_engine_foundation.sql) adds the fingerprint/review contract and the safe internal execution path.
+Migration [0033_ai_tools_operating_brain.sql](../supabase/migrations/0033_ai_tools_operating_brain.sql) adds persistence for saved analyses, audit events, and usage limits. Migration [20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql](../supabase/migrations/20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql) makes the following location backfill compatible with existing deferred invariant triggers without weakening their dependent-column checks. Migration [20260902024804_automation_engine_foundation.sql](../supabase/migrations/20260902024804_automation_engine_foundation.sql) adds the fingerprint/review contract and the safe internal execution path.
 
 Migration verification steps:
 
@@ -144,7 +144,7 @@ Only run the commands above after verifying the linked project, migration histor
 
 ## Controlled Pilot Procedure
 
-1. Verify migration 0033 and the exact current release migration set are applied to the intended Supabase project; Production currently has 0033 but not `20260902024804`.
+1. Verify migration 0033 and the exact current release migration set are applied to the intended Supabase project; Production currently has 0033 but none of the pending suffix beginning with `20260902024803`.
 2. Configure server-only provider credentials in the approved hosting environment.
 3. Configure authoritative input/output price ceilings and exactly one explicit policy row per company. Keep unapproved company rows disabled and require an owner-approved positive monthly budget before enabling either company.
 4. Keep `AI_ACTION_EXECUTION_ENABLED=false`.
@@ -185,7 +185,7 @@ Regression must continue to prove provider-disabled honesty, mocked OpenAI and A
 ## Known Limitations
 
 - Real provider calls require owner-controlled credentials, authoritative price ceilings, and explicit per-company policy/budget approval.
-- Production already contains migration 0033. The reviewed-action and automation additions in `20260902024804` remain pending Production rollout; do not describe them as deployed until the linked ledger and exact deployment prove it.
+- Production already contains migration 0033. The deferred-trigger compatibility predecessor in `20260902024803` and the reviewed-action and automation additions beginning in `20260902024804` remain pending Production rollout; do not describe them as deployed until the linked ledger and exact deployment prove it.
 - Streaming is represented in provider readiness and configuration, but the current UI consumes complete responses.
 - Only the reviewed internal follow-up task is executable. Draft email remains internal-draft-only, and every customer/provider action requires a future explicit owner-approved contract.
 - Image analysis is not active; photo-related statements must remain metadata-based unless a future approved vision provider is configured.

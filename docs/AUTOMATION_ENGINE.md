@@ -13,9 +13,11 @@ There is no registered action for sending email or SMS, placing a call, changing
 
 ## Current Rollout State
 
-The reviewed AI/automation/Mighty release set is `65/65` in the repository and on the isolated regression target. Production remains at the previously deployed `51/51` ledger. The fourteen-migration automation/Mighty release suffix, canonical Mighty Apes endpoint/registry behavior, scheduler secret, AI price ceilings, and per-company AI policy rows are pending Production rollout. No paid Production AI smoke test has been run, and this document does not authorize one.
+The reviewed AI/automation/Mighty release set is `66/66` in the repository and on the isolated regression target. Production remains at the previously deployed `51/51` ledger. The fifteen-migration automation/Mighty release suffix runs from `20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql` through `20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql`; it, the canonical Mighty Apes endpoint/registry behavior, scheduler secret, AI price ceilings, and per-company AI policy rows are pending Production rollout. No paid Production AI smoke test has been run, and this document does not authorize one.
 
 ## Data Model
+
+Migration [20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql](../supabase/migrations/20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql) preserves the three existing deferred constraint triggers and their exact functions, enabled state, `INSERT`, and `DEFERRABLE INITIALLY DEFERRED` semantics while limiting `UPDATE` events to each function's actual invariant dependencies. This prevents unrelated location-only backfills in the following foundation migration from leaving queued trigger events that block same-transaction `ALTER TABLE` statements.
 
 Migration [20260902024804_automation_engine_foundation.sql](../supabase/migrations/20260902024804_automation_engine_foundation.sql) adds:
 
@@ -112,9 +114,9 @@ The UI has no manual run-all button and no workflow builder. Non-owner/admin use
 
 ## Validation And Rollout
 
-Before Production activation (current Production is still `51/51`; the reviewed release checkpoint is `65/65` in the repository/regression):
+Before Production activation (current Production is still `51/51`; the reviewed release checkpoint is `66/66` in the repository/regression):
 
-1. Freeze the exact fourteen-migration release set and register every SHA-256 in migration integrity tests.
+1. Freeze the exact fifteen-migration release set and register every SHA-256 in migration integrity tests.
 2. Apply the migration set to the pinned non-Production regression project.
 3. Prove company/location RLS, stale-version rejection, rule disablement, approval, idempotency, retries, cancellation, due-task exact-once behavior, AI review, inbound-event privacy, and zero provider calls.
 4. Run independent zero-residue verification and Supabase security/performance advisors.

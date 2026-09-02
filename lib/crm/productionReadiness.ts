@@ -583,6 +583,17 @@ const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
     requiredAction: "Verify AI saved analyses, audit events, and usage limit tables before controlled live-provider testing.",
   },
   {
+    id: "deferred-invariant-trigger-location-backfill-compatibility",
+    filename: "20260902024803_scope_deferred_invariant_triggers_for_location_backfill.sql",
+    area: "Deferred invariant trigger and location-backfill compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify the three constraint triggers retain exact functions and deferred INSERT semantics while UPDATE events are limited to their invariant dependency columns.",
+  },
+  {
     id: "automation-engine-foundation",
     filename: "20260902024804_automation_engine_foundation.sql",
     area: "Central automation engine and company locations",
