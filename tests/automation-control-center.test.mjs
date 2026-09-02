@@ -425,6 +425,13 @@ try {
     }),
     "A failed execution for a disabled rule must not expose retry",
   );
+  assert(
+    !helpers.canRetryAutomationExecution(failedExecution, {
+      ...snapshot.automationRules[0],
+      version: failedExecution.rule_version + 1,
+    }),
+    "A failed execution for a newer rule version must not expose retry",
+  );
 
   const legacyModel = helpers.buildAutomationControlCenterModel(
     { companies: [], companyMemberships: [] },
@@ -438,6 +445,10 @@ try {
   );
 
   const repository = readFileSync(join(cwd, "lib/crm/repository.ts"), "utf8");
+  const pagination = readFileSync(
+    join(cwd, "lib/crm/automationExecutionPagination.ts"),
+    "utf8",
+  );
   const types = readFileSync(join(cwd, "lib/crm/types.ts"), "utf8");
   const component = readFileSync(
     join(cwd, "components/AutomationControlCenter.tsx"),
@@ -458,18 +469,67 @@ try {
   }
   includes(
     repository,
-    'fetchAllAutomationExecutionCandidates(client, "active")',
-    "Snapshot reads should fetch every active execution independently of recent history",
+    'fetchBoundedAutomationExecutionCandidates(client, "active")',
+    "General snapshot reads should bound active execution candidates independently of recent history",
   );
   includes(
     repository,
-    'fetchAllAutomationExecutionCandidates(client, "retryable_failed")',
-    "Snapshot reads should fetch every potential manual retry independently of recent history",
+    'fetchBoundedAutomationExecutionCandidates(client, "retryable_failed")',
+    "General snapshot reads should bound potential manual retries independently of recent history",
+  );
+  assert(
+    !repository.includes("fetchAllAutomationExecutionCandidates"),
+    "A general CRM snapshot must not page automation execution candidates to ledger exhaustion",
   );
   includes(
-    repository,
-    ".range(offset, offset + AUTOMATION_EXECUTION_PAGE_SIZE - 1)",
-    "Actionable execution reads should paginate beyond the Supabase row ceiling",
+    pagination,
+    ".limit(AUTOMATION_GENERAL_EXECUTION_CANDIDATE_LIMIT)",
+    "General snapshot candidate queries should have one fixed row bound",
+  );
+  includes(
+    pagination,
+    "AUTOMATION_CONTROL_CENTER_EXECUTION_PAGE_SIZE + 1",
+    "Control Center history should fetch one bounded lookahead row for truthful pagination",
+  );
+  includes(
+    pagination,
+    "updated_at.lt.${normalizedCursor.updatedAt},and(updated_at.eq.${normalizedCursor.updatedAt},id.lt.${normalizedCursor.id})",
+    "Control Center pages should use a deterministic updated-at and ID keyset cursor",
+  );
+  includes(
+    component,
+    "automation-load-older-candidates",
+    "Control Center should expose explicit access to older execution candidates",
+  );
+  includes(
+    component,
+    "loaded in bounded newest-first pages",
+    "Control Center copy should disclose bounded paging instead of claiming an uncapped snapshot",
+  );
+  includes(
+    component,
+    "Awaiting approval loaded",
+    "Control Center metrics should identify counts as loaded rather than globally exhaustive",
+  );
+  includes(
+    component,
+    "Count for execution pages loaded so far",
+    "Partial execution metrics should explain their plus suffix",
+  );
+  includes(
+    component,
+    "No loaded automation execution currently needs owner action",
+    "The actionable empty state should remain conditional while older pages exist",
+  );
+  includes(
+    component,
+    "No loaded automation execution is currently running",
+    "The in-progress empty state should remain conditional while older active pages exist",
+  );
+  includes(
+    component,
+    "candidateLoadMorePendingRef.current",
+    "Control Center should reject concurrent Load Older requests",
   );
 
   for (const rpc of [

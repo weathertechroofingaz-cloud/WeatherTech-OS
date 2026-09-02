@@ -6,6 +6,10 @@ import {
   calculateMaterialOrderItemTotal,
   calculateMaterialOrderTotal,
 } from "./operations";
+import {
+  fetchBoundedAutomationExecutionCandidates,
+  mergeAutomationExecutionRows,
+} from "./automationExecutionPagination";
 import type {
   CrmSnapshot,
   AutomationAttemptRecord,
@@ -398,76 +402,6 @@ function optionalRows<T>(tableName: string, result: CrmListResult<T>): T[] {
   }
 
   throwCrmTableError(tableName, result.error);
-}
-
-const AUTOMATION_EXECUTION_PAGE_SIZE = 1_000;
-
-async function fetchAllAutomationExecutionCandidates(
-  client: CrmClient,
-  kind: "active" | "retryable_failed",
-): Promise<CrmListResult<AutomationExecutionRecord>> {
-  const rows: AutomationExecutionRecord[] = [];
-
-  for (let offset = 0; ; ) {
-    const result =
-      kind === "active"
-        ? await client
-            .from("automation_executions")
-            .select("*")
-            .in("status", [
-              "queued",
-              "awaiting_approval",
-              "running",
-              "retry_scheduled",
-            ])
-            .order("updated_at", { ascending: false })
-            .order("id", { ascending: true })
-            .range(offset, offset + AUTOMATION_EXECUTION_PAGE_SIZE - 1)
-        : await client
-            .from("automation_executions")
-            .select("*")
-            .eq("status", "failed")
-            .lt("attempt_count", 10)
-            .order("updated_at", { ascending: false })
-            .order("id", { ascending: true })
-            .range(offset, offset + AUTOMATION_EXECUTION_PAGE_SIZE - 1);
-
-    if (result.error) {
-      return { data: null, error: result.error };
-    }
-
-    const page = result.data ?? [];
-    if (page.length === 0) {
-      return { data: rows, error: null };
-    }
-
-    rows.push(...page);
-    offset += page.length;
-  }
-}
-
-function mergeAutomationExecutionRows(
-  ...groups: AutomationExecutionRecord[][]
-): AutomationExecutionRecord[] {
-  const rowsById = new Map<string, AutomationExecutionRecord>();
-
-  groups.forEach((rows) => {
-    rows.forEach((row) => {
-      const current = rowsById.get(row.id);
-      const rowUpdatedAt = Date.parse(row.updated_at);
-      const currentUpdatedAt = current ? Date.parse(current.updated_at) : Number.NaN;
-
-      if (
-        !current ||
-        row.version > current.version ||
-        (row.version === current.version && rowUpdatedAt > currentUpdatedAt)
-      ) {
-        rowsById.set(row.id, row);
-      }
-    });
-  });
-
-  return [...rowsById.values()];
 }
 
 type LegacyLeadRecord = Partial<LeadRecord> & {
@@ -1065,8 +999,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .select("*")
       .order("created_at", { ascending: false })
       .limit(200),
-    fetchAllAutomationExecutionCandidates(client, "active"),
-    fetchAllAutomationExecutionCandidates(client, "retryable_failed"),
+    fetchBoundedAutomationExecutionCandidates(client, "active"),
+    fetchBoundedAutomationExecutionCandidates(client, "retryable_failed"),
     client
       .from("automation_attempts")
       .select("*")

@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   automationExecutionStatusLabels,
   buildAutomationControlCenterModel,
@@ -29,6 +29,14 @@ import {
   reviewAutomationExecution,
   setAutomationRuleEnabled,
 } from "../lib/crm/repository";
+import {
+  fetchAutomationExecutionCandidatePage,
+  isAutomationExecutionPagingGenerationCurrent,
+  mergeAutomationExecutionRows,
+  type AutomationExecutionCandidateCursor,
+  type AutomationExecutionCandidateKind,
+  type AutomationExecutionCandidatePage,
+} from "../lib/crm/automationExecutionPagination";
 import type {
   AutomationExecutionRecord,
   AutomationRuleRecord,
@@ -47,6 +55,51 @@ type AutomationControlCenterProps = {
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
+
+type AutomationCandidatePageState = {
+  rows: AutomationExecutionRecord[];
+  cursor: AutomationExecutionCandidateCursor | null;
+  hasMore: boolean;
+};
+
+type AutomationCandidatePagingState = {
+  active: AutomationCandidatePageState;
+  retryableFailed: AutomationCandidatePageState;
+  loaded: boolean;
+  loading: boolean;
+  error: string | null;
+};
+
+function emptyCandidatePageState(): AutomationCandidatePageState {
+  return { rows: [], cursor: null, hasMore: false };
+}
+
+function initialCandidatePagingState(
+  loading = false,
+): AutomationCandidatePagingState {
+  return {
+    active: emptyCandidatePageState(),
+    retryableFailed: emptyCandidatePageState(),
+    loaded: false,
+    loading,
+    error: null,
+  };
+}
+
+function requireCandidatePage(
+  page: AutomationExecutionCandidatePage,
+  kind: AutomationExecutionCandidateKind,
+) {
+  if (page.error || !page.data) {
+    throw new Error(
+      kind === "active"
+        ? "Active automation candidates could not be loaded."
+        : "Failed automation retry candidates could not be loaded.",
+    );
+  }
+
+  return page;
+}
 
 const toneClasses: Record<AutomationControlTone, string> = {
   blue: "border-sky-200 bg-sky-50 text-sky-800",
@@ -80,13 +133,27 @@ function StatusBadge({ label, tone }: { label: string; tone: AutomationControlTo
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  label,
+  value,
+  partial = false,
+}: {
+  label: string;
+  value: number;
+  partial?: boolean;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p className="mt-1 text-2xl font-black text-slate-950">{value}</p>
+      <p
+        className="mt-1 text-2xl font-black text-slate-950"
+        title={partial ? "Count for execution pages loaded so far" : undefined}
+      >
+        {value}
+        {partial ? "+" : ""}
+      </p>
     </div>
   );
 }
@@ -107,11 +174,223 @@ export default function AutomationControlCenter({
   onNotice,
   onError,
 }: AutomationControlCenterProps) {
+  const candidatePagingGenerationRef = useRef(0);
+  const candidateLoadMorePendingRef = useRef(false);
+  const [candidatePaging, setCandidatePaging] =
+    useState<AutomationCandidatePagingState>(() => initialCandidatePagingState());
+  const candidateSnapshot = useMemo(
+    () => ({
+      ...snapshot,
+      automationExecutions: mergeAutomationExecutionRows(
+        snapshot.automationExecutions ?? [],
+        candidatePaging.active.rows,
+        candidatePaging.retryableFailed.rows,
+      ),
+    }),
+    [candidatePaging.active.rows, candidatePaging.retryableFailed.rows, snapshot],
+  );
   const model = useMemo(
-    () => buildAutomationControlCenterModel(snapshot, userId),
-    [snapshot, userId],
+    () => buildAutomationControlCenterModel(candidateSnapshot, userId),
+    [candidateSnapshot, userId],
   );
   const [busyControl, setBusyControl] = useState<string | null>(null);
+  const candidateCountsPartial =
+    !candidatePaging.loaded ||
+    Boolean(candidatePaging.error) ||
+    candidatePaging.active.hasMore ||
+    candidatePaging.retryableFailed.hasMore;
+
+  useEffect(() => {
+    let cancelled = false;
+    const generation = candidatePagingGenerationRef.current + 1;
+    candidatePagingGenerationRef.current = generation;
+    candidateLoadMorePendingRef.current = false;
+
+    if (isDemoMode) {
+      setCandidatePaging({
+        ...initialCandidatePagingState(),
+        loaded: true,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCandidatePaging(initialCandidatePagingState(true));
+    void Promise.all([
+      fetchAutomationExecutionCandidatePage(client, "active"),
+      fetchAutomationExecutionCandidatePage(client, "retryable_failed"),
+    ])
+      .then(([activeResult, failedResult]) => {
+        if (
+          cancelled ||
+          !isAutomationExecutionPagingGenerationCurrent(
+            candidatePagingGenerationRef.current,
+            generation,
+          )
+        ) {
+          return;
+        }
+        const active = requireCandidatePage(activeResult, "active");
+        const retryableFailed = requireCandidatePage(
+          failedResult,
+          "retryable_failed",
+        );
+        setCandidatePaging({
+          active: {
+            rows: active.data ?? [],
+            cursor: active.nextCursor,
+            hasMore: active.hasMore,
+          },
+          retryableFailed: {
+            rows: retryableFailed.data ?? [],
+            cursor: retryableFailed.nextCursor,
+            hasMore: retryableFailed.hasMore,
+          },
+          loaded: true,
+          loading: false,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        if (
+          cancelled ||
+          !isAutomationExecutionPagingGenerationCurrent(
+            candidatePagingGenerationRef.current,
+            generation,
+          )
+        ) {
+          return;
+        }
+        setCandidatePaging({
+          ...initialCandidatePagingState(),
+          loaded: true,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Automation execution candidates could not be loaded.",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+      if (
+        isAutomationExecutionPagingGenerationCurrent(
+          candidatePagingGenerationRef.current,
+          generation,
+        )
+      ) {
+        candidatePagingGenerationRef.current += 1;
+        candidateLoadMorePendingRef.current = false;
+      }
+    };
+  }, [client, isDemoMode, snapshot.automationExecutions]);
+
+  const loadOlderCandidates = async () => {
+    if (
+      candidatePaging.loading ||
+      candidateLoadMorePendingRef.current ||
+      isDemoMode
+    ) {
+      return;
+    }
+
+    const generation = candidatePagingGenerationRef.current;
+    candidateLoadMorePendingRef.current = true;
+
+    setCandidatePaging((current) => ({
+      ...current,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const [activeResult, failedResult] = await Promise.all([
+        candidatePaging.active.hasMore && candidatePaging.active.cursor
+          ? fetchAutomationExecutionCandidatePage(
+              client,
+              "active",
+              candidatePaging.active.cursor,
+            )
+          : Promise.resolve(null),
+        candidatePaging.retryableFailed.hasMore &&
+        candidatePaging.retryableFailed.cursor
+          ? fetchAutomationExecutionCandidatePage(
+              client,
+              "retryable_failed",
+              candidatePaging.retryableFailed.cursor,
+            )
+          : Promise.resolve(null),
+      ]);
+      const active = activeResult
+        ? requireCandidatePage(activeResult, "active")
+        : null;
+      const retryableFailed = failedResult
+        ? requireCandidatePage(failedResult, "retryable_failed")
+        : null;
+
+      if (
+        !isAutomationExecutionPagingGenerationCurrent(
+          candidatePagingGenerationRef.current,
+          generation,
+        )
+      ) {
+        return;
+      }
+
+      setCandidatePaging((current) => ({
+        active: active
+          ? {
+              rows: mergeAutomationExecutionRows(
+                current.active.rows,
+                active.data ?? [],
+              ),
+              cursor: active.nextCursor,
+              hasMore: active.hasMore,
+            }
+          : current.active,
+        retryableFailed: retryableFailed
+          ? {
+              rows: mergeAutomationExecutionRows(
+                current.retryableFailed.rows,
+                retryableFailed.data ?? [],
+              ),
+              cursor: retryableFailed.nextCursor,
+              hasMore: retryableFailed.hasMore,
+            }
+          : current.retryableFailed,
+        loaded: true,
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      if (
+        !isAutomationExecutionPagingGenerationCurrent(
+          candidatePagingGenerationRef.current,
+          generation,
+        )
+      ) {
+        return;
+      }
+      setCandidatePaging((current) => ({
+        ...current,
+        loading: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Older automation execution candidates could not be loaded.",
+      }));
+    } finally {
+      if (
+        isAutomationExecutionPagingGenerationCurrent(
+          candidatePagingGenerationRef.current,
+          generation,
+        )
+      ) {
+        candidateLoadMorePendingRef.current = false;
+      }
+    }
+  };
 
   const runControl = async (
     controlKey: string,
@@ -263,8 +542,16 @@ export default function AutomationControlCenter({
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Rules" value={model.counts.rules} />
         <Metric label="Enabled" value={model.counts.enabled} />
-        <Metric label="Awaiting approval" value={model.counts.awaitingApproval} />
-        <Metric label="Needs attention" value={model.counts.needsAttention} />
+        <Metric
+          label="Awaiting approval loaded"
+          value={model.counts.awaitingApproval}
+          partial={candidateCountsPartial}
+        />
+        <Metric
+          label="Needs attention loaded"
+          value={model.counts.needsAttention}
+          partial={candidateCountsPartial}
+        />
       </div>
 
       <div className="mt-5 rounded-lg border border-violet-200 bg-violet-50 p-4 text-sm leading-6 text-violet-900">
@@ -393,8 +680,10 @@ export default function AutomationControlCenter({
                 key: "actionable",
                 title: "Needs action",
                 description:
-                  "Every visible approval, cancellation, and safe-retry candidate is listed here without a display cap.",
-                emptyMessage: "No automation execution currently needs owner action.",
+                  "Approvals, cancellations, and safe-retry candidates are loaded in bounded newest-first pages. Use Load older candidates to reach the remaining actionable ledger without expanding every CRM reload.",
+                emptyMessage: candidateCountsPartial
+                  ? "No loaded automation execution currently needs owner action. Load the remaining candidate pages before treating this queue as empty."
+                  : "No automation execution currently needs owner action.",
                 executions: model.actionableExecutions,
               },
               {
@@ -402,7 +691,12 @@ export default function AutomationControlCenter({
                 title: "In progress",
                 description:
                   "Running executions remain visible while the worker holds them.",
-                emptyMessage: "No automation execution is currently running.",
+                emptyMessage:
+                  !candidatePaging.loaded ||
+                  Boolean(candidatePaging.error) ||
+                  candidatePaging.active.hasMore
+                    ? "No loaded automation execution is currently running. Load the remaining active-candidate pages before treating this queue as empty."
+                    : "No automation execution is currently running.",
                 executions: model.inProgressExecutions,
               },
               {
@@ -589,6 +883,33 @@ export default function AutomationControlCenter({
             ))}
           </div>
         )}
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          {candidatePaging.error ? (
+            <p className="font-semibold text-red-700" role="alert">
+              {candidatePaging.error}
+            </p>
+          ) : null}
+          {candidatePaging.loading && !candidatePaging.loaded ? (
+            <p>Loading the first bounded execution-candidate pages…</p>
+          ) : null}
+          {candidatePaging.active.hasMore ||
+          candidatePaging.retryableFailed.hasMore ? (
+            <button
+              type="button"
+              data-testid="automation-load-older-candidates"
+              disabled={candidatePaging.loading}
+              onClick={() => void loadOlderCandidates()}
+              className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              {candidatePaging.loading
+                ? "Loading older candidates…"
+                : "Load older execution candidates"}
+            </button>
+          ) : candidatePaging.loaded && !candidatePaging.error ? (
+            <p>All available execution-candidate pages are loaded.</p>
+          ) : null}
+        </div>
       </div>
     </section>
   );
