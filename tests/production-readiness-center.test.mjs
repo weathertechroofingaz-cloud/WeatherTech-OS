@@ -369,12 +369,12 @@ try {
   );
   assertEqual(
     center.lastMigration,
-    "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+    "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
     "Latest required migration is exact",
   );
   assertEqual(
     JSON.stringify(center.requiredMigrations),
-    JSON.stringify(["20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql"]),
+    JSON.stringify(["20260902102714_lead_automation_event_legacy_schema_compatibility.sql"]),
     "Required migration checkpoint is the exact latest singleton",
   );
 
@@ -565,6 +565,7 @@ try {
     "20260902061135_gohighlevel_inbound_automation_bridge.sql",
     "20260902065509_legacy_twilio_synthetic_automation_orphan_cleanup.sql",
     "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+    "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
   ];
   [
     "0027_gmail_workspace_email_foundation.sql",

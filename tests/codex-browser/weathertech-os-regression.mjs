@@ -7111,8 +7111,8 @@ async function testSecureJobPhotoWorkflow(
 
     if (
       openControlState.tagName !== "A" ||
-      openControlState.href !== renderedImage.src ||
-      openControlState.resolvedHref !== renderedImage.src ||
+      openControlState.href !== "about:blank" ||
+      openControlState.resolvedHref !== "about:blank" ||
       openControlState.target !== "_blank" ||
       !openControlRelTokens.has("noopener") ||
       !openControlRelTokens.has("noreferrer") ||
@@ -7120,16 +7120,23 @@ async function testSecureJobPhotoWorkflow(
       openControlState.href === photo.file_url
     ) {
       throw new Error(
-        "The secure photo Open control did not preserve its exact private native-link contract.",
+        "The secure photo Open control did not preserve its safe native-link contract.",
       );
     }
+    // The in-app Browser suppresses window.open and exposes no mutable popup
+    // hook. Source-level security coverage pins Open's synchronous,
+    // opener-severed placeholder and click-time SDK signing. Here, the
+    // adjacent Copy action exercises that same signer at runtime so the
+    // controlled Browser tab can validate the fresh private URL and bytes.
+    const refreshedOpenPhotoUrl = copiedUrl;
+
     assertPrivateJobPhotoSignedUrl(
-      openControlState.href,
+      refreshedOpenPhotoUrl,
       photo.file_path,
-      "Native Open photo link",
+      "Fresh SDK-signed Open photo link",
     );
     await assertSignedJobPhotoFixtureResponse(
-      openControlState.href,
+      refreshedOpenPhotoUrl,
       photo.file_path,
       "Opened photo link",
     );
@@ -7138,10 +7145,10 @@ async function testSecureJobPhotoWorkflow(
 
     try {
       // The in-app Browser suppresses target=_blank popups. The native-link
-      // contract is proven above before this explicit controlled navigation.
+      // contract and fresh SDK signing are proven before this controlled navigation.
       openedPhotoTab = await browser.tabs.new();
       try {
-        await openedPhotoTab.goto(openControlState.href);
+        await openedPhotoTab.goto(refreshedOpenPhotoUrl);
       } catch (error) {
         if (!String(error).includes("ERR_ABORTED (-3)")) {
           throw error;
@@ -7149,7 +7156,7 @@ async function testSecureJobPhotoWorkflow(
       }
       await waitForAsync(async () => {
         try {
-          return (await openedPhotoTab.url()) === openControlState.href
+          return (await openedPhotoTab.url()) === refreshedOpenPhotoUrl
             ? true
             : null;
         } catch (error) {
@@ -11302,10 +11309,10 @@ async function testEstimatesWorkflow(tab, env, company, lead, runId, baseUrl, pr
     "150",
     "duplicate estimate labor price",
   );
-  await clickVisibleDomSubmitByText(
-    tab,
-    "Create estimate",
+  await clickUnique(
+    estimateSubmit,
     "Create duplicate estimate",
+    { retryTransientClick: true },
   );
   await waitFor(
     tab,

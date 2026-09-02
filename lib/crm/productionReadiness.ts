@@ -217,7 +217,8 @@ export type ProductionReadinessCenter = {
   blockers: string[];
 };
 
-const latestRequiredMigration = "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql";
+const latestRequiredMigration =
+  "20260902102714_lead_automation_event_legacy_schema_compatibility.sql";
 
 const providerIdsForActivation = new Set<IntegrationProviderId>([
   "twilio",
@@ -701,6 +702,17 @@ const providerMigrationInventory: ProductionMigrationInventoryItem[] = [
     remoteStatus: "remote_status_unknown",
     requiredAction:
       "Verify the 17-digit Browser Voice recovery remains restricted to exact absent synthetic lead roots on the pinned regression project.",
+  },
+  {
+    id: "lead-automation-event-legacy-schema-compatibility",
+    filename: "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
+    area: "Lead automation event schema compatibility",
+    repositoryStatus: "present_in_repository",
+    integrityStatus: "included_in_migration_integrity_tests",
+    appliedLocallyStatus: "requires_verification",
+    remoteStatus: "remote_status_unknown",
+    requiredAction:
+      "Verify canonical and legacy lead writes emit exact company/location-scoped automation events without inferring missing identity fields.",
   },
 ];
 

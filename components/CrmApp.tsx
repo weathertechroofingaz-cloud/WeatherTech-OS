@@ -26847,11 +26847,11 @@ function EstimatesView({
         });
       }
 
+      await onReload();
       updateUiPreservingScrollPosition(() =>
         setSelectedEstimateId(savedEstimate.id),
       );
       onViewChange("estimates", { type: "estimate", id: savedEstimate.id });
-      await onReload();
       onNotice(
         selectedEstimate
           ? "Estimate updated."
@@ -37759,9 +37759,10 @@ function PhotosView({
   };
 
   const openPhoto = async (photo: JobPhotoRecord) => {
-    const pendingPhotoWindow: Window | null = window.open("about:blank", "_blank");
+    let pendingPhotoWindow: Window | null = null;
 
     try {
+      pendingPhotoWindow = window.open("about:blank", "_blank");
       if (!pendingPhotoWindow) {
         throw new Error("The secure photo window was blocked.");
       }
@@ -37990,30 +37991,21 @@ function PhotosView({
                     <Copy className="h-4 w-4" />
                     Copy temporary link
                   </button>
-                  {photo.signed_url ? (
-                    <a
-                      href={photo.signed_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      data-testid="job-photo-open"
-                      data-photo-id={photo.id}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                    >
-                      <Camera className="h-4 w-4" />
-                      Open
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void openPhoto(photo)}
-                      data-testid="job-photo-open"
-                      data-photo-id={photo.id}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                    >
-                      <Camera className="h-4 w-4" />
-                      Open
-                    </button>
-                  )}
+                  <a
+                    href="about:blank"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openPhoto(photo);
+                    }}
+                    data-testid="job-photo-open"
+                    data-photo-id={photo.id}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    <Camera className="h-4 w-4" />
+                    Open
+                  </a>
                 </div>
               </div>
             </article>

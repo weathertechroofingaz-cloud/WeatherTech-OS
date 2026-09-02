@@ -1057,19 +1057,27 @@ assert(
     harness.includes('await tab.clipboard.writeText("")') &&
     harness.includes("await tab.clipboard.readText()") &&
     harness.includes('openControlState.tagName !== "A"') &&
-    harness.includes("openControlState.href !== renderedImage.src") &&
+    harness.includes('openControlState.href !== "about:blank"') &&
+    harness.includes('openControlState.resolvedHref !== "about:blank"') &&
     harness.includes('openControlState.target !== "_blank"') &&
     harness.includes('openControlRelTokens.has("noopener")') &&
     harness.includes('openControlRelTokens.has("noreferrer")') &&
     harness.includes("openControlState.href === photo.file_path") &&
     harness.includes("openControlState.href === photo.file_url") &&
+    harness.includes("const refreshedOpenPhotoUrl = copiedUrl") &&
+    harness.includes("exposes no mutable popup") &&
+    harness.includes("opener-severed placeholder and click-time SDK signing") &&
+    !harness.includes("__wtosJobPhotoOpenProbe") &&
+    !harness.includes("window.open = patchedOpen") &&
+    harness.includes('"Fresh SDK-signed Open photo link"') &&
     harness.includes("openedPhotoTab = await browser.tabs.new()") &&
-    harness.includes("await openedPhotoTab.goto(openControlState.href)") &&
+    harness.includes("await openedPhotoTab.goto(refreshedOpenPhotoUrl)") &&
     harness.includes('"Opened photo link"') &&
     harness.includes("await openedPhotoTab.url()") &&
-    harness.includes("=== openControlState.href") &&
+    harness.includes("=== refreshedOpenPhotoUrl") &&
     harness.includes('"controlled temporary job-photo URL", 15000') &&
-    !harness.includes("await openedPhotoTab.playwright.waitForURL(openControlState.href") &&
+    !harness.includes("await openedPhotoTab.goto(openControlState.href)") &&
+    !harness.includes("await openedPhotoTab.playwright.waitForURL(refreshedOpenPhotoUrl") &&
     !harness.includes("await openedPhotoTab.playwright.waitForLoadState") &&
     harness.includes("if (openedPhotoTab)") &&
     harness.includes("const openedPhotoControlledTabId = openedPhotoTab.id") &&
@@ -1095,7 +1103,7 @@ assert(
     harness.includes("internalNavigationRecovery: true") &&
     harness.includes("reloadRecovery: true") &&
     harness.includes('[data-testid="customer-360-photos"]'),
-  "Targeted signed-in job-photo coverage proves upload relation isolation, native private open-link semantics, exact controlled-tab navigation and cleanup, reload persistence, and Customer 360 visibility",
+  "Targeted signed-in job-photo coverage proves upload relation isolation, native safe-link semantics, fresh SDK signing, exact controlled-tab navigation and cleanup, reload persistence, and Customer 360 visibility",
 );
 const fieldOperationsWorkflowSource = harness.slice(
   harness.indexOf("async function testFieldOperationsWorkspace"),
@@ -1691,6 +1699,15 @@ assert(
       "const lineItemCount = await countEstimateLineItems(env, savedEstimate.id)",
     ),
   "Estimate browser coverage waits for the child line-item inserts to settle before asserting their final count",
+);
+assert(
+  estimatesWorkflowSource.includes(
+    'await clickUnique(\n    estimateSubmit,\n    "Create duplicate estimate",\n    { retryTransientClick: true },\n  );',
+  ) &&
+    estimatesWorkflowSource.includes(
+      'document.body.innerText.includes("Possible duplicate estimate")',
+    ),
+  "Duplicate estimate coverage uses the exact semantic submit control with bounded transient-click recovery and preserves the visible duplicate guard assertion",
 );
 const leadIntakeWorkspaceSource = harness.slice(
   harness.indexOf("async function testLeadIntakeWorkspace"),

@@ -236,6 +236,10 @@ const expectedMigrations = [
     "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
     "9dc35dfc395f2761344a21f88094cb999d7cc92796c6e0e2204f47caacfb527b",
   ],
+  [
+    "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
+    "eb1de6aeb9c994530b0c0c92adad0688c3e30809d068eed574325463a423fe64",
+  ],
 ];
 
 const files = fs
@@ -396,6 +400,9 @@ const legacyTwilioSyntheticOrphanCleanupIndex = files.indexOf(
 const legacyTwilioBrowserVoiceOrphanCleanupIndex = files.indexOf(
   "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
 );
+const leadAutomationEventLegacySchemaCompatibilityIndex = files.indexOf(
+  "20260902102714_lead_automation_event_legacy_schema_compatibility.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -513,6 +520,7 @@ if (
   goHighLevelInboundAutomationBridgeIndex === -1 ||
   legacyTwilioSyntheticOrphanCleanupIndex === -1 ||
   legacyTwilioBrowserVoiceOrphanCleanupIndex === -1 ||
+  leadAutomationEventLegacySchemaCompatibilityIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -553,12 +561,14 @@ if (
     goHighLevelInboundAutomationBridgeIndex <
       legacyTwilioSyntheticOrphanCleanupIndex &&
     legacyTwilioSyntheticOrphanCleanupIndex <
-      legacyTwilioBrowserVoiceOrphanCleanupIndex
+      legacyTwilioBrowserVoiceOrphanCleanupIndex &&
+    legacyTwilioBrowserVoiceOrphanCleanupIndex <
+      leadAutomationEventLegacySchemaCompatibilityIndex
   ) ||
-  legacyTwilioBrowserVoiceOrphanCleanupIndex !== files.length - 1
+  leadAutomationEventLegacySchemaCompatibilityIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, and its Browser Voice correction must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, and lead-trigger schema compatibility must remain in reviewed order.",
   );
 }
 

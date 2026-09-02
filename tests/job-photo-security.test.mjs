@@ -991,21 +991,45 @@ const openPhotoSection = sourceSection(
   "const handleUpload = async (event: FormEvent<HTMLFormElement>) => {",
 );
 check(
-  photosSurface.includes("photo.signed_url ? (") &&
-    photosSurface.includes("href={photo.signed_url}") &&
+  photosSurface.includes('href="about:blank"') &&
     photosSurface.includes('target="_blank"') &&
     photosSurface.includes('rel="noopener noreferrer"') &&
+    photosSurface.includes("event.preventDefault();") &&
+    photosSurface.includes("void openPhoto(photo);") &&
+    !photosSurface.includes("href={photo.signed_url}") &&
     !photosSurface.includes("href={photo.file_path}") &&
     !photosSurface.includes("href={photo.file_url}"),
-  "Photos workspace exposes its hydrated temporary URL only through a native opener-isolated link",
+  "Photos workspace preserves native link semantics without exposing a cached signed or raw photo URL",
+);
+const openPlaceholderIndex = openPhotoSection.indexOf(
+  'window.open("about:blank", "_blank")',
+);
+const openTryIndex = openPhotoSection.indexOf("try {");
+const severOpenerIndex = openPhotoSection.indexOf(
+  "pendingPhotoWindow.opener = null",
+);
+const refreshSignedUrlIndex = openPhotoSection.indexOf(
+  "await getJobPhotoFileSignedUrl(client, photo)",
+);
+const replaceLocationIndex = openPhotoSection.indexOf(
+  "pendingPhotoWindow.location.replace(signedUrl)",
+);
+const openFailureCatchIndex = openPhotoSection.indexOf("} catch {");
+const closeFailedWindowIndex = openPhotoSection.indexOf(
+  "pendingPhotoWindow?.close()",
 );
 check(
-  openPhotoSection.indexOf('window.open("about:blank", "_blank")') <
-      openPhotoSection.indexOf("await getJobPhotoFileSignedUrl(client, photo)") &&
-    openPhotoSection.includes("pendingPhotoWindow.opener = null") &&
-    openPhotoSection.includes("pendingPhotoWindow.location.replace(signedUrl)") &&
-    openPhotoSection.includes("pendingPhotoWindow?.close()"),
-  "Photos workspace preserves user activation with an opener-severed placeholder and closes it on signing failure",
+  openTryIndex >= 0 &&
+    openPlaceholderIndex > openTryIndex &&
+    severOpenerIndex > openPlaceholderIndex &&
+    refreshSignedUrlIndex > severOpenerIndex &&
+    replaceLocationIndex > refreshSignedUrlIndex &&
+    openFailureCatchIndex > replaceLocationIndex &&
+    closeFailedWindowIndex > openFailureCatchIndex &&
+    !openPhotoSection.includes("photo.signed_url") &&
+    !openPhotoSection.includes("photo.file_path") &&
+    !openPhotoSection.includes("photo.file_url"),
+  "Every photo click synchronously reserves an opener-severed placeholder, refreshes through the SDK, replaces only with that URL, and closes on failure",
 );
 for (const testId of [
   "job-photo-upload-form",
