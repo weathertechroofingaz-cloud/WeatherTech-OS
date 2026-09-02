@@ -204,6 +204,15 @@ export type AiPilotCommandResult = {
   };
 };
 
+type AiPilotCommandPreparation = {
+  config: AiPilotProviderConfig;
+  migrationApplied: boolean;
+  readiness: AiPilotReadiness;
+  context: AiRetrievedContext;
+  usage: AiUsageCheck;
+  fallback: AiGroundedResponse;
+};
+
 type ProviderProposedAction = {
   label?: unknown;
   reason?: unknown;
@@ -474,69 +483,28 @@ export async function runAiPilotCommand({
   quotaReservation = null,
 }: AiPilotCommandRequest): Promise<AiPilotCommandResult> {
   const config = providerConfig ?? getAiPilotProviderConfig(env);
-  const migrationApplied = hasAiPersistenceTables(snapshot);
-  const readiness = buildAiPilotReadiness({ config, migrationApplied });
-  const context = retrieveAuthorizedAiContext(snapshot, {
+  const preparation = prepareAiPilotCommand({
     prompt,
-    companyId,
-    userRole,
-    now,
-  });
-  const usage = checkAiUsageLimits({
-    config,
-    context,
     snapshot,
     companyId,
+    userRole,
     userId,
     now,
-    prompt,
-    userRole,
+    config,
     quotaReservation,
+    requireQuotaReservation: true,
   });
-  const fallback = answerAiCommand({
-    prompt,
-    snapshot,
-    options: { companyId, userRole, now },
+  const localResult = resolveLocalAiPilotCommandResult({
+    preparation,
+    companyId,
+    conversationId,
+    previousResponseId,
   });
-
-  if (fallback.mode === "safety_block") {
-    return decorateResult({
-      response: fallback,
-      readiness,
-      context,
-      usage,
-      conversationId,
-      previousResponseId,
-      providerHealth: { tested: false, ok: true, statusCode: null, error: null },
-      savedWorkSupported: migrationApplied,
-      expectedCompanyId: companyId === "all" ? null : companyId,
-    });
+  if (localResult) {
+    return localResult;
   }
 
-  if (!readiness.liveProviderEnabled || !usage.allowed) {
-    const blockedReason = readiness.liveProviderEnabled ? usage.reason : readiness.summary;
-    const response: AiGroundedResponse = {
-      ...fallback,
-      mode: "provider_disabled",
-      missingInformation: [...new Set([...fallback.missingInformation, blockedReason])],
-      providerRequired: readiness.state !== "provider_disabled",
-      productionDisabled: true,
-      readOnly: true,
-    };
-
-    return decorateResult({
-      response,
-      readiness,
-      context,
-      usage,
-      conversationId,
-      previousResponseId,
-      providerHealth: { tested: false, ok: true, statusCode: null, error: null },
-      savedWorkSupported: migrationApplied,
-      expectedCompanyId: companyId === "all" ? null : companyId,
-    });
-  }
-
+  const { migrationApplied, readiness, context, usage, fallback } = preparation;
   const providerResult = await callConfiguredProvider({
     config,
     prompt,
@@ -643,6 +611,142 @@ export async function runAiPilotCommand({
     providerHealth: { tested: true, ok: true, statusCode: providerResult.statusCode, error: null },
     savedWorkSupported: migrationApplied,
     actionPreviews,
+    expectedCompanyId: companyId === "all" ? null : companyId,
+  });
+}
+
+export function preflightAiPilotCommand({
+  prompt,
+  snapshot,
+  companyId = "all",
+  userRole = "office",
+  userId = null,
+  conversationId = null,
+  previousResponseId = null,
+  now = new Date().toISOString(),
+  env = process.env,
+  providerConfig,
+}: Omit<
+  AiPilotCommandRequest,
+  "fetchImpl" | "signal" | "quotaReservation"
+>): AiPilotCommandResult | null {
+  const config = providerConfig ?? getAiPilotProviderConfig(env);
+  const preparation = prepareAiPilotCommand({
+    prompt,
+    snapshot,
+    companyId,
+    userRole,
+    userId,
+    now,
+    config,
+    quotaReservation: null,
+    requireQuotaReservation: false,
+  });
+  return resolveLocalAiPilotCommandResult({
+    preparation,
+    companyId,
+    conversationId,
+    previousResponseId,
+  });
+}
+
+function prepareAiPilotCommand({
+  prompt,
+  snapshot,
+  companyId,
+  userRole,
+  userId,
+  now,
+  config,
+  quotaReservation,
+  requireQuotaReservation,
+}: {
+  prompt: string;
+  snapshot: CrmSnapshot;
+  companyId: CompanyScopeId;
+  userRole: CompanyMembershipRole | "owner" | "admin";
+  userId: string | null;
+  now: string;
+  config: AiPilotProviderConfig;
+  quotaReservation: AiQuotaReservationReceipt | null;
+  requireQuotaReservation: boolean;
+}): AiPilotCommandPreparation {
+  const migrationApplied = hasAiPersistenceTables(snapshot);
+  const readiness = buildAiPilotReadiness({ config, migrationApplied });
+  const context = retrieveAuthorizedAiContext(snapshot, {
+    prompt,
+    companyId,
+    userRole,
+    now,
+  });
+  const usage = checkAiUsageLimits({
+    config,
+    context,
+    snapshot,
+    companyId,
+    userId,
+    now,
+    prompt,
+    userRole,
+    quotaReservation,
+    requireQuotaReservation,
+  });
+  const fallback = answerAiCommand({
+    prompt,
+    snapshot,
+    options: { companyId, userRole, now },
+  });
+  return { config, migrationApplied, readiness, context, usage, fallback };
+}
+
+function resolveLocalAiPilotCommandResult({
+  preparation,
+  companyId,
+  conversationId,
+  previousResponseId,
+}: {
+  preparation: AiPilotCommandPreparation;
+  companyId: CompanyScopeId;
+  conversationId: string | null;
+  previousResponseId: string | null;
+}): AiPilotCommandResult | null {
+  const { migrationApplied, readiness, context, usage, fallback } = preparation;
+  if (fallback.mode === "safety_block") {
+    return decorateResult({
+      response: fallback,
+      readiness,
+      context,
+      usage,
+      conversationId,
+      previousResponseId,
+      providerHealth: { tested: false, ok: true, statusCode: null, error: null },
+      savedWorkSupported: migrationApplied,
+      expectedCompanyId: companyId === "all" ? null : companyId,
+    });
+  }
+
+  if (readiness.liveProviderEnabled && usage.allowed) {
+    return null;
+  }
+
+  const blockedReason = readiness.liveProviderEnabled ? usage.reason : readiness.summary;
+  const response: AiGroundedResponse = {
+    ...fallback,
+    mode: "provider_disabled",
+    missingInformation: [...new Set([...fallback.missingInformation, blockedReason])],
+    providerRequired: readiness.state !== "provider_disabled",
+    productionDisabled: true,
+    readOnly: true,
+  };
+  return decorateResult({
+    response,
+    readiness,
+    context,
+    usage,
+    conversationId,
+    previousResponseId,
+    providerHealth: { tested: false, ok: true, statusCode: null, error: null },
+    savedWorkSupported: migrationApplied,
     expectedCompanyId: companyId === "all" ? null : companyId,
   });
 }
@@ -818,6 +922,7 @@ export function checkAiUsageLimits({
   prompt,
   userRole = "office",
   quotaReservation = null,
+  requireQuotaReservation = true,
 }: {
   config: AiPilotProviderConfig;
   context: AiRetrievedContext;
@@ -828,6 +933,7 @@ export function checkAiUsageLimits({
   prompt?: string;
   userRole?: string;
   quotaReservation?: AiQuotaReservationReceipt | null;
+  requireQuotaReservation?: boolean;
 }): AiUsageCheck {
   const { estimatedRequestTokens, estimatedCostUsd } = estimateAiRequestUsage({
     config,
@@ -863,7 +969,7 @@ export function checkAiUsageLimits({
     config.maxRequestTokens > 0 && estimatedRequestTokens > config.maxRequestTokens
       ? "The retrieved context exceeds AI_MAX_REQUEST_TOKENS."
       : null,
-    liveProviderConfigured && !quotaReservation
+    requireQuotaReservation && liveProviderConfigured && !quotaReservation
       ? "An atomic AI quota reservation is required before a provider call."
       : null,
     quotaReservation && config.dailyRequestLimit > 0 && globalRequestsToday > config.dailyRequestLimit

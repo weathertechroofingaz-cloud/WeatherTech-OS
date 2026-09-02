@@ -18,6 +18,7 @@ const boundedJson = readFileSync(
   join(cwd, "lib/http/boundedJson.ts"),
   "utf8",
 );
+const aiProvider = readFileSync(join(cwd, "lib/crm/aiProvider.ts"), "utf8");
 const crmApp = readFileSync(join(cwd, "components/CrmApp.tsx"), "utf8");
 const automationMigration = readFileSync(
   join(
@@ -38,14 +39,55 @@ function includes(source, value, message) {
 }
 
 const membershipLookupIndex = commandRoute.indexOf('.from("company_memberships")');
+const preflightIndex = commandRoute.indexOf("const localResult = preflightAiPilotCommand({");
 const requestAuditIndex = commandRoute.indexOf('serviceClient.rpc("wtos_reserve_ai_request_v1"');
 const providerCallIndex = commandRoute.indexOf("runAiPilotCommand({");
 
 assert(
   membershipLookupIndex >= 0 &&
+    preflightIndex > membershipLookupIndex &&
+    requestAuditIndex > preflightIndex &&
     requestAuditIndex > membershipLookupIndex &&
     providerCallIndex > requestAuditIndex,
-  "Command authorization and atomic durable quota reservation must both complete before any provider call.",
+  "Command authorization and network-free local preflight must complete before the atomic reservation and provider call.",
+);
+const localExitBlock = commandRoute.slice(preflightIndex, requestAuditIndex);
+for (const localExitBoundary of [
+  "if (localResult)",
+  "requestAuditEventId: null",
+  "persistAiCommandResult({",
+  "No provider call was attempted",
+]) {
+  includes(
+    localExitBlock,
+    localExitBoundary,
+    `Local AI exits must be audited without quota consumption: ${localExitBoundary}.`,
+  );
+}
+assert(
+  !localExitBlock.includes("wtos_reserve_ai_request_v1") &&
+    !localExitBlock.includes('event_type: "request_initiated"'),
+  "Local AI exits must never create a counted request reservation.",
+);
+const providerPreflightStart = aiProvider.indexOf(
+  "export function preflightAiPilotCommand({",
+);
+const providerPreflightEnd = aiProvider.indexOf(
+  "function prepareAiPilotCommand({",
+  providerPreflightStart,
+);
+const providerPreflight = aiProvider.slice(
+  providerPreflightStart,
+  providerPreflightEnd,
+);
+assert(
+  providerPreflightStart >= 0 &&
+    providerPreflightEnd > providerPreflightStart &&
+    providerPreflight.includes("requireQuotaReservation: false") &&
+    !providerPreflight.includes("callConfiguredProvider") &&
+    !providerPreflight.includes("await fetch") &&
+    !providerPreflight.includes("fetch("),
+  "AI preflight must be structurally network-free and ignore only the not-yet-created reservation requirement.",
 );
 includes(
   commandRoute,
@@ -91,6 +133,7 @@ for (const quotaBoundary of [
   "MAX_AI_COMMAND_BODY_BYTES",
   "MAX_AI_PROMPT_CHARACTERS",
   "resolveCompanyAiProviderConfig",
+  "preflightAiPilotCommand",
   'serviceClient.rpc("wtos_reserve_ai_request_v1"',
   "estimatedCostUsd *",
   "(providerConfig.retryLimit + 1)",
@@ -107,6 +150,8 @@ for (const quotaBoundary of [
   "receipt.estimatedCostCents !== expected.estimatedCostCents",
   "receipt.maxProviderAttempts !== expected.maxProviderAttempts",
   "Number(receipt.reservedCostCentsToday) < expected.estimatedCostCents",
+  "quotaReserved: Boolean(requestAuditEventId)",
+  "requestAuditEventId ? result.actionPreviews : []",
 ]) {
   includes(
     commandRoute,

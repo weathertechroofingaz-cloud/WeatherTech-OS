@@ -4,6 +4,7 @@ import { fetchCrmSnapshot } from "../../../../lib/crm/repository";
 import {
   getAiPilotProviderConfig,
   estimateAiRequestUsage,
+  preflightAiPilotCommand,
   retrieveAuthorizedAiContext,
   resolveCompanyAiProviderConfig,
   runAiPilotCommand,
@@ -145,10 +146,12 @@ export async function POST(request: NextRequest) {
     );
   }
   const providerConfig = companyConfig.config;
+  const commandNow = new Date().toISOString();
   const context = retrieveAuthorizedAiContext(snapshot, {
     prompt,
     companyId: authorization.companyId,
     userRole: authorization.role,
+    now: commandNow,
   });
   const requestEstimate = estimateAiRequestUsage({
     config: providerConfig,
@@ -170,6 +173,36 @@ export async function POST(request: NextRequest) {
       { error: "AI usage controls are not configured or this request exceeds the token limit. No provider call was attempted." },
       503,
     );
+  }
+
+  const localResult = preflightAiPilotCommand({
+    prompt,
+    snapshot,
+    companyId: authorization.companyId,
+    userRole: authorization.role,
+    userId: user.id,
+    conversationId:
+      typeof body.conversationId === "string" ? body.conversationId : null,
+    previousResponseId:
+      typeof body.previousResponseId === "string" ? body.previousResponseId : null,
+    now: commandNow,
+    providerConfig,
+  });
+  if (localResult) {
+    const auditedLocalResult = await persistAiCommandResult({
+      client: serviceClient,
+      result: localResult,
+      userId: user.id,
+      companyId: authorization.companyId,
+      requestAuditEventId: null,
+    });
+    if (!auditedLocalResult) {
+      return noStoreJson(
+        { error: "The local AI result could not be durably audited. No provider call was attempted." },
+        503,
+      );
+    }
+    return noStoreJson(auditedLocalResult, 200);
   }
 
   const requestId = randomUUID();
@@ -247,6 +280,7 @@ export async function POST(request: NextRequest) {
         typeof body.conversationId === "string" ? body.conversationId : null,
       previousResponseId:
         typeof body.previousResponseId === "string" ? body.previousResponseId : null,
+      now: commandNow,
       providerConfig,
       quotaReservation,
     });
@@ -327,7 +361,7 @@ async function persistAiCommandResult({
   result: AiPilotCommandResult;
   userId: string;
   companyId: string;
-  requestAuditEventId: string;
+  requestAuditEventId: string | null;
 }): Promise<AiPilotCommandResult | null> {
   const previewIds = new Set(result.actionPreviews.map((preview) => preview.id));
   if (
@@ -354,14 +388,18 @@ async function persistAiCommandResult({
     })),
     safety_flags: result.response.safetyFlags,
     token_count: result.usage.estimatedRequestTokens + result.usage.maxResponseTokens,
-    estimated_cost_cents: Math.round(result.usage.estimatedCostUsd * 100),
+    estimated_cost_cents: requestAuditEventId
+      ? Math.round(result.usage.estimatedCostUsd * 100)
+      : 0,
   };
   const responseEventType: AiAuditEventType =
     result.response.mode === "safety_block"
       ? "safety_block"
-      : result.providerHealth.tested && !result.providerHealth.ok
-        ? "provider_failed"
-        : "response_generated";
+      : result.response.mode === "provider_disabled" && !result.providerHealth.tested
+        ? "provider_blocked"
+        : result.providerHealth.tested && !result.providerHealth.ok
+          ? "provider_failed"
+          : "response_generated";
   const auditRows: AiAuditEventInsert[] = [
     {
       ...common,
@@ -371,13 +409,14 @@ async function persistAiCommandResult({
       status: "recorded",
       metadata: {
         auditKind: "response",
-        requestAuditEventId,
+        ...(requestAuditEventId ? { requestAuditEventId } : {}),
+        quotaReserved: Boolean(requestAuditEventId),
         commandResponseId: result.response.id,
         readiness: result.readiness.state,
         productionDisabled: result.readiness.productionDisabled,
       },
     },
-    ...result.actionPreviews.map((preview) => ({
+    ...(requestAuditEventId ? result.actionPreviews : []).map((preview) => ({
       ...common,
       event_type: "action_proposed" as const,
       action_type: preview.actionType,
@@ -416,6 +455,7 @@ async function persistAiCommandResult({
   }
 
   if (
+    requestAuditEventId &&
     result.actionPreviews.some(
       (preview) => !auditReferenceByPreviewId.has(preview.id),
     )
