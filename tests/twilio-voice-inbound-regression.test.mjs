@@ -113,6 +113,12 @@ for (const [needle, message] of [
   ["recording_status === \"not_requested\"", "Recording remains not requested"],
   ["transcript_status === \"not_requested\"", "Transcription remains not requested"],
   ["discoverExactPhoneSideEffects", "Unexpected exact-phone side effects are captured"],
+  ["createBrowserCompatibleRegressionRunId", "Cleanup uses the guarded RPC's exact 17-digit marker family"],
+  ["cleanupTwilioSyntheticAutomationLedger", "Immutable automation cleanup uses the guarded database RPC"],
+  ["const sourceMarker = `TEST WTOS REGRESSION ${runId}`", "The exact generic cleanup marker is separate from the Voice label"],
+  ["Neutralize the retained post-claim drift fixture", "Transient lead sources remain present until guarded automation cleanup"],
+  ["leads.length === contactFixtureLeadIds.length", "Only the exact retained contact fixtures may exist before final cleanup"],
+  ["contactFixtureLeadIds.every((id) => leads.some((lead) => lead.id === id))", "No automatically created lead can hide among retained fixtures"],
   ["deleteLeadAccountabilityForExactLeadIds", "Exact lead dependents are safely cleaned"],
   ["capturedIdsAuthorizedForCleanup", "Collision checks gate cleanup authority"],
   ["assertExactIdsAbsent", "Cleanup proves exact-ID absence"],
@@ -141,6 +147,20 @@ check(
 check(
   /\.delete\(\)\.in\("id", ids\)/.test(source),
   "Cleanup deletes captured exact ID sets only",
+);
+check(
+  source.lastIndexOf("cleanupTwilioSyntheticAutomationLedger({") <
+    source.lastIndexOf('deleteExactIds(\n          client,\n          "communication_provider_events"'),
+  "Guarded automation cleanup runs before any ordinary Voice source deletion",
+);
+check(
+  !source.includes('deleteExactIds(client, "leads", contactFixtureLeadIds)') &&
+    !source.includes('deleteExactIds(client, "leads", [driftLeadId])') &&
+    source.includes('.update({ phone: null })') &&
+    source.includes('.eq("id", driftLeadId)') &&
+    source.indexOf('.update({ phone: null })') <
+      source.lastIndexOf("cleanupTwilioSyntheticAutomationLedger({"),
+  "Every automation-emitting lead fixture stays discoverable until guarded cleanup",
 );
 check(
   source.indexOf('deleteExactIds(\n          client,\n          "communication_provider_events"') <
@@ -202,8 +222,10 @@ if (process.env[TWILIO_VOICE_INBOUND_REGRESSION_RUN] === "true") {
   assert.equal(report.outboundCallRecords, 0);
   assert.equal(report.outboundSmsCreated, false);
   assert.equal(report.providerNetworkRequests, 0);
+  assert.equal(report.automationCleanup?.invoked, true);
+  assert.equal(report.automationCleanup?.databaseResidueCount, 0);
   assert.equal(report.cleanupResidue, 0);
-  assertionCount += 42;
+  assertionCount += 44;
   console.log("Twilio Tucson-only voice hosted regression execution: PASS");
 } else {
   console.log(

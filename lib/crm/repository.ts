@@ -8,6 +8,11 @@ import {
 } from "./operations";
 import type {
   CrmSnapshot,
+  AutomationAttemptRecord,
+  AutomationAuditEventRecord,
+  AutomationEventRecord,
+  AutomationExecutionRecord,
+  AutomationRuleRecord,
   AiAuditEventRecord,
   AiSavedAnalysisRecord,
   AiUsageLimitRecord,
@@ -395,6 +400,76 @@ function optionalRows<T>(tableName: string, result: CrmListResult<T>): T[] {
   throwCrmTableError(tableName, result.error);
 }
 
+const AUTOMATION_EXECUTION_PAGE_SIZE = 1_000;
+
+async function fetchAllAutomationExecutionCandidates(
+  client: CrmClient,
+  kind: "active" | "retryable_failed",
+): Promise<CrmListResult<AutomationExecutionRecord>> {
+  const rows: AutomationExecutionRecord[] = [];
+
+  for (let offset = 0; ; ) {
+    const result =
+      kind === "active"
+        ? await client
+            .from("automation_executions")
+            .select("*")
+            .in("status", [
+              "queued",
+              "awaiting_approval",
+              "running",
+              "retry_scheduled",
+            ])
+            .order("updated_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(offset, offset + AUTOMATION_EXECUTION_PAGE_SIZE - 1)
+        : await client
+            .from("automation_executions")
+            .select("*")
+            .eq("status", "failed")
+            .lt("attempt_count", 10)
+            .order("updated_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(offset, offset + AUTOMATION_EXECUTION_PAGE_SIZE - 1);
+
+    if (result.error) {
+      return { data: null, error: result.error };
+    }
+
+    const page = result.data ?? [];
+    if (page.length === 0) {
+      return { data: rows, error: null };
+    }
+
+    rows.push(...page);
+    offset += page.length;
+  }
+}
+
+function mergeAutomationExecutionRows(
+  ...groups: AutomationExecutionRecord[][]
+): AutomationExecutionRecord[] {
+  const rowsById = new Map<string, AutomationExecutionRecord>();
+
+  groups.forEach((rows) => {
+    rows.forEach((row) => {
+      const current = rowsById.get(row.id);
+      const rowUpdatedAt = Date.parse(row.updated_at);
+      const currentUpdatedAt = current ? Date.parse(current.updated_at) : Number.NaN;
+
+      if (
+        !current ||
+        row.version > current.version ||
+        (row.version === current.version && rowUpdatedAt > currentUpdatedAt)
+      ) {
+        rowsById.set(row.id, row);
+      }
+    });
+  });
+
+  return [...rowsById.values()];
+}
+
 type LegacyLeadRecord = Partial<LeadRecord> & {
   customer_name?: string | null;
   lead_source?: string | null;
@@ -695,6 +770,7 @@ function normalizeInspectionRows(inspections: InspectionRecord[]): InspectionRec
 function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
   return {
     ...core,
+    companyLocations: [],
     properties: [],
     marketingCampaigns: [],
     leadAccountability: [],
@@ -731,6 +807,11 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     notifications: [],
     integrationConnections: [],
     integrationSyncLogs: [],
+    automationRules: [],
+    automationEvents: [],
+    automationExecutions: [],
+    automationAttempts: [],
+    automationAuditEvents: [],
     aiSavedAnalyses: [],
     aiAuditEvents: [],
     aiUsageLimits: [],
@@ -788,6 +869,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
 
   const [
     companies,
+    companyLocations,
     properties,
     leads,
     marketingCampaigns,
@@ -829,6 +911,13 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications,
     integrationConnections,
     integrationSyncLogs,
+    automationRules,
+    automationEvents,
+    automationExecutions,
+    activeAutomationExecutions,
+    retryableFailedAutomationExecutions,
+    automationAttempts,
+    automationAuditEvents,
     aiSavedAnalyses,
     aiAuditEvents,
     aiUsageLimits,
@@ -849,6 +938,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     companyWorkflowSettings,
   ] = await Promise.all([
     client.from("companies").select("*").order("name", { ascending: true }),
+    client
+      .from("company_locations")
+      .select("*")
+      .order("display_name", { ascending: true }),
     client.from("properties").select("*").order("updated_at", { ascending: false }),
     client.from("leads").select("*").order("created_at", { ascending: false }),
     client
@@ -959,6 +1052,32 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .order("created_at", { ascending: false })
       .limit(100),
     client
+      .from("automation_rules")
+      .select("*")
+      .order("updated_at", { ascending: false }),
+    client
+      .from("automation_events")
+      .select("*")
+      .order("recorded_at", { ascending: false })
+      .limit(200),
+    client
+      .from("automation_executions")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200),
+    fetchAllAutomationExecutionCandidates(client, "active"),
+    fetchAllAutomationExecutionCandidates(client, "retryable_failed"),
+    client
+      .from("automation_attempts")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(300),
+    client
+      .from("automation_audit_events")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(300),
+    client
       .from("ai_saved_analyses")
       .select("*")
       .order("updated_at", { ascending: false })
@@ -1028,6 +1147,9 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
 
   throwFirstTableError([
     ["companies", companies],
+    ...(companyLocations.error && !isOptionalTableMissingError(companyLocations.error)
+      ? [["company_locations", companyLocations] as [string, { error: unknown }]]
+      : []),
     ...(properties.error && !isOptionalTableMissingError(properties.error)
       ? [["properties", properties] as [string, { error: unknown }]]
       : []),
@@ -1103,6 +1225,43 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ["notifications", notifications],
     ["integration_connections", integrationConnections],
     ["integration_sync_logs", integrationSyncLogs],
+    ...(automationRules.error && !isOptionalTableMissingError(automationRules.error)
+      ? [["automation_rules", automationRules] as [string, { error: unknown }]]
+      : []),
+    ...(automationEvents.error && !isOptionalTableMissingError(automationEvents.error)
+      ? [["automation_events", automationEvents] as [string, { error: unknown }]]
+      : []),
+    ...(automationExecutions.error &&
+    !isOptionalTableMissingError(automationExecutions.error)
+      ? [["automation_executions", automationExecutions] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
+    ...(activeAutomationExecutions.error &&
+    !isOptionalTableMissingError(activeAutomationExecutions.error)
+      ? [["automation_executions", activeAutomationExecutions] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
+    ...(retryableFailedAutomationExecutions.error &&
+    !isOptionalTableMissingError(retryableFailedAutomationExecutions.error)
+      ? [["automation_executions", retryableFailedAutomationExecutions] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
+    ...(automationAttempts.error && !isOptionalTableMissingError(automationAttempts.error)
+      ? [["automation_attempts", automationAttempts] as [string, { error: unknown }]]
+      : []),
+    ...(automationAuditEvents.error &&
+    !isOptionalTableMissingError(automationAuditEvents.error)
+      ? [["automation_audit_events", automationAuditEvents] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
     ...(aiSavedAnalyses.error && !isOptionalTableMissingError(aiSavedAnalyses.error)
       ? [["ai_saved_analyses", aiSavedAnalyses] as [string, { error: unknown }]]
       : []),
@@ -1163,9 +1322,24 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       jobPhotos as CrmListResult<JobPhotoRow>,
     ),
   );
+  const mergedAutomationExecutions = mergeAutomationExecutionRows(
+    optionalRows(
+      "automation_executions",
+      automationExecutions as CrmListResult<AutomationExecutionRecord>,
+    ),
+    optionalRows(
+      "automation_executions",
+      activeAutomationExecutions as CrmListResult<AutomationExecutionRecord>,
+    ),
+    optionalRows(
+      "automation_executions",
+      retryableFailedAutomationExecutions as CrmListResult<AutomationExecutionRecord>,
+    ),
+  );
 
   return {
     companies: requireRows("companies", companies),
+    companyLocations: optionalRows("company_locations", companyLocations),
     properties: normalizePropertyRows(optionalRows("properties", properties)),
     leads: normalizeLeadRows(requireRows("leads", leads)),
     marketingCampaigns: optionalRows(
@@ -1228,6 +1402,23 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     notifications: requireRows("notifications", notifications),
     integrationConnections: requireRows("integration_connections", integrationConnections),
     integrationSyncLogs: requireRows("integration_sync_logs", integrationSyncLogs),
+    automationRules: optionalRows(
+      "automation_rules",
+      automationRules as CrmListResult<AutomationRuleRecord>,
+    ),
+    automationEvents: optionalRows(
+      "automation_events",
+      automationEvents as CrmListResult<AutomationEventRecord>,
+    ),
+    automationExecutions: mergedAutomationExecutions,
+    automationAttempts: optionalRows(
+      "automation_attempts",
+      automationAttempts as CrmListResult<AutomationAttemptRecord>,
+    ),
+    automationAuditEvents: optionalRows(
+      "automation_audit_events",
+      automationAuditEvents as CrmListResult<AutomationAuditEventRecord>,
+    ),
     aiSavedAnalyses: optionalRows(
       "ai_saved_analyses",
       aiSavedAnalyses as CrmListResult<AiSavedAnalysisRecord>,
@@ -1429,6 +1620,192 @@ function requireRpcObject(name: string, value: unknown): Record<string, unknown>
   }
 
   return value as Record<string, unknown>;
+}
+
+function requireBoundedAutomationReason(reason: string | undefined, required: boolean) {
+  const normalized = reason?.trim() ?? "";
+
+  if (required && !normalized) {
+    throw new Error("An audit reason is required for this automation control.");
+  }
+
+  if (normalized.length > 500) {
+    throw new Error("Automation control reasons must be 500 characters or fewer.");
+  }
+
+  return normalized || null;
+}
+
+function requireVersionedAutomationRow<RecordType extends { id: string; version: number }>(
+  name: string,
+  value: unknown,
+  expectedId: string,
+  allowedVersions: number[],
+) {
+  const candidate = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  const result = requireRpcObject(name, candidate);
+
+  if (
+    result.id !== expectedId ||
+    !Number.isInteger(result.version) ||
+    !allowedVersions.includes(Number(result.version))
+  ) {
+    throw new Error(`${name} returned a mismatched versioned record.`);
+  }
+
+  return result as RecordType;
+}
+
+export async function setAutomationRuleEnabled(
+  client: CrmClient,
+  request: {
+    ruleId: string;
+    expectedVersion: number;
+    enabled: boolean;
+    reason: string;
+  },
+) {
+  const reason = requireBoundedAutomationReason(request.reason, true);
+  const { data, error } = await client.rpc("wtos_set_automation_rule_enabled_v1", {
+    p_rule_id: request.ruleId,
+    p_expected_version: request.expectedVersion,
+    p_enabled: request.enabled,
+    p_reason: reason,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const rule = requireVersionedAutomationRow<AutomationRuleRecord>(
+    "Automation rule control",
+    data,
+    request.ruleId,
+    [request.expectedVersion, request.expectedVersion + 1],
+  );
+
+  if (rule.enabled !== request.enabled) {
+    throw new Error("Automation rule control returned an unexpected enabled state.");
+  }
+  if (
+    rule.version === request.expectedVersion &&
+    rule.enabled !== request.enabled
+  ) {
+    throw new Error("Automation rule control returned a stale idempotent response.");
+  }
+
+  return rule;
+}
+
+export async function reviewAutomationExecution(
+  client: CrmClient,
+  request: {
+    executionId: string;
+    expectedVersion: number;
+    decision: "approve" | "reject";
+    reason?: string;
+  },
+) {
+  const { data, error } = await client.rpc("wtos_review_automation_execution_v1", {
+    p_execution_id: request.executionId,
+    p_expected_version: request.expectedVersion,
+    p_decision: request.decision,
+    p_reason: requireBoundedAutomationReason(request.reason, false),
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const execution = requireVersionedAutomationRow<AutomationExecutionRecord>(
+    "Automation execution review",
+    data,
+    request.executionId,
+    request.decision === "approve"
+      ? [request.expectedVersion, request.expectedVersion + 1, request.expectedVersion + 3]
+      : [request.expectedVersion, request.expectedVersion + 1],
+  );
+  const expectedApprovalStatus =
+    request.decision === "approve" ? "approved" : "rejected";
+
+  if (execution.approval_status !== expectedApprovalStatus) {
+    throw new Error("Automation execution review returned an unexpected decision state.");
+  }
+  if (
+    (request.decision === "reject" && execution.status !== "rejected") ||
+    (request.decision === "approve" &&
+      !["queued", "retry_scheduled", "succeeded", "failed"].includes(
+        execution.status,
+      ))
+  ) {
+    throw new Error("Automation execution review returned an impossible status tuple.");
+  }
+
+  return execution;
+}
+
+export async function cancelAutomationExecution(
+  client: CrmClient,
+  request: {
+    executionId: string;
+    expectedVersion: number;
+    reason: string;
+  },
+) {
+  const { data, error } = await client.rpc("wtos_cancel_automation_execution_v1", {
+    p_execution_id: request.executionId,
+    p_expected_version: request.expectedVersion,
+    p_reason: requireBoundedAutomationReason(request.reason, true) ?? "",
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const execution = requireVersionedAutomationRow<AutomationExecutionRecord>(
+    "Automation execution cancellation",
+    data,
+    request.executionId,
+    [request.expectedVersion, request.expectedVersion + 1],
+  );
+
+  if (execution.status !== "cancelled") {
+    throw new Error("Automation execution cancellation returned an unexpected state.");
+  }
+
+  return execution;
+}
+
+export async function retryAutomationExecution(
+  client: CrmClient,
+  request: {
+    executionId: string;
+    expectedVersion: number;
+    reason: string;
+  },
+) {
+  const { data, error } = await client.rpc("wtos_retry_automation_execution_v1", {
+    p_execution_id: request.executionId,
+    p_expected_version: request.expectedVersion,
+    p_reason: requireBoundedAutomationReason(request.reason, true) ?? "",
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const execution = requireVersionedAutomationRow<AutomationExecutionRecord>(
+    "Automation execution retry",
+    data,
+    request.executionId,
+    [request.expectedVersion + 1],
+  );
+
+  if (execution.status !== "queued") {
+    throw new Error("Automation execution retry returned an unexpected state.");
+  }
+
+  return execution;
 }
 
 export async function createAccountableLead(
@@ -4451,8 +4828,6 @@ export async function updateEmailMessage(
   id: string,
   input: Partial<EmailMessageInput>,
 ) {
-
-
   const { data, error } = await client
     .from("email_messages")
     .update(input)

@@ -535,6 +535,40 @@ async function getResidue(config, fetchImpl) {
     );
   }
 
+  // The isolated target has no legitimate dynamic automation history between
+  // runs. These whole-ledger probes therefore catch both exact-source residue
+  // and orphaned immutable descendants that no source-marker scan can see.
+  counts["automation_events.exact-source-or-orphan"] = await restCount(
+    config,
+    fetchImpl,
+    "automation_events",
+    "select=id",
+  );
+  counts["automation_executions.exact-source-or-orphan"] = await restCount(
+    config,
+    fetchImpl,
+    "automation_executions",
+    "select=id",
+  );
+  counts["automation_attempts.exact-source-or-orphan"] = await restCount(
+    config,
+    fetchImpl,
+    "automation_attempts",
+    "select=id",
+  );
+  counts["automation_audit_events.dynamic"] = await restCount(
+    config,
+    fetchImpl,
+    "automation_audit_events",
+    "select=id&audit_type=neq.rule_seeded",
+  );
+  counts["office_tasks.automation_execution_id"] = await restCount(
+    config,
+    fetchImpl,
+    "office_tasks",
+    "select=id&automation_execution_id=not.is.null",
+  );
+
   return counts;
 }
 

@@ -181,7 +181,8 @@ export type OfficeTaskSourceType =
   | "sent_estimate"
   | "unsigned_estimate"
   | "scheduled_job"
-  | "completed_job";
+  | "completed_job"
+  | "automation";
 export type ScheduleEventType =
   | "inspection"
   | "estimate"
@@ -887,6 +888,7 @@ export type PropertyRecord = {
 export type LeadRecord = {
   id: string;
   company_id: string;
+  company_location_id?: string | null;
   customer_id: string | null;
   property_id?: string | null;
   contact_name: string;
@@ -1155,6 +1157,8 @@ export type JobTaskRecord = {
 export type OfficeTaskRecord = {
   id: string;
   company_id: string;
+  company_location_id?: string | null;
+  automation_execution_id?: string | null;
   customer_id: string | null;
   property_id: string | null;
   assigned_employee_id: string | null;
@@ -2006,6 +2010,153 @@ export type NotificationRecord = {
   updated_at: string;
 };
 
+export type AutomationActionType =
+  | "create_office_task"
+  | "complete_office_task";
+export type AutomationApprovalPolicy = "none" | "manual";
+export type AutomationExecutionStatus =
+  | "queued"
+  | "awaiting_approval"
+  | "running"
+  | "retry_scheduled"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "rejected";
+export type AutomationApprovalStatus =
+  | "not_required"
+  | "pending"
+  | "approved"
+  | "rejected";
+export type AutomationAttemptStatus = "running" | "succeeded" | "failed";
+
+export type CompanyLocationRecord = {
+  id: string;
+  company_id: string;
+  location_key: string;
+  display_name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationRuleRecord = {
+  id: string;
+  company_id: string;
+  company_location_id: string | null;
+  rule_key: string;
+  name: string;
+  description: string | null;
+  trigger_type: string;
+  conditions: Record<string, unknown>;
+  condition_contract_version: 1;
+  action_type: AutomationActionType;
+  action_config: Record<string, unknown>;
+  action_contract_version: 1;
+  delay_seconds: number;
+  enabled: boolean;
+  approval_policy: AutomationApprovalPolicy;
+  max_attempts: number;
+  retry_backoff_seconds: number;
+  version: number;
+  enabled_by: string | null;
+  enabled_at: string | null;
+  disabled_by: string | null;
+  disabled_at: string | null;
+  disable_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationEventRecord = {
+  id: string;
+  company_id: string;
+  company_location_id: string | null;
+  event_type: string;
+  source_table: string;
+  source_id: string;
+  source_version: string;
+  actor_user_id: string | null;
+  correlation_id: string;
+  causation_event_id: string | null;
+  idempotency_key: string;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+  recorded_at: string;
+};
+
+export type AutomationExecutionRecord = {
+  id: string;
+  company_id: string;
+  company_location_id: string | null;
+  rule_id: string;
+  event_id: string;
+  rule_version: number;
+  action_type: AutomationActionType;
+  action_config_snapshot: Record<string, unknown>;
+  action_input: Record<string, unknown>;
+  status: AutomationExecutionStatus;
+  approval_status: AutomationApprovalStatus;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_by: string | null;
+  rejected_at: string | null;
+  approval_reason: string | null;
+  scheduled_for: string;
+  attempt_count: number;
+  max_attempts: number;
+  next_retry_at: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  worker_id: string | null;
+  idempotency_key: string;
+  version: number;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  result: Record<string, unknown>;
+  cancelled_by: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+};
+
+export type AutomationAttemptRecord = {
+  id: string;
+  company_id: string;
+  company_location_id: string | null;
+  execution_id: string;
+  attempt_number: number;
+  status: AutomationAttemptStatus;
+  worker_id: string;
+  started_at: string;
+  completed_at: string | null;
+  retryable: boolean;
+  next_retry_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  result: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AutomationAuditEventRecord = {
+  id: string;
+  company_id: string;
+  company_location_id: string | null;
+  rule_id: string | null;
+  event_id: string | null;
+  execution_id: string | null;
+  actor_user_id: string | null;
+  audit_type: string;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
 export type IntegrationConnectionRecord = {
   id: string;
   company_id: string;
@@ -2182,9 +2333,16 @@ export type GoHighLevelWebhookEventRecord = {
   processing_status: "received" | "processed" | "ignored" | "failed";
   attempt_count: number;
   payload_summary: Record<string, unknown>;
+  payload_sha256: string | null;
+  claim_token: string | null;
+  lease_expires_at: string | null;
+  last_attempted_at: string | null;
   error_message: string | null;
   occurred_at: string | null;
   processed_at: string | null;
+  requeued_at: string | null;
+  requeued_by: string | null;
+  requeue_count: number;
   received_at: string;
   created_at: string;
   updated_at: string;
@@ -2569,6 +2727,7 @@ export type CommunicationProviderEventRecord = {
 export type LeadIntakeRecord = {
   id: string;
   company_id: string | null;
+  company_location_id?: string | null;
   linked_lead_id: string | null;
   linked_customer_id: string | null;
   related_communication_event_id: string | null;
@@ -3458,6 +3617,7 @@ export type InspectionInput = {
 
 export type LeadIntakeRecordInput = {
   company_id?: string | null;
+  company_location_id?: string | null;
   linked_lead_id?: string | null;
   linked_customer_id?: string | null;
   related_communication_event_id?: string | null;
@@ -3789,12 +3949,32 @@ export type GoHighLevelResourceSnapshotInsert = Omit<
 
 export type GoHighLevelWebhookEventInsert = Omit<
   GoHighLevelWebhookEventRecord,
-  "id" | "created_at" | "updated_at" | "received_at" | "attempt_count"
+  | "id"
+  | "created_at"
+  | "updated_at"
+  | "received_at"
+  | "attempt_count"
+  | "payload_sha256"
+  | "claim_token"
+  | "lease_expires_at"
+  | "last_attempted_at"
+  | "requeued_at"
+  | "requeued_by"
+  | "requeue_count"
 > &
   Partial<
     Pick<
       GoHighLevelWebhookEventRecord,
-      "id" | "received_at" | "attempt_count"
+      | "id"
+      | "received_at"
+      | "attempt_count"
+      | "payload_sha256"
+      | "claim_token"
+      | "lease_expires_at"
+      | "last_attempted_at"
+      | "requeued_at"
+      | "requeued_by"
+      | "requeue_count"
     >
   >;
 
@@ -4607,6 +4787,7 @@ export type CompanyWorkflowSettingsInsert = {
 
 export type CrmSnapshot = {
   companies: CompanyRecord[];
+  companyLocations: CompanyLocationRecord[];
   properties: PropertyRecord[];
   leads: LeadRecord[];
   marketingCampaigns: MarketingCampaignRecord[];
@@ -4648,6 +4829,11 @@ export type CrmSnapshot = {
   notifications: NotificationRecord[];
   integrationConnections: IntegrationConnectionRecord[];
   integrationSyncLogs: IntegrationSyncLogRecord[];
+  automationRules: AutomationRuleRecord[];
+  automationEvents: AutomationEventRecord[];
+  automationExecutions: AutomationExecutionRecord[];
+  automationAttempts: AutomationAttemptRecord[];
+  automationAuditEvents: AutomationAuditEventRecord[];
   aiSavedAnalyses: AiSavedAnalysisRecord[];
   aiAuditEvents: AiAuditEventRecord[];
   aiUsageLimits: AiUsageLimitRecord[];
@@ -4698,6 +4884,12 @@ export type Database = {
         Row: CompanyRecord;
         Insert: CompanyInsert;
         Update: Partial<Database["public"]["Tables"]["companies"]["Insert"]>;
+        Relationships: [];
+      };
+      company_locations: {
+        Row: CompanyLocationRecord;
+        Insert: never;
+        Update: never;
         Relationships: [];
       };
       customers: {
@@ -5037,6 +5229,36 @@ export type Database = {
         >;
         Relationships: [];
       };
+      automation_rules: {
+        Row: AutomationRuleRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      automation_events: {
+        Row: AutomationEventRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      automation_executions: {
+        Row: AutomationExecutionRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      automation_attempts: {
+        Row: AutomationAttemptRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      automation_audit_events: {
+        Row: AutomationAuditEventRecord;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       ai_saved_analyses: {
         Row: AiSavedAnalysisRecord;
         Insert: AiSavedAnalysisInsert;
@@ -5264,6 +5486,112 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wtos_set_automation_rule_enabled_v1: {
+        Args: {
+          p_rule_id: string;
+          p_expected_version: number;
+          p_enabled: boolean;
+          p_reason?: string | null;
+        };
+        Returns: AutomationRuleRecord;
+      };
+      wtos_review_automation_execution_v1: {
+        Args: {
+          p_execution_id: string;
+          p_expected_version: number;
+          p_decision: "approve" | "reject";
+          p_reason?: string | null;
+        };
+        Returns: AutomationExecutionRecord;
+      };
+      wtos_cancel_automation_execution_v1: {
+        Args: {
+          p_execution_id: string;
+          p_expected_version: number;
+          p_reason: string;
+        };
+        Returns: AutomationExecutionRecord;
+      };
+      wtos_retry_automation_execution_v1: {
+        Args: {
+          p_execution_id: string;
+          p_expected_version: number;
+          p_reason: string;
+        };
+        Returns: AutomationExecutionRecord;
+      };
+      wtos_run_due_automations_v1: {
+        Args: {
+          p_company_id: string;
+          p_batch_size?: number;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_run_automation_worker_v1: {
+        Args: {
+          p_worker_now: string;
+          p_batch_size?: number;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_reserve_ai_request_v1: {
+        Args: {
+          p_company_id: string;
+          p_actor_user_id: string;
+          p_request_id: string;
+          p_request: Record<string, unknown>;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_ai_action_preview_fingerprint_v1: {
+        Args: {
+          p_action_preview: Record<string, unknown>;
+          p_contract_version: number;
+        };
+        Returns: string;
+      };
+      wtos_review_ai_action_v1: {
+        Args: {
+          p_ai_audit_event_id: string;
+          p_decision: "approve" | "reject";
+          p_expected_action_type: string;
+          p_expected_payload_sha256: string;
+          p_expected_contract_version: number;
+          p_reason?: string | null;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_claim_gohighlevel_webhook_v1: {
+        Args: { p_claim: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_transition_gohighlevel_webhook_v1: {
+        Args: {
+          p_event_id: string;
+          p_claim_token: string;
+          p_payload_sha256: string;
+          p_target_status: "processed" | "ignored" | "failed";
+          p_error_message?: string | null;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_finalize_gohighlevel_uninstall_v1: {
+        Args: {
+          p_event_id: string;
+          p_claim_token: string;
+          p_payload_sha256: string;
+          p_scope: "location" | "company";
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_requeue_gohighlevel_webhook_v1: {
+        Args: {
+          p_event_id: string;
+          p_expected_attempt_count: number;
+          p_reason?: string | null;
+        };
+        Returns: Record<string, unknown>;
+      };
       wtos_finalize_proposal_revision: {
         Args: { finalization_request: Record<string, unknown> };
         Returns: Record<string, unknown>;

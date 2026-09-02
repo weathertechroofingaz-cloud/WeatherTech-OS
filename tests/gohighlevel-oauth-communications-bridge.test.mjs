@@ -26,6 +26,74 @@ function assertEqual(actual, expected, message) {
   }
 }
 
+async function assertRejects(operation, pattern, message) {
+  try {
+    await operation();
+  } catch (error) {
+    assert(
+      pattern.test(error instanceof Error ? error.message : String(error)),
+      `${message}: unexpected error ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  throw new Error(`${message}: expected rejection.`);
+}
+
+function createScriptedServiceClient(steps) {
+  const remaining = [...steps];
+  const calls = [];
+  const consume = (actual) => {
+    const expected = remaining.shift();
+    assert(expected, `Unexpected ${actual.operation} on ${actual.table}`);
+    assertEqual(actual.table, expected.table, "Scripted Supabase table must match");
+    assertEqual(
+      actual.operation,
+      expected.operation,
+      "Scripted Supabase operation must match",
+    );
+    calls.push(actual);
+    return Promise.resolve(expected.result);
+  };
+
+  return {
+    calls,
+    assertComplete(message) {
+      assertEqual(remaining.length, 0, message);
+    },
+    client: {
+      from(table) {
+        let operation = null;
+        let payload = null;
+        let columns = null;
+        const filters = [];
+        const builder = {
+          select(value) {
+            columns = value;
+            operation ??= "select";
+            return builder;
+          },
+          update(value) {
+            operation = "update";
+            payload = value;
+            return builder;
+          },
+          insert(value) {
+            return consume({ table, operation: "insert", payload: value, filters: [] });
+          },
+          eq(column, value) {
+            filters.push([column, value]);
+            return builder;
+          },
+          maybeSingle() {
+            return consume({ table, operation, payload, columns, filters });
+          },
+        };
+        return builder;
+      },
+    },
+  };
+}
+
 function configureEnv() {
   process.env.GHL_CLIENT_ID = "0123456789abcdef01234567-testclient";
   process.env.GHL_CLIENT_SECRET = "test-marketplace-secret";
@@ -619,6 +687,181 @@ try {
     "Product review reads do not send the rejected locationId parameter",
   );
 
+  const connection = {
+    id: "connection-weathertech",
+    company_id: "company-weathertech",
+    external_account_id: "location-weathertech",
+  };
+  let failClosedDatabaseCalls = 0;
+  const failClosedClient = {
+    from() {
+      failClosedDatabaseCalls += 1;
+      throw new Error("Direction rejection must happen before database access.");
+    },
+  };
+  for (const [label, record] of [
+    ["missing", { id: "message-missing-direction", messageType: "SMS" }],
+    [
+      "unrecognized",
+      { id: "message-unrecognized-direction", messageType: "SMS", direction: "sideways" },
+    ],
+  ]) {
+    const ignored = await sync.persistGoHighLevelCommunication({
+      serviceClient: failClosedClient,
+      connection,
+      record,
+    });
+    assertEqual(ignored.saved, false, `${label} GHL direction must not persist`);
+    assertEqual(ignored.ignored, true, `${label} GHL direction must fail closed`);
+  }
+  assertEqual(
+    failClosedDatabaseCalls,
+    0,
+    "Missing or unrecognized GHL direction must create zero source rows and automation events",
+  );
+
+  const outboundStore = createScriptedServiceClient([
+    {
+      table: "communication_provider_events",
+      operation: "select",
+      result: { data: null, error: null },
+    },
+    {
+      table: "communication_provider_events",
+      operation: "insert",
+      result: { data: null, error: null },
+    },
+  ]);
+  const outbound = await sync.persistGoHighLevelCommunication({
+    serviceClient: outboundStore.client,
+    connection,
+    record: {
+      id: "message-explicit-outbound",
+      messageType: "SMS",
+      direction: "outbound",
+      status: "delivered",
+    },
+    match: { customerId: null, leadId: "lead-weathertech" },
+  });
+  assertEqual(outbound.saved, true, "Explicit outbound GHL SMS remains persisted");
+  const outboundInsert = outboundStore.calls.find((call) => call.operation === "insert");
+  assertEqual(
+    outboundInsert.payload.direction,
+    "outbound",
+    "Explicit outbound GHL direction remains authoritative",
+  );
+  assertEqual(
+    outboundInsert.payload.event_type,
+    "sms_status",
+    "Explicit outbound GHL SMS cannot masquerade as inbound",
+  );
+  outboundStore.assertComplete("Explicit outbound persistence must consume its exact DB script");
+
+  const communicationCollision = createScriptedServiceClient([
+    {
+      table: "communication_provider_events",
+      operation: "select",
+      result: { data: null, error: null },
+    },
+    {
+      table: "communication_provider_events",
+      operation: "insert",
+      result: { data: null, error: { code: "23505" } },
+    },
+    {
+      table: "communication_provider_events",
+      operation: "select",
+      result: {
+        data: {
+          id: "existing-message",
+          company_id: "company-other",
+          integration_connection_id: "connection-other",
+        },
+        error: null,
+      },
+    },
+  ]);
+  await assertRejects(
+    () => sync.persistGoHighLevelCommunication({
+      serviceClient: communicationCollision.client,
+      connection,
+      record: {
+        id: "message-provider-id-collision",
+        messageType: "SMS",
+        direction: "inbound",
+      },
+      match: { customerId: null, leadId: "lead-weathertech" },
+    }),
+    /another company or connection/i,
+    "Cross-company GHL message provider-ID collision must fail safely",
+  );
+  communicationCollision.assertComplete(
+    "Cross-company GHL message collision must stop before any update",
+  );
+  assert(
+    !communicationCollision.calls.some((call) => call.operation === "update"),
+    "Cross-company GHL message collision must never update the existing row",
+  );
+
+  const callCollision = createScriptedServiceClient([
+    {
+      table: "communication_provider_events",
+      operation: "select",
+      result: { data: null, error: null },
+    },
+    {
+      table: "communication_provider_events",
+      operation: "insert",
+      result: { data: null, error: null },
+    },
+    {
+      table: "call_records",
+      operation: "select",
+      result: { data: null, error: null },
+    },
+    {
+      table: "call_records",
+      operation: "insert",
+      result: { data: null, error: { code: "23505" } },
+    },
+    {
+      table: "call_records",
+      operation: "select",
+      result: {
+        data: {
+          id: "existing-call",
+          company_id: "company-other",
+          integration_connection_id: "connection-other",
+        },
+        error: null,
+      },
+    },
+  ]);
+  await assertRejects(
+    () => sync.persistGoHighLevelCommunication({
+      serviceClient: callCollision.client,
+      connection,
+      record: {
+        id: "call-provider-id-collision",
+        messageType: "CALL",
+        direction: "inbound",
+        callStatus: "missed",
+      },
+      match: { customerId: null, leadId: "lead-weathertech" },
+    }),
+    /another company or connection/i,
+    "Cross-company GHL call provider-ID collision must fail safely",
+  );
+  callCollision.assertComplete(
+    "Cross-company GHL call collision must stop before any call update",
+  );
+  assert(
+    !callCollision.calls.some(
+      (call) => call.table === "call_records" && call.operation === "update",
+    ),
+    "Cross-company GHL call collision must never update the existing call row",
+  );
+
   const startRoute = readFileSync(
     join(cwd, "app/api/integrations/gohighlevel/oauth/start/route.ts"),
     "utf8",
@@ -644,6 +887,13 @@ try {
     join(cwd, "supabase/migrations/0036_gohighlevel_oauth_communications_bridge.sql"),
     "utf8",
   );
+  const webhookStateMachineMigration = readFileSync(
+    join(
+      cwd,
+      "supabase/migrations/20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+    ),
+    "utf8",
+  );
   const crmApp = readFileSync(join(cwd, "components/CrmApp.tsx"), "utf8");
 
   assert(
@@ -667,13 +917,28 @@ try {
     "OAuth callback validates scopes, encrypts tokens, and enforces company isolation",
   );
   assert(
-    webhookRoute.indexOf("await request.text()") <
-      webhookRoute.indexOf("JSON.parse(rawBody)") &&
+    webhookRoute.indexOf("readBoundedTextBody(") >= 0 &&
+      webhookRoute.indexOf("readBoundedTextBody(") <
+        webhookRoute.indexOf("JSON.parse(rawBody)") &&
       webhookRoute.includes("verifyGoHighLevelWebhookSignature") &&
-      webhookRoute.includes('webhookInsertError?.code === "23505"') &&
+      webhookRoute.includes('createHash("sha256").update(rawBody, "utf8")') &&
+      webhookRoute.includes("wtos_claim_gohighlevel_webhook_v1") &&
+      webhookRoute.includes("wtos_transition_gohighlevel_webhook_v1") &&
+      webhookRoute.includes("wtos_finalize_gohighlevel_uninstall_v1") &&
+      webhookRoute.includes("parseClaimReceipt") &&
+      webhookRoute.includes("parseTransitionReceipt") &&
+      webhookRoute.includes("MAX_GHL_WEBHOOK_ATTEMPTS") &&
+      webhookRoute.includes('status: 503') &&
+      webhookRoute.includes('"Retry-After": "30"') &&
       webhookRoute.includes('includes("uninstall")') &&
-      webhookRoute.includes("revoked_at: revokedAt"),
-    "Webhook route verifies the raw body and handles duplicate races idempotently",
+      webhookStateMachineMigration.includes("pg_advisory_xact_lock") &&
+      webhookStateMachineMigration.includes("lease_expires_at") &&
+      webhookStateMachineMigration.includes("provider_max_attempts constant integer := 13"),
+    "Webhook route bounds, verifies, raw-hash binds, and atomically transitions durable deliveries with lease-safe bounded provider retry",
+  );
+  assert(
+    !webhookRoute.includes('ok: true, processed: false, message: "Webhook was recorded for retry."'),
+    "Failed webhook processing must return a retryable non-2xx response rather than falsely acknowledging delivery",
   );
   assert(
     syncRoute.includes("config.syncEnabled") &&
@@ -695,6 +960,14 @@ try {
       !syncSource.includes('.from("customers").insert') &&
       !syncSource.includes('.from("leads").insert'),
     "Synchronization performs no provider writes and creates no duplicate CRM people",
+  );
+  assert(
+    !syncSource.includes('getDirection(record) ?? "inbound"') &&
+      syncSource.includes("if (!direction)") &&
+      syncSource.includes('.select("id, company_id, integration_connection_id")') &&
+      syncSource.includes('.eq("company_id", connection.company_id)') &&
+      syncSource.includes('.eq("integration_connection_id", connection.id)'),
+    "GHL communication persistence fails closed on direction and scopes provider identity updates",
   );
   assert(
     migration.includes("revoke all on table public.gohighlevel_oauth_credentials from anon, public, authenticated") &&

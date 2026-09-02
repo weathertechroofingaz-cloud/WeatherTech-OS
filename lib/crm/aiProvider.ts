@@ -1,4 +1,5 @@
 import type {
+  AiUsageLimitRecord,
   CompanyMembershipRole,
   CrmSnapshot,
 } from "./types";
@@ -7,6 +8,7 @@ import {
   buildAiPriorityItems,
   buildAiWorkspaceModel,
   sanitizeBusinessText,
+  selectAiPriorityItemsForPrompt,
   type AiActionType,
   type AiGroundedResponse,
   type AiProviderKey,
@@ -16,6 +18,7 @@ import {
   type AiTaskType,
 } from "./aiTools";
 import { scopeCrmSnapshotByCompany, type CompanyScopeId } from "./companyScope";
+import { validateProviderActionCandidate } from "./aiActionRuntime";
 
 export type AiPilotReadinessState =
   | "foundation_complete"
@@ -55,6 +58,8 @@ export type AiPilotProviderConfig = {
   perCompanyDailyRequestLimit: number;
   maxRequestTokens: number;
   maxResponseTokens: number;
+  maxInputCostUsdPer1kTokens: number;
+  maxOutputCostUsdPer1kTokens: number;
   timeoutMs: number;
   retryLimit: number;
   streamingEnabled: boolean;
@@ -105,6 +110,10 @@ export type AiUsageCheck = {
   userRequestsToday: number;
   dailyBudgetUsd: number;
   estimatedCostUsd: number;
+  maxProviderAttempts: number;
+  maxReservedRequestCostUsd: number;
+  reservedCostUsdToday: number;
+  companyReservedCostUsdThisMonth: number;
 };
 
 export type AiActionPreview = {
@@ -133,11 +142,45 @@ export type AiPilotCommandRequest = {
   previousResponseId?: string | null;
   now?: string;
   env?: Record<string, string | undefined>;
+  providerConfig?: AiPilotProviderConfig;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
+  quotaReservation?: AiQuotaReservationReceipt | null;
 };
 
+export type AiQuotaReservationReceipt = {
+  contractVersion: 1;
+  reservationId: string;
+  requestAuditEventId: string;
+  requestId: string;
+  companyId: string;
+  actorUserId: string;
+  provider: AiProviderKey;
+  model: string | null;
+  estimatedCostCents: number;
+  maxProviderAttempts: number;
+  status: "reserved";
+  idempotent: boolean;
+  globalRequestsToday: number;
+  companyRequestsToday: number;
+  userRequestsToday: number;
+  reservedCostCentsToday: number;
+  companyReservedCostCentsThisMonth: number;
+};
+
+export type CompanyAiProviderConfigResolution =
+  | {
+      ok: true;
+      config: AiPilotProviderConfig;
+      companyMonthlyBudgetCents: number;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
+
 export type AiPilotCommandResult = {
+  companyId: string | null;
   response: AiGroundedResponse;
   readiness: AiPilotReadiness;
   context: AiRetrievedContext;
@@ -162,11 +205,11 @@ export type AiPilotCommandResult = {
 };
 
 type ProviderProposedAction = {
-  label?: string;
-  reason?: string;
-  actionType?: AiActionType;
-  targetTable?: string;
-  targetId?: string;
+  label?: unknown;
+  reason?: unknown;
+  actionType?: unknown;
+  targetTable?: unknown;
+  targetId?: unknown;
 };
 
 type ProviderStructuredPayload = {
@@ -205,6 +248,8 @@ const safeAiEnvVars = [
   "AI_PER_COMPANY_DAILY_REQUEST_LIMIT",
   "AI_MAX_REQUEST_TOKENS",
   "AI_MAX_RESPONSE_TOKENS",
+  "AI_MAX_INPUT_COST_USD_PER_1K_TOKENS",
+  "AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS",
   "AI_TIMEOUT_MS",
   "AI_RETRY_LIMIT",
   "AI_STREAMING_ENABLED",
@@ -261,6 +306,14 @@ export function getAiPilotProviderConfig(
     perCompanyDailyRequestLimit: parseInteger(env.AI_PER_COMPANY_DAILY_REQUEST_LIMIT, 0),
     maxRequestTokens: parseInteger(env.AI_MAX_REQUEST_TOKENS, 0),
     maxResponseTokens: parseInteger(env.AI_MAX_RESPONSE_TOKENS, 0),
+    maxInputCostUsdPer1kTokens: parseNumber(
+      env.AI_MAX_INPUT_COST_USD_PER_1K_TOKENS,
+      0,
+    ),
+    maxOutputCostUsdPer1kTokens: parseNumber(
+      env.AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS,
+      0,
+    ),
     timeoutMs: parseInteger(env.AI_TIMEOUT_MS, 15000),
     retryLimit: Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2),
     streamingEnabled: parseBoolean(env.AI_STREAMING_ENABLED, false),
@@ -306,8 +359,8 @@ export function buildAiPilotReadiness({
   } else if (!hasConfiguredUsageLimits(config)) {
     state = "usage_limit_reached";
     label = "Usage limits required";
-    summary = "Provider credentials exist, but budget, request, and token limits are not fully configured.";
-    requiredOwnerSetup.push("Set AI_DAILY_BUDGET_USD, request limits, and token limits before testing.");
+    summary = "Provider credentials exist, but budget, request, token, and conservative price ceilings are not fully configured.";
+    requiredOwnerSetup.push("Set AI_DAILY_BUDGET_USD, request limits, token limits, and conservative input/output price ceilings before testing.");
   } else {
     state = "ready_for_controlled_testing";
     label = "Ready for controlled testing";
@@ -315,7 +368,9 @@ export function buildAiPilotReadiness({
       `${providerLabel(config.provider)} is configured for internal testing with explicit limits and production actions disabled.`;
   }
 
-  requiredOwnerSetup.push("Keep AI_ACTION_EXECUTION_ENABLED=false until a later approved activation sprint.");
+  requiredOwnerSetup.push(
+    "Keep AI_ACTION_EXECUTION_ENABLED=false; reviewed internal follow-up tasks use the narrower stored-action contract instead.",
+  );
 
   return {
     state,
@@ -343,6 +398,66 @@ export function buildAiPilotReadiness({
   };
 }
 
+export function resolveCompanyAiProviderConfig({
+  config,
+  usageLimits,
+  companyId,
+}: {
+  config: AiPilotProviderConfig;
+  usageLimits: AiUsageLimitRecord[];
+  companyId: string;
+}): CompanyAiProviderConfigResolution {
+  const rows = usageLimits.filter((row) => row.company_id === companyId);
+  if (rows.length !== 1) {
+    return {
+      ok: false,
+      reason: "Exactly one company AI usage policy is required before a provider call.",
+    };
+  }
+  const policy = rows[0];
+  if (!policy.ai_enabled) {
+    return { ok: false, reason: "AI provider access is disabled for this company." };
+  }
+  if (!policy.allowed_providers.includes(config.provider)) {
+    return { ok: false, reason: "The selected AI provider is not allowed for this company." };
+  }
+  if (!config.model || !policy.allowed_models.includes(config.model)) {
+    return { ok: false, reason: "The selected AI model is not allowed for this company." };
+  }
+  if (
+    policy.daily_request_limit <= 0 ||
+    policy.per_user_daily_request_limit <= 0 ||
+    policy.per_company_monthly_budget_cents <= 0 ||
+    policy.token_limit <= 0 ||
+    policy.timeout_ms <= 0 ||
+    policy.retry_limit < 0
+  ) {
+    return {
+      ok: false,
+      reason: "The company AI policy does not contain complete positive usage limits.",
+    };
+  }
+
+  return {
+    ok: true,
+    companyMonthlyBudgetCents: policy.per_company_monthly_budget_cents,
+    config: {
+      ...config,
+      perCompanyDailyRequestLimit: Math.min(
+        config.perCompanyDailyRequestLimit,
+        policy.daily_request_limit,
+      ),
+      perUserDailyRequestLimit: Math.min(
+        config.perUserDailyRequestLimit,
+        policy.per_user_daily_request_limit,
+      ),
+      maxRequestTokens: Math.min(config.maxRequestTokens, policy.token_limit),
+      timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
+      retryLimit: Math.min(config.retryLimit, policy.retry_limit),
+    },
+  };
+}
+
 export async function runAiPilotCommand({
   prompt,
   snapshot,
@@ -353,10 +468,12 @@ export async function runAiPilotCommand({
   previousResponseId = null,
   now = new Date().toISOString(),
   env = process.env,
+  providerConfig,
   fetchImpl = fetch,
   signal,
+  quotaReservation = null,
 }: AiPilotCommandRequest): Promise<AiPilotCommandResult> {
-  const config = getAiPilotProviderConfig(env);
+  const config = providerConfig ?? getAiPilotProviderConfig(env);
   const migrationApplied = hasAiPersistenceTables(snapshot);
   const readiness = buildAiPilotReadiness({ config, migrationApplied });
   const context = retrieveAuthorizedAiContext(snapshot, {
@@ -372,6 +489,9 @@ export async function runAiPilotCommand({
     companyId,
     userId,
     now,
+    prompt,
+    userRole,
+    quotaReservation,
   });
   const fallback = answerAiCommand({
     prompt,
@@ -389,6 +509,7 @@ export async function runAiPilotCommand({
       previousResponseId,
       providerHealth: { tested: false, ok: true, statusCode: null, error: null },
       savedWorkSupported: migrationApplied,
+      expectedCompanyId: companyId === "all" ? null : companyId,
     });
   }
 
@@ -412,6 +533,7 @@ export async function runAiPilotCommand({
       previousResponseId,
       providerHealth: { tested: false, ok: true, statusCode: null, error: null },
       savedWorkSupported: migrationApplied,
+      expectedCompanyId: companyId === "all" ? null : companyId,
     });
   }
 
@@ -460,6 +582,7 @@ export async function runAiPilotCommand({
         error: providerResult.error,
       },
       savedWorkSupported: migrationApplied,
+      expectedCompanyId: companyId === "all" ? null : companyId,
     });
   }
 
@@ -468,6 +591,7 @@ export async function runAiPilotCommand({
     providerPayload.proposedActions ?? [],
     fallback.actions,
     context.records,
+    companyId === "all" ? null : companyId,
   );
   const supportingRecords = context.records.slice(0, 8);
   const response: AiGroundedResponse = {
@@ -501,7 +625,7 @@ export async function runAiPilotCommand({
       state: "provider_connected",
       label: "Provider connected",
       summary:
-        "Live provider responded in controlled pilot mode. All actions remain preview-only and require human approval.",
+        "Live provider responded in controlled mode. Customer and provider actions remain preview-only; a reviewed internal follow-up may create one office task.",
       health: "ready",
     },
     context,
@@ -511,12 +635,15 @@ export async function runAiPilotCommand({
       estimatedCostUsd: estimateCostUsd(
         providerResult.usage.inputTokens ?? usage.estimatedRequestTokens,
         providerResult.usage.outputTokens ?? config.maxResponseTokens,
+        config,
       ),
     },
     conversationId,
     previousResponseId: providerResult.providerResponseId ?? previousResponseId,
     providerHealth: { tested: true, ok: true, statusCode: providerResult.statusCode, error: null },
     savedWorkSupported: migrationApplied,
+    actionPreviews,
+    expectedCompanyId: companyId === "all" ? null : companyId,
   });
 }
 
@@ -539,7 +666,26 @@ export function retrieveAuthorizedAiContext(
   const scopedSnapshot =
     !companyId || companyId === "all" ? snapshot : scopeCrmSnapshotByCompany(snapshot, companyId);
   const normalizedPrompt = sanitizeBusinessText(prompt).toLowerCase();
-  const priorityItems = buildAiPriorityItems(scopedSnapshot, { companyId, userRole, now });
+  const priorityItems = selectAiPriorityItemsForPrompt(
+    buildAiPriorityItems(scopedSnapshot, { companyId, userRole, now }),
+    normalizedPrompt,
+  );
+  const resolveLocation = (companyLocationId: string | null | undefined, recordCompanyId: string) => {
+    if (!companyLocationId) {
+      return { companyLocationId: null, companyLocationLabel: null };
+    }
+    const location = scopedSnapshot.companyLocations.find(
+      (candidate) =>
+        candidate.id === companyLocationId &&
+        candidate.company_id === recordCompanyId,
+    );
+    return location
+      ? {
+          companyLocationId: location.id,
+          companyLocationLabel: sanitizeBusinessText(location.display_name),
+        }
+      : { companyLocationId: null, companyLocationLabel: null };
+  };
   const records: AiContextRecord[] = [];
   const push = (
     record: AiSourceRecord,
@@ -562,8 +708,16 @@ export function retrieveAuthorizedAiContext(
   }
 
   for (const lead of scopedSnapshot.leads.slice(0, 10)) {
+    const location = resolveLocation(lead.company_location_id, lead.company_id);
     push(
-      sourceRecord("leads", lead.id, `${lead.contact_name} lead`, lead.company_id, "Leads"),
+      sourceRecord(
+        "leads",
+        lead.id,
+        `${lead.contact_name} lead`,
+        lead.company_id,
+        "Leads",
+        location,
+      ),
       `${lead.status} ${lead.source} ${lead.service_type} ${lead.property_address ?? ""} ${lead.notes ?? ""}`,
       "lead",
       14,
@@ -661,6 +815,9 @@ export function checkAiUsageLimits({
   companyId = "all",
   userId = null,
   now = new Date().toISOString(),
+  prompt,
+  userRole = "office",
+  quotaReservation = null,
 }: {
   config: AiPilotProviderConfig;
   context: AiRetrievedContext;
@@ -668,20 +825,29 @@ export function checkAiUsageLimits({
   companyId?: CompanyScopeId;
   userId?: string | null;
   now?: string;
+  prompt?: string;
+  userRole?: string;
+  quotaReservation?: AiQuotaReservationReceipt | null;
 }): AiUsageCheck {
-  const estimatedRequestTokens = estimateTokens(
-    `${context.promptSummary}\n${context.records.map((record) => record.snippet).join("\n")}`,
-  );
-  const today = now.slice(0, 10);
-  const matchingAuditEvents = snapshot.aiAuditEvents.filter((event) =>
-    event.created_at.startsWith(today) &&
-    (companyId === "all" || event.company_id === companyId),
-  );
-  const companyRequestsToday = matchingAuditEvents.length;
-  const userRequestsToday = userId
-    ? matchingAuditEvents.filter((event) => event.actor_user_id === userId).length
-    : 0;
-  const estimatedCostUsd = estimateCostUsd(estimatedRequestTokens, config.maxResponseTokens);
+  const { estimatedRequestTokens, estimatedCostUsd } = estimateAiRequestUsage({
+    config,
+    context,
+    prompt: prompt ?? context.promptSummary,
+    userRole,
+  });
+  const companyRequestsToday = quotaReservation?.companyRequestsToday ?? 0;
+  const userRequestsToday = quotaReservation?.userRequestsToday ?? 0;
+  const globalRequestsToday = quotaReservation?.globalRequestsToday ?? 0;
+  const reservedCostUsdToday = (quotaReservation?.reservedCostCentsToday ?? 0) / 100;
+  const companyReservedCostUsdThisMonth =
+    (quotaReservation?.companyReservedCostCentsThisMonth ?? 0) / 100;
+  const maxProviderAttempts = config.retryLimit + 1;
+  const liveProviderConfigured =
+    config.enabled &&
+    (config.provider === "openai" || config.provider === "anthropic") &&
+    Boolean(config.model) &&
+    config.apiKeyConfigured &&
+    hasConfiguredUsageLimits(config);
   const blocks = [
     config.dailyBudgetUsd <= 0 ? "Daily AI budget is not configured." : null,
     config.dailyRequestLimit <= 0 ? "Daily request limit is not configured." : null,
@@ -690,20 +856,27 @@ export function checkAiUsageLimits({
     config.maxRequestTokens <= 0 || config.maxResponseTokens <= 0
       ? "Request and response token limits are not configured."
       : null,
+    config.maxInputCostUsdPer1kTokens <= 0 ||
+    config.maxOutputCostUsdPer1kTokens <= 0
+      ? "Conservative provider price ceilings are not configured."
+      : null,
     config.maxRequestTokens > 0 && estimatedRequestTokens > config.maxRequestTokens
       ? "The retrieved context exceeds AI_MAX_REQUEST_TOKENS."
       : null,
-    config.dailyRequestLimit > 0 && companyRequestsToday >= config.dailyRequestLimit
+    liveProviderConfigured && !quotaReservation
+      ? "An atomic AI quota reservation is required before a provider call."
+      : null,
+    quotaReservation && config.dailyRequestLimit > 0 && globalRequestsToday > config.dailyRequestLimit
       ? "The daily request limit has been reached."
       : null,
-    config.perCompanyDailyRequestLimit > 0 && companyRequestsToday >= config.perCompanyDailyRequestLimit
+    quotaReservation && config.perCompanyDailyRequestLimit > 0 && companyRequestsToday > config.perCompanyDailyRequestLimit
       ? "The company daily request limit has been reached."
       : null,
-    userId && config.perUserDailyRequestLimit > 0 && userRequestsToday >= config.perUserDailyRequestLimit
+    quotaReservation && userId && config.perUserDailyRequestLimit > 0 && userRequestsToday > config.perUserDailyRequestLimit
       ? "The user daily request limit has been reached."
       : null,
-    config.dailyBudgetUsd > 0 && estimatedCostUsd > config.dailyBudgetUsd
-      ? "The estimated request cost exceeds the daily AI budget."
+    quotaReservation && config.dailyBudgetUsd > 0 && reservedCostUsdToday > config.dailyBudgetUsd
+      ? "The reserved request cost exceeds the daily AI budget."
       : null,
   ].filter((value): value is string => Boolean(value));
 
@@ -720,6 +893,38 @@ export function checkAiUsageLimits({
     userRequestsToday,
     dailyBudgetUsd: config.dailyBudgetUsd,
     estimatedCostUsd,
+    maxProviderAttempts,
+    maxReservedRequestCostUsd: Number(
+      (estimatedCostUsd * maxProviderAttempts).toFixed(4),
+    ),
+    reservedCostUsdToday,
+    companyReservedCostUsdThisMonth,
+  };
+}
+
+export function estimateAiRequestUsage({
+  config,
+  context,
+  prompt,
+  userRole,
+}: {
+  config: AiPilotProviderConfig;
+  context: AiRetrievedContext;
+  prompt: string;
+  userRole: string;
+}) {
+  const providerPrompt = buildProviderPrompt({ prompt, context, userRole });
+  const estimatedRequestTokens = estimateProviderRequestTokenUpperBound({
+    config,
+    providerPrompt,
+  });
+  return {
+    estimatedRequestTokens,
+    estimatedCostUsd: estimateCostUsd(
+      estimatedRequestTokens,
+      config.maxResponseTokens,
+      config,
+    ),
   };
 }
 
@@ -727,50 +932,74 @@ export function buildActionPreviews(
   providerActions: NonNullable<ProviderStructuredPayload["proposedActions"]>,
   fallbackActions: AiRecommendedAction[],
   contextRecords: AiContextRecord[],
+  expectedCompanyId: string | null = null,
 ): AiActionPreview[] {
-  const providerPreviews = providerActions.slice(0, 4).map((providerAction, index) => {
-    const target =
-      contextRecords.find(
-        (record) =>
-          record.table === providerAction.targetTable && record.id === providerAction.targetId,
-      ) ?? contextRecords[index] ?? null;
+  const providerPreviews: AiActionPreview[] = providerActions
+    .slice(0, 4)
+    .flatMap((providerAction, index): AiActionPreview[] => {
+      const validated = validateProviderActionCandidate({
+        candidate: providerAction,
+        contextRecords,
+        expectedCompanyId,
+      });
+      if (!validated) {
+        return [];
+      }
 
-    return {
-      id: `ai-action-preview-provider-${index + 1}`,
-      actionType: providerAction.actionType ?? "open_record",
-      targetRecord: target,
-      companyId: target?.companyId ?? null,
-      reason: sanitizeBusinessText(providerAction.reason ?? "Provider proposed this action from retrieved context."),
-      before: { status: "unchanged" },
-      after: { status: "preview_only", label: sanitizeBusinessText(providerAction.label ?? "Review action") },
-      fieldsAffected: ["draft_preview"],
-      requiredPermission: "authorized internal user",
-      confirmationRequired: true,
-      providerDependency: "live AI provider",
-      auditReference: `ai-action-preview-provider-${index + 1}`,
-      status: "blocked_requires_confirmation" as const,
-    };
-  });
+      const id = [
+        "ai-action-preview-provider",
+        index + 1,
+        validated.actionType,
+        validated.target.table,
+        validated.target.id,
+      ].join(":");
 
-  if (providerPreviews.length) {
+      return [{
+        id,
+        actionType: validated.actionType,
+        targetRecord: validated.target,
+        companyId: validated.target.companyId,
+        reason: sanitizeBusinessText(validated.reason),
+        before: { status: "unchanged" },
+        after: {
+          status: "preview_only",
+          label: sanitizeBusinessText(validated.label),
+        },
+        fieldsAffected: ["draft_preview"],
+        requiredPermission: "authorized internal user",
+        confirmationRequired: true,
+        providerDependency: "live AI provider",
+        auditReference: `pending:${id}`,
+        status: "blocked_requires_confirmation" as const,
+      } satisfies AiActionPreview];
+    });
+
+  if (providerActions.length) {
     return providerPreviews;
   }
 
-  return fallbackActions.slice(0, 4).map((fallbackAction) => ({
-    id: `preview-${fallbackAction.id}`,
-    actionType: fallbackAction.type,
-    targetRecord: fallbackAction.target,
-    companyId: fallbackAction.companyId,
-    reason: fallbackAction.reason,
-    before: { status: "unchanged" },
-    after: fallbackAction.fieldsToChange,
-    fieldsAffected: Object.keys(fallbackAction.fieldsToChange),
-    requiredPermission: fallbackAction.requiredPermission,
-    confirmationRequired: true,
-    providerDependency: fallbackAction.providerDependency,
-    auditReference: fallbackAction.auditReference,
-    status: "preview_only",
-  }));
+  return fallbackActions
+    .filter(
+      (fallbackAction) =>
+        !expectedCompanyId ||
+        (!fallbackAction.companyId || fallbackAction.companyId === expectedCompanyId),
+    )
+    .slice(0, 4)
+    .map((fallbackAction) => ({
+      id: `preview-${fallbackAction.id}`,
+      actionType: fallbackAction.type,
+      targetRecord: fallbackAction.target,
+      companyId: expectedCompanyId ?? fallbackAction.companyId,
+      reason: fallbackAction.reason,
+      before: { status: "unchanged" },
+      after: fallbackAction.fieldsToChange,
+      fieldsAffected: Object.keys(fallbackAction.fieldsToChange),
+      requiredPermission: fallbackAction.requiredPermission,
+      confirmationRequired: true,
+      providerDependency: fallbackAction.providerDependency,
+      auditReference: fallbackAction.auditReference,
+      status: "preview_only",
+    }));
 }
 
 async function callConfiguredProvider({
@@ -820,6 +1049,7 @@ async function callOpenAiProvider({
   signal?: AbortSignal;
 }): Promise<ProviderCallResult> {
   return withTimeout(config.timeoutMs, signal, async (controllerSignal) => {
+    const requestBody = buildOpenAiRequestBody(config, providerPrompt);
     const response = await fetchWithRetry(
       () =>
         fetchImpl("https://api.openai.com/v1/responses", {
@@ -828,26 +1058,7 @@ async function callOpenAiProvider({
             "Content-Type": "application/json",
             Authorization: `Bearer ${process.env.AI_OPENAI_API_KEY ?? ""}`,
           },
-          body: JSON.stringify({
-            model: config.model,
-            input: [
-              {
-                role: "system",
-                content: "You are WeatherTech OS AI. Return only the requested JSON. Never execute actions.",
-              },
-              { role: "user", content: providerPrompt },
-            ],
-            max_output_tokens: config.maxResponseTokens,
-            store: false,
-            text: {
-              format: {
-                type: "json_schema",
-                name: "weathertech_ai_grounded_response",
-                strict: true,
-                schema: providerStructuredSchema,
-              },
-            },
-          }),
+          body: JSON.stringify(requestBody),
           signal: controllerSignal,
         }),
       config.retryLimit,
@@ -882,6 +1093,7 @@ async function callAnthropicProvider({
   signal?: AbortSignal;
 }): Promise<ProviderCallResult> {
   return withTimeout(config.timeoutMs, signal, async (controllerSignal) => {
+    const requestBody = buildAnthropicRequestBody(config, providerPrompt);
     const response = await fetchWithRetry(
       () =>
         fetchImpl("https://api.anthropic.com/v1/messages", {
@@ -891,12 +1103,7 @@ async function callAnthropicProvider({
             "x-api-key": process.env.AI_ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "",
             "anthropic-version": process.env.AI_ANTHROPIC_VERSION ?? "2023-06-01",
           },
-          body: JSON.stringify({
-            model: config.model,
-            max_tokens: config.maxResponseTokens,
-            system: "You are WeatherTech OS AI. Return only JSON. Never execute actions.",
-            messages: [{ role: "user", content: providerPrompt }],
-          }),
+          body: JSON.stringify(requestBody),
           signal: controllerSignal,
         }),
       config.retryLimit,
@@ -928,6 +1135,8 @@ function decorateResult({
   previousResponseId,
   providerHealth,
   savedWorkSupported,
+  actionPreviews: providedActionPreviews,
+  expectedCompanyId = null,
 }: {
   response: AiGroundedResponse;
   readiness: AiPilotReadiness;
@@ -937,10 +1146,15 @@ function decorateResult({
   previousResponseId: string | null;
   providerHealth: AiPilotCommandResult["providerHealth"];
   savedWorkSupported: boolean;
+  actionPreviews?: AiActionPreview[];
+  expectedCompanyId?: string | null;
 }): AiPilotCommandResult {
-  const actionPreviews = buildActionPreviews([], response.actions, context.records);
+  const actionPreviews =
+    providedActionPreviews ??
+    buildActionPreviews([], response.actions, context.records, expectedCompanyId);
 
   return {
+    companyId: expectedCompanyId,
     response: {
       ...response,
       safetyFlags: [...new Set([...response.safetyFlags, ...context.safetyFlags])],
@@ -953,7 +1167,7 @@ function decorateResult({
     conversation: {
       id: conversationId ?? `ai-conversation-${Date.now()}`,
       previousResponseId,
-      followUpSupported: true,
+      followUpSupported: false,
     },
     savedWork: {
       supported: savedWorkSupported,
@@ -1049,7 +1263,7 @@ function formatProviderAnswer(payload: ProviderStructuredPayload) {
   return [
     sanitizeBusinessText(payload.answer ?? "The provider returned a structured response without a narrative answer."),
     ...sections,
-    "Required approval: All proposed actions are previews only and require human approval.",
+    "Required approval: Customer/provider actions remain non-executing previews. A reviewed internal follow-up action may create one office task after human approval.",
     "Provider or production limitations: Live customer communications, schedules, invoices, signatures, provider writes, migrations, and deployments remain disabled.",
   ].join("\n\n");
 }
@@ -1074,6 +1288,8 @@ function buildProviderPrompt({
       id: record.id,
       label: record.label,
       companyId: record.companyId,
+      companyLocationId: record.companyLocationId ?? null,
+      companyLocationLabel: record.companyLocationLabel ?? null,
       safeReference: record.safeReference,
       hrefView: record.hrefView,
       snippet: record.snippet,
@@ -1105,12 +1321,18 @@ function sourceRecord(
   label: string,
   companyId: string | null,
   hrefView: string,
+  location: {
+    companyLocationId: string | null;
+    companyLocationLabel: string | null;
+  } = { companyLocationId: null, companyLocationLabel: null },
 ): AiSourceRecord {
   return {
     table,
     id,
     label: sanitizeBusinessText(label),
     companyId,
+    companyLocationId: location.companyLocationId,
+    companyLocationLabel: location.companyLocationLabel,
     safeReference: `${table}:${id}`,
     hrefView,
   };
@@ -1164,7 +1386,9 @@ function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
     config.perUserDailyRequestLimit > 0 &&
     config.perCompanyDailyRequestLimit > 0 &&
     config.maxRequestTokens > 0 &&
-    config.maxResponseTokens > 0
+    config.maxResponseTokens > 0 &&
+    config.maxInputCostUsdPer1kTokens > 0 &&
+    config.maxOutputCostUsdPer1kTokens > 0
   );
 }
 
@@ -1206,12 +1430,85 @@ function providerLabel(provider: AiProviderKey) {
         : "Disabled provider";
 }
 
-function estimateTokens(value: string) {
-  return Math.max(1, Math.ceil(value.length / 4));
+const providerTokenAccountingOverhead = 256;
+
+function buildOpenAiRequestBody(
+  config: AiPilotProviderConfig,
+  providerPrompt: string,
+) {
+  return {
+    model: config.model,
+    input: [
+      {
+        role: "system",
+        content:
+          "You are WeatherTech OS AI. Return only the requested JSON. Never execute actions.",
+      },
+      { role: "user", content: providerPrompt },
+    ],
+    max_output_tokens: config.maxResponseTokens,
+    store: false,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "weathertech_ai_grounded_response",
+        strict: true,
+        schema: providerStructuredSchema,
+      },
+    },
+  };
 }
 
-function estimateCostUsd(inputTokens: number, outputTokens: number) {
-  return Number((((inputTokens / 1000) * 0.003 + (outputTokens / 1000) * 0.012)).toFixed(4));
+function buildAnthropicRequestBody(
+  config: AiPilotProviderConfig,
+  providerPrompt: string,
+) {
+  return {
+    model: config.model,
+    max_tokens: config.maxResponseTokens,
+    system: "You are WeatherTech OS AI. Return only JSON. Never execute actions.",
+    messages: [{ role: "user", content: providerPrompt }],
+  };
+}
+
+function estimateProviderRequestTokenUpperBound({
+  config,
+  providerPrompt,
+}: {
+  config: AiPilotProviderConfig;
+  providerPrompt: string;
+}) {
+  const requestBody =
+    config.provider === "anthropic"
+      ? buildAnthropicRequestBody(config, providerPrompt)
+      : buildOpenAiRequestBody(config, providerPrompt);
+  // A token cannot encode less than one byte of the submitted UTF-8 payload.
+  // Counting every serialized request byte plus a fixed framing allowance is a
+  // deliberately conservative upper bound that also covers system text and the
+  // structured-output schema. Provider-reported usage remains the reporting
+  // value after a successful call; this bound is only for admission and spend
+  // reservation.
+  return Math.max(
+    1,
+    new TextEncoder().encode(JSON.stringify(requestBody)).byteLength +
+      providerTokenAccountingOverhead,
+  );
+}
+
+function estimateCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  config: Pick<
+    AiPilotProviderConfig,
+    "maxInputCostUsdPer1kTokens" | "maxOutputCostUsdPer1kTokens"
+  >,
+) {
+  return Number(
+    (
+      (inputTokens / 1000) * config.maxInputCostUsdPer1kTokens +
+      (outputTokens / 1000) * config.maxOutputCostUsdPer1kTokens
+    ).toFixed(4),
+  );
 }
 
 async function withTimeout<T>(

@@ -18,6 +18,10 @@ import {
   runRegressionEnvironmentCommand,
   validateRegressionEnvironment,
 } from "./regression-environment.mjs";
+import {
+  cleanupTwilioSyntheticAutomationLedger,
+  createBrowserCompatibleRegressionRunId,
+} from "./twilio-automation-cleanup.mjs";
 
 export const TWILIO_INBOUND_REGRESSION_RUN =
   "WTOS_TWILIO_INBOUND_REGRESSION_RUN";
@@ -599,8 +603,9 @@ export async function runTwilioInboundRegression({
   );
 
   const compiled = compileWebhookRoute(repositoryPath);
-  const runId = randomUUID();
-  const marker = `TEST WTOS REGRESSION TWILIO INBOUND ${runId}`;
+  const runId = createBrowserCompatibleRegressionRunId();
+  const sourceMarker = `TEST WTOS REGRESSION ${runId}`;
+  const marker = `${sourceMarker} TWILIO INBOUND`;
   const fixture = {
     accountSid: syntheticSid(TEST_ACCOUNT_SID_PREFIX, runId, "account"),
     authToken: crypto.randomBytes(32).toString("hex"),
@@ -1317,6 +1322,7 @@ export async function runTwilioInboundRegression({
       evidenceProofVerified: true,
       outboundMessages: 0,
       providerNetworkRequests: 0,
+      automationCleanup: null,
       cleanupResidue: null,
     };
   } catch (error) {
@@ -1324,6 +1330,22 @@ export async function runTwilioInboundRegression({
   } finally {
     try {
       if (capturedIdsAuthorizedForCleanup) {
+        const automationCleanup = await cleanupTwilioSyntheticAutomationLedger({
+          service: client,
+          ownerEmail: loaded.config.ownerEmail,
+          runId,
+          sourceMarker,
+          capturedSourceIds: {
+            leads: capturedIds.leads,
+            customers: capturedIds.customers,
+            call_records: [],
+            communication_provider_events:
+              capturedIds.communication_provider_events,
+          },
+        });
+        if (report) {
+          report.automationCleanup = automationCleanup;
+        }
         await deleteExactIds(
           client,
           "communication_provider_events",

@@ -340,8 +340,8 @@ try {
     "Production readiness remains disabled until owner setup is complete",
   );
   assert(
-    center.blockers.some((blocker) => blocker.includes("Production deployment has not been run")),
-    "Deployment blocker is present",
+    center.blockers.some((blocker) => blocker.includes("Production deployment evidence must be verified")),
+    "Exact release deployment-evidence blocker is present",
   );
   assert(
     center.blockers.some((blocker) => blocker.includes("Live integrations remain disabled")),
@@ -367,9 +367,15 @@ try {
     "disabled",
     "Provider writes remain disabled in browser metadata",
   );
-  assert(
-    center.requiredMigrations.includes("0033_ai_tools_operating_brain.sql"),
-    "Latest required migration is tracked",
+  assertEqual(
+    center.lastMigration,
+    "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+    "Latest required migration is exact",
+  );
+  assertEqual(
+    JSON.stringify(center.requiredMigrations),
+    JSON.stringify(["20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql"]),
+    "Required migration checkpoint is the exact latest singleton",
   );
 
   const guideLabels = center.activationGuides.map((guide) => guide.label);
@@ -382,8 +388,21 @@ try {
     "Website",
     "QuickBooks Online",
     "Electronic Signatures",
-    "AI Tools controlled pilot",
+    "AI Command Center 3.0",
+    "Automation Engine",
   ].forEach((label) => assert(guideLabels.includes(label), `${label} guide is present`));
+
+  const yelpGuide = center.activationGuides.find((guide) => guide.label === "Yelp");
+  assert(yelpGuide, "Yelp activation guide is present");
+  const yelpGuideText = JSON.stringify(yelpGuide);
+  assert(
+    yelpGuideText.includes("Mighty Apes Phoenix campaign") &&
+      yelpGuideText.includes("WeatherTech Tucson and IHC") &&
+      yelpGuideText.includes("lead.test") &&
+      yelpGuideText.includes("lead.created") &&
+      yelpGuideText.includes("direct-Yelp partner access"),
+    "Yelp guide separates the signed Mighty Apes registry from direct Yelp access and keeps unverified routes fail-closed",
+  );
 
   const twilioGuide = center.activationGuides.find((guide) => guide.label === "Twilio");
   assert(twilioGuide, "Twilio activation guide is present");
@@ -419,6 +438,7 @@ try {
     "DROPBOX_SIGN_CLIENT_ID",
     "AI_OPENAI_API_KEY",
     "AI_ANTHROPIC_API_KEY",
+    "CRON_SECRET",
   ].forEach((envName) =>
     assert(requiredCredentialNames.includes(envName), `${envName} is included in owner setup`),
   );
@@ -507,7 +527,8 @@ try {
     "QuickBooks Online",
     "DocuSign",
     "Dropbox Sign",
-    "AI Tools controlled pilot",
+    "AI Command Center 3.0",
+    "Automation Engine",
   ].forEach((label) => assert(providerCardLabels.includes(label), `${label} provider activation card exists`));
 
   assert(
@@ -519,7 +540,32 @@ try {
     "Every provider card documents rollback",
   );
 
+  const yelpCard = center.providerActivationCards.find((card) => card.label === "Yelp");
+  assert(yelpCard, "Yelp provider activation card exists");
+  const yelpCardText = JSON.stringify(yelpCard);
+  assert(
+    yelpCardText.includes("signed Mighty Apes receiver") &&
+      yelpCardText.includes("Phoenix is the only seeded route") &&
+      yelpCardText.includes("Tucson and IHC require authoritative campaign IDs") &&
+      yelpCardText.includes("lead.test") &&
+      yelpCardText.includes("first real lead.created"),
+    "Yelp card truthfully exposes the Phoenix-only seed and the external Tucson/IHC provider actions",
+  );
+
   const migrationNames = center.migrationInventory.map((migration) => migration.filename);
+  const expectedAutomationMigrationSuffix = [
+    "20260902024804_automation_engine_foundation.sql",
+    "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+    "20260902043624_mighty_apes_legacy_service_routing_correction.sql",
+    "20260902044154_gohighlevel_webhook_uninstall_guardrails.sql",
+    "20260902044714_legacy_lead_dynamic_insert_lint_correction.sql",
+    "20260902045112_canonical_lead_dynamic_insert_lint_correction.sql",
+    "20260902053037_automation_synthetic_regression_cleanup.sql",
+    "20260902054334_automation_synthetic_cleanup_lead_source_correction.sql",
+    "20260902061135_gohighlevel_inbound_automation_bridge.sql",
+    "20260902065509_legacy_twilio_synthetic_automation_orphan_cleanup.sql",
+    "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+  ];
   [
     "0027_gmail_workspace_email_foundation.sql",
     "0028_google_calendar_scheduling_foundation.sql",
@@ -527,7 +573,17 @@ try {
     "0030_quickbooks_online_foundation.sql",
     "0031_electronic_signatures_foundation.sql",
     "0033_ai_tools_operating_brain.sql",
+    ...expectedAutomationMigrationSuffix,
   ].forEach((filename) => assert(migrationNames.includes(filename), `${filename} migration is inventoried`));
+  assertEqual(
+    JSON.stringify(
+      migrationNames.slice(
+        migrationNames.indexOf("20260902024804_automation_engine_foundation.sql"),
+      ),
+    ),
+    JSON.stringify(expectedAutomationMigrationSuffix),
+    "Automation release migrations are inventoried as one exact ordered suffix",
+  );
   assert(
     center.migrationInventory.every(
       (migration) =>
@@ -595,6 +651,7 @@ try {
     "TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO",
     "AI_ENABLED",
     "AI_ACTION_EXECUTION_ENABLED",
+    "CRON_SECRET",
   ].forEach((envName) =>
     assert(
       unknownEnvironmentInventory.some((check) => check.name === envName),
@@ -612,6 +669,7 @@ try {
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-key",
     SUPABASE_SERVICE_ROLE_KEY: "super-secret-service-key",
+    CRON_SECRET: "test-only-cron-secret-at-least-32-characters",
     NEXT_PUBLIC_APP_URL: "https://app.example.test",
     TWILIO_OUTBOUND_SMS_ENABLED: "false",
     TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED: "false",
@@ -638,6 +696,26 @@ try {
   assert(
     !JSON.stringify(validatedEnvironmentInventory).includes("super-secret-service-key"),
     "Secret values are redacted from environment inventory",
+  );
+  assert(
+    validatedChecks.some(
+      (check) =>
+        check.name === "CRON_SECRET" &&
+        check.status === "present" &&
+        check.secret,
+    ),
+    "The scheduler secret is required server-side and remains redacted",
+  );
+  const invalidCronInventory = readinessModule.buildProductionEnvironmentInventory({
+    CRON_SECRET: "too-short",
+  });
+  assert(
+    invalidCronInventory
+      .flatMap((group) => group.checks)
+      .some(
+        (check) => check.name === "CRON_SECRET" && check.status === "invalid",
+      ),
+    "Weak scheduler secrets fail readiness",
   );
   assert(
     validatedChecks.some(

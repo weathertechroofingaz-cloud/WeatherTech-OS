@@ -192,6 +192,50 @@ const expectedMigrations = [
     "20260824044610_native_proposal_esign_sold_job_gate.sql",
     "703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7",
   ],
+  [
+    "20260902024804_automation_engine_foundation.sql",
+    "bfddf783fe462e7c1258c3a3df90f9302c45c7c6830745308097de2c09d8a868",
+  ],
+  [
+    "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+    "e19f6f9fce96c4453ffe813b6c7844ce9d27328fe43b5b9a200f86cea1f28047",
+  ],
+  [
+    "20260902043624_mighty_apes_legacy_service_routing_correction.sql",
+    "94805469418f37a39a341702ac830ce9edea5cdb9af5defe734aa65403064822",
+  ],
+  [
+    "20260902044154_gohighlevel_webhook_uninstall_guardrails.sql",
+    "0b151badd6f5e7955a3c55f4c419d821706a50478480d745fc28e03d313e5225",
+  ],
+  [
+    "20260902044714_legacy_lead_dynamic_insert_lint_correction.sql",
+    "3ad35b6d2f1a63cee44bf9277d39de2ba88d8926688ab048aaaaa0c51df24c41",
+  ],
+  [
+    "20260902045112_canonical_lead_dynamic_insert_lint_correction.sql",
+    "bfb671b09d0b445e30cc44b5d1d875e3afac1437eaac4b48d4fff3a8bfb546ed",
+  ],
+  [
+    "20260902053037_automation_synthetic_regression_cleanup.sql",
+    "ceeedc66abab9df291bc67aaf97a2da43494918810e9ca9d918d30719a79585e",
+  ],
+  [
+    "20260902054334_automation_synthetic_cleanup_lead_source_correction.sql",
+    "a46b3c8e608251cedbdc99a5c9839847bb32f1d6d6b10b0453db8de88cb24c15",
+  ],
+  [
+    "20260902061135_gohighlevel_inbound_automation_bridge.sql",
+    "812d841ef3918a1d09674d23c5ad227242d5c534fe2cc0d42edf54e46d10fab2",
+  ],
+  [
+    "20260902065509_legacy_twilio_synthetic_automation_orphan_cleanup.sql",
+    "2f76c73fdb1108f67a92ad143429108c37cac59cedcca0b1dcfaa25e58540dca",
+  ],
+  [
+    "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+    "9dc35dfc395f2761344a21f88094cb999d7cc92796c6e0e2204f47caacfb527b",
+  ],
 ];
 
 const files = fs
@@ -319,6 +363,39 @@ const jobPhotoStorageRollbackRetryCorrectionIndex = files.indexOf(
 const nativeProposalEsignSoldJobGateIndex = files.indexOf(
   "20260824044610_native_proposal_esign_sold_job_gate.sql",
 );
+const automationEngineFoundationIndex = files.indexOf(
+  "20260902024804_automation_engine_foundation.sql",
+);
+const goHighLevelWebhookStateMachineIndex = files.indexOf(
+  "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+);
+const mightyApesLegacyServiceCorrectionIndex = files.indexOf(
+  "20260902043624_mighty_apes_legacy_service_routing_correction.sql",
+);
+const goHighLevelWebhookGuardrailsIndex = files.indexOf(
+  "20260902044154_gohighlevel_webhook_uninstall_guardrails.sql",
+);
+const legacyLeadDynamicInsertLintCorrectionIndex = files.indexOf(
+  "20260902044714_legacy_lead_dynamic_insert_lint_correction.sql",
+);
+const canonicalLeadDynamicInsertLintCorrectionIndex = files.indexOf(
+  "20260902045112_canonical_lead_dynamic_insert_lint_correction.sql",
+);
+const automationSyntheticRegressionCleanupIndex = files.indexOf(
+  "20260902053037_automation_synthetic_regression_cleanup.sql",
+);
+const automationSyntheticLeadSourceCorrectionIndex = files.indexOf(
+  "20260902054334_automation_synthetic_cleanup_lead_source_correction.sql",
+);
+const goHighLevelInboundAutomationBridgeIndex = files.indexOf(
+  "20260902061135_gohighlevel_inbound_automation_bridge.sql",
+);
+const legacyTwilioSyntheticOrphanCleanupIndex = files.indexOf(
+  "20260902065509_legacy_twilio_synthetic_automation_orphan_cleanup.sql",
+);
+const legacyTwilioBrowserVoiceOrphanCleanupIndex = files.indexOf(
+  "20260902071651_legacy_twilio_browser_voice_orphan_cleanup.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -425,6 +502,17 @@ if (
   secureCompanyScopedJobPhotosIndex === -1 ||
   jobPhotoStorageRollbackRetryCorrectionIndex === -1 ||
   nativeProposalEsignSoldJobGateIndex === -1 ||
+  automationEngineFoundationIndex === -1 ||
+  goHighLevelWebhookStateMachineIndex === -1 ||
+  mightyApesLegacyServiceCorrectionIndex === -1 ||
+  goHighLevelWebhookGuardrailsIndex === -1 ||
+  legacyLeadDynamicInsertLintCorrectionIndex === -1 ||
+  canonicalLeadDynamicInsertLintCorrectionIndex === -1 ||
+  automationSyntheticRegressionCleanupIndex === -1 ||
+  automationSyntheticLeadSourceCorrectionIndex === -1 ||
+  goHighLevelInboundAutomationBridgeIndex === -1 ||
+  legacyTwilioSyntheticOrphanCleanupIndex === -1 ||
+  legacyTwilioBrowserVoiceOrphanCleanupIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -449,12 +537,28 @@ if (
       secureCompanyScopedJobPhotosIndex &&
     secureCompanyScopedJobPhotosIndex <
       jobPhotoStorageRollbackRetryCorrectionIndex &&
-    jobPhotoStorageRollbackRetryCorrectionIndex < nativeProposalEsignSoldJobGateIndex
+    jobPhotoStorageRollbackRetryCorrectionIndex < nativeProposalEsignSoldJobGateIndex &&
+    nativeProposalEsignSoldJobGateIndex < automationEngineFoundationIndex &&
+    automationEngineFoundationIndex < goHighLevelWebhookStateMachineIndex &&
+    goHighLevelWebhookStateMachineIndex < mightyApesLegacyServiceCorrectionIndex &&
+    mightyApesLegacyServiceCorrectionIndex < goHighLevelWebhookGuardrailsIndex &&
+    goHighLevelWebhookGuardrailsIndex < legacyLeadDynamicInsertLintCorrectionIndex &&
+    legacyLeadDynamicInsertLintCorrectionIndex < canonicalLeadDynamicInsertLintCorrectionIndex &&
+    canonicalLeadDynamicInsertLintCorrectionIndex <
+      automationSyntheticRegressionCleanupIndex &&
+    automationSyntheticRegressionCleanupIndex <
+      automationSyntheticLeadSourceCorrectionIndex &&
+    automationSyntheticLeadSourceCorrectionIndex <
+      goHighLevelInboundAutomationBridgeIndex &&
+    goHighLevelInboundAutomationBridgeIndex <
+      legacyTwilioSyntheticOrphanCleanupIndex &&
+    legacyTwilioSyntheticOrphanCleanupIndex <
+      legacyTwilioBrowserVoiceOrphanCleanupIndex
   ) ||
-  nativeProposalEsignSoldJobGateIndex !== files.length - 1
+  legacyTwilioBrowserVoiceOrphanCleanupIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation hardening and Mighty Apes Yelp intake must precede lead accountability, job-photo hardening, and the final native proposal e-sign/sold-job gate migration.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, and its Browser Voice correction must remain in reviewed order.",
   );
 }
 
@@ -1519,6 +1623,48 @@ const leadAccountabilityIdempotencyIntegrityHardeningMigration = fs.readFileSync
   path.join(
     migrationsDir,
     "20260816164202_lead_accountability_idempotency_integrity_hardening.sql",
+  ),
+  "utf8",
+);
+const automationEngineFoundationMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902024804_automation_engine_foundation.sql",
+  ),
+  "utf8",
+);
+const goHighLevelWebhookStateMachineMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902042428_gohighlevel_webhook_durable_state_machine.sql",
+  ),
+  "utf8",
+);
+const goHighLevelWebhookGuardrailsMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902044154_gohighlevel_webhook_uninstall_guardrails.sql",
+  ),
+  "utf8",
+);
+const legacyLeadDynamicInsertLintCorrectionMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902044714_legacy_lead_dynamic_insert_lint_correction.sql",
+  ),
+  "utf8",
+);
+const canonicalLeadDynamicInsertLintCorrectionMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902045112_canonical_lead_dynamic_insert_lint_correction.sql",
+  ),
+  "utf8",
+);
+const goHighLevelInboundAutomationBridgeMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260902061135_gohighlevel_inbound_automation_bridge.sql",
   ),
   "utf8",
 );
@@ -2866,6 +3012,177 @@ if (/\b(?:phone|email|property_address|message_body|raw_payload|provider_payload
   leadAccountabilityEventSchema,
 )) {
   failures.push("Lead accountability event ledger must not persist PII or raw provider payloads.");
+}
+
+for (const automationContract of [
+  "begin;",
+  "set local lock_timeout = '5s'",
+  "create table public.automation_rules",
+  "create table public.automation_events",
+  "create table public.automation_executions",
+  "create table public.automation_attempts",
+  "create table public.automation_audit_events",
+  "alter table public.automation_rules enable row level security",
+  "constraint automation_events_company_idempotency_key unique (company_id, idempotency_key)",
+  "constraint automation_executions_event_rule_version_key unique (event_id, rule_id, rule_version)",
+  "Rule disabled or version changed before execution.",
+  "revoke execute on function public.wtos_run_automation_worker_v1(timestamptz, integer)",
+  "grant execute on function public.wtos_run_automation_worker_v1(timestamptz, integer)",
+  "revoke execute on function public.wtos_reserve_ai_request_v1(uuid, uuid, uuid, jsonb)",
+  "grant execute on function public.wtos_reserve_ai_request_v1(uuid, uuid, uuid, jsonb)",
+  "create table public.mighty_apes_campaign_routes",
+  "Mighty Apes campaign is not authorized for ingestion.",
+  "commit;",
+]) {
+  if (!automationEngineFoundationMigration.includes(automationContract)) {
+    failures.push(`Automation engine migration is missing ${automationContract}.`);
+  }
+}
+if (/errcode\s*=\s*'40001'/i.test(automationEngineFoundationMigration)) {
+  failures.push(
+    "Automation expected-version and replay refusals must not use PostgREST-retried SQLSTATE 40001.",
+  );
+}
+if (/action_type\s+in\s*\([^)]*(?:send_email|send_sms|place_call|provider_write)/i.test(
+  automationEngineFoundationMigration,
+)) {
+  failures.push("Automation action allowlists must remain internal-task-only.");
+}
+
+if (
+  automationEngineFoundationIndex === -1 ||
+  goHighLevelWebhookStateMachineIndex === -1 ||
+  automationEngineFoundationIndex >= goHighLevelWebhookStateMachineIndex
+) {
+  failures.push("GoHighLevel webhook state-machine hardening must follow the automation foundation.");
+}
+
+for (const goHighLevelWebhookContract of [
+  "add column if not exists payload_sha256 text",
+  "add column if not exists claim_token uuid",
+  "add column if not exists lease_expires_at timestamptz",
+  "provider_max_attempts constant integer := 13",
+  "pg_advisory_xact_lock",
+  "for update;",
+  "existing_event.lease_expires_at > clock_timestamp()",
+  "create or replace function public.wtos_claim_gohighlevel_webhook_v1",
+  "create or replace function public.wtos_transition_gohighlevel_webhook_v1",
+  "create or replace function public.wtos_finalize_gohighlevel_uninstall_v1",
+  "create or replace function public.wtos_requeue_gohighlevel_webhook_v1",
+  "public.wtos_has_membership_role(existing_event.company_id, array['owner', 'admin'])",
+  "grant execute on function public.wtos_claim_gohighlevel_webhook_v1(jsonb)",
+  "to service_role;",
+  "grant execute on function public.wtos_requeue_gohighlevel_webhook_v1(uuid, integer, text)",
+  "to authenticated;",
+]) {
+  if (!goHighLevelWebhookStateMachineMigration.includes(goHighLevelWebhookContract)) {
+    failures.push(`GoHighLevel webhook state-machine migration is missing ${goHighLevelWebhookContract}.`);
+  }
+}
+if (/\b(?:raw_payload|payload_body|request_body)\s+(?:text|jsonb|bytea)/i.test(
+  goHighLevelWebhookStateMachineMigration,
+)) {
+  failures.push("GoHighLevel webhook state-machine migration must not persist raw provider payloads.");
+}
+if (/grant execute on function public\.wtos_(?:claim|transition|finalize)_gohighlevel[^\n]*\nto authenticated/i.test(
+  goHighLevelWebhookStateMachineMigration,
+)) {
+  failures.push("GoHighLevel claim and terminal RPCs must remain service-role-only.");
+}
+
+for (const inboundBridgeContract of [
+  "create or replace function public.wtos_emit_inbound_communication_event_v1()",
+  "create or replace function public.wtos_emit_missed_call_event_v1()",
+  "if new.provider = 'gohighlevel' then",
+  "connection.id = new.integration_connection_id",
+  "connection.company_id = new.company_id",
+  "connection.provider = 'gohighlevel'",
+  "connection.status = 'connected'",
+  "elsif new.provider in ('twilio', 'twilio_sms') then",
+  "route.id = new.business_phone_number_id",
+  "route.company_id = new.company_id",
+  "route.routing_status = 'active'",
+  "from public, anon, authenticated, service_role;",
+]) {
+  if (!goHighLevelInboundAutomationBridgeMigration.includes(inboundBridgeContract)) {
+    failures.push(`GoHighLevel inbound automation bridge is missing ${inboundBridgeContract}.`);
+  }
+}
+if (
+  (goHighLevelInboundAutomationBridgeMigration.match(
+    /create or replace function public\./g,
+  ) ?? []).length !== 2 ||
+  /^\s*(?:(?:create|alter|drop)\s+(?:table|trigger)|(?:insert into|update|delete from|truncate)\b)/gim.test(
+    goHighLevelInboundAutomationBridgeMigration,
+  )
+) {
+  failures.push(
+    "GoHighLevel inbound automation bridge must replace only two trigger functions and mutate no schema or data.",
+  );
+}
+
+for (const goHighLevelGuardrailContract of [
+  "lower(existing_event.event_type) not like '%uninstall%'",
+  "existing_event.external_location_id not like 'company:%'",
+  "credential.external_company_id = substring(",
+  "connection.external_account_id = existing_event.external_location_id",
+  "Company uninstall scope mismatch.",
+  "Location uninstall scope mismatch.",
+  "The reason is intentionally not persisted",
+  "p_expected_attempt_count,\n    null",
+  "revoke all on function public.wtos_finalize_gohighlevel_uninstall_v1_unscoped_20260902",
+  "revoke all on function public.wtos_requeue_gohighlevel_webhook_v1_unbounded_reason_20260902",
+]) {
+  if (!goHighLevelWebhookGuardrailsMigration.includes(goHighLevelGuardrailContract)) {
+    failures.push(`GoHighLevel webhook guardrail migration is missing ${goHighLevelGuardrailContract}.`);
+  }
+}
+
+for (const legacyLeadLintContract of [
+  "public.wtos_ingest_mighty_apes_yelp(jsonb)",
+  "public.wtos_create_accountable_lead_core(jsonb,boolean)",
+  "pg_catalog.pg_get_functiondef(candidate.oid)",
+  "execute pg_catalog.format($insert_legacy_lead$",
+  "execute pg_catalog.format($create_legacy_lead$",
+  "pg_catalog.concat(''customer'', ''_name'')",
+  "candidate.proacl is not distinct from original_acl",
+  "candidate.proowner = original_owner",
+  "candidate.prosecdef = original_security_definer",
+  "candidate.proconfig is not distinct from original_config",
+]) {
+  if (!legacyLeadDynamicInsertLintCorrectionMigration.includes(legacyLeadLintContract)) {
+    failures.push(`Legacy lead lint correction is missing ${legacyLeadLintContract}.`);
+  }
+}
+
+for (const canonicalLeadLintContract of [
+  "public.wtos_ingest_mighty_apes_yelp(jsonb)",
+  "public.wtos_create_accountable_lead_core(jsonb,boolean)",
+  "pg_catalog.pg_get_functiondef(candidate.oid)",
+  "execute pg_catalog.format($insert_canonical_lead$",
+  "execute pg_catalog.format($create_canonical_lead$",
+  "pg_catalog.concat(''contact'', ''_name'')",
+  "target_route.company_location_id",
+  "target_route.service_type",
+  "candidate.proacl is not distinct from original_acl",
+  "candidate.proowner = original_owner",
+  "candidate.prosecdef = original_security_definer",
+  "candidate.proconfig is not distinct from original_config",
+]) {
+  if (!canonicalLeadDynamicInsertLintCorrectionMigration.includes(canonicalLeadLintContract)) {
+    failures.push(`Canonical lead lint correction is missing ${canonicalLeadLintContract}.`);
+  }
+}
+
+for (const lintCorrection of [
+  legacyLeadDynamicInsertLintCorrectionMigration,
+  canonicalLeadDynamicInsertLintCorrectionMigration,
+]) {
+  if (/\b(?:delete from|truncate|send_email|send_sms|place_call|provider_write)\b/i.test(
+    lintCorrection,
+  )) {
+    failures.push("Cross-schema lint corrections must not mutate CRM data or invoke providers.");
+  }
 }
 
 if (failures.length > 0) {

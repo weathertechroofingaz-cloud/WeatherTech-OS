@@ -19,6 +19,42 @@ const harnessPath = path.join(__dirname, "codex-browser", "weathertech-os-regres
 const harness = fs.readFileSync(harnessPath, "utf8");
 const crmAppPath = path.join(__dirname, "..", "components", "CrmApp.tsx");
 const crmApp = fs.readFileSync(crmAppPath, "utf8");
+const mightyRegressionPath = path.join(
+  __dirname,
+  "..",
+  "scripts",
+  "mighty-apes-yelp-regression.mjs",
+);
+const mightyRegression = fs.readFileSync(mightyRegressionPath, "utf8");
+const regressionEnvironmentPath = path.join(
+  __dirname,
+  "..",
+  "scripts",
+  "regression-environment.mjs",
+);
+const regressionEnvironment = fs.readFileSync(regressionEnvironmentPath, "utf8");
+const automationCleanupMigrationPath = path.join(
+  __dirname,
+  "..",
+  "supabase",
+  "migrations",
+  "20260902053037_automation_synthetic_regression_cleanup.sql",
+);
+const automationCleanupMigration = fs.readFileSync(
+  automationCleanupMigrationPath,
+  "utf8",
+);
+const automationCleanupLeadSourceCorrectionPath = path.join(
+  __dirname,
+  "..",
+  "supabase",
+  "migrations",
+  "20260902054334_automation_synthetic_cleanup_lead_source_correction.sql",
+);
+const automationCleanupLeadSourceCorrection = fs.readFileSync(
+  automationCleanupLeadSourceCorrectionPath,
+  "utf8",
+);
 
 function assert(condition, message) {
   if (!condition) {
@@ -518,8 +554,8 @@ assert(
   "Estimate post-refresh diagnostics parse raw view and UUID query pairs without unavailable evaluator globals or DOM constructors",
 );
 assert(
-  websiteMarketingEntryHelper.includes(
-    'await clickVisibleDomButtonByText(\n    tab,\n    "Provider setup",',
+  /await clickVisibleDomButtonByText\(\s*tab,\s*"Provider setup",/.test(
+    websiteMarketingEntryHelper,
   ) &&
     websiteMarketingEntryHelper.includes(
       'await clickVisibleDomButtonByText(\n    tab,\n    "Open lead intake",',
@@ -531,6 +567,28 @@ assert(
       'button[contains(normalize-space(.), "Open lead intake")]',
     ),
   "Website Marketing quick actions use the established scroll-safe visible-button boundary",
+);
+assert(
+  websiteMarketingEntryHelper.includes(
+    "const waitForMarketingProviderSetupDestination = () =>",
+  ) &&
+    websiteMarketingEntryHelper.includes("providerSetupAttempt < 2") &&
+    websiteMarketingEntryHelper.includes("if (providerSetupAttempt > 0)") &&
+    websiteMarketingEntryHelper.includes('retryState.view !== "marketing"') &&
+    websiteMarketingEntryHelper.includes("!retryState.workspaceVisible") &&
+    websiteMarketingEntryHelper.includes("retryState.buttonCount !== 1") &&
+    websiteMarketingEntryHelper.includes("retryState.errorCount !== 0") &&
+    websiteMarketingEntryHelper.includes(
+      'document.querySelector(\'[data-testid="website-marketing-foundation"]\')',
+    ) &&
+    websiteMarketingEntryHelper.includes(
+      'normalize(button.textContent) === "Provider setup"',
+    ) &&
+    websiteMarketingEntryHelper.includes('button.tagName === "BUTTON"') &&
+    websiteMarketingEntryHelper.includes("!button.disabled") &&
+    websiteMarketingEntryHelper.includes("await waitForMarketingProviderSetupDestination()") &&
+    !websiteMarketingEntryHelper.includes("instanceof HTMLButtonElement"),
+  "Website Marketing retries only its exact Provider setup transition after a fail-closed live-state proof and preserves the full destination check",
 );
 assert(
   crmApp.includes(
@@ -599,7 +657,7 @@ assert(
   "Cleanup removes the immutable Mighty Apes audit rows before their exact linked sync logs",
 );
 assert(
-  harness.includes('"/api/integrations/mighty-apes/yelp/webhook"') &&
+  harness.includes('"/api/integrations/mighty-apes/webhook"') &&
     harness.includes("MIGHTY_APES_YELP_WEBHOOK_SECRET") &&
     harness.includes('"User-Agent": "MightyApes-Webhook/1"') &&
     harness.includes("createMightyApesHmacSignature(yelpRawBody, yelpSigningSecret)") &&
@@ -642,6 +700,250 @@ assert(
     harness.includes('"crm_identity_reconciliation_events",\n    "id",\n    reconciliationEventIds') &&
     harness.includes("residueVerified: true"),
   "Cleanup verifies run residue across direct, child, reconciliation, accountability, marketing, property, and generated office-task records",
+);
+const browserAutomationCleanupIndex = harness.indexOf(
+  "const automationCleanup = await cleanupSyntheticAutomationLedger(env",
+);
+const browserFirstSourceDeleteIndex = harness.indexOf(
+  'deleteByLikeIfPresent(\n      env,\n      "integration_sync_logs"',
+);
+assert(
+  harness.includes("async function discoverAutomationLedgerGraph(env, sourceRecords)") &&
+    harness.includes('"automation_events"') &&
+    harness.includes('"causation_event_id"') &&
+    harness.includes('"automation_executions"') &&
+    harness.includes('"automation_attempts"') &&
+    harness.includes('"automation_audit_events"') &&
+    harness.includes('"automation_execution_id"') &&
+    harness.includes('"rpc/wtos_cleanup_synthetic_automation_fixture"') &&
+    harness.includes('markerFamily: "browser"') &&
+    browserAutomationCleanupIndex >= 0 &&
+    browserAutomationCleanupIndex < browserFirstSourceDeleteIndex,
+  "Browser cleanup discovers the recursive immutable ledger and invokes the guarded RPC before any source deletion",
+);
+assert(
+  harness.includes("async function findAutomationLedgerResidue(env)") &&
+    harness.includes('"automation_events?select=id"') &&
+    harness.includes('"automation_executions?select=id"') &&
+    harness.includes('"automation_attempts?select=id"') &&
+    harness.includes(
+      '"automation_audit_events?select=id&audit_type=neq.rule_seeded"',
+    ) &&
+    harness.includes(
+      '"office_tasks?select=id&automation_execution_id=not.is.null"',
+    ) &&
+    harness.includes("markerCount + automationLedger.count"),
+  "Browser preflight and final verification treat all dynamic automation-ledger rows as release-blocking residue",
+);
+const settingsAutomationStart = harness.indexOf(
+  '"database-authorized Automation Control Center"',
+);
+const settingsAutomationEnd = harness.indexOf(
+  '"Twilio connection wizard"',
+  settingsAutomationStart,
+);
+const settingsAutomationSource = harness.slice(
+  settingsAutomationStart,
+  settingsAutomationEnd,
+);
+assert(
+  settingsAutomationStart >= 0 &&
+    settingsAutomationSource.includes('"WeatherTech Roofing LLC"') &&
+    settingsAutomationSource.includes('"IHC Painting"') &&
+    settingsAutomationSource.includes("everyRuleManageable") &&
+    settingsAutomationSource.includes('button?.tagName === "BUTTON"') &&
+    !settingsAutomationSource.includes("instanceof HTMLButtonElement") &&
+    settingsAutomationSource.includes("executionCompaniesExact") &&
+    settingsAutomationSource.includes("No automation executions are visible yet.") &&
+    settingsAutomationSource.includes("cannot send provider or customer communications") &&
+    !settingsAutomationSource.includes(".click("),
+  "Settings Browser coverage proves exact two-company automation rules, history truth, and management permission without mutating a rule",
+);
+const aiOperatingBrainStart = harness.indexOf(
+  "async function testAiToolsOperatingBrain",
+);
+const aiOperatingBrainEnd = harness.indexOf(
+  "async function testFinancialOperationsWorkspace",
+  aiOperatingBrainStart,
+);
+const aiOperatingBrainSource = harness.slice(
+  aiOperatingBrainStart,
+  aiOperatingBrainEnd,
+);
+assert(
+  aiOperatingBrainStart >= 0 &&
+    aiOperatingBrainSource.includes('input?.tagName === "INPUT"') &&
+    aiOperatingBrainSource.includes('analyze?.tagName === "BUTTON"') &&
+    aiOperatingBrainSource.includes('text.includes("external actions disabled")') &&
+    !/instanceof HTML[A-Za-z]+Element/.test(aiOperatingBrainSource),
+  "AI Command Center Browser coverage uses realm-safe element checks for approval gates and exact-company controls",
+);
+
+const mightyAutomationCleanupIndex = mightyRegression.indexOf(
+  "const automationCleanup = await cleanupSyntheticAutomationLedger({",
+);
+const mightyFirstSourceDeleteIndex = mightyRegression.indexOf(
+  "await deleteExactIds(service, AUDIT_TABLE",
+);
+assert(
+  mightyRegression.includes('markerFamily: "mighty"') &&
+    mightyRegression.includes("sourceMarker: leadNameMarker") &&
+    mightyRegression.includes("providerMarker") &&
+    mightyRegression.includes("discoverAutomationLedgerGraph(service, sourceRecords)") &&
+    mightyAutomationCleanupIndex >= 0 &&
+    mightyAutomationCleanupIndex < mightyFirstSourceDeleteIndex,
+  "Dedicated Mighty Apes regression cleans its exact UUID marker family through the guarded ledger RPC before source deletion",
+);
+assert(
+  regressionEnvironment.includes(
+    'counts["automation_events.exact-source-or-orphan"]',
+  ) &&
+    regressionEnvironment.includes(
+      'counts["automation_executions.exact-source-or-orphan"]',
+    ) &&
+    regressionEnvironment.includes(
+      'counts["automation_attempts.exact-source-or-orphan"]',
+    ) &&
+    regressionEnvironment.includes(
+      'counts["automation_audit_events.dynamic"]',
+    ) &&
+    regressionEnvironment.includes(
+      'counts["office_tasks.automation_execution_id"]',
+    ),
+  "Independent environment verification catches complete-ledger and orphan automation residue",
+);
+
+const trustedJwtBoundaryIndex = automationCleanupMigration.indexOf(
+  "trusted_claims ->> 'iss' is distinct from 'supabase'",
+);
+const firstRequestUuidCastIndex = automationCleanupMigration.indexOf(
+  "request_operation_key := (cleanup_request ->> 'operationKey')::uuid",
+);
+const automationAuditDeleteIndex = automationCleanupMigration.indexOf(
+  "delete from public.automation_audit_events",
+);
+const automationAttemptDeleteIndex = automationCleanupMigration.indexOf(
+  "delete from public.automation_attempts",
+);
+const automationTaskDeleteIndex = automationCleanupMigration.indexOf(
+  "delete from public.office_tasks",
+);
+const automationExecutionDeleteIndex = automationCleanupMigration.indexOf(
+  "delete from public.automation_executions",
+);
+const automationEventDeleteIndex = automationCleanupMigration.indexOf(
+  "delete from public.automation_events",
+);
+assert(
+  automationCleanupMigration.trimStart().startsWith("--") &&
+    automationCleanupMigration.includes("\nbegin;\n") &&
+    automationCleanupMigration.trimEnd().endsWith("commit;") &&
+    automationCleanupMigration.includes(
+      "alter table public.automation_synthetic_cleanup_guards force row level security",
+    ) &&
+    automationCleanupMigration.includes(
+      "from public, anon, authenticated, service_role",
+    ) &&
+    automationCleanupMigration.includes(
+      "grant execute on function public.wtos_cleanup_synthetic_automation_fixture(jsonb)\nto service_role",
+    ) &&
+    trustedJwtBoundaryIndex >= 0 &&
+    automationCleanupMigration.includes(
+      "trusted_claims ->> 'role' is distinct from 'service_role'",
+    ) &&
+    automationCleanupMigration.includes(
+      "trusted_claims ->> 'ref' is distinct from 'hygtnhmmaoboduqghhwg'",
+    ) &&
+    automationCleanupMigration.includes(
+      "'2150c43d-c5b6-4560-9ecb-142561ba1dc2'::uuid",
+    ) &&
+    automationCleanupMigration.includes(
+      "'weathertech-os-regression@example.test'",
+    ) &&
+    automationCleanupMigration.includes(
+      "selected_owner.raw_app_meta_data is distinct from",
+    ) &&
+    trustedJwtBoundaryIndex < firstRequestUuidCastIndex,
+  "Cleanup RPC is transaction-wrapped, service-role-only, RLS-hidden, and rejects missing or wrong pinned JWT claims before request parsing",
+);
+for (const markerContract of [
+  "'TEST WTOS REGRESSION ' || request_run_id",
+  "'TEST WTOS REGRESSION ' || request_run_id || ' MIGHTY APES'",
+  "'TEST WTOS MIGHTY APES REGRESSION: ' || request_run_id",
+  "'TEST WTOS MIGHTY APES REGRESSION:' || request_run_id",
+]) {
+  assert(
+    automationCleanupMigration.includes(markerContract),
+    `Cleanup RPC preserves exact marker contract ${markerContract}`,
+  );
+}
+assert(
+  automationCleanupMigration.includes("with recursive event_graph(id) as") &&
+    automationCleanupMigration.includes(
+      "event.source_table || ':' || event.source_id = any(request_source_keys)",
+    ) &&
+    automationCleanupMigration.includes(
+      "source_company.source_key = event.source_table || ':' || event.source_id",
+    ) &&
+    automationCleanupMigration.includes(
+      "Synthetic automation event company is outside the regression owner scope.",
+    ) &&
+    automationCleanupMigration.includes("parent.id = child.causation_event_id") &&
+    automationCleanupMigration.includes(
+      "not (parent.id = any(actual_event_ids))",
+    ) &&
+    automationCleanupMigration.includes(
+      "child.company_id is distinct from parent.company_id",
+    ) &&
+    automationCleanupMigration.includes(
+      "Synthetic automation cleanup refused a partial or mismatched ledger graph.",
+    ) &&
+    !/disable trigger|drop trigger/i.test(automationCleanupMigration),
+  "Cleanup RPC locks and re-derives an exact table:id graph, rejects cross-owner or cross-company descendants, and never disables immutable triggers",
+);
+const cleanupFunctionSignature =
+  "create or replace function public.wtos_cleanup_synthetic_automation_fixture(";
+const cleanupFunctionStart = automationCleanupMigration.indexOf(cleanupFunctionSignature);
+const cleanupFunctionEnd = automationCleanupMigration.indexOf("\n$$;", cleanupFunctionStart) + 4;
+const cleanupCorrectionFunctionStart =
+  automationCleanupLeadSourceCorrection.indexOf(cleanupFunctionSignature);
+const cleanupCorrectionFunctionEnd = automationCleanupLeadSourceCorrection.indexOf(
+  "\n$$;",
+  cleanupCorrectionFunctionStart,
+) + 4;
+const cleanupFunctionDefinition = automationCleanupMigration.slice(
+  cleanupFunctionStart,
+  cleanupFunctionEnd,
+);
+const cleanupCorrectionFunctionDefinition =
+  automationCleanupLeadSourceCorrection.slice(
+    cleanupCorrectionFunctionStart,
+    cleanupCorrectionFunctionEnd,
+  );
+assert(
+  cleanupFunctionStart >= 0 &&
+    cleanupFunctionEnd > cleanupFunctionStart &&
+    cleanupCorrectionFunctionStart >= 0 &&
+    cleanupCorrectionFunctionEnd > cleanupCorrectionFunctionStart &&
+    cleanupFunctionDefinition.match(/to_jsonb\(source\)/g)?.length === 3 &&
+    cleanupCorrectionFunctionDefinition ===
+      cleanupFunctionDefinition.replaceAll("to_jsonb(source)", "to_jsonb(source.*)") &&
+    automationCleanupLeadSourceCorrection.trimStart().startsWith("begin;") &&
+    automationCleanupLeadSourceCorrection.trimEnd().endsWith("commit;") &&
+    !/disable trigger|drop trigger/i.test(automationCleanupLeadSourceCorrection),
+  "Forward cleanup correction preserves the full reviewed function and changes only composite-row resolution for marked leads",
+);
+assert(
+  automationAuditDeleteIndex >= 0 &&
+    automationAuditDeleteIndex < automationAttemptDeleteIndex &&
+    automationAttemptDeleteIndex < automationTaskDeleteIndex &&
+    automationTaskDeleteIndex < automationExecutionDeleteIndex &&
+    automationExecutionDeleteIndex < automationEventDeleteIndex &&
+    automationCleanupMigration.includes(
+      "Synthetic automation cleanup did not reach exact zero ledger residue.",
+    ) &&
+    automationCleanupMigration.includes("'databaseResidueCount', final_residue_count"),
+  "Guarded automation cleanup deletes audit to attempt to task to execution to event and returns only exact sanitized counts after zero proof",
 );
 assert(
   harness.includes("async function removeRegressionJobPhotoObjects") &&
@@ -754,21 +1056,22 @@ assert(
     !harness.includes("image instanceof HTMLImageElement") &&
     harness.includes('await tab.clipboard.writeText("")') &&
     harness.includes("await tab.clipboard.readText()") &&
-    harness.includes("const visiblePhotoTabsBeforeOpen = new Set(") &&
-    harness.includes("await browser.user.openTabs()") &&
-    harness.includes("!visiblePhotoTabsBeforeOpen.has(entry.providerTabId)") &&
-    harness.includes("openedPhotoProviderTabId = opened.providerTabId") &&
-    harness.includes("openedPhotoTab = await browser.user.claimTab(opened)") &&
+    harness.includes('openControlState.tagName !== "A"') &&
+    harness.includes("openControlState.href !== renderedImage.src") &&
+    harness.includes('openControlState.target !== "_blank"') &&
+    harness.includes('openControlRelTokens.has("noopener")') &&
+    harness.includes('openControlRelTokens.has("noreferrer")') &&
+    harness.includes("openControlState.href === photo.file_path") &&
+    harness.includes("openControlState.href === photo.file_url") &&
+    harness.includes("openedPhotoTab = await browser.tabs.new()") &&
+    harness.includes("await openedPhotoTab.goto(openControlState.href)") &&
+    harness.includes('"Opened photo link"') &&
     harness.includes("await openedPhotoTab.url()") &&
-    harness.includes("=== opened.url ? true : null") &&
-    harness.includes('"temporary job-photo claimed URL", 15000') &&
-    !harness.includes("await openedPhotoTab.playwright.waitForURL(opened.url") &&
+    harness.includes("=== openControlState.href") &&
+    harness.includes('"controlled temporary job-photo URL", 15000') &&
+    !harness.includes("await openedPhotoTab.playwright.waitForURL(openControlState.href") &&
     !harness.includes("await openedPhotoTab.playwright.waitForLoadState") &&
     harness.includes("if (openedPhotoTab)") &&
-    !harness.includes("if (openedPhotoTab && openedPhotoProviderTabId)") &&
-    harness.includes(
-      "The temporary job-photo tab is missing its exact provider identity.",
-    ) &&
     harness.includes("const openedPhotoControlledTabId = openedPhotoTab.id") &&
     harness.includes("attempt <= 3") &&
     harness.includes("setTimeout(resolve, 250)") &&
@@ -776,7 +1079,6 @@ assert(
     harness.includes(
       "openedPhotoTab = await browser.tabs.get(openedPhotoControlledTabId)",
     ) &&
-    harness.includes("entry.providerTabId === openedPhotoProviderTabId") &&
     harness.includes('"temporary job-photo tab cleanup"') &&
     harness.includes("ERR_ABORTED (-3) loading 'about:blank'") &&
     harness.includes("Unable to close the temporary job-photo tab safely.") &&
@@ -793,7 +1095,7 @@ assert(
     harness.includes("internalNavigationRecovery: true") &&
     harness.includes("reloadRecovery: true") &&
     harness.includes('[data-testid="customer-360-photos"]'),
-  "Targeted signed-in job-photo coverage proves upload relation isolation, private preview/copy/open with exact-URL-polled, bounded, exact-identity tab cleanup, reload persistence, and Customer 360 visibility",
+  "Targeted signed-in job-photo coverage proves upload relation isolation, native private open-link semantics, exact controlled-tab navigation and cleanup, reload persistence, and Customer 360 visibility",
 );
 const fieldOperationsWorkflowSource = harness.slice(
   harness.indexOf("async function testFieldOperationsWorkspace"),

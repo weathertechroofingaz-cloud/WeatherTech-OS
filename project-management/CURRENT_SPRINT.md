@@ -1,20 +1,20 @@
 # Current Sprint
 
-This file records the most recently owner-approved WeatherTech OS sprint and its lifecycle status. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
+This file records the active owner-approved WeatherTech OS sprint and its lifecycle status. Codex must read [OWNER_APPROVAL.md](./OWNER_APPROVAL.md), [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md), and this file before development.
 
 ## Approval Status
 
-Completed
+Approved
 
-The owner made the final routing decision on 2026-08-29: WeatherTech Phoenix and IHC remain direct carrier voice lines and must not be routed through Twilio. Tucson remains the only WeatherTech OS voice route. This approval authorized the narrow repository, Vercel, Twilio inspection, validation, commit, pull-request, merge, deployment, and documentation work needed to reconcile the already implemented multi-route foundation with that final architecture. It did not authorize a real call, carrier forwarding, porting, number ownership changes, outbound messaging, recording, transcription, automatic replies, or automatic CRM creation.
+The owner explicitly approved end-to-end execution on 2026-09-01. The approval authorizes the focused repository, additive Supabase schema/RLS, server execution, owner UI, validation, commit, pull-request, merge, Production migration/deployment, and verification work required to connect the existing AI Command Center 3.0, CRM, office-task automations, provider adapters, and approval architecture into one production operating system. It does not authorize a real customer message, outbound call, number change, carrier change, destructive database operation, invented provider identity, or weakening of any company/security boundary.
 
 ## Sprint Name
 
-WeatherTech Final Phone Routing Reconciliation — Tucson-Only Twilio Voice
+WeatherTech OS — AI 3.0 Production Automation & OS Launch
 
 ## Objective
 
-Preserve the completed WeatherTech Tucson signed inbound voice route to the verified assistant while removing Phoenix/IHC voice destinations, public sources, gates, attestations, readiness blockers, and activation guidance. Keep WeatherTech Phoenix public voice directly on Verizon and IHC public voice directly on AT&T. Keep their existing Twilio numbers as exact, company-separated SMS-only ingresses with blank Voice handling.
+Complete only the missing execution layer between the already-built AI Command Center 3.0, WeatherTech OS CRM, existing office-task workflows, integration events, approvals, and provider adapters. WeatherTech OS remains the company-scoped system of record. The result must provide a durable, auditable, idempotent, retry-safe automation engine and a simple owner-facing control center while keeping customer-facing actions approval-gated unless a specific rule is separately and explicitly authorized.
 
 ## Owner
 
@@ -22,100 +22,92 @@ Joe Harris
 
 ## Owner Approval Date
 
-2026-08-29.
+2026-09-01.
 
 ## Verified Starting State
 
-- Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; starting `main` SHA `e71642014634f3ab5020d1fa7cf7778d7666dc80`.
-- The starting tree and index were clean, local `main` matched `origin/main`, and no merge, rebase, cherry-pick, or bisect was in progress.
-- Production Supabase remains healthy with local and Production migration ledgers exact at `51/51`; no migration is required.
-- Three exact active Twilio identities exist: `weathertech-tucson` is `sms_voice`; `weathertech-phoenix` and `ihc-primary` are `sms`.
-- Tucson ending `3145` retains the signed Production Voice POST webhook and the established signed SMS path. Its protected destination is the owner-verified assistant line, which is Tucson-only and has no forwarding or ring group.
-- Phoenix ending `1326` and IHC ending `6930` retain their established SMS configuration. Their Voice URL, backup URL, number-level status callback, and recording configuration are blank.
-- WeatherTech Phoenix public voice remains with Verizon and IHC public voice remains with AT&T. The owner does not authorize carrier forwarding for either route.
-- Historical Tucson evidence remains exactly two completed owner-confirmed calls of 15 and 18 seconds, two `voice_inbound` events, and two `voice_status` events with working two-way audio.
-- SMS evidence remains Tucson two messages/two events, Phoenix one/one, and IHC zero/zero. No outbound SMS, automatic reply, recording, transcript, or automatic CRM side effect is authorized.
+- Canonical repository: `/Users/spotty/Documents/GitHub/WeatherTech-OS`; starting `main` SHA `bd22060d073f731f813b8e6e7bba5f2b37df693c`.
+- Working branch: `codex/weathertech-ai-3-production-automation-os-launch`; it was created from exact local/remote/live `main` with a clean tree and index and no interrupted Git operation.
+- Canonical Production `/api/health` returns HTTP `200` at the exact starting SHA. `/api/readiness` truthfully remains HTTP `503` under the existing broad provider-safety policy while runtime, environment, auth, and Supabase checks pass.
+- Production Supabase project `gahfcgyjtfwwmsterhzu` is `ACTIVE_HEALTHY` on PostgreSQL 17 with exact local/Production migration parity at `51/51`; latest migration is `20260824044610_native_proposal_esign_sold_job_gate`.
+- AI Command Center 3.0, the OpenAI/Anthropic adapter, grounded company-scoped context, saved work/audit tables, rule-based daily priorities, action previews, and provider usage limits already exist. Executable actions are intentionally hard-disabled in the starting code.
+- The office operations queue already provides company-scoped, RLS-protected, idempotent internal task generation for new leads, inspection events, sent estimates, and job lifecycle events. This sprint must reuse it.
+- GoHighLevel, Twilio, Mighty Apes/Yelp, Stripe, Gmail, Calendar, website intake, and other integrations already have provider/readiness/audit surfaces. They remain adapters behind WeatherTech OS and must not become a second CRM.
+- Final phone architecture is immutable in this sprint: Tucson alone uses signed Twilio Voice; WeatherTech Phoenix and IHC remain direct-carrier voice with their Twilio numbers SMS-only.
 - Protected starting hashes:
   - `.env.local`: `03b206881812c36ddcfd25b6b78041443baf1d813d8adbba5d6dce0023c703a0`.
+  - `package.json`: `d7a15f1db3be9dc7b813439c37c749e049ad4d3282dccb9c7aeb711a28333f12`.
+  - `package-lock.json`: `ddfc2149c4ef7ceae7c277a2e7b74ba027eb5fdca5cf193a1c36575a40ba6d22`.
   - `supabase/migrations/0026_property_intelligence_foundation.sql`: `caf57aa490f540adb6b11d249d08d68079bce5822b5cd6046cf80636b390bc8e`.
   - `supabase/migrations/20260824044610_native_proposal_esign_sold_job_gate.sql`: `703ce436ee616b5181cc189c5ea5287c64dde3f2bfaf0c57e1cc903a414e89d7`.
 
 ## Owner-Approved Scope
 
-- Make Tucson the sole application voice route. Only its exact signed receiving number, `sms_voice` database identity, protected destination, gate, terminal attestation, and loop checks may produce SDK-generated `<Dial>` TwiML.
-- Keep loop protection against all three configured Twilio ingress numbers and terminal-origin recursion. Preserve exact account, company, branch, persistence, replay, status, privacy, recording, transcription, and no-outbound-call boundaries.
-- Remove Phoenix/IHC public-source, voice-destination, voice-gate, and terminal-attestation requirements from server configuration, readiness, Integration Center guidance, deployment safety inventories, examples, CI, tests, and runbooks.
-- Ensure obsolete Phoenix/IHC voice environment values cannot activate a voice route. A signed Phoenix or IHC voice request must fail closed without TwiML or persistence.
-- Preserve all three exact inbound SMS mappings and company/branch identities. Phoenix and IHC remain `communication_channel='sms'`; Tucson remains `sms_voice`.
-- Reconcile Vercel Production by retaining only the required Tucson voice variables and removing obsolete Phoenix/IHC voice variables without exposing their values.
-- Preserve the Tucson Twilio Voice webhook and keep the Phoenix/IHC Twilio Voice handling blank.
-- Update owner-facing readiness so Tucson alone has voice readiness while Phoenix and IHC truthfully report direct-carrier voice and SMS-only Twilio ingress.
-- Run focused, complete, hosted isolated, Browser, security, CI, deployment, and health validation without a real provider call or message.
-- Commit, push, merge, and deploy the exact reviewed correction, then close the sprint only after exact-SHA Production health and configuration verification pass.
+- Perform a delta-only audit of the existing AI, CRM, office-task workflow, approval, integration, notification, company/location, provider, and audit infrastructure; reuse completed architecture rather than rebuilding it.
+- Add one centralized company-scoped automation model for rules, trigger events, conditions, action definitions, delay/due timing, enabled state, approval requirements, execution history, attempts, retry/failure state, cancellation, and deterministic idempotency.
+- Extend existing AI action previews and approval boundaries so safe authorized internal actions can execute through the centralized engine; keep all customer-facing communications blocked or approval-required unless a specific rule is explicitly owner-approved.
+- Reuse the existing `office_tasks` queue for internal follow-up/reminder actions and connect existing CRM/provider events to the centralized automation history without duplicating core CRM records.
+- Provide sensible disabled or internal-only starter rules for new leads, Yelp/website intake, estimate follow-up, approved-estimate operations handoff, completed-job follow-up, stale leads, and other supported existing data events.
+- Provide a simple owner-facing Automation Control Center showing rule, trigger, action, company/location, enabled state, approval requirement, last run, result, retry/failure state, and history; the owner must be able to disable an automation without developer intervention.
+- Make Daily Operations and AI recommendations use the same authorized WeatherTech OS data and surface actionable internal work, overdue/stale records, unscheduled approved jobs, unpaid invoices, customer waits, recent activity, and highest priorities without fake Production data.
+- Preserve and validate existing GoHighLevel source-of-truth, external-ID, company-routing, deduplication, logging, retry, and loop-prevention behavior; add only a narrow adapter connection if the delta audit proves it missing.
+- Preserve and validate Mighty Apes/Yelp authoritative campaign routing, immutable webhook evidence, exact-once lead creation, `lead.test` isolation, and follow-up-task automation; never invent a campaign ID.
+- Preserve existing Twilio, Stripe, Gmail, Calendar, website-intake, and provider behavior. Connect only legitimately available inbound/provider data to automation events and never claim unavailable carrier SMS.
+- Add only additive, non-destructive Supabase migration/RLS/grants required for the centralized engine, generated through the repository Supabase workflow. Preserve existing rows and historical migrations.
+- Run focused, repository-wide, hosted isolated, Browser, security, CI, migration, deployment, and exact-SHA Production workflow verification; fix in-scope defects autonomously.
+- Create one focused implementation commit, push one branch, obtain exact-head CI/review/Preview evidence, merge through the established procedure, apply the exact reviewed migration to Production, deploy exact merge SHA, verify Production, and perform one documentation-only closeout commit if required by the sprint workflow.
 
 ## Explicit Exclusions
 
-- No port, transfer, release, reassignment, cancellation, ownership change, carrier change, or purchase for any Verizon, AT&T, Twilio, or other number.
-- No Verizon or AT&T forwarding change. Phoenix and IHC continue ringing directly through their existing carriers.
-- No Voice URL, TwiML App, Studio Flow, SIP trunk, callback, recording, or other voice configuration on the Phoenix or IHC Twilio numbers.
-- No real Tucson, Phoenix, or IHC call and no inbound provider SMS test without a separate exact approval.
-- No outbound SMS/MMS, standalone outbound calling, automatic reply, campaign, reminder, A2P submission, recording, transcription, speech recognition, IVR, queue, conference, or automatic CRM creation.
-- No public carrier-number SMS ingestion claim. SMS sent to the public Verizon/AT&T numbers does not enter WeatherTech OS through the Twilio ingresses.
-- No schema migration, RLS change, destructive database operation, historical migration change, `.env.local` change, package/lockfile change, or unrelated application/provider change.
-- No rewriting or deleting the historical Tucson call/SMS evidence.
-- No later sprint selection or implementation.
+- No rebuild of AI Command Center 3.0, CRM, office-task queue, completed provider integrations, or final phone routing.
+- No GoHighLevel-as-system-of-record redesign and no second independent CRM.
+- No destructive schema/data change, historical migration edit, `.env.local` change, package-manifest change, unrelated lockfile churn, or secret exposure. The single transitive Browserslist lockfile update is allowed only to clear the newly published high-severity audit findings, with no added/removed package and with the complete validation suite rerun.
+- No real SMS, email, call, customer reply, signature request, review request, campaign, charge, refund, payout, provider contact write, or other customer/financial side effect without a separately verified explicit approval path.
+- No global AI permission to message customers or mutate arbitrary CRM records. AI output remains grounded, company-scoped, permission-aware, and action-schema constrained.
+- No port, purchase, release, transfer, reassignment, forwarding, webhook, recording, transcription, or ownership change for any phone number. Tucson-only Twilio Voice and Phoenix/IHC carrier-direct voice remain unchanged.
+- No invented Mighty Apes/Yelp campaign IDs, no conversion of `lead.test` into a real lead workflow, and no provider-side authorization claim without direct evidence.
+- No weakening of authentication, RLS, company/location isolation, webhook verification, duplicate protection, idempotency, audit logging, approval requirements, provider safety flags, or server-only secret boundaries to obtain a green result.
+- No unrelated feature, UI redesign, provider purchase, billing-plan decision, legal-language invention, or later sprint selection.
 
 ## Completion Criteria
 
-- Tucson is the only application voice route and the only voice readiness card/action.
-- Phoenix and IHC remain direct carrier voice lines; their Twilio identities remain exact SMS-only routes with blank Voice handling and no destination requirement.
-- Obsolete Phoenix/IHC voice variables are absent from source examples, readiness requirements, CI, and final Vercel Production configuration.
-- Signed Phoenix/IHC voice ingress and status attempts fail closed without `<Dial>`, call rows, or provider events, even if obsolete environment names are present.
-- Tucson accepts only an exact valid signed request after its gate, terminal attestation, strict destination, `sms_voice` row, and complete ingress-loop checks pass.
-- Tucson SMS, Phoenix SMS, IHC SMS, company isolation, bounded call evidence, replay behavior, recording/transcription locks, and outbound locks remain unchanged.
-- No migration or Production database mutation occurs; ledgers remain exact `51/51` and protected hashes remain exact.
-- Focused tests, every top-level test, type-check, lint, Production build, dependency audit, migration integrity, secret/protected-file/scope checks, hosted voice/SMS regression with zero residue, targeted Browser validation, and the complete established Browser suite pass.
-- Exact-head pull-request CI, merge/main CI, exact-SHA Production deployment, canonical HTTP 200 health, and owner-only readiness/configuration verification pass.
-- No real call, carrier change, number mutation, outbound message, recording, transcription, or automatic CRM side effect occurs.
+- One central automation engine durably represents rules, company/location ownership, triggers, conditions, actions, delays, enabled state, approval requirements, executions, attempts, retry/failure state, cancellation, and immutable audit history.
+- Event ingestion and action dispatch are idempotent and retry-safe; duplicate trigger delivery cannot produce duplicate customer communication or duplicate internal tasks.
+- Existing CRM/provider events generate only authorized company-bound automation activity. Cross-company records, actors, events, rules, actions, and history fail closed.
+- Safe internal starter automations create or surface work through existing WeatherTech OS task/history models. Customer-facing starter rules remain disabled or approval-gated.
+- AI Command Center 3.0 remains grounded in authorized CRM data and can recommend/prepare actions; authorized internal action execution uses the central engine, while risky/provider actions remain blocked pending approval and provider readiness.
+- Daily Operations truthfully answers the owner’s priority questions from live scoped WeatherTech OS data and exposes no fake Production records.
+- The Automation Control Center lets an authorized owner view, enable/disable, inspect, retry/cancel where allowed, and audit rules/executions without developer intervention; unauthorized and cross-company mutations fail closed.
+- Existing GoHighLevel, Yelp/Mighty Apes, website, Twilio, Stripe, Gmail, Calendar, CRM, office-task, phone-routing, and company-separation behavior remains intact.
+- New schema is additive with explicit grants and RLS; Supabase security/performance advisors show no new blocker; local/regression/Production migration ledgers match exactly after rollout.
+- All focused automation/AI/company-isolation/RLS/webhook/lead-intake/provider tests, every top-level repository test, type-check, lint, Production build, dependency audit, migration integrity, protected-file/scope/secret/diff checks, hosted isolated lifecycles, targeted Browser checks, and the complete established Browser suite pass with zero residue.
+- Exact-head pull-request CI/review/Preview, merge/main CI, exact-SHA Production deployment, canonical health, applicable readiness, signed-in Production workflow, exact database state, and clean refs/worktree all pass.
+- Governance completion records contain the exact immutable implementation and deployment evidence; no subsequent sprint is started.
 
 ## Validation Plan
 
-- Reverify Git identity, clean tree, protected hashes, migration parity, Production health, route rows, environment-variable name inventory, provider Voice/SMS configuration, and historical evidence.
-- Unit-test Tucson-only route selection, strict protected destination, all-ingress and terminal-origin loop refusal, signed account/To/company/branch identity, exact `sms_voice` capability, SDK no-recording TwiML, bounded persistence, replay/conflict/status handling, and masked readiness.
-- Prove Phoenix and IHC remain SMS-only and cannot gain voice capability from a database row or stale environment variable.
-- Run the guarded hosted Tucson voice lifecycle and existing SMS lifecycle only against the pinned regression project, followed by independent zero-residue verification.
+- Freeze and compare repository refs, protected hashes, Production deployment/health/readiness, Vercel variable names and safe non-secret state, Production Supabase health/migrations, provider readiness, and existing CRM/integration evidence.
+- Unit-test rule validation, event normalization, condition evaluation, permission checks, approval classification, deterministic idempotency, delay scheduling, retries/backoff, cancellation, action dispatch, immutable history, and company/location isolation.
+- Test additive migration structure, explicit grants, RLS policies, trigger/function privileges, cross-company negatives, duplicate/replay races, and bounded service-role access; run Supabase advisors after application.
+- Test AI preview-to-execution authorization, safe internal actions, customer-facing approval gates, provider readiness, audit linkage, Daily Operations grounding, and malicious/cross-company inputs.
+- Test existing Yelp `lead.test`/`lead.created`, website intake, office tasks, GoHighLevel sync, Twilio inbound SMS/voice locks, Stripe/payment state, and provider regressions without real customer/provider side effects.
+- Run guarded hosted automation and existing provider lifecycles only against the pinned non-Production regression project, each followed by independent exact cleanup/residue verification.
 - Run every repository test, type-check, lint, Production build, dependency audit, migration integrity, protected-file, secret, scope, and whitespace checks.
-- Run targeted Integrations and Production Readiness Browser validation plus the complete isolated Browser suite with no provider call/message and zero residue.
-- Perform a final independent security and scope audit.
-- Push one focused implementation commit on a `codex/` branch, require exact-head CI/preview, merge through the established procedure, require main-push CI, deploy the exact merge SHA, and verify canonical health/readiness.
-- After rollout evidence is complete, record the sprint in `COMPLETED_SPRINTS.md`, update this file to `Completed`, reconcile `NEXT_SPRINT.md`, `ROADMAP.md`, and `CHANGELOG.md`, and create at most one documentation-only closeout commit.
+- Run targeted signed-in Automation Control Center, AI Command Center, Daily Operations, Integrations, and Production Readiness Browser validation plus the complete established Browser suite with exact cleanup and zero residue.
+- Perform independent security, schema, scope, and release audits before commit and again against the exact reviewed commit.
+- Push one focused implementation commit, require exact-head CI/review/Preview, merge, require main-push repository and isolated-Supabase jobs, apply/reverify the exact migration, deploy exact merge SHA, verify canonical health/readiness/logs/data, and then create at most one documentation-only closeout commit.
 
 ## Release Commits
 
-- Original carrier-forwarding foundation implementation: `110a8521bf9fffb29bf88f6333a6a4fc6d87c3ee`.
-- Original carrier-forwarding foundation merge: `b5331540d3816476f83358f942fb3dfc6f5f82b8`.
-- Distinct-terminal corrective implementation: `f18f6cb20836060b00a0a58f1ec477a9e5209a0e`.
-- Distinct-terminal corrective merge: `e71642014634f3ab5020d1fa7cf7778d7666dc80`.
-- Final Tucson-only reconciliation implementation commits: `d72b1512f0195d3186dda91f04641c343855d407` and `8d22457362008492fab69e7ed6bee929f74103bc`.
-- Pull request: `#18`.
-- Final Tucson-only reconciliation merge: `690c22083165ebd55882b51172c9ac92e1f745f8`.
-
-## Completion Evidence
-
-- Main CI run `33284946637` completed successfully, including repository-validation job `99186398668` and isolated-Supabase job `99186677967`.
-- The final environment-cleanup Production deployment is `dpl_ESK8ZVaXyRuqG3k2AHkfLdBuSCPi`. Canonical `/api/health` returns HTTP `200` and reports exact merge SHA `690c22083165ebd55882b51172c9ac92e1f745f8`; `/api/readiness` remains truthfully HTTP `503` under the existing broad production-approval controls.
-- Production Supabase remains exact at `51/51` local/remote migrations with no mismatch and no sprint database write.
-- Final routing is exact: `weathertech-phoenix` remains active `sms` with direct Verizon carrier voice; `weathertech-tucson` remains active `sms_voice` with the sole signed Twilio Voice route to its protected verified assistant destination; and `ihc-primary` remains active `sms` with direct AT&T carrier voice. Phoenix and IHC Twilio Voice handling remains blank.
-- Historical evidence is unchanged: Tucson retains two completed call rows, two `voice_inbound` events, two `voice_status` events, two inbound SMS messages, and two inbound SMS events; Phoenix retains one inbound SMS message and one inbound SMS event; IHC remains at zero messages and zero events. There are zero active or outbound calls, outbound SMS, recording events or artifacts, transcript artifacts, automatic replies, automatic lead flags, or voice CRM links.
-- The earlier full isolated Browser run `20260829235055033` recorded `29/31`; its two unrelated transient groups then passed the isolated `2/2` confirmation run `20260830001525831`. The later definitive frozen-tree full run `20260830015820614` satisfied the unchanged completion gate: all `24/24` groups and `31/31` assertions passed, console errors/warnings were `0/0`, harness cleanup reported `residueVerified: true`, and independent `verify-residue` passed with `0` residue on the approved regression target. Targeted Settings and Production Readiness Browser validation also passed without console errors or residue.
-- Six obsolete Production Vercel variable names were removed: `TWILIO_WEATHERTECH_PHOENIX_PUBLIC_NUMBER`, `TWILIO_WEATHERTECH_PHOENIX_VOICE_FORWARDING_ENABLED`, `TWILIO_WEATHERTECH_PHOENIX_TERMINAL_FORWARDING_DISABLED_CONFIRMED`, `TWILIO_IHC_PUBLIC_NUMBER`, `TWILIO_IHC_VOICE_FORWARDING_ENABLED`, and `TWILIO_IHC_TERMINAL_FORWARDING_DISABLED_CONFIRMED`.
-- Exactly twelve required Production Twilio variable names remain: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID`, `TWILIO_PUBLIC_BASE_URL`, `TWILIO_INBOUND_SMS_ENABLED`, `TWILIO_OUTBOUND_SMS_ENABLED`, `TWILIO_WEATHERTECH_PHOENIX_NUMBER`, `TWILIO_WEATHERTECH_TUCSON_NUMBER`, `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARDING_ENABLED`, `TWILIO_WEATHERTECH_TUCSON_VOICE_FORWARD_TO`, `TWILIO_IHC_NUMBER`, and `TWILIO_VOICE_TERMINAL_FORWARDING_DISABLED_CONFIRMED`. No values are recorded here.
-- No live call or message was placed, and no Twilio-provider, carrier, phone-number, or Production database mutation occurred. The Twilio number configuration remained exact: Tucson retained its working Voice webhook, while Phoenix and IHC retained blank Voice handling and their existing SMS configuration.
+- Implementation: pending.
+- Pull request: pending.
+- Merge: pending.
+- Documentation closeout: pending.
 
 ## Final Status
 
-Completed. The owner-approved Tucson-only Twilio Voice architecture is deployed, healthy, database-verified, and closed. No owner-only Phoenix or IHC destination, carrier-forwarding, Twilio Voice, or live-call action remains, and no subsequent sprint is active.
+Approved and active. The delta-only audit is complete; implementation and bounded validation of the centralized automation, reviewed internal AI action, and owner control surfaces are in progress. No Production migration, scheduler activation, provider write, or customer-facing action has occurred.
 
 ## Notes
 
-The final owner architecture is intentionally simple: Phoenix voice stays on Verizon, IHC voice stays on AT&T, Tucson alone uses Twilio voice forwarding to the verified assistant, and the existing Phoenix/IHC Twilio numbers remain useful only as distinct SMS ingresses. A future change to Phoenix or IHC voice would require a new explicit owner-approved rework sprint.
+This sprint connects existing systems; it does not replace them. WeatherTech OS owns the records and automation state, providers remain adapters, AI remains constrained by company/permission/approval policy, and customer-facing effects require explicit authorization.

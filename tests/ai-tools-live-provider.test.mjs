@@ -23,6 +23,7 @@ function assertEqual(actual, expected, message) {
 function emptySnapshot(overrides = {}) {
   return {
     companies: [],
+    companyLocations: [],
     properties: [],
     leads: [],
     marketingCampaigns: [],
@@ -36,6 +37,7 @@ function emptySnapshot(overrides = {}) {
     scopes: [],
     jobs: [],
     jobTasks: [],
+    officeTasks: [],
     jobNotes: [],
     jobMaterials: [],
     scheduleEvents: [],
@@ -63,6 +65,11 @@ function emptySnapshot(overrides = {}) {
     notifications: [],
     integrationConnections: [],
     integrationSyncLogs: [],
+    automationRules: [],
+    automationEvents: [],
+    automationExecutions: [],
+    automationAttempts: [],
+    automationAuditEvents: [],
     aiSavedAnalyses: [],
     aiAuditEvents: [],
     aiUsageLimits: [],
@@ -111,9 +118,33 @@ try {
   }
 
   const aiProvider = await import(pathToFileURL(join(outDir, "aiProvider.js")));
+  const aiActionRuntime = await import(
+    pathToFileURL(join(outDir, "aiActionRuntime.js"))
+  );
+  const aiTools = await import(pathToFileURL(join(outDir, "aiTools.js")));
   const now = "2026-08-05T10:00:00.000Z";
   const wtCompanyId = "11111111-1111-4111-8111-111111111111";
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
+  const wtLocationId = "33333333-3333-4333-8333-333333333333";
+  const quotaReservation = {
+    contractVersion: 1,
+    reservationId: "33333333-3333-4333-8333-333333333333",
+    requestAuditEventId: "33333333-3333-4333-8333-333333333333",
+    requestId: "55555555-5555-4555-8555-555555555555",
+    companyId: wtCompanyId,
+    actorUserId: "user-wt",
+    provider: "openai",
+    model: "owner-approved-openai-model",
+    estimatedCostCents: 50,
+    maxProviderAttempts: 1,
+    status: "reserved",
+    idempotent: false,
+    globalRequestsToday: 1,
+    companyRequestsToday: 1,
+    userRequestsToday: 1,
+    reservedCostCentsToday: 50,
+    companyReservedCostCentsThisMonth: 50,
+  };
   const snapshot = emptySnapshot({
     companies: [
       {
@@ -132,6 +163,17 @@ try {
         legal_name: "IHC Painting",
         trade: "painting",
         workflow_profile: "painting",
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+      },
+    ],
+    companyLocations: [
+      {
+        id: wtLocationId,
+        company_id: wtCompanyId,
+        location_key: "weathertech_phoenix",
+        display_name: "WeatherTech Phoenix",
         is_active: true,
         created_at: now,
         updated_at: now,
@@ -169,6 +211,7 @@ try {
       {
         id: "lead-wt",
         company_id: wtCompanyId,
+        company_location_id: wtLocationId,
         contact_name: "Avery Roof Owner",
         email: "avery@example.test",
         phone: "602-555-0101",
@@ -245,6 +288,102 @@ try {
     ],
   });
 
+  const exactAuthorization = aiActionRuntime.resolveExactAiCompanyAuthorization({
+    memberships: [
+      { user_id: "user-wt", company_id: wtCompanyId, role: "office" },
+    ],
+    userId: "user-wt",
+    requestedCompanyId: wtCompanyId,
+  });
+  assertEqual(exactAuthorization.ok, true, "Exact internal membership authorizes AI");
+  assertEqual(
+    aiActionRuntime.resolveExactAiCompanyAuthorization({
+      memberships: [],
+      userId: "user-wt",
+      requestedCompanyId: " all ",
+    }).code,
+    "exact_company_required",
+    "All-company AI requests fail closed",
+  );
+  assertEqual(
+    aiActionRuntime.resolveExactAiCompanyAuthorization({
+      memberships: [],
+      userId: "user-wt",
+      requestedCompanyId: wtCompanyId,
+    }).code,
+    "company_membership_required",
+    "Missing company membership fails closed",
+  );
+  assertEqual(
+    aiActionRuntime.resolveExactAiCompanyAuthorization({
+      memberships: [
+        { user_id: "user-wt", company_id: wtCompanyId, role: "customer_portal" },
+      ],
+      userId: "user-wt",
+      requestedCompanyId: wtCompanyId,
+    }).code,
+    "internal_role_required",
+    "Portal membership cannot invoke controlled AI",
+  );
+  assertEqual(
+    aiActionRuntime.resolveExactAiCompanyAuthorization({
+      memberships: [
+        { user_id: "user-wt", company_id: wtCompanyId, role: "office" },
+        { user_id: "user-wt", company_id: wtCompanyId, role: "admin" },
+      ],
+      userId: "user-wt",
+      requestedCompanyId: wtCompanyId,
+    }).code,
+    "ambiguous_company_membership",
+    "Duplicate exact memberships fail closed",
+  );
+  const rejectableOnlyPreview = aiActionRuntime.validateStoredAiActionPreview({
+    value: {
+      id: "preview-reject-only",
+      actionType: "draft_email",
+      targetRecord: {
+        table: "sms_messages",
+        id: "sms-review-only",
+        label: "SMS context",
+        companyId: null,
+        safeReference: "sms_messages:sms-review-only",
+        hrefView: "Inbox",
+      },
+      companyId: wtCompanyId,
+      reason: "Review-only unsupported draft target.",
+      confirmationRequired: true,
+    },
+    expectedActionType: "draft_email",
+    expectedCompanyId: wtCompanyId,
+  });
+  assert(
+    rejectableOnlyPreview &&
+      !aiActionRuntime.isApprovableAiActionTarget(
+        rejectableOnlyPreview.actionType,
+        rejectableOnlyPreview.targetRecord.table,
+      ),
+    "A stored preview can still be rejected when its target is unscoped or not executable",
+  );
+  const overdueEstimate = {
+    ...snapshot.estimates[0],
+    id: "estimate-overdue",
+    title: "Expired estimate",
+    estimate_number: "EST-WT-OVERDUE",
+    expiration_date: "2026-08-04",
+    updated_at: now,
+  };
+  const overdueEstimateItem = aiTools
+    .buildAiPriorityItems(
+      { ...snapshot, estimates: [overdueEstimate] },
+      { companyId: wtCompanyId, now },
+    )
+    .find((item) => item.id === "estimate-estimate-overdue");
+  assertEqual(
+    overdueEstimateItem?.suggestedAction.type,
+    "create_follow_up_draft",
+    "An expired sent estimate deterministically produces a follow-up task draft",
+  );
+
   const disabled = aiProvider.getAiPilotProviderConfig({ AI_ENABLED: "false" });
   assertEqual(disabled.enabled, false, "AI provider config defaults to disabled");
   assertEqual(disabled.provider, "disabled", "Unconfigured provider is disabled");
@@ -270,6 +409,38 @@ try {
     disabledResult.context.safetyFlags.some((flag) => flag.includes("untrusted_content")),
     "Retrieved customer notes with prompt-injection text are flagged as untrusted",
   );
+  assert(
+    disabledResult.actionPreviews.some(
+      (preview) =>
+        preview.actionType === "create_follow_up_draft" &&
+        preview.targetRecord?.table === "leads" &&
+        preview.targetRecord.id === "lead-wt" &&
+        preview.companyId === wtCompanyId,
+    ),
+    "A grounded new-lead fallback exposes an exact-company follow-up task draft",
+  );
+
+  const staleEstimateResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    env: { AI_ENABLED: "false" },
+    fetchImpl: async () => {
+      throw new Error("Rule-based estimate follow-up must not call a provider.");
+    },
+  });
+  assert(
+    staleEstimateResult.actionPreviews.some(
+      (preview) =>
+        preview.actionType === "create_follow_up_draft" &&
+        preview.targetRecord?.table === "estimates" &&
+        preview.targetRecord.id === "estimate-wt" &&
+        preview.companyId === wtCompanyId,
+    ),
+    "A grounded stale estimate exposes an exact-company follow-up task draft without a provider",
+  );
 
   const missingBudget = aiProvider.buildAiPilotReadiness({
     config: aiProvider.getAiPilotProviderConfig({
@@ -284,6 +455,65 @@ try {
     missingBudget.state,
     "usage_limit_reached",
     "Live provider is blocked until explicit usage limits are configured",
+  );
+
+  const baseCompanyPolicy = {
+    id: "44444444-4444-4444-8444-444444444444",
+    company_id: wtCompanyId,
+    ai_enabled: true,
+    allowed_providers: ["openai"],
+    allowed_models: ["owner-approved-openai-model"],
+    daily_request_limit: 8,
+    per_user_daily_request_limit: 4,
+    per_company_monthly_budget_cents: 2500,
+    expensive_task_confirmation_cents: 100,
+    token_limit: 6000,
+    timeout_ms: 4000,
+    retry_limit: 0,
+    last_reviewed_at: now,
+    created_at: now,
+    updated_at: now,
+  };
+  const scopedConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "openai",
+      AI_MODEL: "owner-approved-openai-model",
+      AI_OPENAI_API_KEY: "test-key",
+      AI_DAILY_BUDGET_USD: "5",
+      AI_DAILY_REQUEST_LIMIT: "20",
+      AI_PER_USER_DAILY_REQUEST_LIMIT: "10",
+      AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
+      AI_MAX_REQUEST_TOKENS: "12000",
+      AI_MAX_RESPONSE_TOKENS: "1200",
+      AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+      AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
+      AI_TIMEOUT_MS: "5000",
+      AI_RETRY_LIMIT: "2",
+    }),
+    usageLimits: [baseCompanyPolicy],
+    companyId: wtCompanyId,
+  });
+  assert(scopedConfig.ok, "An exact enabled company AI policy should resolve");
+  assertEqual(scopedConfig.config.perCompanyDailyRequestLimit, 8, "Company policy must tighten the environment request cap");
+  assertEqual(scopedConfig.config.perUserDailyRequestLimit, 4, "Company policy must tighten the user cap");
+  assertEqual(scopedConfig.config.maxRequestTokens, 6000, "Company policy must tighten the request token cap");
+  assertEqual(scopedConfig.config.retryLimit, 0, "Company policy must tighten the retry cap");
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: scopedConfig.config,
+      usageLimits: [{ ...baseCompanyPolicy, company_id: ihcCompanyId, ai_enabled: false }],
+      companyId: ihcCompanyId,
+    }).ok,
+    "A disabled IHC company policy must fail closed",
+  );
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: scopedConfig.config,
+      usageLimits: [{ ...baseCompanyPolicy, allowed_models: ["different-model"] }],
+      companyId: wtCompanyId,
+    }).ok,
+    "A model absent from the exact company allowlist must fail closed",
   );
 
   process.env.AI_OPENAI_API_KEY = "test-openai-key";
@@ -305,10 +535,13 @@ try {
       AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
       AI_MAX_REQUEST_TOKENS: "12000",
       AI_MAX_RESPONSE_TOKENS: "1200",
+      AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+      AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
       AI_TIMEOUT_MS: "5000",
       AI_RETRY_LIMIT: "0",
       AI_STRUCTURED_OUTPUT_ENABLED: "true",
     },
+    quotaReservation,
     fetchImpl: async (url, init) => {
       openAiRequest = { url: String(url), body: JSON.parse(init.body) };
       return new Response(
@@ -352,6 +585,204 @@ try {
     openAiResult.actionPreviews.every((preview) => preview.confirmationRequired),
     "Provider action proposals are converted into approval-gated previews",
   );
+  assertEqual(
+    openAiResult.actionPreviews[0]?.targetRecord?.id,
+    "estimate-wt",
+    "A valid provider action keeps its exact proposed target",
+  );
+  assertEqual(
+    openAiResult.actionPreviews[0]?.actionType,
+    "draft_email",
+    "A valid provider action keeps its validated action type",
+  );
+  assertEqual(
+    openAiResult.conversation.followUpSupported,
+    false,
+    "The stateless provider adapter must not claim unsupported follow-up memory",
+  );
+  const locatedLeadContext = openAiResult.context.records.find(
+    (record) => record.table === "leads" && record.id === "lead-wt",
+  );
+  assertEqual(
+    locatedLeadContext?.companyLocationId,
+    wtLocationId,
+    "Live-provider context preserves the exact authorized company location ID",
+  );
+  assertEqual(
+    locatedLeadContext?.companyLocationLabel,
+    "WeatherTech Phoenix",
+    "Live-provider context includes only the authoritative location label",
+  );
+  const serializedProviderContext = JSON.parse(
+    openAiRequest.body.input.find((message) => message.role === "user").content,
+  );
+  const serializedLocatedLead = serializedProviderContext.records.find(
+    (record) => record.table === "leads" && record.id === "lead-wt",
+  );
+  assertEqual(
+    serializedLocatedLead?.companyLocationId,
+    wtLocationId,
+    "The exact location identity reaches the provider request body",
+  );
+
+  const unicodeContext = aiProvider.retrieveAuthorizedAiContext(snapshot, {
+    prompt: "😀".repeat(1_000),
+    companyId: wtCompanyId,
+    userRole: "office",
+    now,
+  });
+  const unicodeUsage = aiProvider.estimateAiRequestUsage({
+    config: {
+      ...scopedConfig.config,
+      maxRequestTokens: 100_000,
+    },
+    context: unicodeContext,
+    prompt: "😀".repeat(1_000),
+    userRole: "office",
+  });
+  assert(
+    unicodeUsage.estimatedRequestTokens >
+      new TextEncoder().encode("😀".repeat(1_000)).byteLength,
+    "Admission must conservatively cover high-density Unicode plus provider system/schema overhead",
+  );
+
+  let tightenedRetryCalls = 0;
+  const tightenedRetryResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    env: {
+      AI_ENABLED: "true",
+      AI_PROVIDER: "openai",
+      AI_MODEL: "owner-approved-openai-model",
+      AI_OPENAI_API_KEY: "test-openai-key",
+      AI_DAILY_BUDGET_USD: "5",
+      AI_DAILY_REQUEST_LIMIT: "20",
+      AI_PER_USER_DAILY_REQUEST_LIMIT: "10",
+      AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
+      AI_MAX_REQUEST_TOKENS: "100000",
+      AI_MAX_RESPONSE_TOKENS: "1200",
+      AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+      AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
+      AI_TIMEOUT_MS: "5000",
+      AI_RETRY_LIMIT: "2",
+    },
+    providerConfig: {
+      ...scopedConfig.config,
+      maxRequestTokens: 100_000,
+      retryLimit: 0,
+    },
+    quotaReservation,
+    fetchImpl: async () => {
+      tightenedRetryCalls += 1;
+      return new Response(JSON.stringify({ error: { message: "retry test" } }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  assertEqual(
+    tightenedRetryCalls,
+    1,
+    "The exact company retry cap must control provider execution instead of global env",
+  );
+  assertEqual(
+    tightenedRetryResult.response.mode,
+    "provider_disabled",
+    "A bounded provider failure returns the safe fallback",
+  );
+
+  const actionContext = openAiResult.context.records;
+  const groundedFallbackAction = staleEstimateResult.response.actions.find(
+    (action) => action.type === "create_follow_up_draft",
+  );
+  assert(groundedFallbackAction, "Grounded fallback action fixture is available");
+  assertEqual(
+    aiProvider.buildActionPreviews(
+      [
+        {
+          label: "Missing target",
+          reason: "The provider supplied an unknown record.",
+          actionType: "draft_email",
+          targetTable: "estimates",
+          targetId: "does-not-exist",
+        },
+      ],
+      [groundedFallbackAction],
+      actionContext,
+      wtCompanyId,
+    ).length,
+    0,
+    "A missing provider target is rejected instead of being replaced by a fallback target",
+  );
+  assertEqual(
+    aiProvider.buildActionPreviews(
+      [
+        {
+          label: "Wrong table",
+          reason: "The action/table pairing is invalid.",
+          actionType: "prepare_invoice_draft",
+          targetTable: "leads",
+          targetId: "lead-wt",
+        },
+      ],
+      [],
+      actionContext,
+      wtCompanyId,
+    ).length,
+    0,
+    "An invalid provider action/table pairing is rejected",
+  );
+  assertEqual(
+    aiProvider.buildActionPreviews(
+      [
+        {
+          label: "Cross-company target",
+          reason: "The target belongs to another company.",
+          actionType: "create_follow_up_draft",
+          targetTable: "leads",
+          targetId: "lead-ihc",
+        },
+      ],
+      [],
+      [
+        ...actionContext,
+        {
+          table: "leads",
+          id: "lead-ihc",
+          label: "IHC lead",
+          companyId: ihcCompanyId,
+          safeReference: "leads:lead-ihc",
+          hrefView: "Leads",
+          snippet: "IHC Painting lead",
+          score: 1,
+        },
+      ],
+      wtCompanyId,
+    ).length,
+    0,
+    "A cross-company provider target is rejected",
+  );
+  assertEqual(
+    aiProvider.buildActionPreviews(
+      [
+        {
+          label: "Unknown action",
+          reason: "The action type is not in the runtime contract.",
+          actionType: "send_email_now",
+          targetTable: "estimates",
+          targetId: "estimate-wt",
+        },
+      ],
+      [],
+      actionContext,
+      wtCompanyId,
+    ).length,
+    0,
+    "An unknown provider action type is rejected",
+  );
 
   process.env.AI_ANTHROPIC_API_KEY = "test-anthropic-key";
   let anthropicRequest = null;
@@ -372,9 +803,12 @@ try {
       AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
       AI_MAX_REQUEST_TOKENS: "12000",
       AI_MAX_RESPONSE_TOKENS: "1200",
+      AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+      AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
       AI_TIMEOUT_MS: "5000",
       AI_RETRY_LIMIT: "0",
     },
+    quotaReservation,
     fetchImpl: async (url, init) => {
       anthropicRequest = {
         url: String(url),

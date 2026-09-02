@@ -485,6 +485,29 @@ assert.match(
   /"provider_lead_id",\s+"TEST WTOS MIGHTY APES REGRESSION:\*"/,
   "Mighty Apes provider-lead markers participate in zero-residue verification",
 );
+for (const automationProbe of [
+  'counts["automation_events.exact-source-or-orphan"]',
+  'counts["automation_executions.exact-source-or-orphan"]',
+  'counts["automation_attempts.exact-source-or-orphan"]',
+  'counts["automation_audit_events.dynamic"]',
+  'counts["office_tasks.automation_execution_id"]',
+]) {
+  assert.match(
+    source,
+    new RegExp(automationProbe.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    `Independent residue verification includes ${automationProbe}`,
+  );
+}
+assert.match(
+  source,
+  /"automation_audit_events",\s+"select=id&audit_type=neq\.rule_seeded"/,
+  "Rule-seed audit history remains while every dynamic automation audit is release-blocking residue",
+);
+assert.match(
+  source,
+  /"office_tasks",\s+"select=id&automation_execution_id=not\.is\.null"/,
+  "Automation-created office-task linkage cannot survive an isolated regression run",
+);
 assert.doesNotMatch(source, /readFile(?:Sync)?\s*\(/);
 const cleanupSource = source.slice(source.indexOf("async function cleanupOwner"));
 assert.ok(

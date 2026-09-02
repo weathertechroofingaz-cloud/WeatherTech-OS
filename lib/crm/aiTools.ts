@@ -40,6 +40,19 @@ export type AiTaskType =
   | "saved_analysis";
 export type AiPriority = "critical" | "high" | "medium" | "low";
 export type AiResponseCompleteness = "complete" | "partial" | "insufficient";
+export type AiDailyOperationsTopic =
+  | "attention_today"
+  | "uncontacted_leads"
+  | "stale_leads"
+  | "estimate_follow_up"
+  | "approved_unscheduled_jobs"
+  | "scheduled_today"
+  | "scheduled_tomorrow"
+  | "outstanding_invoices"
+  | "customers_waiting"
+  | "overdue_tasks"
+  | "since_yesterday"
+  | "highest_priorities";
 export type AiActionType =
   | "open_record"
   | "draft_scope"
@@ -60,6 +73,8 @@ export type AiSourceRecord = {
   id: string;
   label: string;
   companyId: string | null;
+  companyLocationId?: string | null;
+  companyLocationLabel?: string | null;
   safeReference: string;
   hrefView: string;
 };
@@ -98,6 +113,9 @@ export type AiPriorityItem = {
     | "weather"
     | "readiness";
   companyId: string | null;
+  companyLocationId: string | null;
+  companyLocationLabel: string | null;
+  dailyOperationsTopics: AiDailyOperationsTopic[];
   owner: string | null;
   dueAt: string | null;
   ageDays: number;
@@ -467,9 +485,18 @@ export function answerAiCommand({
   const normalizedPrompt = cleanPrompt.toLowerCase();
   const priorityItems = buildAiPriorityItems(authorizedSnapshot, { ...options, now });
   const taskType = inferTaskType(normalizedPrompt);
-  const matchedItems = filterPriorityItemsForPrompt(priorityItems, normalizedPrompt);
+  const dailyOperationsTopics = dailyOperationsTopicsForPrompt(normalizedPrompt);
+  const matchedItems = selectAiPriorityItemsForPrompt(priorityItems, normalizedPrompt);
   const supportingRecords = matchedItems.map((item) => item.source).slice(0, 8);
-  const responseActions = matchedItems.map((item) => item.suggestedAction).slice(0, 4);
+  const responseActions = matchedItems
+    .map((item) => item.suggestedAction)
+    .filter(
+      (candidate) =>
+        dailyOperationsTopics.length === 0 ||
+        candidate.type === "open_record" ||
+        candidate.type === "create_follow_up_draft",
+    )
+    .slice(0, 4);
 
   if (normalizedPrompt.includes("draft") || taskType === "communication_draft") {
     const draft = buildDraftAnswer(authorizedSnapshot, normalizedPrompt);
@@ -498,9 +525,16 @@ export function answerAiCommand({
         `Found ${matchedItems.length} priority item${matchedItems.length === 1 ? "" : "s"} for this request.`,
         ...matchedItems
           .slice(0, 5)
-          .map((item, index) => `${index + 1}. ${item.title}: ${item.reason}`),
+          .map(
+            (item, index) =>
+              `${index + 1}. ${item.title}${item.companyLocationLabel ? ` [${item.companyLocationLabel}]` : ""}: ${item.reason}`,
+          ),
       ].join("\n")
-    : "No matching records are visible in the authorized WeatherTech OS snapshot. This is a read-only rule-based response, not a live AI-provider answer.";
+    : dailyOperationsTopics.length
+      ? "No matching Daily Operations records are visible in the authorized company scope."
+      : "No matching records are visible in the authorized WeatherTech OS snapshot. This is a read-only rule-based response, not a live AI-provider answer.";
+
+  const isDailyOperationsAnswer = dailyOperationsTopics.length > 0;
 
   return {
     id: `ai-response-${Date.now()}`,
@@ -509,10 +543,16 @@ export function answerAiCommand({
     prompt: cleanPrompt,
     answer,
     supportingRecords,
-    completeness: matchedItems.length ? "partial" : "insufficient",
-    missingInformation: matchedItems.length
-      ? ["Live AI provider is not configured, so this answer uses deterministic OS rules only."]
-      : ["No matching authorized records were available in the loaded company scope."],
+    completeness: isDailyOperationsAnswer
+      ? "complete"
+      : matchedItems.length
+        ? "partial"
+        : "insufficient",
+    missingInformation: isDailyOperationsAnswer
+      ? []
+      : matchedItems.length
+        ? ["Live AI provider is not configured, so this answer uses deterministic OS rules only."]
+        : ["No matching authorized records were available in the loaded company scope."],
     recommendedNextAction:
       responseActions[0]?.label ??
       "Open the related workspace and confirm the next step with a human reviewer.",
@@ -542,33 +582,84 @@ export function buildAiPriorityItems(
 ): AiPriorityItem[] {
   const now = new Date(options.now ?? new Date().toISOString());
   const authorizedSnapshot = getAuthorizedAiSnapshot(snapshot, options.companyId);
-  const today = toDateKey(now.toISOString());
+  const today = toBusinessDateKey(now);
+  const tomorrow = toBusinessDateKey(new Date(now.getTime() + 86_400_000));
+  const sinceYesterday = now.getTime() - 86_400_000;
   const items: AiPriorityItem[] = [];
 
-  const push = (item: AiPriorityItem) => {
-    items.push(item);
+  const push = (
+    item: Omit<
+      AiPriorityItem,
+      "companyLocationId" | "companyLocationLabel" | "dailyOperationsTopics"
+    > &
+      Partial<
+        Pick<
+          AiPriorityItem,
+          "companyLocationId" | "companyLocationLabel" | "dailyOperationsTopics"
+        >
+      >,
+  ) => {
+    items.push({
+      ...item,
+      companyLocationId:
+        item.companyLocationId ?? item.source.companyLocationId ?? null,
+      companyLocationLabel:
+        item.companyLocationLabel ?? item.source.companyLocationLabel ?? null,
+      dailyOperationsTopics: item.dailyOperationsTopics ?? [],
+    });
   };
 
   for (const lead of authorizedSnapshot.leads) {
+    const accountability = authorizedSnapshot.leadAccountability.find(
+      (record) =>
+        record.company_id === lead.company_id && record.lead_id === lead.id,
+    );
+    const openLead = lead.status !== "won" && lead.status !== "lost";
     const followUpDue = Boolean(lead.next_follow_up && lead.next_follow_up <= today);
-    if (lead.status === "new" || lead.status === "contacted" || followUpDue) {
-      const source = leadSource(lead);
+    const uncontacted = Boolean(
+      openLead &&
+        !accountability?.first_response_at &&
+        (lead.status === "new" || Boolean(accountability)),
+    );
+    const stale = openLead && ageInDays(lead.updated_at, now) >= 3;
+    if (lead.status === "new" || lead.status === "contacted" || followUpDue || stale) {
+      const source = leadSource(lead, authorizedSnapshot);
+      const dailyOperationsTopics: AiDailyOperationsTopic[] = [
+        ...(followUpDue ? (["attention_today", "customers_waiting"] as const) : []),
+        ...(uncontacted ? (["uncontacted_leads"] as const) : []),
+        ...(stale ? (["stale_leads"] as const) : []),
+        ...((followUpDue || uncontacted || stale)
+          ? (["highest_priorities"] as const)
+          : []),
+      ];
       push({
         id: `lead-${lead.id}`,
-        priority: lead.priority === "urgent" ? "critical" : lead.priority === "high" ? "high" : followUpDue ? "high" : "medium",
+        priority:
+          lead.priority === "urgent"
+            ? "critical"
+            : lead.priority === "high" || followUpDue || uncontacted
+              ? "high"
+              : "medium",
         score: scoreFromFactors({
           urgency: lead.priority === "urgent" ? 32 : lead.priority === "high" ? 22 : 10,
-          overdue: followUpDue ? 24 : 0,
+          overdue: followUpDue ? 24 : uncontacted ? 18 : stale ? 12 : 0,
           value: lead.estimated_value,
           ageDays: ageInDays(lead.created_at, now),
         }),
-        title: `${lead.contact_name} needs lead follow-up`,
+        title: uncontacted
+          ? `${lead.contact_name} has not been contacted`
+          : `${lead.contact_name} needs lead follow-up`,
         summary: `${lead.source} ${lead.service_type} lead at ${lead.property_address || "unknown address"}`,
         reason: followUpDue
           ? `Next follow-up was due ${lead.next_follow_up}.`
+          : uncontacted
+            ? "No first response is recorded for this open lead."
+            : stale
+              ? `This open lead has not been updated for ${ageInDays(lead.updated_at, now)} days.`
           : `Lead is still ${lead.status.replace("_", " ")}.`,
         category: "sales",
         companyId: lead.company_id,
+        dailyOperationsTopics,
         owner: getLeadOwnerUserId(
           authorizedSnapshot.leadAccountability,
           lead.id,
@@ -582,8 +673,16 @@ export function buildAiPriorityItems(
           source: lead.source,
           estimated_value: lead.estimated_value,
           next_follow_up: lead.next_follow_up,
+          first_response_at: accountability?.first_response_at ?? null,
+          stale,
         },
-        suggestedAction: action("open_record", "Open lead", source, lead.company_id, "Confirm qualification and next follow-up."),
+        suggestedAction: action(
+          "create_follow_up_draft",
+          "Create follow-up task draft",
+          source,
+          lead.company_id,
+          "Prepare an internal follow-up task for human review before it is created.",
+        ),
       });
     }
   }
@@ -591,24 +690,36 @@ export function buildAiPriorityItems(
   for (const estimate of authorizedSnapshot.estimates) {
     if (estimate.status === "sent" || estimate.status === "draft") {
       const ageDays = ageInDays(estimate.updated_at, now);
-      const source = estimateSource(estimate);
+      const source = estimateSource(estimate, authorizedSnapshot);
       const isStale = estimate.status === "sent" && ageDays >= 3;
+      const isOverdue = Boolean(
+        estimate.status === "sent" &&
+          estimate.expiration_date &&
+          estimate.expiration_date < today,
+      );
+      const needsFollowUp = isStale || isOverdue;
       push({
         id: `estimate-${estimate.id}`,
-        priority: isStale ? "high" : estimate.status === "sent" ? "medium" : "low",
+        priority: needsFollowUp ? "high" : estimate.status === "sent" ? "medium" : "low",
         score: scoreFromFactors({
-          urgency: isStale ? 22 : 8,
-          overdue: isStale ? 16 : 0,
+          urgency: needsFollowUp ? 22 : 8,
+          overdue: isOverdue ? 22 : isStale ? 16 : 0,
           value: estimate.total,
           ageDays,
         }),
         title: `${estimate.title} needs estimate attention`,
         summary: `${estimate.status} ${estimate.service_type} estimate worth ${money(estimate.total)}`,
-        reason: isStale
-          ? `Estimate was last updated ${ageDays} days ago and may need follow-up.`
-          : `Estimate remains ${estimate.status}.`,
+        reason: isOverdue
+          ? `Estimate expired ${estimate.expiration_date} and may need follow-up.`
+          : isStale
+            ? `Estimate was last updated ${ageDays} days ago and may need follow-up.`
+            : `Estimate remains ${estimate.status}.`,
         category: "sales",
         companyId: estimate.company_id,
+        dailyOperationsTopics: [
+          ...(estimate.status === "sent" ? (["estimate_follow_up"] as const) : []),
+          ...(needsFollowUp ? (["attention_today", "highest_priorities"] as const) : []),
+        ],
         owner: null,
         dueAt: estimate.expiration_date,
         ageDays,
@@ -619,7 +730,15 @@ export function buildAiPriorityItems(
           expiration_date: estimate.expiration_date,
           profit_margin_total: estimate.profit_margin_total,
         },
-        suggestedAction: action("draft_proposal", "Review estimate", source, estimate.company_id, "Prepare or follow up through the existing estimate workflow."),
+        suggestedAction: action(
+          estimate.status === "sent" ? "create_follow_up_draft" : "draft_proposal",
+          estimate.status === "sent" ? "Create estimate follow-up task draft" : "Review estimate",
+          source,
+          estimate.company_id,
+          estimate.status === "sent"
+            ? "Prepare an internal estimate follow-up task for human review before it is created."
+            : "Prepare or follow up through the existing estimate workflow.",
+        ),
       });
     }
   }
@@ -671,44 +790,174 @@ export function buildAiPriorityItems(
   }
 
   for (const job of authorizedSnapshot.jobs) {
-    const missingSchedule = !job.scheduled_start && !job.start_date;
+    const jobScheduleValue =
+      job.scheduled_start ??
+      job.scheduled_end ??
+      job.start_date ??
+      job.end_date;
+    const hasSavedSchedule = Boolean(
+      job.scheduled_start ||
+        job.scheduled_end ||
+        job.start_date ||
+        job.end_date,
+    );
+    const jobScheduleDate = jobScheduleValue
+      ? toBusinessDateKey(new Date(jobScheduleValue))
+      : null;
+    const scheduledEvent = authorizedSnapshot.scheduleEvents.find(
+      (event) =>
+        event.job_id === job.id &&
+        event.status === "scheduled" &&
+        toBusinessDateKey(new Date(event.start_at)) >= today,
+    );
+    const missingSchedule = !hasSavedSchedule && !scheduledEvent;
     const missingCrew =
       ["scheduled", "in_progress"].includes(job.status) &&
       !job.crew_name &&
       !authorizedSnapshot.jobAssignments.some((assignment) => assignment.job_id === job.id);
-    if (job.status === "blocked" || missingSchedule || missingCrew) {
-      const source = jobSource(job);
+    const linkedEstimate = job.estimate_id
+      ? authorizedSnapshot.estimates.find(
+          (estimate) =>
+            estimate.id === job.estimate_id &&
+            estimate.company_id === job.company_id,
+        )
+      : null;
+    const hasAcceptedProposal = Boolean(
+      job.proposal_acceptance_id &&
+        authorizedSnapshot.proposalAcceptances.some(
+          (acceptance) =>
+            acceptance.id === job.proposal_acceptance_id &&
+            acceptance.company_id === job.company_id,
+        ),
+    );
+    const approvedUnscheduled = Boolean(
+      missingSchedule &&
+        (linkedEstimate?.status === "approved" || hasAcceptedProposal),
+    );
+    const scheduledToday = jobScheduleDate === today;
+    const scheduledTomorrow = jobScheduleDate === tomorrow;
+    const operationalRisk = job.status === "blocked" || missingSchedule || missingCrew;
+    if (operationalRisk || scheduledToday || scheduledTomorrow) {
+      const source = jobSource(job, authorizedSnapshot);
       push({
         id: `job-${job.id}`,
-        priority: job.status === "blocked" ? "critical" : missingCrew ? "high" : "medium",
+        priority:
+          job.status === "blocked"
+            ? "critical"
+            : missingCrew || approvedUnscheduled
+              ? "high"
+              : scheduledToday
+                ? "medium"
+                : "low",
         score: scoreFromFactors({
           urgency: job.status === "blocked" ? 34 : missingCrew ? 24 : 12,
-          overdue: missingSchedule ? 12 : 0,
+          overdue: approvedUnscheduled ? 20 : missingSchedule ? 12 : 0,
           value: job.total,
           ageDays: ageInDays(job.updated_at, now),
         }),
-        title: `${job.title} is at operational risk`,
+        title: operationalRisk
+          ? `${job.title} is at operational risk`
+          : `${job.title} is scheduled ${scheduledToday ? "today" : "tomorrow"}`,
         summary: `${job.status.replace("_", " ")} job at ${job.property_address}`,
         reason: job.status === "blocked"
           ? "Job is marked blocked."
-          : missingCrew
-          ? "Job is scheduled or active without a visible crew assignment."
-          : "Job is awaiting production scheduling.",
+          : approvedUnscheduled
+            ? "The linked estimate or proposal is approved, but no production schedule is saved."
+            : missingCrew
+              ? "Job is scheduled or active without a visible crew assignment."
+              : missingSchedule
+                ? "Job is awaiting production scheduling."
+                : `Production starts ${jobScheduleValue}.`,
         category: "production",
         companyId: job.company_id,
+        dailyOperationsTopics: [
+          ...(approvedUnscheduled ? (["approved_unscheduled_jobs"] as const) : []),
+          ...(scheduledToday ? (["scheduled_today"] as const) : []),
+          ...(scheduledTomorrow ? (["scheduled_tomorrow"] as const) : []),
+          ...(operationalRisk ? (["attention_today", "highest_priorities"] as const) : []),
+        ],
         owner: job.project_manager,
-        dueAt: job.scheduled_start ?? job.start_date,
+        dueAt: jobScheduleValue ?? scheduledEvent?.start_at ?? null,
         ageDays: ageInDays(job.updated_at, now),
         source,
         supportingFields: {
           status: job.status,
           scheduled_start: job.scheduled_start,
+          scheduled_end: job.scheduled_end,
           crew_name: job.crew_name,
           total: job.total,
+          approved: linkedEstimate?.status === "approved" || hasAcceptedProposal,
+          has_scheduled_event: Boolean(scheduledEvent),
         },
-        suggestedAction: action("prepare_schedule_change", "Open production", source, job.company_id, "Confirm schedule, crew, material readiness, and customer update."),
+        suggestedAction: action(
+          "open_record",
+          "Open production",
+          source,
+          job.company_id,
+          "Review schedule, crew, and production readiness without changing the job.",
+        ),
       });
     }
+  }
+
+  for (const event of authorizedSnapshot.scheduleEvents) {
+    if (event.status !== "scheduled") continue;
+    const eventDate = toBusinessDateKey(new Date(event.start_at));
+    if (eventDate !== today && eventDate !== tomorrow) continue;
+    const linkedJob = event.job_id
+      ? authorizedSnapshot.jobs.find(
+          (job) => job.id === event.job_id && job.company_id === event.company_id,
+        )
+      : null;
+    if (event.event_type !== "job" && !linkedJob) continue;
+    const linkedJobDate =
+      linkedJob?.scheduled_start ??
+      linkedJob?.scheduled_end ??
+      linkedJob?.start_date ??
+      linkedJob?.end_date;
+    if (
+      linkedJobDate &&
+      toBusinessDateKey(new Date(linkedJobDate)) === eventDate
+    ) {
+      continue;
+    }
+    const source = scheduleEventSource(event, authorizedSnapshot);
+    const scheduledToday = eventDate === today;
+    push({
+      id: `schedule-event-${event.id}`,
+      priority: scheduledToday ? "medium" : "low",
+      score: scoreFromFactors({
+        urgency: scheduledToday ? 18 : 8,
+        overdue: 0,
+        value: linkedJob?.total ?? 0,
+        ageDays: 0,
+      }),
+      title: `${event.title} is scheduled ${scheduledToday ? "today" : "tomorrow"}`,
+      summary: `${event.event_type.replace(/_/g, " ")} from ${event.start_at} to ${event.end_at}`,
+      reason: "This active schedule event is recorded in the authorized company calendar.",
+      category: "production",
+      companyId: event.company_id,
+      dailyOperationsTopics: [
+        scheduledToday ? "scheduled_today" : "scheduled_tomorrow",
+      ],
+      owner: linkedJob?.project_manager ?? null,
+      dueAt: event.start_at,
+      ageDays: 0,
+      source,
+      supportingFields: {
+        event_type: event.event_type,
+        status: event.status,
+        start_at: event.start_at,
+        end_at: event.end_at,
+      },
+      suggestedAction: action(
+        "open_record",
+        "Open calendar",
+        source,
+        event.company_id,
+        "Review the saved schedule event without changing it.",
+      ),
+    });
   }
 
   for (const order of authorizedSnapshot.materialOrders) {
@@ -791,8 +1040,11 @@ export function buildAiPriorityItems(
   }
 
   for (const invoice of authorizedSnapshot.invoices) {
-    if (invoice.status === "overdue" || (invoice.status === "sent" && invoice.balance_due > 0)) {
-      const source = invoiceSource(invoice);
+    if (
+      invoice.balance_due > 0 &&
+      (invoice.status === "overdue" || invoice.status === "sent")
+    ) {
+      const source = invoiceSource(invoice, authorizedSnapshot);
       const overdue = invoice.status === "overdue";
       push({
         id: `invoice-${invoice.id}`,
@@ -808,6 +1060,10 @@ export function buildAiPriorityItems(
         reason: overdue ? "Invoice is overdue." : "Invoice remains sent with a positive balance.",
         category: "financial",
         companyId: invoice.company_id,
+        dailyOperationsTopics: [
+          "outstanding_invoices",
+          ...(overdue ? (["attention_today", "highest_priorities"] as const) : []),
+        ],
         owner: null,
         dueAt: invoice.due_date,
         ageDays: ageInDays(invoice.updated_at, now),
@@ -817,9 +1073,372 @@ export function buildAiPriorityItems(
           balance_due: invoice.balance_due,
           due_date: invoice.due_date,
         },
-        suggestedAction: action("draft_email", "Draft collection follow-up", source, invoice.company_id, "Prepare a customer-safe reminder, then send only through an approved workflow."),
+        suggestedAction: action(
+          "open_record",
+          "Open invoice",
+          source,
+          invoice.company_id,
+          "Review the outstanding balance without sending a customer message.",
+        ),
       });
     }
+  }
+
+  for (const task of authorizedSnapshot.officeTasks ?? []) {
+    if (task.status === "completed") continue;
+    const effectiveDueAt =
+      task.status === "snoozed" && task.snoozed_until
+        ? task.snoozed_until
+        : task.due_at;
+    const dueTimestamp = new Date(effectiveDueAt).getTime();
+    const dueDate = toBusinessDateKey(new Date(effectiveDueAt));
+    const overdue = Number.isFinite(dueTimestamp) && dueTimestamp < now.getTime();
+    const dueToday = dueDate === today;
+    if (!overdue && !dueToday) continue;
+    const source = officeTaskSource(task, authorizedSnapshot);
+    push({
+      id: `office-task-${task.id}`,
+      priority:
+        task.priority === "urgent"
+          ? "critical"
+          : task.priority === "high" || overdue
+            ? "high"
+            : "medium",
+      score: scoreFromFactors({
+        urgency: task.priority === "urgent" ? 34 : task.priority === "high" ? 24 : 12,
+        overdue: overdue ? 24 : 0,
+        value: 0,
+        ageDays: ageInDays(task.created_at, now),
+      }),
+      title: `${overdue ? "Overdue task" : "Task due today"}: ${task.title}`,
+      summary: `${task.source_type.replace(/_/g, " ")} office task`,
+      reason: overdue
+        ? `The active task was due ${effectiveDueAt}.`
+        : `The active task is due today at ${effectiveDueAt}.`,
+      category: "readiness",
+      companyId: task.company_id,
+      dailyOperationsTopics: [
+        "attention_today",
+        "highest_priorities",
+        ...(overdue ? (["overdue_tasks"] as const) : []),
+      ],
+      owner: task.assigned_employee_id,
+      dueAt: effectiveDueAt,
+      ageDays: ageInDays(task.created_at, now),
+      source,
+      supportingFields: {
+        status: task.status,
+        priority: task.priority,
+        due_at: task.due_at,
+        snoozed_until: task.snoozed_until,
+        source_type: task.source_type,
+      },
+      suggestedAction: action(
+        "open_record",
+        "Open Daily Ops",
+        source,
+        task.company_id,
+        "Review the internal task without completing or changing it.",
+      ),
+    });
+  }
+
+  for (const email of authorizedSnapshot.emailMessages) {
+    const receivedAt = email.received_at ?? email.created_at;
+    if (
+      email.direction !== "inbound" ||
+      hasLaterOutboundEmail(authorizedSnapshot, email, receivedAt)
+    ) {
+      continue;
+    }
+    const source = emailMessageSource(email, authorizedSnapshot);
+    const linkedLead = email.lead_id
+      ? authorizedSnapshot.leads.find(
+          (lead) => lead.id === email.lead_id && lead.company_id === email.company_id,
+        )
+      : null;
+    const actionTarget = linkedLead
+      ? leadSource(linkedLead, authorizedSnapshot)
+      : source;
+    push({
+      id: `customer-waiting-email-${email.id}`,
+      priority: "high",
+      score: scoreFromFactors({
+        urgency: 22,
+        overdue: ageInDays(receivedAt, now) >= 1 ? 12 : 4,
+        value: 0,
+        ageDays: ageInDays(receivedAt, now),
+      }),
+      title: `${email.subject || "Inbound email"} is waiting for review`,
+      summary: "Inbound customer email with no later outbound reply in the same grounded context",
+      reason: `The latest matched inbound email was received ${receivedAt}.`,
+      category: "customer",
+      companyId: email.company_id,
+      dailyOperationsTopics: [
+        "customers_waiting",
+        "attention_today",
+        "highest_priorities",
+      ],
+      owner: null,
+      dueAt: receivedAt,
+      ageDays: ageInDays(receivedAt, now),
+      source,
+      supportingFields: {
+        direction: email.direction,
+        status: email.status,
+        received_at: receivedAt,
+        has_later_outbound_reply: false,
+      },
+      suggestedAction: action(
+        linkedLead ? "create_follow_up_draft" : "open_record",
+        linkedLead ? "Create follow-up task draft" : "Open inbox",
+        actionTarget,
+        email.company_id,
+        linkedLead
+          ? "Prepare one internal follow-up task for human review."
+          : "Review the inbound email without sending a reply.",
+      ),
+    });
+  }
+
+  for (const sms of authorizedSnapshot.smsMessages) {
+    const receivedAt = sms.created_at;
+    if (
+      sms.direction !== "inbound" ||
+      hasLaterOutboundSms(authorizedSnapshot, sms, receivedAt)
+    ) {
+      continue;
+    }
+    const source = smsMessageSource(sms, authorizedSnapshot);
+    const linkedLead = sms.lead_id
+      ? authorizedSnapshot.leads.find(
+          (lead) => lead.id === sms.lead_id && lead.company_id === sms.company_id,
+        )
+      : null;
+    const actionTarget = linkedLead
+      ? leadSource(linkedLead, authorizedSnapshot)
+      : source;
+    push({
+      id: `customer-waiting-sms-${sms.id}`,
+      priority: "high",
+      score: scoreFromFactors({
+        urgency: 22,
+        overdue: ageInDays(receivedAt, now) >= 1 ? 12 : 4,
+        value: 0,
+        ageDays: ageInDays(receivedAt, now),
+      }),
+      title: "Inbound SMS is waiting for review",
+      summary: "Inbound customer SMS with no later outbound reply in the same grounded context",
+      reason: `The latest matched inbound SMS was received ${receivedAt}.`,
+      category: "customer",
+      companyId: sms.company_id,
+      dailyOperationsTopics: [
+        "customers_waiting",
+        "attention_today",
+        "highest_priorities",
+      ],
+      owner: null,
+      dueAt: receivedAt,
+      ageDays: ageInDays(receivedAt, now),
+      source,
+      supportingFields: {
+        direction: sms.direction,
+        status: sms.status,
+        received_at: receivedAt,
+        has_later_outbound_reply: false,
+      },
+      suggestedAction: action(
+        linkedLead ? "create_follow_up_draft" : "open_record",
+        linkedLead ? "Create follow-up task draft" : "Open inbox",
+        actionTarget,
+        sms.company_id,
+        linkedLead
+          ? "Prepare one internal follow-up task for human review."
+          : "Review the inbound SMS without sending a reply.",
+      ),
+    });
+  }
+
+  for (const call of authorizedSnapshot.callRecords) {
+    const occurredAt = call.ended_at ?? call.started_at ?? call.created_at;
+    const needsAttention =
+      call.direction === "inbound" &&
+      (call.follow_up_required ||
+        ["missed", "busy", "failed", "voicemail"].includes(call.call_status));
+    const companyId = resolveCommunicationCompanyId(authorizedSnapshot, call);
+    if (
+      !needsAttention ||
+      !companyId
+    ) {
+      continue;
+    }
+    const source = callSource(call, authorizedSnapshot, companyId);
+    const linkedLead = call.lead_id
+      ? authorizedSnapshot.leads.find(
+          (lead) => lead.id === call.lead_id && lead.company_id === companyId,
+        )
+      : null;
+    const actionTarget = linkedLead
+      ? leadSource(linkedLead, authorizedSnapshot)
+      : source;
+    push({
+      id: `customer-waiting-call-${call.id}`,
+      priority: call.call_status === "missed" ? "critical" : "high",
+      score: scoreFromFactors({
+        urgency: call.call_status === "missed" ? 32 : 22,
+        overdue: call.follow_up_required ? 14 : 8,
+        value: 0,
+        ageDays: ageInDays(occurredAt, now),
+      }),
+      title: `${call.call_status.replace(/_/g, " ")} call needs follow-up`,
+      summary: "Inbound phone activity marked for internal attention",
+      reason: call.follow_up_required
+        ? "The call record explicitly requires follow-up."
+        : `The call status is ${call.call_status.replace(/_/g, " ")}.`,
+      category: "customer",
+      companyId,
+      dailyOperationsTopics: [
+        "customers_waiting",
+        "attention_today",
+        "highest_priorities",
+      ],
+      owner: null,
+      dueAt: occurredAt,
+      ageDays: ageInDays(occurredAt, now),
+      source,
+      supportingFields: {
+        call_status: call.call_status,
+        follow_up_required: call.follow_up_required,
+        occurred_at: occurredAt,
+      },
+      suggestedAction: action(
+        linkedLead ? "create_follow_up_draft" : "open_record",
+        linkedLead ? "Create follow-up task draft" : "Open call record",
+        actionTarget,
+        companyId,
+        linkedLead
+          ? "Prepare one internal follow-up task for human review."
+          : "Review the call record without placing a call.",
+      ),
+    });
+  }
+
+  for (const event of authorizedSnapshot.communicationProviderEvents) {
+    const companyId = resolveCommunicationCompanyId(authorizedSnapshot, event);
+    const needsAttention =
+      event.direction === "inbound" &&
+      (event.channel === "sms" ||
+        ["missed", "busy", "failed", "voicemail", "no-answer"].includes(
+          event.status.toLowerCase(),
+        ));
+    if (
+      !needsAttention ||
+      !companyId ||
+      (event.sms_message_id &&
+        authorizedSnapshot.smsMessages.some(
+          (sms) => sms.id === event.sms_message_id && sms.company_id === companyId,
+        )) ||
+      authorizedSnapshot.callRecords.some(
+        (call) => call.correlation_id === event.correlation_id,
+      ) ||
+      hasLaterOutboundProviderEvent(authorizedSnapshot, event)
+    ) {
+      continue;
+    }
+    const source = communicationProviderEventSource(
+      event,
+      authorizedSnapshot,
+      companyId,
+    );
+    const linkedLead = event.lead_id
+      ? authorizedSnapshot.leads.find(
+          (lead) => lead.id === event.lead_id && lead.company_id === companyId,
+        )
+      : null;
+    const actionTarget = linkedLead
+      ? leadSource(linkedLead, authorizedSnapshot)
+      : source;
+    push({
+      id: `customer-waiting-provider-event-${event.id}`,
+      priority: event.channel === "voice" ? "critical" : "high",
+      score: scoreFromFactors({
+        urgency: event.channel === "voice" ? 30 : 22,
+        overdue: ageInDays(event.occurred_at, now) >= 1 ? 12 : 4,
+        value: 0,
+        ageDays: ageInDays(event.occurred_at, now),
+      }),
+      title: `${event.channel.toUpperCase()} inbound activity is waiting for review`,
+      summary: `${event.provider} ${event.event_type.replace(/_/g, " ")} routed ${event.routing_status.replace(/_/g, " ")}`,
+      reason: `No later outbound provider event is recorded in the same linked context after ${event.occurred_at}.`,
+      category: "customer",
+      companyId,
+      dailyOperationsTopics: [
+        "customers_waiting",
+        "attention_today",
+        "highest_priorities",
+      ],
+      owner: null,
+      dueAt: event.occurred_at,
+      ageDays: ageInDays(event.occurred_at, now),
+      source,
+      supportingFields: {
+        channel: event.channel,
+        direction: event.direction,
+        status: event.status,
+        routing_status: event.routing_status,
+        occurred_at: event.occurred_at,
+        has_later_outbound_event: false,
+      },
+      suggestedAction: action(
+        linkedLead ? "create_follow_up_draft" : "open_record",
+        linkedLead ? "Create follow-up task draft" : "Open inbox",
+        actionTarget,
+        companyId,
+        linkedLead
+          ? "Prepare one internal follow-up task for human review."
+          : "Review the inbound provider event without sending or calling.",
+      ),
+    });
+  }
+
+  const recentAutomationEvents = [...(authorizedSnapshot.automationEvents ?? [])]
+    .filter((event) => new Date(event.occurred_at).getTime() >= sinceYesterday)
+    .sort(
+      (left, right) =>
+        new Date(right.occurred_at).getTime() -
+        new Date(left.occurred_at).getTime(),
+    )
+    .slice(0, 15);
+
+  for (const event of recentAutomationEvents) {
+    const source = automationEventSource(event, authorizedSnapshot);
+    push({
+      id: `recent-automation-event-${event.id}`,
+      priority: "low",
+      score: 8,
+      title: `${event.event_type.replace(/\./g, " ")} was recorded`,
+      summary: `${event.source_table} activity at ${event.occurred_at}`,
+      reason: "This immutable automation event occurred within the previous 24 hours.",
+      category: "readiness",
+      companyId: event.company_id,
+      dailyOperationsTopics: ["since_yesterday"],
+      owner: event.actor_user_id,
+      dueAt: event.occurred_at,
+      ageDays: 0,
+      source,
+      supportingFields: {
+        event_type: event.event_type,
+        source_table: event.source_table,
+        occurred_at: event.occurred_at,
+      },
+      suggestedAction: action(
+        "open_record",
+        "Review automation activity",
+        source,
+        event.company_id,
+        "Review the recorded internal activity without replaying it.",
+      ),
+    });
   }
 
   for (const log of authorizedSnapshot.integrationSyncLogs) {
@@ -854,7 +1473,7 @@ export function buildAiPriorityItems(
     }
   }
 
-  return items.sort((left, right) => right.score - left.score).slice(0, 40);
+  return items.sort((left, right) => right.score - left.score).slice(0, 100);
 }
 
 function buildExecutiveBrief(
@@ -1789,7 +2408,7 @@ function buildWeatherAssistant(snapshot: CrmSnapshot): AiAssistantDraft[] {
       body:
         "Weather intelligence can flag heat, wind, rain, coating-temperature, and crew-safety concerns using the Weather workspace plus scheduled job context. It does not claim certainty beyond the weather source.",
       missingInformation: weatherSensitiveJobs.length ? [] : ["scheduled weather-sensitive jobs"],
-      sourceRecords: weatherSensitiveJobs.map(jobSource),
+      sourceRecords: weatherSensitiveJobs.map((job) => jobSource(job)),
       actions: weatherSensitiveJobs.slice(0, 1).map((job) =>
         action("draft_sms", "Prepare customer delay draft", jobSource(job), job.company_id, "Draft only; do not send until approved."),
       ),
@@ -1904,6 +2523,9 @@ function buildDraftAnswer(snapshot: CrmSnapshot, normalizedPrompt: string): AiAs
 }
 
 function inferTaskType(normalizedPrompt: string): AiTaskType {
+  if (dailyOperationsTopicsForPrompt(normalizedPrompt).length > 0) {
+    return "daily_brief";
+  }
   if (normalizedPrompt.includes("scope")) return "scope_writer";
   if (normalizedPrompt.includes("proposal")) return "proposal_review";
   if (normalizedPrompt.includes("estimate")) return "estimate_assistant";
@@ -1917,10 +2539,28 @@ function inferTaskType(normalizedPrompt: string): AiTaskType {
   return "command";
 }
 
-function filterPriorityItemsForPrompt(
+export function selectAiPriorityItemsForPrompt(
   items: AiPriorityItem[],
   normalizedPrompt: string,
 ): AiPriorityItem[] {
+  const dailyOperationsTopics = dailyOperationsTopicsForPrompt(normalizedPrompt);
+  if (dailyOperationsTopics.length > 0) {
+    if (dailyOperationsTopics.includes("highest_priorities")) {
+      return items.slice(0, 10);
+    }
+
+    return items
+      .filter(
+        (item) =>
+          item.dailyOperationsTopics.some((topic) =>
+            dailyOperationsTopics.includes(topic),
+          ) ||
+          (dailyOperationsTopics.includes("attention_today") &&
+            (item.priority === "critical" || item.priority === "high")),
+      )
+      .slice(0, 20);
+  }
+
   if (normalizedPrompt.includes("overdue invoice") || normalizedPrompt.includes("unpaid")) {
     return items.filter((item) => item.category === "financial");
   }
@@ -1948,6 +2588,130 @@ function filterPriorityItemsForPrompt(
   }
 
   return items;
+}
+
+function dailyOperationsTopicsForPrompt(
+  normalizedPrompt: string,
+): AiDailyOperationsTopic[] {
+  const topics = new Set<AiDailyOperationsTopic>();
+  const includesAny = (...values: string[]) =>
+    values.some((value) => normalizedPrompt.includes(value));
+
+  if (
+    includesAny(
+      "daily operations",
+      "daily ops",
+      "morning brief",
+      "run the company today",
+    )
+  ) {
+    for (const topic of [
+      "attention_today",
+      "uncontacted_leads",
+      "stale_leads",
+      "estimate_follow_up",
+      "approved_unscheduled_jobs",
+      "scheduled_today",
+      "scheduled_tomorrow",
+      "outstanding_invoices",
+      "customers_waiting",
+      "overdue_tasks",
+      "since_yesterday",
+    ] as const) {
+      topics.add(topic);
+    }
+  }
+
+  if (
+    includesAny(
+      "needs my attention today",
+      "need my attention today",
+      "needs attention today",
+      "what needs attention",
+    )
+  ) {
+    topics.add("attention_today");
+  }
+
+  if (
+    includesAny(
+      "haven't been contacted",
+      "have not been contacted",
+      "not been contacted",
+      "uncontacted lead",
+      "leads without contact",
+    )
+  ) {
+    topics.add("uncontacted_leads");
+  }
+
+  if (includesAny("stale lead", "stale opportunity")) {
+    topics.add("stale_leads");
+  }
+
+  if (
+    normalizedPrompt.includes("estimate") &&
+    includesAny("follow-up", "follow up", "needs follow")
+  ) {
+    topics.add("estimate_follow_up");
+  }
+
+  if (
+    normalizedPrompt.includes("approved") &&
+    normalizedPrompt.includes("job") &&
+    includesAny("aren't scheduled", "are not scheduled", "not scheduled", "unscheduled")
+  ) {
+    topics.add("approved_unscheduled_jobs");
+  }
+
+  if (normalizedPrompt.includes("scheduled") && normalizedPrompt.includes("today")) {
+    topics.add("scheduled_today");
+  }
+
+  if (
+    normalizedPrompt.includes("scheduled") &&
+    normalizedPrompt.includes("tomorrow")
+  ) {
+    topics.add("scheduled_tomorrow");
+  }
+
+  if (
+    normalizedPrompt.includes("invoice") &&
+    includesAny("outstanding", "unpaid", "balance due")
+  ) {
+    topics.add("outstanding_invoices");
+  }
+
+  if (
+    normalizedPrompt.includes("customer") &&
+    includesAny("waiting on us", "waiting for us", "needs a response", "need a response")
+  ) {
+    topics.add("customers_waiting");
+  }
+
+  if (
+    normalizedPrompt.includes("task") &&
+    includesAny("overdue", "past due")
+  ) {
+    topics.add("overdue_tasks");
+  }
+
+  if (includesAny("since yesterday", "last 24 hours", "past 24 hours")) {
+    topics.add("since_yesterday");
+  }
+
+  if (
+    includesAny(
+      "highest-priority actions today",
+      "highest priority actions today",
+      "top priorities today",
+      "highest priorities today",
+    )
+  ) {
+    topics.add("highest_priorities");
+  }
+
+  return Array.from(topics);
 }
 
 function getAuthorizedAiSnapshot(snapshot: CrmSnapshot, companyId?: CompanyScopeId) {
@@ -2005,33 +2769,62 @@ function action(
   };
 }
 
+type AuthoritativeAiLocation = { id: string; label: string };
+
 function source(
   table: string,
   id: string,
   label: string,
   companyId: string | null,
   hrefView: string,
+  location: AuthoritativeAiLocation | null = null,
 ): AiSourceRecord {
   return {
     table,
     id,
     label: sanitizeBusinessText(label).slice(0, 120) || table,
     companyId,
+    companyLocationId: location?.id ?? null,
+    companyLocationLabel: location?.label ?? null,
     safeReference: `${table}:${id.slice(0, 8)}`,
     hrefView,
   };
 }
 
-function leadSource(lead: LeadRecord) {
-  return source("leads", lead.id, lead.contact_name, lead.company_id, "Leads");
+function leadSource(lead: LeadRecord, snapshot?: CrmSnapshot) {
+  return source(
+    "leads",
+    lead.id,
+    lead.contact_name,
+    lead.company_id,
+    "Leads",
+    snapshot
+      ? resolveAuthoritativeLocation(
+          snapshot,
+          lead.company_id,
+          lead.company_location_id,
+        )
+      : null,
+  );
 }
 
 function customerSource(customer: CustomerRecord) {
   return source("customers", customer.id, customer.display_name, customer.company_id, "Customers");
 }
 
-function estimateSource(estimate: EstimateRecord) {
-  return source("estimates", estimate.id, estimate.title, estimate.company_id, "Estimates");
+function estimateSource(estimate: EstimateRecord, snapshot?: CrmSnapshot) {
+  return source(
+    "estimates",
+    estimate.id,
+    estimate.title,
+    estimate.company_id,
+    "Estimates",
+    snapshot
+      ? resolveLocationFromLinks(snapshot, estimate.company_id, {
+          leadId: estimate.lead_id,
+        })
+      : null,
+  );
 }
 
 function proposalSource(proposal: EstimateProposalRevisionRecord) {
@@ -2044,16 +2837,40 @@ function proposalSource(proposal: EstimateProposalRevisionRecord) {
   );
 }
 
-function jobSource(job: JobRecord) {
-  return source("jobs", job.id, job.title, job.company_id, "Jobs");
+function jobSource(job: JobRecord, snapshot?: CrmSnapshot) {
+  return source(
+    "jobs",
+    job.id,
+    job.title,
+    job.company_id,
+    "Jobs",
+    snapshot
+      ? resolveLocationFromLinks(snapshot, job.company_id, {
+          leadId: job.lead_id,
+          estimateId: job.estimate_id,
+        })
+      : null,
+  );
 }
 
 function inspectionSource(inspection: InspectionRecord) {
   return source("inspections", inspection.id, inspection.title, inspection.company_id, "Inspections");
 }
 
-function invoiceSource(invoice: InvoiceRecord) {
-  return source("invoices", invoice.id, invoice.invoice_number, invoice.company_id, "Invoices");
+function invoiceSource(invoice: InvoiceRecord, snapshot?: CrmSnapshot) {
+  return source(
+    "invoices",
+    invoice.id,
+    invoice.invoice_number,
+    invoice.company_id,
+    "Invoices",
+    snapshot
+      ? resolveLocationFromLinks(snapshot, invoice.company_id, {
+          estimateId: invoice.estimate_id,
+          jobId: invoice.job_id,
+        })
+      : null,
+  );
 }
 
 function documentSource(document: DocumentRecord) {
@@ -2078,13 +2895,341 @@ function proposalAuditSource(event: ProposalAuditEventRecord) {
   return source("proposal_audit_events", event.id, event.summary, event.company_id, "Estimates");
 }
 
-function callSource(call: CallRecord) {
+function callSource(
+  call: CallRecord,
+  snapshot?: CrmSnapshot,
+  resolvedCompanyId?: string | null,
+) {
+  const companyId = resolvedCompanyId ?? call.company_id;
   return source(
     "call_records",
     call.id,
     call.customer_phone ?? call.from_phone ?? "Phone call",
-    call.company_id,
+    companyId,
     "Inbox",
+    snapshot && companyId
+      ? resolveLocationFromLinks(snapshot, companyId, {
+          leadId: call.lead_id,
+          jobId: call.job_id,
+        })
+      : null,
+  );
+}
+
+function scheduleEventSource(
+  event: CrmSnapshot["scheduleEvents"][number],
+  snapshot: CrmSnapshot,
+) {
+  return source(
+    "schedule_events",
+    event.id,
+    event.title,
+    event.company_id,
+    "Calendar",
+    resolveLocationFromLinks(snapshot, event.company_id, {
+      leadId: event.lead_id,
+      jobId: event.job_id,
+    }),
+  );
+}
+
+function officeTaskSource(
+  task: CrmSnapshot["officeTasks"][number],
+  snapshot: CrmSnapshot,
+) {
+  return source(
+    "office_tasks",
+    task.id,
+    task.title,
+    task.company_id,
+    "Daily Ops",
+    resolveLocationFromLinks(snapshot, task.company_id, {
+      companyLocationId: task.company_location_id,
+      leadId: task.lead_id,
+      estimateId: task.estimate_id,
+      jobId: task.job_id,
+      inspectionId: task.inspection_id,
+    }),
+  );
+}
+
+function emailMessageSource(
+  email: CrmSnapshot["emailMessages"][number],
+  snapshot: CrmSnapshot,
+) {
+  return source(
+    "email_messages",
+    email.id,
+    email.subject || "Inbound email",
+    email.company_id,
+    "Inbox",
+    resolveLocationFromLinks(snapshot, email.company_id, {
+      leadId: email.lead_id,
+      estimateId: email.estimate_id,
+      jobId: email.job_id,
+    }),
+  );
+}
+
+function smsMessageSource(
+  sms: CrmSnapshot["smsMessages"][number],
+  snapshot: CrmSnapshot,
+) {
+  return source(
+    "sms_messages",
+    sms.id,
+    sanitizeBusinessText(sms.body).slice(0, 48) || "Inbound SMS",
+    sms.company_id,
+    "Inbox",
+    resolveLocationFromLinks(snapshot, sms.company_id, {
+      leadId: sms.lead_id,
+      jobId: sms.job_id,
+    }),
+  );
+}
+
+function communicationProviderEventSource(
+  event: CrmSnapshot["communicationProviderEvents"][number],
+  snapshot: CrmSnapshot,
+  companyId: string,
+) {
+  return source(
+    "communication_provider_events",
+    event.id,
+    `${event.provider} ${event.channel} ${event.status}`,
+    companyId,
+    "Inbox",
+    resolveLocationFromLinks(snapshot, companyId, {
+      leadId: event.lead_id,
+      jobId: event.job_id,
+    }),
+  );
+}
+
+function automationEventSource(
+  event: CrmSnapshot["automationEvents"][number],
+  snapshot: CrmSnapshot,
+) {
+  return source(
+    "automation_events",
+    event.id,
+    event.event_type,
+    event.company_id,
+    "Daily Ops",
+    resolveAuthoritativeLocation(
+      snapshot,
+      event.company_id,
+      event.company_location_id,
+    ),
+  );
+}
+
+function resolveAuthoritativeLocation(
+  snapshot: CrmSnapshot,
+  companyId: string,
+  companyLocationId: string | null | undefined,
+): AuthoritativeAiLocation | null {
+  if (!companyLocationId) return null;
+  const location = (snapshot.companyLocations ?? []).find(
+    (candidate) =>
+      candidate.id === companyLocationId && candidate.company_id === companyId,
+  );
+  return location
+    ? { id: location.id, label: location.display_name }
+    : null;
+}
+
+function resolveLocationFromLinks(
+  snapshot: CrmSnapshot,
+  companyId: string,
+  links: {
+    companyLocationId?: string | null;
+    leadId?: string | null;
+    estimateId?: string | null;
+    jobId?: string | null;
+    inspectionId?: string | null;
+  },
+): AuthoritativeAiLocation | null {
+  const direct = resolveAuthoritativeLocation(
+    snapshot,
+    companyId,
+    links.companyLocationId,
+  );
+  if (direct) return direct;
+
+  const lead = links.leadId
+    ? snapshot.leads.find(
+        (candidate) =>
+          candidate.id === links.leadId && candidate.company_id === companyId,
+      )
+    : null;
+  const leadLocation = resolveAuthoritativeLocation(
+    snapshot,
+    companyId,
+    lead?.company_location_id,
+  );
+  if (leadLocation) return leadLocation;
+
+  const estimate = links.estimateId
+    ? snapshot.estimates.find(
+        (candidate) =>
+          candidate.id === links.estimateId && candidate.company_id === companyId,
+      )
+    : null;
+  if (estimate?.lead_id) {
+    const estimateLocation: AuthoritativeAiLocation | null =
+      resolveLocationFromLinks(snapshot, companyId, {
+      leadId: estimate.lead_id,
+      });
+    if (estimateLocation) return estimateLocation;
+  }
+
+  const job = links.jobId
+    ? snapshot.jobs.find(
+        (candidate) =>
+          candidate.id === links.jobId && candidate.company_id === companyId,
+      )
+    : null;
+  if (job) {
+    const jobLocation: AuthoritativeAiLocation | null =
+      resolveLocationFromLinks(snapshot, companyId, {
+      leadId: job.lead_id,
+      estimateId: job.estimate_id,
+      });
+    if (jobLocation) return jobLocation;
+  }
+
+  const inspection = links.inspectionId
+    ? snapshot.inspections.find(
+        (candidate) =>
+          candidate.id === links.inspectionId &&
+          candidate.company_id === companyId,
+      )
+    : null;
+  if (inspection) {
+    return resolveLocationFromLinks(snapshot, companyId, {
+      leadId: inspection.lead_id,
+      estimateId: inspection.estimate_id,
+      jobId: inspection.job_id,
+    });
+  }
+
+  return null;
+}
+
+function resolveCommunicationCompanyId(
+  snapshot: CrmSnapshot,
+  record: {
+    company_id: string | null;
+    business_phone_number_id: string | null;
+    customer_id: string | null;
+    lead_id: string | null;
+    job_id: string | null;
+  },
+) {
+  const companyIds = new Set<string>();
+  if (record.company_id) companyIds.add(record.company_id);
+
+  const businessPhone = record.business_phone_number_id
+    ? snapshot.businessPhoneNumbers.find(
+        (candidate) => candidate.id === record.business_phone_number_id,
+      )
+    : null;
+  if (businessPhone) companyIds.add(businessPhone.company_id);
+
+  const customer = record.customer_id
+    ? snapshot.customers.find((candidate) => candidate.id === record.customer_id)
+    : null;
+  if (customer) companyIds.add(customer.company_id);
+
+  const lead = record.lead_id
+    ? snapshot.leads.find((candidate) => candidate.id === record.lead_id)
+    : null;
+  if (lead) companyIds.add(lead.company_id);
+
+  const job = record.job_id
+    ? snapshot.jobs.find((candidate) => candidate.id === record.job_id)
+    : null;
+  if (job) companyIds.add(job.company_id);
+
+  return companyIds.size === 1 ? Array.from(companyIds)[0] ?? null : null;
+}
+
+function hasLaterOutboundEmail(
+  snapshot: CrmSnapshot,
+  inbound: CrmSnapshot["emailMessages"][number],
+  receivedAt: string,
+) {
+  const receivedTimestamp = new Date(receivedAt).getTime();
+  return snapshot.emailMessages.some((candidate) => {
+    if (
+      candidate.company_id !== inbound.company_id ||
+      candidate.direction !== "outbound" ||
+      new Date(candidate.sent_at ?? candidate.created_at).getTime() <=
+        receivedTimestamp
+    ) {
+      return false;
+    }
+    if (
+      inbound.gmail_thread_id &&
+      candidate.gmail_thread_id === inbound.gmail_thread_id
+    ) {
+      return true;
+    }
+    return recordsShareLinkedContext(candidate, inbound);
+  });
+}
+
+function hasLaterOutboundSms(
+  snapshot: CrmSnapshot,
+  inbound: CrmSnapshot["smsMessages"][number],
+  receivedAt: string,
+) {
+  const receivedTimestamp = new Date(receivedAt).getTime();
+  return snapshot.smsMessages.some(
+    (candidate) =>
+      candidate.company_id === inbound.company_id &&
+      candidate.direction === "outbound" &&
+      new Date(candidate.sent_at ?? candidate.created_at).getTime() >
+        receivedTimestamp &&
+      (recordsShareLinkedContext(candidate, inbound) ||
+        Boolean(inbound.from_phone && candidate.to_phone === inbound.from_phone)),
+  );
+}
+
+function hasLaterOutboundProviderEvent(
+  snapshot: CrmSnapshot,
+  inbound: CrmSnapshot["communicationProviderEvents"][number],
+) {
+  const receivedTimestamp = new Date(inbound.occurred_at).getTime();
+  const inboundCompanyId = resolveCommunicationCompanyId(snapshot, inbound);
+  if (!inboundCompanyId) return false;
+  return snapshot.communicationProviderEvents.some(
+    (candidate) =>
+      candidate.direction === "outbound" &&
+      resolveCommunicationCompanyId(snapshot, candidate) === inboundCompanyId &&
+      new Date(candidate.occurred_at).getTime() > receivedTimestamp &&
+      (candidate.correlation_id === inbound.correlation_id ||
+        recordsShareLinkedContext(candidate, inbound)),
+  );
+}
+
+function recordsShareLinkedContext(
+  left: {
+    customer_id?: string | null;
+    lead_id?: string | null;
+    job_id?: string | null;
+  },
+  right: {
+    customer_id?: string | null;
+    lead_id?: string | null;
+    job_id?: string | null;
+  },
+) {
+  return Boolean(
+    (left.customer_id && left.customer_id === right.customer_id) ||
+      (left.lead_id && left.lead_id === right.lead_id) ||
+      (left.job_id && left.job_id === right.job_id),
   );
 }
 
@@ -2139,8 +3284,18 @@ function ageInDays(value: string | null | undefined, now: Date) {
   return Math.max(0, Math.floor((now.getTime() - timestamp) / 86_400_000));
 }
 
-function toDateKey(value: string) {
-  return value.slice(0, 10);
+function toBusinessDateKey(value: Date) {
+  if (Number.isNaN(value.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Phoenix",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
 }
 
 function money(value: number) {

@@ -985,9 +985,27 @@ check(
     !customerPropertiesPhotoSection.includes("<Image"),
   "Customer property cards render transient signed photos without the Next Image dimension heuristic",
 );
+const openPhotoSection = sourceSection(
+  app,
+  "const openPhoto = async (photo: JobPhotoRecord) => {",
+  "const handleUpload = async (event: FormEvent<HTMLFormElement>) => {",
+);
 check(
-  app.includes('window.open(signedUrl, "_blank", "noopener,noreferrer")'),
-  "Photos workspace opens temporary links in an isolated tab",
+  photosSurface.includes("photo.signed_url ? (") &&
+    photosSurface.includes("href={photo.signed_url}") &&
+    photosSurface.includes('target="_blank"') &&
+    photosSurface.includes('rel="noopener noreferrer"') &&
+    !photosSurface.includes("href={photo.file_path}") &&
+    !photosSurface.includes("href={photo.file_url}"),
+  "Photos workspace exposes its hydrated temporary URL only through a native opener-isolated link",
+);
+check(
+  openPhotoSection.indexOf('window.open("about:blank", "_blank")') <
+      openPhotoSection.indexOf("await getJobPhotoFileSignedUrl(client, photo)") &&
+    openPhotoSection.includes("pendingPhotoWindow.opener = null") &&
+    openPhotoSection.includes("pendingPhotoWindow.location.replace(signedUrl)") &&
+    openPhotoSection.includes("pendingPhotoWindow?.close()"),
+  "Photos workspace preserves user activation with an opener-severed placeholder and closes it on signing failure",
 );
 for (const testId of [
   "job-photo-upload-form",
