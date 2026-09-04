@@ -90,14 +90,19 @@ export const twilioEnvVars = {
 };
 
 export const goHighLevelEnvVars = {
-  privateIntegrationToken: "GHL_PRIVATE_INTEGRATION_TOKEN",
-  weatherTechLocationId: "GHL_LOCATION_ID_WEATHERTECH",
-  ihcLocationId: "GHL_LOCATION_ID_IHC",
+  clientId: "GHL_CLIENT_ID",
+  clientSecret: "GHL_CLIENT_SECRET",
+  redirectUri: "GHL_REDIRECT_URI",
+  marketplaceInstallUrl: "GHL_MARKETPLACE_INSTALL_URL",
+  tokenEncryptionKey: "GHL_TOKEN_ENCRYPTION_KEY",
+  syncEnabled: "GHL_SYNC_ENABLED",
   apiBaseUrl: "https://services.leadconnectorhq.com",
   testEndpoint: "/api/integrations/gohighlevel/test",
   readinessEndpoint: "/api/integrations/gohighlevel/readiness",
-  leadDryRunEndpoint: "/api/integrations/gohighlevel/leads/dry-run",
-  leadDryRunEventType: "lead_contact.dry_run",
+  oauthStartEndpoint: "/api/integrations/gohighlevel/oauth/start",
+  oauthCallbackPath: "/api/oauth/marketplace/callback",
+  syncEndpoint: "/api/integrations/gohighlevel/sync",
+  webhookEndpoint: "/api/integrations/gohighlevel/webhook",
 };
 
 const DEFAULT_RETRY_DELAY_MINUTES = 15;

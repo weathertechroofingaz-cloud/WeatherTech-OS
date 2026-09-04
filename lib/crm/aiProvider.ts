@@ -1453,6 +1453,30 @@ export function retrieveAuthorizedAiContext(
     );
   }
 
+  for (const resource of scopedSnapshot.goHighLevelResourceSnapshots) {
+    const summaryName = resource.payload_summary.name;
+    const label =
+      resource.body_preview ??
+      (typeof summaryName === "string" ? summaryName : null) ??
+      `${resource.resource_type.replace(/_/g, " ")} ${resource.status ?? "synced"}`;
+    push(
+      sourceRecord(
+        "gohighlevel_resource_snapshots",
+        resource.id,
+        label,
+        resource.company_id,
+        resource.resource_type === "calendar_event" ? "Calendar" : "Communications",
+      ),
+      `${resource.resource_type} ${resource.status ?? ""} ${
+        resource.body_preview ?? ""
+      } ${JSON.stringify(resource.payload_summary)}`,
+      resource.resource_type === "message" || resource.resource_type === "call"
+        ? "communication_draft"
+        : "saved_analysis",
+      resource.resource_type === "message" || resource.resource_type === "call" ? 14 : 10,
+    );
+  }
+
   for (const log of scopedSnapshot.integrationSyncLogs.slice(0, 8)) {
     push(
       sourceRecord("integration_sync_logs", log.id, `${log.provider} ${log.event_type}`, log.company_id, "Settings"),

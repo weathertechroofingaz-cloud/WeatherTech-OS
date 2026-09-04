@@ -4,6 +4,7 @@ import {
   GOHIGHLEVEL_API_VERSION,
   GOHIGHLEVEL_OAUTH_EVENT_TYPE,
   GOHIGHLEVEL_OAUTH_STATE_COOKIE,
+  bindGoHighLevelOAuthConnection,
   createGoHighLevelServiceClient,
   describeGoHighLevelScopeMismatch,
   encryptGoHighLevelToken,
@@ -277,7 +278,8 @@ export async function GET(request: NextRequest) {
   if (
     !scopeValidation.ok ||
     tokenPayload.userType !== "Location" ||
-    !tokenPayload.locationId
+    !tokenPayload.locationId ||
+    !tokenPayload.companyId
   ) {
     const message = !scopeValidation.ok
       ? describeGoHighLevelScopeMismatch(scopeValidation)
@@ -347,114 +349,49 @@ export async function GET(request: NextRequest) {
   const locationName = getLocationName(locationPayload) ?? "HighLevel location";
   const now = new Date().toISOString();
   const tokenExpiresAt = getGoHighLevelTokenExpiry(tokenPayload.expiresIn);
-  const { data: existingConnection } = await serviceClient
-    .from("integration_connections")
-    .select("*")
-    .eq("company_id", stateRecord.company_id)
-    .eq("provider", "gohighlevel")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const connectionPayload = {
-    company_id: stateRecord.company_id,
-    provider: "gohighlevel" as const,
-    status: "connected" as const,
-    account_email: null,
-    display_name: locationName,
-    external_account_id: locationId,
-    provider_account_id: locationId,
-    default_calendar_id: null,
-    scopes: tokenPayload.scopes,
-    sync_direction: "provider_to_weathertech" as const,
-    credential_reference: null,
-    token_expires_at: tokenExpiresAt,
-    last_sync_at: existingConnection?.last_sync_at ?? null,
-    last_successful_sync_at: now,
-    last_failure_at: null,
-    last_error: null,
-    settings: {
-      ...(existingConnection?.settings ?? {}),
-      authMethod: "marketplace_oauth",
+  const binding = await bindGoHighLevelOAuthConnection({
+    serviceClient,
+    binding: {
+      companyId: stateRecord.company_id,
+      externalLocationId: locationId,
       externalCompanyId: tokenPayload.companyId,
       externalUserId: tokenPayload.userId,
-      webhooksVerified: false,
-      webhookVerificationMode: "ed25519_with_rsa_legacy_fallback",
-      outboundMessagingEnabled: false,
-      pipelineWritesEnabled: false,
+      displayName: locationName,
+      scopes: tokenPayload.scopes,
+      encryptedAccessToken: encryptGoHighLevelToken(tokenPayload.accessToken),
+      encryptedRefreshToken: encryptGoHighLevelToken(tokenPayload.refreshToken),
+      tokenType: tokenPayload.tokenType,
+      userType: "Location",
+      tokenExpiresAt,
+      settings: {
+        authMethod: "marketplace_oauth",
+        externalCompanyId: tokenPayload.companyId,
+        externalUserId: tokenPayload.userId,
+        webhooksVerified: false,
+        webhookVerificationMode: "ed25519_with_rsa_legacy_fallback",
+        outboundMessagingEnabled: false,
+        pipelineWritesEnabled: false,
+      },
     },
-  };
-  const connectionMutation = existingConnection
-    ? serviceClient
-        .from("integration_connections")
-        .update(connectionPayload)
-        .eq("id", existingConnection.id)
-        .select("*")
-        .single()
-    : serviceClient
-        .from("integration_connections")
-        .insert(connectionPayload)
-        .select("*")
-        .single();
-  const { data: connection, error: connectionError } = await connectionMutation;
+  });
 
-  if (connectionError || !connection) {
+  if (!binding.ok) {
     await recordFailure({
       serviceClient,
       stateId: stateRecord.id,
       companyId: stateRecord.company_id,
       stateHash,
-      message: "HighLevel company mapping could not be saved.",
+      message: binding.error,
     });
     return redirectAndClearState(request, redirectPath, {
       gohighlevel: "error",
-      reason: "connection_save_failed",
-    });
-  }
-
-  const credentialPayload = {
-    company_id: stateRecord.company_id,
-    integration_connection_id: connection.id,
-    external_location_id: locationId,
-    external_company_id: tokenPayload.companyId,
-    external_user_id: tokenPayload.userId,
-    encrypted_access_token: encryptGoHighLevelToken(tokenPayload.accessToken),
-    encrypted_refresh_token: encryptGoHighLevelToken(tokenPayload.refreshToken),
-    token_type: tokenPayload.tokenType,
-    scopes: tokenPayload.scopes,
-    user_type: tokenPayload.userType,
-    token_expires_at: tokenExpiresAt,
-    last_refreshed_at: now,
-    revoked_at: null,
-  };
-  const credentialMutation = existingLocationCredential
-    ? serviceClient
-        .from("gohighlevel_oauth_credentials")
-        .update(credentialPayload)
-        .eq("integration_connection_id", existingLocationCredential.integration_connection_id)
-    : serviceClient.from("gohighlevel_oauth_credentials").insert(credentialPayload);
-  const { error: credentialError } = await credentialMutation;
-
-  if (credentialError) {
-    await serviceClient
-      .from("integration_connections")
-      .update({ status: "error", last_error: "Encrypted OAuth credential could not be saved." })
-      .eq("id", connection.id);
-    await recordFailure({
-      serviceClient,
-      stateId: stateRecord.id,
-      companyId: stateRecord.company_id,
-      stateHash,
-      message: "Encrypted HighLevel OAuth credential could not be saved.",
-    });
-    return redirectAndClearState(request, redirectPath, {
-      gohighlevel: "error",
-      reason: "credential_save_failed",
+      reason: binding.reason,
     });
   }
 
   await serviceClient.from("integration_sync_logs").insert({
     company_id: stateRecord.company_id,
-    integration_connection_id: connection.id,
+    integration_connection_id: binding.connectionId,
     provider: "gohighlevel",
     direction: "provider_to_weathertech",
     event_type: GOHIGHLEVEL_OAUTH_EVENT_TYPE,

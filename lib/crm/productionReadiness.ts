@@ -304,9 +304,12 @@ const providerGuideEnv = {
     electronicSignatureEnvVars.dropboxSignAccountIdIhc,
   ],
   goHighLevel: [
-    goHighLevelEnvVars.privateIntegrationToken,
-    goHighLevelEnvVars.weatherTechLocationId,
-    goHighLevelEnvVars.ihcLocationId,
+    goHighLevelEnvVars.clientId,
+    goHighLevelEnvVars.clientSecret,
+    goHighLevelEnvVars.redirectUri,
+    goHighLevelEnvVars.marketplaceInstallUrl,
+    goHighLevelEnvVars.tokenEncryptionKey,
+    goHighLevelEnvVars.syncEnabled,
   ],
   ai: [
     "AI_ENABLED",

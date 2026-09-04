@@ -260,6 +260,10 @@ const expectedMigrations = [
     "20260904104733_ai_quota_probe_refresh_cooldown.sql",
     "a139c0628f8dc84c9297e40dc1e7e38ea64b3580e313d7df5a1badf448003b7b",
   ],
+  [
+    "20260904140401_gohighlevel_bridge_observability_hardening.sql",
+    "1d08462d07c1f9d906a34eb957dafe933875915dd722a780f6c289ca63454655",
+  ],
 ];
 
 const files = fs
@@ -438,6 +442,9 @@ const aiQuotaStatusReadModelIndex = files.indexOf(
 const aiQuotaProbeRefreshCooldownIndex = files.indexOf(
   "20260904104733_ai_quota_probe_refresh_cooldown.sql",
 );
+const goHighLevelBridgeObservabilityHardeningIndex = files.indexOf(
+  "20260904140401_gohighlevel_bridge_observability_hardening.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -610,12 +617,13 @@ if (
     goHighLevelReconciliationAutomationTransitionFixIndex <
       goHighLevelReconciliationEventRecoveryIndex &&
     goHighLevelReconciliationEventRecoveryIndex < aiQuotaStatusReadModelIndex &&
-    aiQuotaStatusReadModelIndex < aiQuotaProbeRefreshCooldownIndex
+    aiQuotaStatusReadModelIndex < aiQuotaProbeRefreshCooldownIndex &&
+    aiQuotaProbeRefreshCooldownIndex < goHighLevelBridgeObservabilityHardeningIndex
   ) ||
-  aiQuotaProbeRefreshCooldownIndex !== files.length - 1
+  goHighLevelBridgeObservabilityHardeningIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, forward-only event-recovery/Twilio compatibility, the AI quota read model, and its durable refresh cooldown must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, forward-only event-recovery/Twilio compatibility, the AI quota read model and cooldown, and GHL bridge hardening must remain in reviewed order.",
   );
 }
 

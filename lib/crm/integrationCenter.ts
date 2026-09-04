@@ -16,6 +16,11 @@ import {
   quickBooksOnlineOAuthCallbackPath,
   quickBooksOnlineScopes,
 } from "./quickbooksOnlineFoundation";
+import {
+  goHighLevelOAuthEndpoints,
+  goHighLevelOAuthScopes,
+  goHighLevelProductionBridgeMigration,
+} from "../gohighlevel/foundation";
 
 export type IntegrationCapability =
   | "accounting"
@@ -739,61 +744,61 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     shortLabel: "GHL",
     family: "automation",
     description:
-      "Secure live synchronization foundation for contacts, leads, opportunities, activity mirroring, and campaign-safe workflow handoff.",
+      "Company-scoped Marketplace OAuth bridge for read-only contacts, conversations, calendars, opportunities, reviews, and signed inbound webhooks.",
     connectionProviders: ["gohighlevel"],
     capabilities: ["sms", "email", "calendar", "crm_sync", "ai", "webhooks"],
     iconKey: "automation",
     requiresCredentials: true,
-    supportsOAuth: false,
+    supportsOAuth: true,
     supportsWebhooks: true,
     configurationFields: [
       {
-        id: "api_base",
-        label: "API base URL",
-        description: "Approved GoHighLevel API base for the business account.",
+        id: "oauth_client",
+        label: "Marketplace OAuth client",
+        description: "GHL_CLIENT_ID and GHL_CLIENT_SECRET stay server-only.",
+        required: true,
+        sensitive: true,
+        kind: "oauth",
+      },
+      {
+        id: "oauth_redirect",
+        label: "Canonical OAuth redirect",
+        description: "GHL_REDIRECT_URI must match the Marketplace callback exactly.",
         required: true,
         sensitive: false,
         kind: "url",
       },
       {
-        id: "private_token",
-        label: "Private token",
-        description: "Stored server-side only for approved sync workers and dry-run checks.",
-        required: true,
-        sensitive: true,
-        kind: "secret",
-      },
-      {
-        id: "location_id",
-        label: "Location IDs",
+        id: "company_location_mapping",
+        label: "Company/location mappings",
         description:
-          "Maps GoHighLevel sub-accounts to WeatherTech Roofing LLC and IHC without mixing records.",
+          "Each authorized HighLevel location maps to exactly one WeatherTech OS company.",
         required: true,
         sensitive: false,
         kind: "text",
       },
       {
         id: "sync_foundation_migration",
-        label: "Sync mapping tables",
+        label: "Production bridge schema",
         description:
-          "Stores external IDs, duplicate detection metadata, conflict state, retries, and last-sync timestamps.",
+          `Applies ${goHighLevelProductionBridgeMigration} for provider evidence, webhook deduplication, retries, and observability.`,
         required: true,
         sensitive: false,
         kind: "text",
       },
       {
-        id: "pipeline_mapping",
-        label: "Pipeline and stage mapping",
+        id: "sync_gate",
+        label: "Inbound sync gate",
         description:
-          "Maps WeatherTech OS lead statuses to approved GoHighLevel pipelines and stages.",
+          "GHL_SYNC_ENABLED controls provider-to-WeatherTech ingestion; it grants no provider-write capability.",
         required: true,
         sensitive: false,
         kind: "text",
       },
       {
-        id: "webhook_secret",
-        label: "Webhook signing secret",
-        description: "Required before trusting inbound automation events.",
+        id: "webhook_signature",
+        label: "Webhook signature verification",
+        description: "HighLevel Ed25519 signatures are verified against the exact raw body.",
         required: true,
         sensitive: true,
         kind: "webhook",
@@ -802,8 +807,8 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
     credentialValidationChecks: [
       {
         id: "credentials",
-        label: "Server credential check",
-        description: "Validate the private token from server-only storage without triggering campaigns.",
+        label: "OAuth credential check",
+        description: "Validate encrypted, rotating location tokens without exposing them to the browser.",
       },
       {
         id: "location",
@@ -835,26 +840,26 @@ export const integrationProviderRegistry: IntegrationProviderMetadata[] = [
       },
     ],
     oauthReadiness: {
-      enabled: false,
-      label: "API credential flow",
-      callbackPath: null,
-      scopes: [],
-      summary: "GoHighLevel uses server-side API credentials in the current architecture.",
+      enabled: true,
+      label: "Marketplace OAuth",
+      callbackPath: goHighLevelOAuthEndpoints.callback,
+      scopes: [...goHighLevelOAuthScopes],
+      summary: "Each company authorizes one HighLevel location with the approved read-only scope set.",
     },
     connectionSteps: [
-      "Collect server-only GoHighLevel credentials from the approved account.",
-      "Apply the additive sync mapping migration before live workers are enabled.",
-      "Validate the API base, token, location metadata, and pipeline discovery in read-only mode.",
-      "Map contacts, leads, opportunities, notes, tags, and tasks by company.",
-      "Confirm workflow safety before any outbound automation or campaign handoff is enabled.",
-      "Enable sync workers only after account routing, duplicate handling, and owner approval are complete.",
+      "Authorize the exact HighLevel location for each WeatherTech OS company through Marketplace OAuth.",
+      "Validate the encrypted token, approved scopes, and exact company/location binding.",
+      "Apply the additive production bridge migration before inbound sync is enabled.",
+      "Run a bounded read-only sync for contacts, communications, calendars, opportunities, and reviews.",
+      "Observe signed webhook processing, deduplication, failures, and signed-redelivery state per company.",
+      "Keep SMS, email, calls, campaigns, provider writes, and automatic AI replies disabled.",
     ],
     disconnectSummary:
       "A future disconnect will pause GoHighLevel sync and automation handoff without deleting CRM history.",
     reconnectSummary:
       "A future reconnect will rerun credential, location, and workflow-safety validation.",
     summaryWhenDisconnected:
-      "Credentials Required before GoHighLevel validation or live sync workers can run.",
+      "Marketplace OAuth authorization is required before read-only HighLevel sync can run.",
   },
   {
     id: "quickbooks_online",

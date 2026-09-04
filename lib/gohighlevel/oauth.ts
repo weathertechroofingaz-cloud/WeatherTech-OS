@@ -36,6 +36,15 @@ export const GOHIGHLEVEL_PROVIDER_MANAGED_OAUTH_SCOPES = [
 const OAUTH_STATE_TTL_MINUTES = 10;
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 2 * 60 * 1000;
 const TOKEN_ENCRYPTION_VERSION = "v1";
+const INSTALLED_LOCATIONS_PAGE_SIZE = 100;
+const MAX_INSTALLED_LOCATION_PAGES = 10;
+const MAX_INSTALLED_LOCATIONS = 500;
+const MAX_INSTALLED_LOCATION_PAGE_TOKEN_LENGTH = 2_048;
+const TOKEN_REFRESH_LEASE_SECONDS = 30;
+const TOKEN_REFRESH_PROVIDER_TIMEOUT_MS = 15_000;
+const TOKEN_REFRESH_WAIT_ATTEMPTS = 5;
+const TOKEN_REFRESH_WAIT_MS = 100;
+const TOKEN_REFRESH_CLAIM_ATTEMPTS = 2;
 
 const GHL_ED25519_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAi2HR1srL4o18O8BRa7gVJY7G7bupbN3H9AwJrHCDiOg=
@@ -77,6 +86,31 @@ export type HighLevelInstalledLocation = {
   id: string;
   name: string | null;
 };
+
+export type GoHighLevelConnectionCredentialBinding = {
+  id: string;
+  company_id: string;
+  provider: string;
+  external_account_id: string | null;
+};
+
+export function isGoHighLevelCredentialBoundToConnection({
+  credential,
+  connection,
+}: {
+  credential: Pick<
+    GoHighLevelOauthCredentialRecord,
+    "company_id" | "integration_connection_id" | "external_location_id"
+  >;
+  connection: GoHighLevelConnectionCredentialBinding;
+}) {
+  return (
+    connection.provider === "gohighlevel" &&
+    credential.integration_connection_id === connection.id &&
+    credential.company_id === connection.company_id &&
+    credential.external_location_id === connection.external_account_id
+  );
+}
 
 export type HighLevelInstalledLocationsResult =
   | { ok: true; locations: HighLevelInstalledLocation[] }
@@ -243,7 +277,13 @@ function normalizeString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function normalizeTokenPayload(value: unknown): HighLevelTokenPayload | null {
+function normalizeTokenPayload(
+  value: unknown,
+  fallback?: {
+    userType?: HighLevelTokenPayload["userType"];
+    companyId?: string;
+  },
+): HighLevelTokenPayload | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -251,7 +291,10 @@ function normalizeTokenPayload(value: unknown): HighLevelTokenPayload | null {
   const payload = value as Record<string, unknown>;
   const accessToken = normalizeString(payload.accessToken ?? payload.access_token);
   const refreshToken = normalizeString(payload.refreshToken ?? payload.refresh_token);
-  const rawUserType = normalizeString(payload.userType ?? payload.user_type);
+  const rawUserType =
+    normalizeString(payload.userType ?? payload.user_type) ??
+    fallback?.userType ??
+    null;
   const userType =
     rawUserType === "Company" || rawUserType === "Location" ? rawUserType : null;
   const rawExpiresIn = payload.expiresIn ?? payload.expires_in;
@@ -275,7 +318,10 @@ function normalizeTokenPayload(value: unknown): HighLevelTokenPayload | null {
     scopes: scopeValue.split(/[\s,]+/).filter(Boolean),
     userType,
     locationId: normalizeString(payload.locationId ?? payload.location_id),
-    companyId: normalizeString(payload.companyId ?? payload.company_id),
+    companyId:
+      normalizeString(payload.companyId ?? payload.company_id) ??
+      fallback?.companyId ??
+      null,
     userId: normalizeString(payload.userId ?? payload.user_id),
     approvedLocations: Array.isArray(rawApprovedLocations)
       ? rawApprovedLocations
@@ -301,10 +347,12 @@ async function requestHighLevelToken({
   body,
   encoding = "json",
   fetchImpl = fetch,
+  signal,
 }: {
   body: Record<string, string>;
   encoding?: "json" | "form";
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
 }): Promise<HighLevelTokenExchangeResult> {
   const requestBody =
     encoding === "form" ? new URLSearchParams(body).toString() : JSON.stringify(body);
@@ -316,9 +364,11 @@ async function requestHighLevelToken({
         encoding === "form"
           ? "application/x-www-form-urlencoded"
           : "application/json",
+      Version: "v3",
     },
     body: requestBody,
     cache: "no-store",
+    signal,
   }).catch(() => null);
 
   if (!response) {
@@ -417,8 +467,17 @@ export async function exchangeGoHighLevelLocationToken({
     };
   }
 
-  const payload = normalizeTokenPayload(rawPayload);
-  return payload?.userType === "Location" && payload.locationId === locationId
+  // The documented v3 location-token response identifies the requested
+  // location but does not promise to repeat userType or companyId. Bind those
+  // two values only from this authenticated request when absent; if HighLevel
+  // does return either field, an unexpected value still fails closed below.
+  const payload = normalizeTokenPayload(rawPayload, {
+    userType: "Location",
+    companyId,
+  });
+  return payload?.userType === "Location" &&
+    payload.locationId === locationId &&
+    payload.companyId === companyId
     ? { ok: true, payload }
     : {
         ok: false,
@@ -445,64 +504,132 @@ export async function getGoHighLevelInstalledLocations({
     };
   }
 
-  const url = new URL(GOHIGHLEVEL_INSTALLED_LOCATIONS_ENDPOINT);
-  url.searchParams.set("companyId", companyId);
-  url.searchParams.set("appId", config.marketplaceAppId);
-  url.searchParams.set("isInstalled", "true");
-  url.searchParams.set("pageSize", "100");
-  if (config.marketplaceVersionId) {
-    url.searchParams.set("versionId", config.marketplaceVersionId);
-  }
-
-  const response = await fetchImpl(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      Version: "v3",
-    },
-    cache: "no-store",
-  }).catch(() => null);
-
-  if (!response) {
-    return {
-      ok: false,
-      status: null,
-      error: "HighLevel installed-location discovery failed.",
-    };
-  }
-
-  const rawPayload: unknown = await response.json().catch(() => null);
-  if (!response.ok || !rawPayload || typeof rawPayload !== "object") {
-    return {
-      ok: false,
-      status: response.status,
-      error: "HighLevel rejected installed-location discovery.",
-    };
-  }
-
-  const payload = rawPayload as Record<string, unknown>;
-  const rawLocations = Array.isArray(payload.items)
-    ? payload.items
-    : Array.isArray(payload.locations)
-      ? payload.locations
-      : [];
   const locations = new Map<string, HighLevelInstalledLocation>();
-  for (const value of rawLocations) {
-    if (!value || typeof value !== "object") continue;
-    const location = value as Record<string, unknown>;
-    if (location.isInstalled === false) continue;
-    const id = normalizeString(
-      location._id ?? location.id ?? location.locationId ?? location.location_id,
-    );
-    if (!id) continue;
-    locations.set(id, {
-      id,
-      name: normalizeString(location.name),
-    });
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | null = null;
+
+  for (let page = 1; page <= MAX_INSTALLED_LOCATION_PAGES; page += 1) {
+    const url = new URL(GOHIGHLEVEL_INSTALLED_LOCATIONS_ENDPOINT);
+    url.searchParams.set("companyId", companyId);
+    url.searchParams.set("appId", config.marketplaceAppId);
+    url.searchParams.set("isInstalled", "true");
+    url.searchParams.set("pageSize", String(INSTALLED_LOCATIONS_PAGE_SIZE));
+    if (config.marketplaceVersionId) {
+      url.searchParams.set("versionId", config.marketplaceVersionId);
+    }
+    if (pageToken) {
+      url.searchParams.set("pageToken", pageToken);
+    }
+
+    const response = await fetchImpl(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        Version: "v3",
+      },
+      cache: "no-store",
+    }).catch(() => null);
+
+    if (!response) {
+      return {
+        ok: false,
+        status: null,
+        error: "HighLevel installed-location discovery failed.",
+      };
+    }
+
+    const rawPayload: unknown = await response.json().catch(() => null);
+    if (!response.ok || !rawPayload || typeof rawPayload !== "object") {
+      return {
+        ok: false,
+        status: response.status,
+        error: "HighLevel rejected installed-location discovery.",
+      };
+    }
+
+    const payload = rawPayload as Record<string, unknown>;
+    const rawLocations = Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.locations)
+        ? payload.locations
+        : null;
+    const rawPagination = payload.pagination;
+    if (
+      !rawLocations ||
+      rawLocations.length > INSTALLED_LOCATIONS_PAGE_SIZE ||
+      !rawPagination ||
+      typeof rawPagination !== "object" ||
+      Array.isArray(rawPagination)
+    ) {
+      return {
+        ok: false,
+        status: response.status,
+        error: "HighLevel returned malformed installed-location pagination.",
+      };
+    }
+
+    for (const value of rawLocations) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const location = value as Record<string, unknown>;
+      if (location.isInstalled === false) continue;
+      const id = normalizeString(
+        location._id ?? location.id ?? location.locationId ?? location.location_id,
+      );
+      if (!id) continue;
+      locations.set(id, {
+        id,
+        name: normalizeString(location.name),
+      });
+      if (locations.size > MAX_INSTALLED_LOCATIONS) {
+        return {
+          ok: false,
+          status: response.status,
+          error: "HighLevel installed-location discovery exceeded its safe location limit.",
+        };
+      }
+    }
+
+    const pagination = rawPagination as Record<string, unknown>;
+    if (typeof pagination.hasNextPage !== "boolean") {
+      return {
+        ok: false,
+        status: response.status,
+        error: "HighLevel returned malformed installed-location pagination.",
+      };
+    }
+    if (!pagination.hasNextPage) {
+      return { ok: true, locations: [...locations.values()] };
+    }
+
+    const nextPageToken = normalizeString(pagination.nextPageToken);
+    if (
+      !nextPageToken ||
+      nextPageToken.length > MAX_INSTALLED_LOCATION_PAGE_TOKEN_LENGTH ||
+      seenPageTokens.has(nextPageToken)
+    ) {
+      return {
+        ok: false,
+        status: response.status,
+        error: "HighLevel returned an invalid installed-location page token.",
+      };
+    }
+    if (page === MAX_INSTALLED_LOCATION_PAGES) {
+      return {
+        ok: false,
+        status: response.status,
+        error: "HighLevel installed-location discovery exceeded its safe page limit.",
+      };
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
   }
 
-  return { ok: true, locations: [...locations.values()] };
+  return {
+    ok: false,
+    status: null,
+    error: "HighLevel installed-location discovery exceeded its safe page limit.",
+  };
 }
 
 export async function resolveGoHighLevelCompanyLocation({
@@ -574,12 +701,102 @@ export async function resolveGoHighLevelCompanyLocation({
   };
 }
 
+export type GoHighLevelOAuthBindingInput = {
+  companyId: string;
+  externalLocationId: string;
+  externalCompanyId: string;
+  externalUserId: string | null;
+  displayName: string;
+  scopes: string[];
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string;
+  tokenType: string;
+  userType: "Location";
+  tokenExpiresAt: string;
+  settings: Record<string, unknown>;
+};
+
+export type GoHighLevelOAuthBindingResult =
+  | {
+      ok: true;
+      connectionId: string;
+      disposition: "connected" | "reconnected";
+    }
+  | {
+      ok: false;
+      reason: "location_company_conflict" | "binding_failed";
+      error: string;
+    };
+
+export async function bindGoHighLevelOAuthConnection({
+  serviceClient,
+  binding,
+}: {
+  serviceClient: CrmClient;
+  binding: GoHighLevelOAuthBindingInput;
+}): Promise<GoHighLevelOAuthBindingResult> {
+  const { data, error } = await serviceClient.rpc(
+    "wtos_bind_gohighlevel_oauth_v1",
+    {
+      p_binding: {
+        contractVersion: 1,
+        ...binding,
+      },
+    },
+  );
+
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) {
+    return {
+      ok: false,
+      reason: "binding_failed",
+      error: "HighLevel connection and encrypted credential could not be saved atomically.",
+    };
+  }
+
+  const receipt = data as Record<string, unknown>;
+  const disposition = normalizeString(receipt.disposition);
+  if (
+    receipt.contractVersion !== 1 ||
+    receipt.companyId !== binding.companyId ||
+    receipt.locationId !== binding.externalLocationId
+  ) {
+    return {
+      ok: false,
+      reason: "binding_failed",
+      error: "HighLevel returned an invalid atomic binding receipt.",
+    };
+  }
+  if (disposition === "conflict") {
+    return {
+      ok: false,
+      reason: "location_company_conflict",
+      error: "This HighLevel location is already mapped to another WeatherTech OS company.",
+    };
+  }
+
+  const connectionId = normalizeString(receipt.connectionId);
+  if (
+    !connectionId ||
+    (disposition !== "connected" && disposition !== "reconnected")
+  ) {
+    return {
+      ok: false,
+      reason: "binding_failed",
+      error: "HighLevel returned an invalid atomic binding receipt.",
+    };
+  }
+
+  return { ok: true, connectionId, disposition };
+}
+
 export async function refreshGoHighLevelOAuthToken({
   refreshToken,
   fetchImpl = fetch,
+  signal,
 }: {
   refreshToken: string;
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
 }) {
   const config = getGoHighLevelOAuthConfig();
 
@@ -593,6 +810,7 @@ export async function refreshGoHighLevelOAuthToken({
 
   return requestHighLevelToken({
     fetchImpl,
+    signal,
     encoding: "form",
     body: {
       client_id: config.clientId,
@@ -683,25 +901,371 @@ export function getGoHighLevelTokenExpiry(expiresIn: number) {
   return new Date(Date.now() + safeSeconds * 1000).toISOString();
 }
 
-export async function getGoHighLevelAccessToken({
+type GoHighLevelRefreshClaimReceipt = {
+  disposition: "claimed" | "busy" | "superseded" | "unavailable";
+  credentialId: string | null;
+  refreshVersion: number | null;
+};
+
+type GoHighLevelRefreshAdoptionReceipt = {
+  disposition: "adopted" | "busy" | "reclaimable" | "unavailable";
+  credentialId: string | null;
+  refreshVersion: number | null;
+};
+
+type GoHighLevelRefreshFinalizeReceipt = {
+  disposition: "finalized" | "stale";
+  credentialId: string | null;
+  refreshVersion: number | null;
+};
+
+type GoHighLevelRefreshReleaseReceipt = {
+  disposition: "released" | "stale";
+  connectionMarkedNeedsReauth: boolean;
+};
+
+function isSafeRefreshVersion(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function parseGoHighLevelRefreshClaimReceipt(
+  value: unknown,
+): GoHighLevelRefreshClaimReceipt | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  const disposition = normalizeString(receipt.disposition);
+  if (
+    receipt.contractVersion !== 1 ||
+    !disposition ||
+    !["claimed", "busy", "superseded", "unavailable"].includes(disposition)
+  ) {
+    return null;
+  }
+  if (disposition === "unavailable") {
+    return { disposition, credentialId: null, refreshVersion: null };
+  }
+  const credentialId = normalizeString(receipt.credentialId);
+  if (!credentialId || !isSafeRefreshVersion(receipt.refreshVersion)) return null;
+  return {
+    disposition: disposition as Exclude<
+      GoHighLevelRefreshClaimReceipt["disposition"],
+      "unavailable"
+    >,
+    credentialId,
+    refreshVersion: receipt.refreshVersion,
+  };
+}
+
+function parseGoHighLevelRefreshAdoptionReceipt(
+  value: unknown,
+): GoHighLevelRefreshAdoptionReceipt | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  const disposition = normalizeString(receipt.disposition);
+  if (
+    receipt.contractVersion !== 1 ||
+    !disposition ||
+    !["adopted", "busy", "reclaimable", "unavailable"].includes(disposition)
+  ) {
+    return null;
+  }
+  if (disposition === "unavailable") {
+    return { disposition, credentialId: null, refreshVersion: null };
+  }
+  const credentialId = normalizeString(receipt.credentialId);
+  if (!credentialId || !isSafeRefreshVersion(receipt.refreshVersion)) return null;
+  return {
+    disposition: disposition as Exclude<
+      GoHighLevelRefreshAdoptionReceipt["disposition"],
+      "unavailable"
+    >,
+    credentialId,
+    refreshVersion: receipt.refreshVersion,
+  };
+}
+
+function parseGoHighLevelRefreshFinalizeReceipt(
+  value: unknown,
+): GoHighLevelRefreshFinalizeReceipt | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  const disposition = normalizeString(receipt.disposition);
+  if (
+    receipt.contractVersion !== 1 ||
+    (disposition !== "finalized" && disposition !== "stale")
+  ) {
+    return null;
+  }
+  if (disposition === "stale") {
+    return { disposition, credentialId: null, refreshVersion: null };
+  }
+  const credentialId = normalizeString(receipt.credentialId);
+  if (!credentialId || !isSafeRefreshVersion(receipt.refreshVersion)) return null;
+  return { disposition, credentialId, refreshVersion: receipt.refreshVersion };
+}
+
+function parseGoHighLevelRefreshReleaseReceipt(
+  value: unknown,
+): GoHighLevelRefreshReleaseReceipt | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  const disposition = normalizeString(receipt.disposition);
+  if (
+    receipt.contractVersion !== 1 ||
+    (disposition !== "released" && disposition !== "stale") ||
+    typeof receipt.connectionMarkedNeedsReauth !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    disposition,
+    connectionMarkedNeedsReauth: receipt.connectionMarkedNeedsReauth,
+  };
+}
+
+async function readActiveGoHighLevelCredential({
   serviceClient,
   integrationConnectionId,
-  fetchImpl = fetch,
-  forceRefresh = false,
 }: {
   serviceClient: CrmClient;
   integrationConnectionId: string;
-  fetchImpl?: FetchLike;
-  forceRefresh?: boolean;
 }) {
-  const { data: credential, error } = await serviceClient
+  const { data, error } = await serviceClient
     .from("gohighlevel_oauth_credentials")
     .select("*")
     .eq("integration_connection_id", integrationConnectionId)
     .is("revoked_at", null)
     .maybeSingle();
 
-  if (error || !credential) {
+  return error || !data
+    ? null
+    : (data as GoHighLevelOauthCredentialRecord);
+}
+
+async function readGoHighLevelConnectionCredentialBinding({
+  serviceClient,
+  integrationConnectionId,
+}: {
+  serviceClient: CrmClient;
+  integrationConnectionId: string;
+}) {
+  const { data, error } = await serviceClient
+    .from("integration_connections")
+    .select("id,company_id,provider,external_account_id")
+    .eq("id", integrationConnectionId)
+    .maybeSingle();
+
+  return error || !data
+    ? null
+    : (data as GoHighLevelConnectionCredentialBinding);
+}
+
+async function readBoundActiveGoHighLevelCredential({
+  serviceClient,
+  integrationConnectionId,
+}: {
+  serviceClient: CrmClient;
+  integrationConnectionId: string;
+}) {
+  const credential = await readActiveGoHighLevelCredential({
+    serviceClient,
+    integrationConnectionId,
+  });
+  if (!credential) return null;
+
+  const connection = await readGoHighLevelConnectionCredentialBinding({
+    serviceClient,
+    integrationConnectionId,
+  });
+  return connection &&
+    isGoHighLevelCredentialBoundToConnection({ credential, connection })
+    ? credential
+    : null;
+}
+
+async function claimGoHighLevelRefreshLease({
+  serviceClient,
+  credential,
+  leaseId,
+}: {
+  serviceClient: CrmClient;
+  credential: GoHighLevelOauthCredentialRecord;
+  leaseId: string;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "wtos_claim_gohighlevel_token_refresh_v1",
+    {
+      p_claim: {
+        contractVersion: 1,
+        integrationConnectionId: credential.integration_connection_id,
+        leaseId,
+        expectedRefreshVersion: credential.refresh_version,
+        leaseSeconds: TOKEN_REFRESH_LEASE_SECONDS,
+      },
+    },
+  );
+  return error ? null : parseGoHighLevelRefreshClaimReceipt(data);
+}
+
+async function inspectGoHighLevelRefreshAdoption({
+  serviceClient,
+  credential,
+}: {
+  serviceClient: CrmClient;
+  credential: GoHighLevelOauthCredentialRecord;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "wtos_adopt_gohighlevel_token_refresh_v1",
+    {
+      p_adoption: {
+        contractVersion: 1,
+        integrationConnectionId: credential.integration_connection_id,
+        minimumRefreshVersion: credential.refresh_version,
+        minimumTokenExpiresAt: new Date(
+          Date.now() + ACCESS_TOKEN_EXPIRY_SKEW_MS,
+        ).toISOString(),
+      },
+    },
+  );
+  return error ? null : parseGoHighLevelRefreshAdoptionReceipt(data);
+}
+
+async function finalizeGoHighLevelRefreshLease({
+  serviceClient,
+  credential,
+  leaseId,
+  payload,
+}: {
+  serviceClient: CrmClient;
+  credential: GoHighLevelOauthCredentialRecord;
+  leaseId: string;
+  payload: HighLevelTokenPayload;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "wtos_finalize_gohighlevel_token_refresh_v1",
+    {
+      p_finalization: {
+        contractVersion: 1,
+        credentialId: credential.id,
+        leaseId,
+        expectedRefreshVersion: credential.refresh_version,
+        encryptedAccessToken: encryptGoHighLevelToken(payload.accessToken),
+        encryptedRefreshToken: encryptGoHighLevelToken(payload.refreshToken),
+        tokenType: payload.tokenType,
+        scopes: payload.scopes,
+        tokenExpiresAt: getGoHighLevelTokenExpiry(payload.expiresIn),
+      },
+    },
+  );
+  return error ? null : parseGoHighLevelRefreshFinalizeReceipt(data);
+}
+
+async function releaseGoHighLevelRefreshLease({
+  serviceClient,
+  credential,
+  leaseId,
+  markNeedsReauth,
+}: {
+  serviceClient: CrmClient;
+  credential: GoHighLevelOauthCredentialRecord;
+  leaseId: string;
+  markNeedsReauth: boolean;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "wtos_release_gohighlevel_token_refresh_v1",
+    {
+      p_release: {
+        contractVersion: 1,
+        credentialId: credential.id,
+        leaseId,
+        expectedRefreshVersion: credential.refresh_version,
+        markNeedsReauth,
+      },
+    },
+  );
+  return error ? null : parseGoHighLevelRefreshReleaseReceipt(data);
+}
+
+type GoHighLevelRefreshAdoptionResult =
+  | {
+      disposition: "adopted";
+      credential: GoHighLevelOauthCredentialRecord;
+      accessToken: string;
+    }
+  | { disposition: "busy" | "reclaimable" | "unavailable" | "invalid" };
+
+async function waitForGoHighLevelRefreshAdoption({
+  serviceClient,
+  credential,
+  waitImpl,
+}: {
+  serviceClient: CrmClient;
+  credential: GoHighLevelOauthCredentialRecord;
+  waitImpl: (milliseconds: number) => Promise<void>;
+}): Promise<GoHighLevelRefreshAdoptionResult> {
+  for (let attempt = 0; attempt < TOKEN_REFRESH_WAIT_ATTEMPTS; attempt += 1) {
+    const receipt = await inspectGoHighLevelRefreshAdoption({
+      serviceClient,
+      credential,
+    });
+    if (!receipt) return { disposition: "invalid" };
+    if (receipt.disposition === "unavailable") {
+      return { disposition: "unavailable" };
+    }
+    if (receipt.disposition === "reclaimable") {
+      return { disposition: "reclaimable" };
+    }
+    if (receipt.disposition === "adopted") {
+      const adoptedCredential = await readBoundActiveGoHighLevelCredential({
+        serviceClient,
+        integrationConnectionId: credential.integration_connection_id,
+      });
+      if (
+        !adoptedCredential ||
+        adoptedCredential.id !== receipt.credentialId ||
+        adoptedCredential.refresh_version < (receipt.refreshVersion ?? 0) ||
+        adoptedCredential.refresh_version <= credential.refresh_version ||
+        new Date(adoptedCredential.token_expires_at).getTime() <=
+          Date.now() + ACCESS_TOKEN_EXPIRY_SKEW_MS
+      ) {
+        return { disposition: "invalid" };
+      }
+      return {
+        disposition: "adopted",
+        credential: adoptedCredential,
+        accessToken: decryptGoHighLevelToken(
+          adoptedCredential.encrypted_access_token,
+        ),
+      };
+    }
+    if (attempt + 1 < TOKEN_REFRESH_WAIT_ATTEMPTS) {
+      await waitImpl(TOKEN_REFRESH_WAIT_MS);
+    }
+  }
+  return { disposition: "busy" };
+}
+
+export async function getGoHighLevelAccessToken({
+  serviceClient,
+  integrationConnectionId,
+  fetchImpl = fetch,
+  forceRefresh = false,
+  waitImpl = (milliseconds) =>
+    new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
+  randomUUID = () => crypto.randomUUID(),
+}: {
+  serviceClient: CrmClient;
+  integrationConnectionId: string;
+  fetchImpl?: FetchLike;
+  forceRefresh?: boolean;
+  waitImpl?: (milliseconds: number) => Promise<void>;
+  randomUUID?: () => string;
+}) {
+  let credential = await readBoundActiveGoHighLevelCredential({
+    serviceClient,
+    integrationConnectionId,
+  });
+  if (!credential) {
     return { ok: false as const, error: "GoHighLevel OAuth credential is unavailable." };
   }
 
@@ -718,82 +1282,234 @@ export async function getGoHighLevelAccessToken({
     };
   }
 
-  const refresh = await refreshGoHighLevelOAuthToken({
-    refreshToken: decryptGoHighLevelToken(credential.encrypted_refresh_token),
-    fetchImpl,
-  });
-
-  if (!refresh.ok) {
-    const { data: concurrentlyRefreshed } = await serviceClient
-      .from("gohighlevel_oauth_credentials")
-      .select("*")
-      .eq("id", credential.id)
-      .is("revoked_at", null)
-      .maybeSingle();
-    if (
-      concurrentlyRefreshed &&
-      concurrentlyRefreshed.encrypted_refresh_token !==
-        credential.encrypted_refresh_token &&
-      new Date(concurrentlyRefreshed.token_expires_at).getTime() >
-        Date.now() + ACCESS_TOKEN_EXPIRY_SKEW_MS
-    ) {
+  const adoptOrDescribeContention = async (
+    baselineCredential: GoHighLevelOauthCredentialRecord,
+  ) => {
+    const adoption = await waitForGoHighLevelRefreshAdoption({
+      serviceClient,
+      credential: baselineCredential,
+      waitImpl,
+    });
+    if (adoption.disposition === "adopted") {
       return {
         ok: true as const,
-        accessToken: decryptGoHighLevelToken(
-          concurrentlyRefreshed.encrypted_access_token,
-        ),
-        credential: concurrentlyRefreshed,
+        accessToken: adoption.accessToken,
+        credential: adoption.credential,
         refreshed: true,
       };
     }
+    if (adoption.disposition === "unavailable") {
+      return {
+        ok: false as const,
+        error: "GoHighLevel OAuth credential is unavailable.",
+      };
+    }
+    if (adoption.disposition === "busy") {
+      return {
+        ok: false as const,
+        error: "HighLevel OAuth token refresh is already in progress; retry shortly.",
+      };
+    }
+    if (adoption.disposition === "invalid") {
+      return {
+        ok: false as const,
+        error: "HighLevel returned an invalid token refresh lease receipt.",
+      };
+    }
+    return null;
+  };
 
-    await serviceClient
-      .from("integration_connections")
-      .update({ status: "needs_reauth", last_error: refresh.error })
-      .eq("id", integrationConnectionId);
-    return { ok: false as const, error: refresh.error };
-  }
+  for (
+    let claimAttempt = 0;
+    claimAttempt < TOKEN_REFRESH_CLAIM_ATTEMPTS;
+    claimAttempt += 1
+  ) {
+    const leaseId = randomUUID();
+    const claim = await claimGoHighLevelRefreshLease({
+      serviceClient,
+      credential,
+      leaseId,
+    });
+    if (!claim) {
+      return {
+        ok: false as const,
+        error: "HighLevel token refresh lease could not be claimed.",
+      };
+    }
+    if (claim.disposition === "unavailable") {
+      return {
+        ok: false as const,
+        error: "GoHighLevel OAuth credential is unavailable.",
+      };
+    }
+    if (claim.disposition !== "claimed") {
+      const adopted = await adoptOrDescribeContention(credential);
+      if (adopted) return adopted;
 
-  const scopes = validateGoHighLevelGrantedScopes(refresh.payload.scopes);
+      const currentCredential = await readBoundActiveGoHighLevelCredential({
+        serviceClient,
+        integrationConnectionId,
+      });
+      if (!currentCredential) {
+        return {
+          ok: false as const,
+          error: "GoHighLevel OAuth credential is unavailable.",
+        };
+      }
+      if (
+        !forceRefresh &&
+        new Date(currentCredential.token_expires_at).getTime() >
+          Date.now() + ACCESS_TOKEN_EXPIRY_SKEW_MS
+      ) {
+        return {
+          ok: true as const,
+          accessToken: decryptGoHighLevelToken(
+            currentCredential.encrypted_access_token,
+          ),
+          credential: currentCredential,
+          refreshed: true,
+        };
+      }
+      credential = currentCredential;
+      continue;
+    }
 
-  if (!scopes.ok || refresh.payload.locationId !== credential.external_location_id) {
-    await serviceClient
-      .from("integration_connections")
-      .update({
-        status: "needs_reauth",
-        last_error: "HighLevel refreshed the token with an invalid scope or location binding.",
-      })
-      .eq("id", integrationConnectionId);
+    if (
+      claim.credentialId !== credential.id ||
+      claim.refreshVersion !== credential.refresh_version
+    ) {
+      return {
+        ok: false as const,
+        error: "HighLevel returned an invalid token refresh lease receipt.",
+      };
+    }
+
+    const leasedCredential = await readBoundActiveGoHighLevelCredential({
+      serviceClient,
+      integrationConnectionId,
+    });
+    if (
+      !leasedCredential ||
+      leasedCredential.id !== credential.id ||
+      leasedCredential.refresh_version !== credential.refresh_version ||
+      leasedCredential.refresh_lease_id !== leaseId
+    ) {
+      await releaseGoHighLevelRefreshLease({
+        serviceClient,
+        credential,
+        leaseId,
+        markNeedsReauth: false,
+      });
+      return {
+        ok: false as const,
+        error: "HighLevel OAuth credential binding changed before refresh.",
+      };
+    }
+    credential = leasedCredential;
+
+    const refresh = await refreshGoHighLevelOAuthToken({
+      refreshToken: decryptGoHighLevelToken(credential.encrypted_refresh_token),
+      fetchImpl,
+      signal: AbortSignal.timeout(TOKEN_REFRESH_PROVIDER_TIMEOUT_MS),
+    });
+
+    if (!refresh.ok) {
+      const release = await releaseGoHighLevelRefreshLease({
+        serviceClient,
+        credential,
+        leaseId,
+        markNeedsReauth: true,
+      });
+      if (release?.disposition === "released") {
+        return { ok: false as const, error: refresh.error };
+      }
+      const adopted = await adoptOrDescribeContention(credential);
+      return (
+        adopted ?? {
+          ok: false as const,
+          error: "HighLevel OAuth token refresh ownership changed; retry shortly.",
+        }
+      );
+    }
+
+    const scopes = validateGoHighLevelGrantedScopes(refresh.payload.scopes);
+    if (
+      !scopes.ok ||
+      refresh.payload.userType !== "Location" ||
+      refresh.payload.locationId !== credential.external_location_id ||
+      (credential.external_company_id !== null &&
+        refresh.payload.companyId !== null &&
+        refresh.payload.companyId !== credential.external_company_id)
+    ) {
+      const release = await releaseGoHighLevelRefreshLease({
+        serviceClient,
+        credential,
+        leaseId,
+        markNeedsReauth: true,
+      });
+      if (release?.disposition !== "released") {
+        const adopted = await adoptOrDescribeContention(credential);
+        if (adopted) return adopted;
+      }
+      return {
+        ok: false as const,
+        error: "HighLevel refreshed the token with an invalid scope or location binding.",
+      };
+    }
+
+    const finalization = await finalizeGoHighLevelRefreshLease({
+      serviceClient,
+      credential,
+      leaseId,
+      payload: refresh.payload,
+    });
+    if (
+      finalization?.disposition === "finalized" &&
+      finalization.credentialId === credential.id &&
+      finalization.refreshVersion === credential.refresh_version + 1
+    ) {
+      const refreshedCredential = await readBoundActiveGoHighLevelCredential({
+        serviceClient,
+        integrationConnectionId,
+      });
+      if (
+        refreshedCredential &&
+        refreshedCredential.id === credential.id &&
+        refreshedCredential.refresh_version >= finalization.refreshVersion
+      ) {
+        return {
+          ok: true as const,
+          accessToken: decryptGoHighLevelToken(
+            refreshedCredential.encrypted_access_token,
+          ),
+          credential: refreshedCredential,
+          refreshed: true,
+        };
+      }
+    }
+
+    const adopted = await adoptOrDescribeContention(credential);
+    if (adopted?.ok) return adopted;
+
+    const release = await releaseGoHighLevelRefreshLease({
+      serviceClient,
+      credential,
+      leaseId,
+      markNeedsReauth: true,
+    });
+    if (release?.disposition === "stale") {
+      const lateAdoption = await adoptOrDescribeContention(credential);
+      if (lateAdoption) return lateAdoption;
+    }
     return {
       ok: false as const,
-      error: "HighLevel refreshed the token with an invalid scope or location binding.",
+      error: "Refreshed HighLevel token could not be saved atomically.",
     };
   }
 
-  const update = {
-    encrypted_access_token: encryptGoHighLevelToken(refresh.payload.accessToken),
-    encrypted_refresh_token: encryptGoHighLevelToken(refresh.payload.refreshToken),
-    token_type: refresh.payload.tokenType,
-    scopes: refresh.payload.scopes,
-    token_expires_at: getGoHighLevelTokenExpiry(refresh.payload.expiresIn),
-    last_refreshed_at: new Date().toISOString(),
-  };
-  const { data: refreshedCredential, error: updateError } = await serviceClient
-    .from("gohighlevel_oauth_credentials")
-    .update(update)
-    .eq("id", credential.id)
-    .select("*")
-    .single();
-
-  if (updateError || !refreshedCredential) {
-    return { ok: false as const, error: "Refreshed HighLevel token could not be saved." };
-  }
-
   return {
-    ok: true as const,
-    accessToken: refresh.payload.accessToken,
-    credential: refreshedCredential as GoHighLevelOauthCredentialRecord,
-    refreshed: true,
+    ok: false as const,
+    error: "HighLevel OAuth token refresh lease could not be reclaimed safely.",
   };
 }
 

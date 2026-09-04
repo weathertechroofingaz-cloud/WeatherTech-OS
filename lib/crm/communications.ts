@@ -850,6 +850,48 @@ function findLeadContactMatch(
   );
 }
 
+function getPayloadSummaryText(
+  payload: Record<string, unknown>,
+  key: string,
+) {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getGoHighLevelSnapshotIdentity({
+  companyId,
+  integrationConnectionId,
+  channel,
+  externalId,
+}: {
+  companyId: string | null | undefined;
+  integrationConnectionId: string | null | undefined;
+  channel: string | null | undefined;
+  externalId: string | null | undefined;
+}) {
+  return companyId && integrationConnectionId && channel && externalId
+    ? `${companyId}:${integrationConnectionId}:${channel}:${externalId}`
+    : null;
+}
+
+function getGoHighLevelResourceChannel(
+  resourceType: "message" | "call",
+  payloadSummary: Record<string, unknown>,
+) {
+  const messageType = getPayloadSummaryText(payloadSummary, "messageType")
+    ?.toLowerCase();
+  if (
+    resourceType === "call" ||
+    messageType?.includes("call") ||
+    messageType?.includes("voicemail")
+  ) {
+    return "voice";
+  }
+  if (messageType?.includes("email")) return "email";
+  if (messageType?.includes("sms")) return "sms";
+  return "unknown";
+}
+
 function getCustomerPrimaryPropertyId(
   snapshot: CrmSnapshot,
   customerId: string | null | undefined,
@@ -1508,6 +1550,70 @@ export function buildUnifiedInboxItems(
   snapshot: CrmSnapshot,
   companyMap: Map<string, CompanyRecord>,
 ) {
+  const goHighLevelResourceSnapshots =
+    snapshot.goHighLevelResourceSnapshots ?? [];
+  const goHighLevelMessageSnapshotsByIdentity = new Map(
+    goHighLevelResourceSnapshots
+      .filter((record) =>
+        record.resource_type === "message" || record.resource_type === "call",
+      )
+      .flatMap((record) => {
+        const identity = getGoHighLevelSnapshotIdentity({
+          companyId: record.company_id,
+          integrationConnectionId: record.integration_connection_id,
+          channel: getGoHighLevelResourceChannel(
+            record.resource_type as "message" | "call",
+            record.payload_summary,
+          ),
+          externalId: record.external_id,
+        });
+        return identity ? [[identity, record] as const] : [];
+      }),
+  );
+  const persistedGoHighLevelCommunicationIdentities = new Set(
+    [
+      ...snapshot.communicationProviderEvents
+        .filter((event) => event.provider === "gohighlevel")
+        .map((event) =>
+          getGoHighLevelSnapshotIdentity({
+            companyId: event.company_id,
+            integrationConnectionId: event.integration_connection_id,
+            channel: event.channel,
+            externalId: event.provider_event_sid,
+          }),
+        ),
+      ...snapshot.callRecords
+        .filter((record) => record.provider === "gohighlevel")
+        .map((record) =>
+          getGoHighLevelSnapshotIdentity({
+            companyId: record.company_id,
+            integrationConnectionId: record.integration_connection_id,
+            channel: "voice",
+            externalId: record.provider_call_sid,
+          }),
+        ),
+    ].filter((identity): identity is string => Boolean(identity)),
+  );
+  const persistedGoHighLevelCallIdentities = new Set(
+    snapshot.callRecords
+      .filter((record) => record.provider === "gohighlevel")
+      .map((record) =>
+        getGoHighLevelSnapshotIdentity({
+          companyId: record.company_id,
+          integrationConnectionId: record.integration_connection_id,
+          channel: "voice",
+          externalId: record.provider_call_sid,
+        }),
+      )
+      .filter((identity): identity is string => Boolean(identity)),
+  );
+  const persistedGoHighLevelCallCorrelations = new Set(
+    snapshot.callRecords
+      .filter((record) => record.provider === "gohighlevel")
+      .map((record) => record.correlation_id)
+      .filter(Boolean),
+  );
+
   const leadIntakeItems: UnifiedInboxItem[] = snapshot.leadIntakeRecords.map((record) => {
     const provider = getLeadIntakeInboxProvider(record.provider);
     const channel = getLeadIntakeChannel(provider);
@@ -1617,6 +1723,7 @@ export function buildUnifiedInboxItems(
   });
 
   const callItems: UnifiedInboxItem[] = snapshot.callRecords.map((record) => {
+    const provider = getIntegrationInboxProvider(record.provider);
     const businessPhoneNumber = getBusinessPhoneNumber(
       snapshot,
       record.business_phone_number_id,
@@ -1656,7 +1763,7 @@ export function buildUnifiedInboxItems(
 
     return {
       id: `call-${record.id}`,
-      provider: "twilio",
+      provider,
       channel: "phone_call",
       direction: record.direction,
       kind: record.call_status === "voicemail" ? "Voicemail" : "Call",
@@ -1689,7 +1796,7 @@ export function buildUnifiedInboxItems(
         businessPhoneNumber?.business_location ?? job?.property_address,
       ),
       sourceAccount,
-      sourceLabel: "Twilio",
+      sourceLabel: inboxProviderLabels[provider],
       serviceType: job ? serviceLabel(job.service_type) : lead ? serviceLabel(lead.service_type) : "Call",
       summary:
         record.call_status === "voicemail"
@@ -1746,6 +1853,24 @@ export function buildUnifiedInboxItems(
   const providerEventItems: UnifiedInboxItem[] = snapshot.communicationProviderEvents
     .filter((event) => {
       const normalizedStatus = event.status.toLowerCase();
+      const goHighLevelVoiceIdentity =
+        event.provider === "gohighlevel" && event.channel === "voice"
+          ? getGoHighLevelSnapshotIdentity({
+              companyId: event.company_id,
+              integrationConnectionId: event.integration_connection_id,
+              channel: event.channel,
+              externalId: event.provider_event_sid,
+            })
+          : null;
+      if (
+        event.provider === "gohighlevel" &&
+        event.channel === "voice" &&
+        ((goHighLevelVoiceIdentity &&
+          persistedGoHighLevelCallIdentities.has(goHighLevelVoiceIdentity)) ||
+          persistedGoHighLevelCallCorrelations.has(event.correlation_id))
+      ) {
+        return false;
+      }
 
       return (
         !event.sms_message_id ||
@@ -1756,6 +1881,7 @@ export function buildUnifiedInboxItems(
       );
     })
     .map((event) => {
+      const provider = getIntegrationInboxProvider(event.provider);
       const businessPhoneNumber = getBusinessPhoneNumber(
         snapshot,
         event.business_phone_number_id,
@@ -1794,11 +1920,25 @@ export function buildUnifiedInboxItems(
       );
       const responseStatus = getProviderEventResponseStatus(event);
       const matchStatus = getProviderEventMatchStatus(event);
+      const isMissedCall =
+        event.channel === "voice" &&
+        event.direction === "inbound" &&
+        ["missed", "voicemail"].includes(event.status.toLowerCase());
       const sourceAccount = getBusinessPhoneLabel(businessPhoneNumber) ?? event.business_phone;
+      const snapshotIdentity = getGoHighLevelSnapshotIdentity({
+        companyId: event.company_id,
+        integrationConnectionId: event.integration_connection_id,
+        channel: event.channel,
+        externalId: event.provider_event_sid,
+      });
+      const goHighLevelSnapshot =
+        event.provider === "gohighlevel" && snapshotIdentity
+          ? goHighLevelMessageSnapshotsByIdentity.get(snapshotIdentity) ?? null
+          : null;
 
       return {
         id: `provider-event-${event.id}`,
-        provider: "twilio",
+        provider,
         channel,
         direction: event.direction,
         kind: "Provider Event",
@@ -1827,12 +1967,15 @@ export function buildUnifiedInboxItems(
           businessPhoneNumber?.business_location ?? job?.property_address,
         ),
         sourceAccount,
-        sourceLabel: "Twilio",
+        sourceLabel: inboxProviderLabels[provider],
         serviceType: statusLabel(event.event_type),
         summary:
           sanitizeIntegrationSyncLogText(event.error_message) ??
+          sanitizeIntegrationSyncLogText(goHighLevelSnapshot?.body_preview) ??
           `${statusLabel(event.event_type)} is ${statusLabel(event.status).toLowerCase()}.`,
-        notes: sanitizeIntegrationSyncLogText(event.error_message),
+        notes:
+          sanitizeIntegrationSyncLogText(event.error_message) ??
+          sanitizeIntegrationSyncLogText(goHighLevelSnapshot?.body_preview),
         participants: compactParticipants([
           contactPhone,
           event.business_phone,
@@ -1858,6 +2001,7 @@ export function buildUnifiedInboxItems(
         suggestedNextAction: getSuggestedNextAction({
           channel,
           isFailed: failed,
+          isMissedCall,
           isUnassigned: event.routing_status !== "matched" && !event.customer_id && !event.lead_id,
           responseStatus,
           matchStatus,
@@ -1865,13 +2009,180 @@ export function buildUnifiedInboxItems(
         isUnread: event.direction === "inbound" || responseStatus === "needs_response",
         isArchived: false,
         isFailed: failed,
-        isMissedCall: event.channel === "voice" && event.direction === "inbound",
+        isMissedCall,
         isUnassigned: event.routing_status !== "matched" || (!event.customer_id && !event.lead_id),
         followUpAt: responseStatus === "needs_response" || responseStatus === "overdue"
           ? event.occurred_at ?? event.received_at
           : null,
         assignedTo: businessPhoneNumber?.team_queue ?? null,
         failureDetail: sanitizeIntegrationSyncLogText(event.error_message),
+      };
+    });
+
+  const goHighLevelSnapshotItems: UnifiedInboxItem[] = goHighLevelResourceSnapshots
+    .filter((record) => {
+      if (record.resource_type !== "message" && record.resource_type !== "call") {
+        return false;
+      }
+      const identity = getGoHighLevelSnapshotIdentity({
+        companyId: record.company_id,
+        integrationConnectionId: record.integration_connection_id,
+        channel: getGoHighLevelResourceChannel(
+          record.resource_type as "message" | "call",
+          record.payload_summary,
+        ),
+        externalId: record.external_id,
+      });
+      return Boolean(identity && !persistedGoHighLevelCommunicationIdentities.has(identity));
+    })
+    .map((record) => {
+      const messageType =
+        getPayloadSummaryText(record.payload_summary, "messageType")?.toLowerCase() ?? "";
+      const isCall =
+        record.resource_type === "call" ||
+        messageType.includes("call") ||
+        messageType.includes("voicemail");
+      const isEmail = messageType.includes("email");
+      const channel: CommunicationChannel = isCall
+        ? "phone_call"
+        : isEmail
+          ? "email"
+          : messageType.includes("sms")
+            ? "sms"
+            : "gohighlevel";
+      const direction = record.direction ?? "internal";
+      const from = getPayloadSummaryText(record.payload_summary, "from");
+      const to = getPayloadSummaryText(record.payload_summary, "to");
+      const contactValue = direction === "inbound" ? from : to;
+      const customer = record.customer_id
+        ? snapshot.customers.find(
+            (candidate) =>
+              candidate.id === record.customer_id &&
+              candidate.company_id === record.company_id,
+          ) ?? null
+        : null;
+      const lead = record.lead_id
+        ? snapshot.leads.find(
+            (candidate) =>
+              candidate.id === record.lead_id &&
+              candidate.company_id === record.company_id,
+          ) ?? null
+        : null;
+      const connection = snapshot.integrationConnections.find(
+        (candidate) =>
+          candidate.id === record.integration_connection_id &&
+          candidate.company_id === record.company_id &&
+          candidate.provider === "gohighlevel",
+      );
+      const summary =
+        sanitizeIntegrationSyncLogText(record.body_preview) ??
+        getPayloadSummaryText(record.payload_summary, "name") ??
+        `${statusLabel(messageType || record.resource_type)} activity from GoHighLevel.`;
+      const payloadMatchStatus = getPayloadSummaryText(
+        record.payload_summary,
+        "matchStatus",
+      );
+      const matchStatus: CommunicationMatchStatus = customer
+        ? "matched_customer"
+        : lead
+          ? "matched_lead"
+          : payloadMatchStatus === "ambiguous"
+            ? "ambiguous_match"
+            : "manual_review_required";
+      const inbound = direction === "inbound";
+      const normalizedStatus = record.status?.toLowerCase() ?? "";
+      const isMissedCall =
+        isCall &&
+        inbound &&
+        (messageType.includes("voicemail") ||
+          normalizedStatus.includes("voicemail") ||
+          normalizedStatus.includes("miss") ||
+          normalizedStatus.includes("no-answer"));
+      const needsResponse = inbound && (!isCall || isMissedCall);
+
+      return {
+        id: `gohighlevel-resource-${record.id}`,
+        provider: "gohighlevel",
+        channel,
+        direction,
+        kind: isCall
+          ? messageType.includes("voicemail")
+            ? "Voicemail"
+            : "Call"
+          : isEmail
+            ? "Email"
+            : messageType.includes("sms")
+              ? "SMS"
+              : "Provider Event",
+        companyId: record.company_id,
+        leadId: lead?.id ?? null,
+        customerId: customer?.id ?? null,
+        propertyId:
+          getCustomerPrimaryPropertyId(snapshot, customer?.id) ??
+          lead?.property_id ??
+          null,
+        jobId: null,
+        estimateId: null,
+        invoiceId: null,
+        scheduleEventId: null,
+        businessPhoneNumberId: null,
+        providerEventId: null,
+        relatedTable: "gohighlevel_resource_snapshots",
+        relatedRecordId: record.id,
+        customerName:
+          customer?.display_name ?? lead?.contact_name ?? contactValue ?? "GoHighLevel contact",
+        contact: isEmail
+          ? getInboxContact(null, contactValue)
+          : getInboxContact(contactValue, null),
+        phone: isEmail ? null : contactValue,
+        email: isEmail ? contactValue : null,
+        businessLocation: getCompanyLocationLabel(
+          companyMap.get(record.company_id),
+          null,
+        ),
+        sourceAccount: connection?.external_account_id ?? null,
+        sourceLabel: "GoHighLevel",
+        serviceType: statusLabel(messageType || record.resource_type),
+        summary,
+        notes: sanitizeIntegrationSyncLogText(record.body_preview),
+        participants: compactParticipants([from, to, customer?.display_name, lead?.contact_name]),
+        attachments: [],
+        createdAt: record.occurred_at ?? record.provider_updated_at ?? record.last_synced_at,
+        updatedAt: record.updated_at,
+        status: statusLabel(record.status ?? (inbound ? "received" : "synced")),
+        priority: isMissedCall ? "high" : needsResponse ? "medium" : "low",
+        responseStatus: needsResponse ? "needs_response" : "resolved",
+        matchStatus,
+        routingStatus:
+          matchStatus === "matched_customer" || matchStatus === "matched_lead"
+            ? "Matched"
+            : "Needs review",
+        deliveryState: inbound ? "received" : "not_applicable",
+        syncState:
+          matchStatus === "matched_customer" || matchStatus === "matched_lead"
+            ? "synced"
+            : "needs_review",
+        waitingSince: needsResponse
+          ? record.occurred_at ?? record.provider_updated_at ?? record.last_synced_at
+          : null,
+        suggestedNextAction: getSuggestedNextAction({
+          channel,
+          isFailed: false,
+          isMissedCall,
+          isUnassigned: !customer && !lead,
+          responseStatus: needsResponse ? "needs_response" : "resolved",
+          matchStatus,
+        }),
+        isUnread: needsResponse,
+        isArchived: false,
+        isFailed: false,
+        isMissedCall,
+        isUnassigned: !customer && !lead,
+        followUpAt: needsResponse
+          ? record.occurred_at ?? record.provider_updated_at ?? record.last_synced_at
+          : null,
+        assignedTo: null,
+        failureDetail: null,
       };
     });
 
@@ -2374,6 +2685,7 @@ export function buildUnifiedInboxItems(
     ...leadIntakeItems,
     ...callItems,
     ...providerEventItems,
+    ...goHighLevelSnapshotItems,
     ...leadItems,
     ...smsItems,
     ...emailItems,
