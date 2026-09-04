@@ -2,11 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCrmSnapshot } from "../../../../lib/crm/repository";
 import {
+  buildAiQuotaStatusRequest,
   buildAiCompanyPilotStatus,
   getAiPilotProviderConfig,
   estimateAiRequestUsage,
   isAiQuotaReservationRequestWithinBounds,
   isAiQuotaReservationReceiptWithinBounds,
+  parseAiQuotaStatusReceipt,
   preflightAiPilotCommand,
   retrieveAuthorizedAiContext,
   resolveCompanyAiProviderConfig,
@@ -28,6 +30,7 @@ import { readBoundedJsonBody } from "../../../../lib/http/boundedJson";
 import { getSupabaseServerClient } from "../../../../lib/supabase/server";
 import {
   getSupabaseServiceRoleClient,
+  readSupabaseAiQuotaStatus,
   verifySupabaseAiQuotaServiceCapability,
 } from "../../../../lib/supabase/service";
 
@@ -126,6 +129,47 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const providerConfig = getAiPilotProviderConfig();
+  const companyConfig = resolveCompanyAiProviderConfig({
+    config: providerConfig,
+    usageLimits: policyRows as AiUsageLimitRecord[],
+    companyId: authorization.companyId,
+  });
+  let quotaStatus = null;
+  if (companyConfig.ok) {
+    const quotaStatusRequest = buildAiQuotaStatusRequest({
+      config: companyConfig.config,
+      companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
+    });
+    if (!quotaStatusRequest) {
+      return noStoreJson(
+        {
+          error:
+            "Current audited AI quota capacity could not be verified. Production AI status is unavailable.",
+        },
+        503,
+      );
+    }
+    const quotaStatusPayload = await readSupabaseAiQuotaStatus({
+      companyId: authorization.companyId,
+      actorUserId: user.id,
+      request: quotaStatusRequest,
+    });
+    quotaStatus = parseAiQuotaStatusReceipt(quotaStatusPayload, {
+      companyId: authorization.companyId,
+      actorUserId: user.id,
+    });
+    if (!quotaStatus) {
+      return noStoreJson(
+        {
+          error:
+            "Current audited AI quota capacity could not be verified. Production AI status is unavailable.",
+        },
+        503,
+      );
+    }
+  }
+
   const savedAnalysesReadProbe = await client
     .from("ai_saved_analyses")
     .select(
@@ -138,8 +182,9 @@ export async function GET(request: NextRequest) {
   const status = buildAiCompanyPilotStatus({
     companyId: authorization.companyId,
     policy: policyRows[0] as AiUsageLimitRecord,
-    config: getAiPilotProviderConfig(),
+    config: providerConfig,
     savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null,
+    quotaStatus,
   });
   return noStoreJson(status, 200);
 }

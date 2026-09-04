@@ -4469,8 +4469,10 @@ async function waitForAiProviderStatus(
         loadedCompanyId !== requestCompanyId ||
         budgetCents !== "5000" ||
         card.getAttribute("data-ai-enabled") !== "false" ||
+        card.getAttribute("data-ai-current-quota-available") !== "false" ||
         card.getAttribute("data-ai-runtime-provider-health") !== "not_tested" ||
         !text.includes("$50/month") ||
+        !text.includes("current quota unavailable") ||
         !text.includes("external actions disabled") ||
         savedWork.getAttribute("data-ai-saved-analyses-phase") !== "loaded" ||
         savedWork.getAttribute("data-ai-saved-analyses-read-available") !== "true" ||
@@ -5651,6 +5653,8 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
         providerCompanyId:
           providerStatus?.getAttribute("data-ai-request-company-id") ?? "",
         providerBusy: providerStatus?.getAttribute("aria-busy") ?? "",
+        currentQuotaAvailable:
+          providerStatus?.getAttribute("data-ai-current-quota-available") ?? "",
         savedAnalysesPhase:
           savedWork?.getAttribute("data-ai-saved-analyses-phase") ?? "",
         savedAnalysesReadAvailable:
@@ -5667,6 +5671,7 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
     allCompanyGate.providerPhase !== "selection_required" ||
     allCompanyGate.providerCompanyId !== "" ||
     allCompanyGate.providerBusy !== "false" ||
+    allCompanyGate.currentQuotaAvailable !== "" ||
     allCompanyGate.savedAnalysesPhase !== "selection_required" ||
     allCompanyGate.savedAnalysesReadAvailable !== "false" ||
     allCompanyGate.savedAnalysesCompanyId !== ""
@@ -5736,6 +5741,8 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
     );
   }
 
+  const disabledCommandStatusSequenceBaseline =
+    await getAiProviderStatusRequestSequence(tab);
   await tab.playwright.locator("#ai-command-input").fill("Show overdue invoices.");
   await buttonContainingText(tab, "Analyze").click({ timeoutMs: 10000 });
   await waitFor(
@@ -5775,6 +5782,10 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
     "AI disabled-policy response rejects before any provider call",
     15000,
   );
+  await waitForAiProviderStatus(tab, "WeatherTech Roofing LLC", {
+    expectedCompanyId: companies.weatherTech.id,
+    requestSequenceBaseline: disabledCommandStatusSequenceBaseline,
+  });
 
   const approvePreview = tab.playwright.locator('button:has-text("Approve preview")').first();
   if ((await approvePreview.count()) > 0) {

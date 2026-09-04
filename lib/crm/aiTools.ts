@@ -46,6 +46,11 @@ export type AiRuntimeProviderHealthEvidence = {
   statusRefreshSequence: number;
   state: AiRuntimeProviderHealthState;
 };
+export type AiPilotErrorEvidence = {
+  companyId: string | null;
+  statusRefreshSequence: number;
+  message: string;
+};
 
 export function isCurrentAiCommandCompletion({
   activeCompanyId,
@@ -116,6 +121,28 @@ export function getCurrentAiRuntimeProviderHealth({
   return evidence.state === "ready" || evidence.state === "failed"
     ? evidence.state
     : null;
+}
+
+export function getCurrentAiPilotError({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiPilotErrorEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}) {
+  if (
+    !evidence ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence ||
+    !evidence.message.trim()
+  ) {
+    return "";
+  }
+
+  return evidence.message;
 }
 
 export type AiSourceRecord = {

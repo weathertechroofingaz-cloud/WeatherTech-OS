@@ -161,6 +161,38 @@ try {
     "ready",
     "A tested success from the current generation restores provider health",
   );
+  const currentErrorEvidence = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 9,
+    message: "Current exact-company fallback.",
+  };
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "Current exact-company fallback.",
+    "A current exact-company error remains visible",
+  );
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 10,
+    }),
+    "",
+    "Refresh immediately hides an older command error",
+  );
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: ihcCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "",
+    "WeatherTech command errors never appear in IHC",
+  );
   assertEqual(
     aiTools.isCurrentAiCommandCompletion({
       activeCompanyId: wtCompanyId,

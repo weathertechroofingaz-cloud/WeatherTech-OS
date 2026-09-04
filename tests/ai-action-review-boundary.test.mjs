@@ -63,6 +63,15 @@ const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
 const statusQuotaCapabilityIndex = statusRoute.indexOf(
   "await verifySupabaseAiQuotaServiceCapability()",
 );
+const statusCompanyConfigIndex = statusRoute.indexOf(
+  "const companyConfig = resolveCompanyAiProviderConfig({",
+);
+const statusQuotaReadIndex = statusRoute.indexOf(
+  "await readSupabaseAiQuotaStatus({",
+);
+const statusQuotaParseIndex = statusRoute.indexOf(
+  "parseAiQuotaStatusReceipt(quotaStatusPayload",
+);
 const statusSavedAnalysesIndex = statusRoute.indexOf('.from("ai_saved_analyses")');
 const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
 assert(
@@ -70,7 +79,11 @@ assert(
     statusMembershipIndex > statusAuthIndex &&
     statusPolicyIndex > statusMembershipIndex &&
     statusQuotaCapabilityIndex > statusPolicyIndex &&
+    statusCompanyConfigIndex > statusQuotaCapabilityIndex &&
+    statusQuotaReadIndex > statusCompanyConfigIndex &&
+    statusQuotaParseIndex > statusQuotaReadIndex &&
     statusSavedAnalysesIndex > statusPolicyIndex &&
+    statusSavedAnalysesIndex > statusQuotaParseIndex &&
     statusSavedAnalysesIndex > statusMembershipIndex &&
     statusBuildIndex > statusSavedAnalysesIndex &&
     statusBuildIndex > statusQuotaCapabilityIndex &&
@@ -88,10 +101,15 @@ for (const statusBoundary of [
   "getAiPilotProviderConfig()",
   "await verifySupabaseAiQuotaServiceCapability()",
   "The audited AI quota service is unavailable. Production AI status is not ready.",
+  "buildAiQuotaStatusRequest({",
+  "await readSupabaseAiQuotaStatus({",
+  "parseAiQuotaStatusReceipt(quotaStatusPayload",
+  "Current audited AI quota capacity could not be verified. Production AI status is unavailable.",
   '.from("ai_saved_analyses")',
   '{ head: true }',
   '.eq("company_id", authorization.companyId)',
   "savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null",
+  "quotaStatus,",
   "return noStoreJson(status, 200)",
 ]) {
   includes(
@@ -131,6 +149,13 @@ for (const serviceBoundary of [
   'redirect: "error"',
   "AbortSignal.timeout(SUPABASE_OPENAPI_TIMEOUT_MS)",
   "SUPABASE_OPENAPI_MAX_BYTES",
+  'const AI_QUOTA_STATUS_RPC_PATH = "/rest/v1/rpc/wtos_get_ai_quota_status_v1"',
+  "export async function readSupabaseAiQuotaStatus",
+  "SUPABASE_AI_QUOTA_STATUS_MAX_BYTES",
+  "SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS",
+  'endpoint.searchParams.set("p_company_id", companyId)',
+  'endpoint.searchParams.set("p_actor_user_id", actorUserId)',
+  'endpoint.searchParams.set("p_request", JSON.stringify(request))',
   "AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000",
   "AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000",
   "const aiQuotaCapabilityCache = new WeakMap",
@@ -206,7 +231,10 @@ new Function("require", "module", "exports", compiledSupabaseService)(
   serviceModuleUnderTest,
   serviceModuleUnderTest.exports,
 );
-const { verifySupabaseAiQuotaServiceCapability } =
+const {
+  readSupabaseAiQuotaStatus,
+  verifySupabaseAiQuotaServiceCapability,
+} =
   serviceModuleUnderTest.exports;
 
 function exactQuotaOpenApiDocument() {
@@ -477,6 +505,129 @@ for (const invalidResponseFactory of [
     "Credential, media-type, parse, size, body, and network failures must fail closed.",
   );
 }
+
+const quotaStatusCompanyId = "11111111-1111-4111-8111-111111111111";
+const quotaStatusActorUserId = "22222222-2222-4222-8222-222222222222";
+const quotaStatusRequest = {
+  contractVersion: 1,
+  estimatedCostCents: 25,
+  globalDailyRequestLimit: 500,
+  companyDailyRequestLimit: 500,
+  userDailyRequestLimit: 500,
+  dailyBudgetCents: 10_000,
+  companyMonthlyBudgetCents: 5_000,
+};
+const quotaStatusReceipt = {
+  contractVersion: 1,
+  companyId: quotaStatusCompanyId,
+  actorUserId: quotaStatusActorUserId,
+  requestCapacityAvailable: true,
+  blockingReason: "none",
+  checkedAt: "2026-09-04T05:00:00.000Z",
+  globalRequestsToday: 2,
+  companyRequestsToday: 1,
+  userRequestsToday: 1,
+  reservedCostCentsToday: 50,
+  companyReservedCostCentsThisMonth: 25,
+};
+let capturedQuotaStatusRequest = null;
+const readQuotaStatusResult = await readSupabaseAiQuotaStatus(
+  {
+    companyId: quotaStatusCompanyId,
+    actorUserId: quotaStatusActorUserId,
+    request: quotaStatusRequest,
+  },
+  testServiceEnv,
+  async (input, init) => {
+    capturedQuotaStatusRequest = { input: String(input), init };
+    return new Response(JSON.stringify(quotaStatusReceipt), {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  },
+);
+assert(
+  JSON.stringify(readQuotaStatusResult) === JSON.stringify(quotaStatusReceipt),
+  "The fresh quota reader must return only its bounded JSON payload for route validation.",
+);
+const capturedQuotaStatusUrl = new URL(capturedQuotaStatusRequest.input);
+assert(
+  capturedQuotaStatusUrl.origin === "https://quota-capability.test" &&
+    capturedQuotaStatusUrl.pathname ===
+      "/rest/v1/rpc/wtos_get_ai_quota_status_v1" &&
+    capturedQuotaStatusUrl.searchParams.get("p_company_id") ===
+      quotaStatusCompanyId &&
+    capturedQuotaStatusUrl.searchParams.get("p_actor_user_id") ===
+      quotaStatusActorUserId &&
+    JSON.parse(capturedQuotaStatusUrl.searchParams.get("p_request"))
+      .companyMonthlyBudgetCents === 5_000 &&
+    capturedQuotaStatusRequest.init?.method === "GET" &&
+    capturedQuotaStatusRequest.init?.cache === "no-store" &&
+    capturedQuotaStatusRequest.init?.redirect === "error" &&
+    capturedQuotaStatusRequest.init?.headers?.Accept === "application/json" &&
+    capturedQuotaStatusRequest.init?.headers?.["Accept-Profile"] === "public" &&
+    capturedQuotaStatusRequest.init?.headers?.apikey ===
+      "unit-test-service-role-secret" &&
+    capturedQuotaStatusRequest.init?.headers?.Authorization ===
+      "Bearer unit-test-service-role-secret" &&
+    !capturedQuotaStatusRequest.input.includes("unit-test-service-role-secret"),
+  "The quota status RPC must be a fresh bounded GET with exact safe arguments and server-only credentials.",
+);
+
+for (const invalidQuotaStatusResponse of [
+  async () =>
+    new Response("{}", {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    }),
+  async () =>
+    new Response("{}", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    }),
+  async () =>
+    new Response("not-json", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  async () =>
+    new Response("x".repeat(16 * 1024 + 1), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  async () => {
+    throw new Error("synthetic quota status network failure");
+  },
+]) {
+  assert(
+    (await readSupabaseAiQuotaStatus(
+      {
+        companyId: quotaStatusCompanyId,
+        actorUserId: quotaStatusActorUserId,
+        request: quotaStatusRequest,
+      },
+      testServiceEnv,
+      invalidQuotaStatusResponse,
+    )) === null,
+    "Quota status transport, media, size, parse, and network failures must fail closed.",
+  );
+}
+let invalidQuotaStatusFetchCalls = 0;
+assert(
+  (await readSupabaseAiQuotaStatus(
+    {
+      companyId: "not-a-uuid",
+      actorUserId: quotaStatusActorUserId,
+      request: quotaStatusRequest,
+    },
+    testServiceEnv,
+    async () => {
+      invalidQuotaStatusFetchCalls += 1;
+      return new Response("{}");
+    },
+  )) === null && invalidQuotaStatusFetchCalls === 0,
+  "Invalid quota status identities must fail before a service request.",
+);
 for (const savedAnalysesStatusBoundary of [
   "savedAnalysesReadAvailable: boolean;",
   "savedAnalysesReadAvailable = false",
@@ -642,11 +793,15 @@ for (const quotaContractBoundary of [
   "maxCompanyMonthlyBudgetCents: 1_000_000_000",
   "export function isAiQuotaReservationRequestWithinBounds(",
   "export function isAiQuotaReservationReceiptWithinBounds(",
+  "export function isAiQuotaStatusRequestWithinBounds(",
+  "export function parseAiQuotaStatusReceipt(",
+  "export function getAiCurrentQuotaAvailability({",
+  "export function buildAiQuotaStatusRequest({",
   "request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8)",
   "request.estimatedRequestTokens <= request.maxRequestTokens",
   "request.estimatedCostCents <= request.dailyBudgetCents",
   "request.estimatedCostCents <= request.companyMonthlyBudgetCents",
-  "maximumEstimatedCostUsd * 100 * maxProviderAttempts",
+  "maximumEstimatedCostUsd * 100 * (config.retryLimit + 1)",
   "hasQuotaCompatibleProviderConfig(",
 ]) {
   includes(
@@ -831,6 +986,7 @@ for (const statusUiBoundary of [
   'data-ai-status-request-sequence={String(requestSequence)}',
   'data-ai-status-company-id={status?.companyId ?? ""}',
   'data-ai-monthly-budget-cents={status ? String(status.monthlyBudgetCents) : ""}',
+  'data-ai-current-quota-available={',
   'data-ai-runtime-provider-health={runtimeProviderHealth ?? "not_tested"}',
   'role="status"',
   'aria-live="polite"',
@@ -839,12 +995,16 @@ for (const statusUiBoundary of [
   'label="External actions disabled"',
   'tone={status.readiness.migrationStatus === "applied" ? "blue" : "amber"}',
   "providerStatus?.usageAccountingConfigured",
+  "providerStatus.currentQuotaAvailable === false",
+  "Current quota available",
+  "Current quota unavailable",
   "Usage accounting is not ready for this company. No provider call can run until the required controls are complete.",
   "getAiEndpointErrorMessage(",
   "aiProviderStatusRequestSequenceRef.current + 1",
   "setAiProviderStatusRequestSequence(requestSequence)",
   "statusRefreshSequence: number",
-  "[exactAiCompanyId, statusRefreshSequence]",
+  "aiProviderStatusReloadSequence",
+  "setAiProviderStatusReloadSequence((current) => current + 1)",
   "const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence]",
   "await onScrollPreservingReload()",
   "setAiProviderStatusRefreshSequence((current) => current + 1)",
@@ -868,9 +1028,10 @@ for (const statusUiBoundary of [
   "setAiRuntimeProviderHealth(null)",
   "if (result.providerHealth.tested)",
   'state: result.providerHealth.ok ? "ready" : "failed"',
-  "!runtimeProviderFailed && status?.aiEnabled && status.readiness.liveProviderEnabled",
+  "status.currentQuotaAvailable",
   "runtimeProviderFailed",
   "Provider test failed",
+  'typeof status.currentQuotaAvailable === "boolean"',
   'typeof status.savedAnalysesReadAvailable === "boolean"',
   "currentAiProviderStatus?.savedAnalysesReadAvailable === true",
   'data-testid="ai-saved-work"',
@@ -886,6 +1047,31 @@ for (const statusUiBoundary of [
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
   );
 }
+
+for (const errorEvidenceBoundary of [
+  "export type AiPilotErrorEvidence = {",
+  "export function getCurrentAiPilotError({",
+  "evidence.companyId !== companyId",
+  "evidence.statusRefreshSequence !== statusRefreshSequence",
+  "useState<AiPilotErrorEvidence | null>(null)",
+  "getCurrentAiPilotError({",
+  "setAiPilotErrorEvidence({",
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  "{currentAiPilotError}",
+]) {
+  includes(
+    `${aiToolsSource}\n${crmApp}`,
+    errorEvidenceBoundary,
+    `AI command errors must be exact-company and Refresh-generation scoped: ${errorEvidenceBoundary}.`,
+  );
+}
+assert(
+  !aiProvider.includes("reservedCostUsdToday: number;") &&
+    !crmApp.includes("Reserved today:") &&
+    crmApp.includes("Company reserved this month:") &&
+    crmApp.includes("usage?.companyReservedCostUsdThisMonth"),
+  "Exact-company AI results must not serialize or render global all-company reserved spend.",
+);
 
 const aiCommandCompletionGuardIndex = crmApp.indexOf(
   "!isCurrentAiCommandCompletion({",

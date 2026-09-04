@@ -5543,6 +5543,14 @@ export type Database = {
         };
         Returns: Record<string, unknown>;
       };
+      wtos_get_ai_quota_status_v1: {
+        Args: {
+          p_company_id: string;
+          p_actor_user_id: string;
+          p_request: Record<string, unknown>;
+        };
+        Returns: Record<string, unknown>;
+      };
       wtos_ai_action_preview_fingerprint_v1: {
         Args: {
           p_action_preview: Record<string, unknown>;

@@ -142,7 +142,7 @@ try {
     globalRequestsToday: 1,
     companyRequestsToday: 1,
     userRequestsToday: 1,
-    reservedCostCentsToday: 50,
+    reservedCostCentsToday: 75,
     companyReservedCostCentsThisMonth: 50,
   };
   const snapshot = emptySnapshot({
@@ -556,6 +556,52 @@ try {
     AI_TIMEOUT_MS: "5000",
     AI_RETRY_LIMIT: "2",
   });
+  const quotaActorUserId = "99999999-9999-4999-8999-999999999999";
+  const availableQuotaStatus = {
+    contractVersion: 1,
+    companyId: wtCompanyId,
+    actorUserId: quotaActorUserId,
+    requestCapacityAvailable: true,
+    blockingReason: "none",
+    checkedAt: now,
+    globalRequestsToday: 0,
+    companyRequestsToday: 0,
+    userRequestsToday: 0,
+    reservedCostCentsToday: 0,
+    companyReservedCostCentsThisMonth: 0,
+  };
+  assertEqual(
+    aiProvider.parseAiQuotaStatusReceipt(availableQuotaStatus, {
+      companyId: wtCompanyId,
+      actorUserId: quotaActorUserId,
+    })?.requestCapacityAvailable,
+    true,
+    "An exact bounded current-quota receipt is accepted",
+  );
+  for (const [label, invalidQuotaStatus] of [
+    ["wrong company", { ...availableQuotaStatus, companyId: ihcCompanyId }],
+    ["wrong actor", { ...availableQuotaStatus, actorUserId: wtCompanyId }],
+    ["fractional count", { ...availableQuotaStatus, userRequestsToday: 0.5 }],
+    ["negative spend", { ...availableQuotaStatus, reservedCostCentsToday: -1 }],
+    [
+      "impossible count relation",
+      { ...availableQuotaStatus, companyRequestsToday: 1, globalRequestsToday: 0 },
+    ],
+    [
+      "contradictory availability",
+      { ...availableQuotaStatus, requestCapacityAvailable: false },
+    ],
+    ["extra property", { ...availableQuotaStatus, unexpected: true }],
+  ]) {
+    assertEqual(
+      aiProvider.parseAiQuotaStatusReceipt(invalidQuotaStatus, {
+        companyId: wtCompanyId,
+        actorUserId: quotaActorUserId,
+      }),
+      null,
+      `Current-quota receipt rejects ${label}`,
+    );
+  }
   const invalidInjectedRetryReadiness = aiProvider.buildAiPilotReadiness({
     config: { ...productionStatusConfig, retryLimit: -1 },
     migrationApplied: true,
@@ -732,6 +778,7 @@ try {
       maxResponseTokens: 1_000_000,
       retryLimit: 2,
     },
+    quotaStatus: availableQuotaStatus,
   });
   assertEqual(
     maximumBoundedStatus.aiEnabled,
@@ -787,9 +834,11 @@ try {
     policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
     config: productionStatusConfig,
     savedAnalysesReadAvailable: true,
+    quotaStatus: availableQuotaStatus,
   });
   assertEqual(enabledCompanyStatus.companyId, wtCompanyId, "AI status echoes the exact company");
   assertEqual(enabledCompanyStatus.aiEnabled, true, "Environment and company policy enable live AI together");
+  assertEqual(enabledCompanyStatus.currentQuotaAvailable, true, "Fresh quota capacity is required for live AI status");
   assertEqual(enabledCompanyStatus.monthlyBudgetCents, 5000, "AI status exposes the exact company monthly budget");
   assertEqual(enabledCompanyStatus.savedAnalysesReadAvailable, true, "AI status preserves authenticated saved-analysis read availability");
   assertEqual(enabledCompanyStatus.readiness.state, "live_ai_enabled", "Enabled company status is explicit");
@@ -797,17 +846,36 @@ try {
   assertEqual(enabledCompanyStatus.readiness.requiredOwnerSetup.length, 0, "Enabled company status has no provider setup action");
   assertEqual(enabledCompanyStatus.usageAccountingConfigured, true, "Enabled company status confirms usage accounting controls");
   assertEqual(enabledCompanyStatus.externalActionExecutionEnabled, false, "External action execution remains disabled");
+  const companyStatusWithoutQuotaEvidence = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: true,
+  });
+  assertEqual(
+    companyStatusWithoutQuotaEvidence.aiEnabled,
+    false,
+    "Missing fresh quota evidence fails operational status closed",
+  );
+  assertEqual(
+    companyStatusWithoutQuotaEvidence.usageAccountingConfigured,
+    true,
+    "Missing current quota evidence does not misstate configured accounting infrastructure",
+  );
   const serializedCompanyStatus = JSON.stringify(enabledCompanyStatus);
   assert(
     !serializedCompanyStatus.includes("test-secret-key-never-serialized") &&
-      !serializedCompanyStatus.includes("apiKeyConfigured"),
-    "Sanitized company status must never serialize provider credentials or raw config",
+      !serializedCompanyStatus.includes("apiKeyConfigured") &&
+      !serializedCompanyStatus.includes("globalRequestsToday") &&
+      !serializedCompanyStatus.includes("reservedCostCentsToday"),
+    "Sanitized company status must never serialize credentials, raw config, or cross-company quota totals",
   );
   const enabledCompanyWithUnverifiedSavedAnalyses = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
     config: productionStatusConfig,
     savedAnalysesReadAvailable: false,
+    quotaStatus: availableQuotaStatus,
   });
   assertEqual(
     enabledCompanyWithUnverifiedSavedAnalyses.aiEnabled,
@@ -819,6 +887,120 @@ try {
     "pending_or_unverified",
     "An unverified saved-analysis schema cannot claim its migration is applied",
   );
+  const effectiveStatusConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: productionStatusConfig,
+    usageLimits: [baseCompanyPolicy],
+    companyId: wtCompanyId,
+  });
+  assert(effectiveStatusConfig.ok, "Quota status tests require an effective company config");
+  const quotaStatusRequest = aiProvider.buildAiQuotaStatusRequest({
+    config: effectiveStatusConfig.config,
+    companyMonthlyBudgetCents:
+      effectiveStatusConfig.companyMonthlyBudgetCents,
+  });
+  assert(quotaStatusRequest, "A valid company config produces a bounded quota-status request");
+  assertEqual(
+    aiProvider.isAiQuotaStatusRequestWithinBounds(quotaStatusRequest),
+    true,
+    "The current-quota read request shares the bounded reservation contract",
+  );
+  const maximumReservationCostCents = quotaStatusRequest.estimatedCostCents;
+  const buildQuotaAwareStatus = (quotaOverrides) =>
+    aiProvider.buildAiCompanyPilotStatus({
+      companyId: wtCompanyId,
+      policy: baseCompanyPolicy,
+      config: productionStatusConfig,
+      savedAnalysesReadAvailable: true,
+      quotaStatus: { ...availableQuotaStatus, ...quotaOverrides },
+    });
+  const availableAtExactCostBoundary = buildQuotaAwareStatus({
+    reservedCostCentsToday:
+      quotaStatusRequest.dailyBudgetCents - maximumReservationCostCents,
+    companyReservedCostCentsThisMonth:
+      quotaStatusRequest.companyMonthlyBudgetCents -
+      maximumReservationCostCents,
+  });
+  assertEqual(
+    availableAtExactCostBoundary.currentQuotaAvailable,
+    true,
+    "A maximum reservation that exactly fits both remaining budgets remains available",
+  );
+  for (const [label, quotaOverrides] of [
+    [
+      "global daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "global_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.dailyRequestLimit,
+      },
+    ],
+    [
+      "company daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "company_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.perCompanyDailyRequestLimit,
+        companyRequestsToday: effectiveStatusConfig.config.perCompanyDailyRequestLimit,
+      },
+    ],
+    [
+      "user daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "user_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+        companyRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+        userRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+      },
+    ],
+    [
+      "global daily budget",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "global_daily_budget",
+        reservedCostCentsToday:
+          quotaStatusRequest.dailyBudgetCents - maximumReservationCostCents + 1,
+      },
+    ],
+    [
+      "company monthly budget",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "company_monthly_budget",
+        companyReservedCostCentsThisMonth:
+          quotaStatusRequest.companyMonthlyBudgetCents -
+          maximumReservationCostCents +
+          1,
+      },
+    ],
+  ]) {
+    const exhaustedStatus = buildQuotaAwareStatus(quotaOverrides);
+    assertEqual(
+      exhaustedStatus.aiEnabled,
+      false,
+      `${label} exhaustion disables operational live AI status`,
+    );
+    assertEqual(
+      exhaustedStatus.currentQuotaAvailable,
+      false,
+      `${label} exhaustion is reflected by the sanitized quota boolean`,
+    );
+    assertEqual(
+      exhaustedStatus.readiness.state,
+      "usage_limit_reached",
+      `${label} exhaustion uses the current quota readiness state`,
+    );
+    assertEqual(
+      exhaustedStatus.companyPolicy.aiEnabled,
+      true,
+      `${label} exhaustion does not misstate the durable company policy`,
+    );
+    assertEqual(
+      exhaustedStatus.usageAccountingConfigured,
+      true,
+      `${label} exhaustion does not misstate accounting configuration`,
+    );
+  }
   const excessiveCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: {
@@ -1036,6 +1218,19 @@ try {
     "OpenAI adapter trims the configured server credential before use",
   );
   assertEqual(openAiRequest.body.store, false, "OpenAI request disables provider-side storage");
+  assertEqual(
+    Object.prototype.hasOwnProperty.call(
+      openAiResult.usage,
+      "reservedCostUsdToday",
+    ),
+    false,
+    "An exact-company result never serializes the global all-company reserved cost",
+  );
+  assertEqual(
+    openAiResult.usage.companyReservedCostUsdThisMonth,
+    0.5,
+    "An exact-company result may expose only its company-scoped monthly reservation cost",
+  );
   assertEqual(
     openAiRequest.body.text.format.type,
     "json_schema",

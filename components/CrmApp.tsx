@@ -188,6 +188,7 @@ import {
 import {
   answerAiCommand,
   buildAiWorkspaceModel,
+  getCurrentAiPilotError,
   getCurrentAiRuntimeProviderHealth,
   isCurrentAiCommandCompletion,
   type AiAdvisorModeKey,
@@ -195,6 +196,7 @@ import {
   type AiCommandCenterRecommendation,
   type AiGroundedResponse,
   type AiPriorityItem,
+  type AiPilotErrorEvidence,
   type AiRecommendedAction,
   type AiRuntimeProviderHealthEvidence,
   type AiSourceRecord,
@@ -39886,6 +39888,7 @@ function isAiCompanyPilotStatus(
   return (
     status.companyId === expectedCompanyId &&
     typeof status.aiEnabled === "boolean" &&
+    typeof status.currentQuotaAvailable === "boolean" &&
     Number.isInteger(status.monthlyBudgetCents) &&
     Number(status.monthlyBudgetCents) >= 0 &&
     typeof status.savedAnalysesReadAvailable === "boolean" &&
@@ -39927,7 +39930,8 @@ function AiToolsView({
   const [aiResponseCompanyId, setAiResponseCompanyId] = useState<string | null>(null);
   const [aiPilotResultEvidence, setAiPilotResultEvidence] =
     useState<AiPilotResultEvidence | null>(null);
-  const [aiPilotError, setAiPilotError] = useState("");
+  const [aiPilotErrorEvidence, setAiPilotErrorEvidence] =
+    useState<AiPilotErrorEvidence | null>(null);
   const [aiProviderStatus, setAiProviderStatus] =
     useState<AiCompanyPilotStatus | null>(null);
   const [aiProviderStatusError, setAiProviderStatusError] = useState<{
@@ -39937,6 +39941,8 @@ function AiToolsView({
   const [aiProviderStatusLoadingCompanyId, setAiProviderStatusLoadingCompanyId] =
     useState<string | null>(null);
   const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
+    useState(0);
+  const [aiProviderStatusReloadSequence, setAiProviderStatusReloadSequence] =
     useState(0);
   const [aiRuntimeProviderHealth, setAiRuntimeProviderHealth] =
     useState<AiRuntimeProviderHealthEvidence | null>(null);
@@ -39988,6 +39994,11 @@ function AiToolsView({
     aiProviderStatusError?.companyId === exactAiCompanyId
       ? aiProviderStatusError.message
       : "";
+  const currentAiPilotError = getCurrentAiPilotError({
+    evidence: aiPilotErrorEvidence,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
   const currentAiRuntimeProviderHealth = getCurrentAiRuntimeProviderHealth({
     evidence: aiRuntimeProviderHealth,
     companyId: exactAiCompanyId,
@@ -40042,7 +40053,7 @@ function AiToolsView({
     setAiResponses([]);
     setAiResponseCompanyId(null);
     setAiPilotResultEvidence(null);
-    setAiPilotError("");
+    setAiPilotErrorEvidence(null);
     setAiProviderStatus(null);
     setAiProviderStatusError(null);
     setAiProviderStatusLoadingCompanyId(null);
@@ -40129,7 +40140,11 @@ function AiToolsView({
 
     void loadAiProviderStatus();
     return () => controller.abort();
-  }, [exactAiCompanyId, statusRefreshSequence]);
+  }, [
+    aiProviderStatusReloadSequence,
+    exactAiCompanyId,
+    statusRefreshSequence,
+  ]);
 
   useEffect(
     () => () => {
@@ -40219,24 +40234,30 @@ function AiToolsView({
       return;
     }
     if (!exactAiCompanySelected) {
-      setAiPilotError(
-        "Select one company in Company Scope before running audited AI. No provider request was made.",
-      );
+      setAiPilotErrorEvidence({
+        companyId: null,
+        statusRefreshSequence,
+        message:
+          "Select one company in Company Scope before running audited AI. No provider request was made.",
+      });
       return;
     }
 
     const requestCompanyId = exactAiCompanyId;
     if (!requestCompanyId) {
-      setAiPilotError(
-        "Select a current authorized company before running audited AI. No provider request was made.",
-      );
+      setAiPilotErrorEvidence({
+        companyId: null,
+        statusRefreshSequence,
+        message:
+          "Select a current authorized company before running audited AI. No provider request was made.",
+      });
       return;
     }
     const requestStatusRefreshSequence = statusRefreshSequence;
     aiReviewAbortRef.current?.abort();
     aiReviewAbortRef.current = null;
     setReviewingActionId(null);
-    setAiPilotError("");
+    setAiPilotErrorEvidence(null);
     setIsAiCommandRunning(true);
     const controller = new AbortController();
     aiCommandAbortRef.current = controller;
@@ -40318,17 +40339,26 @@ function AiToolsView({
         return;
       }
       if (controller.signal.aborted) {
-        setAiPilotError("AI request canceled. No action was taken.");
+        setAiPilotErrorEvidence({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          message: "AI request canceled. No action was taken.",
+        });
       } else {
-        setAiPilotError(
-          `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
-        );
+        setAiPilotErrorEvidence({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          message: `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
+        });
         setAiResponseCompanyId(requestCompanyId);
         setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
         setAiPilotResultEvidence(null);
         setReviewedActionIds({});
       }
     } finally {
+      if (activeAiCompanyRef.current === requestCompanyId) {
+        setAiProviderStatusReloadSequence((current) => current + 1);
+      }
       if (aiCommandAbortRef.current === controller) {
         aiCommandAbortRef.current = null;
         setIsAiCommandRunning(false);
@@ -40783,9 +40813,9 @@ function AiToolsView({
           ) : null}
         </form>
 
-        {aiPilotError ? (
+        {currentAiPilotError ? (
           <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
-            {aiPilotError}
+            {currentAiPilotError}
           </p>
         ) : null}
 
@@ -41644,7 +41674,10 @@ function AiProviderCard({
 }) {
   const runtimeProviderFailed = runtimeProviderHealth === "failed";
   const isEnabled = Boolean(
-    !runtimeProviderFailed && status?.aiEnabled && status.readiness.liveProviderEnabled,
+    !runtimeProviderFailed &&
+      status?.aiEnabled &&
+      status.currentQuotaAvailable &&
+      status.readiness.liveProviderEnabled,
   );
   const statusPhase = !companyName
     ? "selection_required"
@@ -41663,7 +41696,9 @@ function AiProviderCard({
         ? "Provider test failed"
         : status
           ? status.readiness.label
-          : "Production AI status unavailable";
+          : statusError
+            ? "Production AI status unavailable"
+            : "Production AI status pending";
   const summary = !companyName
     ? "Choose WeatherTech Roofing LLC or IHC Painting to load its authenticated AI policy and monthly budget."
     : isLoading
@@ -41672,12 +41707,16 @@ function AiProviderCard({
         ? `${companyName}: The latest live provider test failed. Production AI will remain unavailable until a later tested request succeeds.`
         : status
           ? `${companyName}: ${status.readiness.summary}`
-          : `${companyName}: ${statusError || "The authenticated provider status could not be loaded."}`;
+          : statusError
+            ? `${companyName}: ${statusError}`
+            : `${companyName}: Waiting for the authenticated provider status.`;
   const providerLabel = status
     ? `${status.readiness.provider} / ${status.readiness.model}`
-    : companyName
-      ? "authenticated status pending"
-      : "exact company scope required";
+    : !companyName
+      ? "exact company scope required"
+      : statusError
+        ? "authenticated status unavailable"
+        : "authenticated status pending";
   const cardClass = isEnabled
     ? "rounded-2xl border border-sky-200 bg-sky-50 p-4"
     : "rounded-2xl border border-amber-200 bg-amber-50 p-4";
@@ -41690,6 +41729,9 @@ function AiProviderCard({
       className={cardClass}
       data-testid="ai-provider-status"
       data-ai-enabled={isEnabled ? "true" : "false"}
+      data-ai-current-quota-available={
+        status ? String(status.currentQuotaAvailable) : ""
+      }
       data-ai-status-phase={statusPhase}
       data-ai-request-company-id={companyId ?? ""}
       data-ai-status-request-sequence={String(requestSequence)}
@@ -41729,6 +41771,16 @@ function AiProviderCard({
             tone={status.monthlyBudgetCents > 0 ? "blue" : "amber"}
           />
         ) : null}
+        {status ? (
+          <AiStatusBadge
+            label={
+              status.currentQuotaAvailable
+                ? "Current quota available"
+                : "Current quota unavailable"
+            }
+            tone={status.currentQuotaAvailable ? "blue" : "amber"}
+          />
+        ) : null}
         <AiStatusBadge label="External actions disabled" tone="slate" />
         {status ? (
           <AiStatusBadge
@@ -41753,7 +41805,7 @@ function AiPilotControlPanel({
   runtimeProviderHealth: "ready" | "failed" | null;
 }) {
   const usage = result?.usage;
-  const readiness = result?.readiness ?? providerStatus?.readiness;
+  const readiness = providerStatus?.readiness ?? result?.readiness;
   const runtimeProviderFailed = runtimeProviderHealth === "failed";
   const sourceCount = result?.context.records.length ?? latestResponse?.supportingRecords.length ?? 0;
 
@@ -41794,12 +41846,15 @@ function AiPilotControlPanel({
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Usage and cost controls</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {usage?.reason ??
-            (providerStatus?.usageAccountingConfigured
+          {providerStatus?.usageAccountingConfigured &&
+          providerStatus.currentQuotaAvailable === false
+            ? "Usage accounting is configured, but current request capacity is unavailable. No provider call can run until quota resets or approved limits change."
+            : usage?.reason ??
+              (providerStatus?.usageAccountingConfigured
               ? `Usage accounting is configured with a ${formatMoney(providerStatus.monthlyBudgetCents / 100)} monthly company budget.`
               : providerStatus
                 ? "Usage accounting is not ready for this company. No provider call can run until the required controls are complete."
-              : "Select one company to load its authenticated usage and cost controls.")}
+                : "Select one company to load its authenticated usage and cost controls.")}
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
           <span>
@@ -41811,7 +41866,9 @@ function AiPilotControlPanel({
           <span>One attempt: ${usage?.estimatedCostUsd ?? 0}</span>
           <span>Max attempts: {usage?.maxProviderAttempts ?? 0}</span>
           <span>Max reservation: ${usage?.maxReservedRequestCostUsd ?? 0}</span>
-          <span>Reserved today: ${usage?.reservedCostUsdToday ?? 0}</span>
+          <span>
+            Company reserved this month: ${usage?.companyReservedCostUsdThisMonth ?? 0}
+          </span>
         </div>
       </div>
       <div className="rounded-2xl border border-slate-200 bg-white p-4">

@@ -1,9 +1,11 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import type { AiQuotaStatusRequest } from "../crm/aiProvider";
 import type { Database } from "../crm/types";
 
 const AI_QUOTA_RPC_PATH = "/rpc/wtos_reserve_ai_request_v1";
+const AI_QUOTA_STATUS_RPC_PATH = "/rest/v1/rpc/wtos_get_ai_quota_status_v1";
 const AI_QUOTA_RPC_ARGUMENTS = [
   "p_company_id",
   "p_actor_user_id",
@@ -12,6 +14,8 @@ const AI_QUOTA_RPC_ARGUMENTS = [
 ] as const;
 const SUPABASE_OPENAPI_MAX_BYTES = 2 * 1024 * 1024;
 const SUPABASE_OPENAPI_TIMEOUT_MS = 8_000;
+const SUPABASE_AI_QUOTA_STATUS_MAX_BYTES = 16 * 1024;
+const SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS = 8_000;
 const AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000;
 const AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000;
 
@@ -25,6 +29,8 @@ const aiQuotaCapabilityCache = new WeakMap<
   typeof fetch,
   Map<string, AiQuotaCapabilityCacheEntry>
 >();
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -98,7 +104,10 @@ function hasExactAiQuotaRpcContract(document: unknown) {
   );
 }
 
-async function readBoundedResponseText(response: Response) {
+async function readBoundedResponseText(
+  response: Response,
+  maximumBytes = SUPABASE_OPENAPI_MAX_BYTES,
+) {
   const reader = response.body?.getReader();
   if (!reader) {
     return null;
@@ -113,7 +122,7 @@ async function readBoundedResponseText(response: Response) {
         break;
       }
       byteLength += chunk.value.byteLength;
-      if (byteLength > SUPABASE_OPENAPI_MAX_BYTES) {
+      if (byteLength > maximumBytes) {
         await reader.cancel();
         return null;
       }
@@ -230,6 +239,70 @@ export async function verifySupabaseAiQuotaServiceCapability(
     });
   cacheEntry.inFlight = inFlight;
   return inFlight;
+}
+
+/**
+ * Reads a fresh, bounded quota snapshot through the stable service-role-only
+ * RPC. The response remains server-side and is validated against the exact
+ * company and actor before any browser-safe status is built.
+ */
+export async function readSupabaseAiQuotaStatus(
+  {
+    companyId,
+    actorUserId,
+    request,
+  }: {
+    companyId: string;
+    actorUserId: string;
+    request: AiQuotaStatusRequest;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
+): Promise<unknown | null> {
+  const config = readSupabaseServiceRoleConfig(env);
+  if (
+    !config ||
+    !uuidPattern.test(companyId) ||
+    !uuidPattern.test(actorUserId)
+  ) {
+    return null;
+  }
+
+  try {
+    const endpoint = new URL(AI_QUOTA_STATUS_RPC_PATH, config.url);
+    endpoint.searchParams.set("p_company_id", companyId);
+    endpoint.searchParams.set("p_actor_user_id", actorUserId);
+    endpoint.searchParams.set("p_request", JSON.stringify(request));
+    const response = await fetcher(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "Accept-Profile": "public",
+        apikey: config.serviceRoleKey,
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+      },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS),
+    });
+    if (
+      !response.ok ||
+      !response.headers.get("content-type")?.startsWith("application/json")
+    ) {
+      await response.body?.cancel();
+      return null;
+    }
+    const responseText = await readBoundedResponseText(
+      response,
+      SUPABASE_AI_QUOTA_STATUS_MAX_BYTES,
+    );
+    if (!responseText) {
+      return null;
+    }
+    return JSON.parse(responseText) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 /**
