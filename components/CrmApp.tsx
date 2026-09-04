@@ -198,8 +198,8 @@ import {
 } from "../lib/crm/aiTools";
 import type {
   AiActionPreview,
+  AiCompanyPilotStatus,
   AiPilotCommandResult,
-  AiPilotReadiness,
   AiUsageCheck,
 } from "../lib/crm/aiProvider";
 import {
@@ -6410,13 +6410,8 @@ function CrmWorkspace({
   onNotice,
   onError,
 }: CrmWorkspaceProps) {
-  const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>(() => {
-    if (typeof window === "undefined") {
-      return "all";
-    }
-
-    return window.localStorage.getItem("weathertech-company-scope") ?? "all";
-  });
+  const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>("all");
+  const [companyScopeStorageReady, setCompanyScopeStorageReady] = useState(false);
   const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
     useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -6603,6 +6598,20 @@ function CrmWorkspace({
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
   );
+
+  useEffect(() => {
+    if (companyScopeStorageReady) {
+      return;
+    }
+
+    const storedCompanyId = window.localStorage.getItem("weathertech-company-scope");
+    setSelectedCompanyId(
+      storedCompanyId && snapshot.companies.some((company) => company.id === storedCompanyId)
+        ? storedCompanyId
+        : "all",
+    );
+    setCompanyScopeStorageReady(true);
+  }, [companyScopeStorageReady, snapshot.companies]);
   const focusedRecordCompanyId = useMemo(() => {
     if (!workspaceRecordFocus) {
       return null;
@@ -6718,8 +6727,10 @@ function CrmWorkspace({
   }, [selectedCompanyId, snapshot.companies]);
 
   useEffect(() => {
-    window.localStorage.setItem("weathertech-company-scope", selectedCompanyId);
-  }, [selectedCompanyId]);
+    if (companyScopeStorageReady) {
+      window.localStorage.setItem("weathertech-company-scope", selectedCompanyId);
+    }
+  }, [companyScopeStorageReady, selectedCompanyId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -39826,6 +39837,50 @@ type AiActionReviewReceipt = {
   idempotent: boolean;
 };
 
+function getAiEndpointErrorMessage(
+  payload: unknown,
+  status: number,
+  fallback: string,
+) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    "error" in payload &&
+    typeof payload.error === "string" &&
+    payload.error.trim()
+  ) {
+    return payload.error.trim().slice(0, 320);
+  }
+
+  return `${fallback} (${status}).`;
+}
+
+function isAiCompanyPilotStatus(
+  value: unknown,
+  expectedCompanyId: string,
+): value is AiCompanyPilotStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const status = value as Partial<AiCompanyPilotStatus>;
+  return (
+    status.companyId === expectedCompanyId &&
+    typeof status.aiEnabled === "boolean" &&
+    Number.isInteger(status.monthlyBudgetCents) &&
+    Number(status.monthlyBudgetCents) >= 0 &&
+    Boolean(status.readiness) &&
+    typeof status.readiness?.label === "string" &&
+    typeof status.readiness?.liveProviderEnabled === "boolean" &&
+    Boolean(status.companyPolicy) &&
+    status.companyPolicy?.configured === true &&
+    typeof status.companyPolicy?.aiEnabled === "boolean" &&
+    typeof status.usageAccountingConfigured === "boolean" &&
+    status.externalActionExecutionEnabled === false
+  );
+}
+
 const aiAuditReferencePattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -39849,8 +39904,19 @@ function AiToolsView({
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
   const [aiCommand, setAiCommand] = useState("");
   const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
+  const [aiResponseCompanyId, setAiResponseCompanyId] = useState<string | null>(null);
   const [aiPilotResult, setAiPilotResult] = useState<AiPilotCommandResult | null>(null);
   const [aiPilotError, setAiPilotError] = useState("");
+  const [aiProviderStatus, setAiProviderStatus] =
+    useState<AiCompanyPilotStatus | null>(null);
+  const [aiProviderStatusError, setAiProviderStatusError] = useState<{
+    companyId: string;
+    message: string;
+  } | null>(null);
+  const [aiProviderStatusLoadingCompanyId, setAiProviderStatusLoadingCompanyId] =
+    useState<string | null>(null);
+  const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
+    useState(0);
   const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
   const [reviewingActionId, setReviewingActionId] = useState<string | null>(null);
@@ -39863,6 +39929,8 @@ function AiToolsView({
       propertyKey: "all",
     });
   const aiCommandAbortRef = useRef<AbortController | null>(null);
+  const aiProviderStatusAbortRef = useRef<AbortController | null>(null);
+  const aiProviderStatusRequestSequenceRef = useRef(0);
   const aiReviewAbortRef = useRef<AbortController | null>(null);
   const activeAiCompanyRef = useRef<CompanyScopeId>(activeCompanyId);
 
@@ -39875,7 +39943,23 @@ function AiToolsView({
       }),
     [activeCompanyId, companyMap, snapshot],
   );
-  const exactAiCompanySelected = activeCompanyId !== "all";
+  const exactAiCompany =
+    activeCompanyId === "all" ? null : companyMap.get(activeCompanyId) ?? null;
+  const exactAiCompanyId = exactAiCompany?.id ?? null;
+  const exactAiCompanySelected = exactAiCompanyId !== null;
+  const currentAiProviderStatus =
+    aiProviderStatus?.companyId === exactAiCompanyId ? aiProviderStatus : null;
+  const currentAiPilotResult =
+    aiPilotResult?.companyId === exactAiCompanyId ? aiPilotResult : null;
+  const currentAiResponses =
+    aiResponseCompanyId === exactAiCompanyId ? aiResponses : [];
+  const currentAiProviderStatusError =
+    aiProviderStatusError?.companyId === exactAiCompanyId
+      ? aiProviderStatusError.message
+      : "";
+  const isAiProviderStatusLoading =
+    aiProviderStatusLoadingCompanyId === exactAiCompanyId &&
+    exactAiCompanyId !== null;
 
   useEffect(() => {
     if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
@@ -39901,14 +39985,20 @@ function AiToolsView({
 
   useEffect(() => {
     aiCommandAbortRef.current?.abort();
+    aiProviderStatusAbortRef.current?.abort();
     aiReviewAbortRef.current?.abort();
     aiCommandAbortRef.current = null;
+    aiProviderStatusAbortRef.current = null;
     aiReviewAbortRef.current = null;
     activeAiCompanyRef.current = activeCompanyId;
     setAiCommand("");
     setAiResponses([]);
+    setAiResponseCompanyId(null);
     setAiPilotResult(null);
     setAiPilotError("");
+    setAiProviderStatus(null);
+    setAiProviderStatusError(null);
+    setAiProviderStatusLoadingCompanyId(null);
     setIsAiCommandRunning(false);
     setReviewedActionIds({});
     setReviewingActionId(null);
@@ -39920,9 +40010,83 @@ function AiToolsView({
     });
   }, [activeCompanyId]);
 
+  useEffect(() => {
+    if (!exactAiCompanyId) {
+      return;
+    }
+
+    const requestCompanyId = exactAiCompanyId;
+    const requestSequence = aiProviderStatusRequestSequenceRef.current + 1;
+    aiProviderStatusRequestSequenceRef.current = requestSequence;
+    const controller = new AbortController();
+    aiProviderStatusAbortRef.current?.abort();
+    aiProviderStatusAbortRef.current = controller;
+    setAiProviderStatus(null);
+    setAiProviderStatusError(null);
+    setAiProviderStatusLoadingCompanyId(requestCompanyId);
+    setAiProviderStatusRequestSequence(requestSequence);
+
+    const loadAiProviderStatus = async () => {
+      try {
+        const response = await fetch(
+          `/api/ai-tools/command?companyId=${encodeURIComponent(requestCompanyId)}`,
+          {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as unknown;
+        if (!response.ok) {
+          throw new Error(
+            getAiEndpointErrorMessage(
+              payload,
+              response.status,
+              "Production AI status could not be loaded",
+            ),
+          );
+        }
+        if (!isAiCompanyPilotStatus(payload, requestCompanyId)) {
+          throw new Error("Production AI status returned an invalid company-scoped response.");
+        }
+        if (
+          controller.signal.aborted ||
+          activeAiCompanyRef.current !== requestCompanyId
+        ) {
+          return;
+        }
+        setAiProviderStatus(payload);
+      } catch (currentError) {
+        if (
+          controller.signal.aborted ||
+          activeAiCompanyRef.current !== requestCompanyId
+        ) {
+          return;
+        }
+        setAiProviderStatusError({
+          companyId: requestCompanyId,
+          message: getCaughtErrorMessage(
+            currentError,
+            "Production AI status could not be loaded.",
+          ),
+        });
+      } finally {
+        if (aiProviderStatusAbortRef.current === controller) {
+          aiProviderStatusAbortRef.current = null;
+          setAiProviderStatusLoadingCompanyId(null);
+        }
+      }
+    };
+
+    void loadAiProviderStatus();
+    return () => controller.abort();
+  }, [exactAiCompanyId]);
+
   useEffect(
     () => () => {
       aiCommandAbortRef.current?.abort();
+      aiProviderStatusAbortRef.current?.abort();
       aiReviewAbortRef.current?.abort();
     },
     [],
@@ -39995,10 +40159,10 @@ function AiToolsView({
       },
       {
         label: "Local answer history",
-        value: `${aiResponses.length} stateless answer${aiResponses.length === 1 ? "" : "s"} shown`,
+        value: `${currentAiResponses.length} stateless answer${currentAiResponses.length === 1 ? "" : "s"} shown`,
       },
     ],
-    [aiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
+    [currentAiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
   );
 
   const runAiCommandPrompt = async (prompt: string) => {
@@ -40013,7 +40177,13 @@ function AiToolsView({
       return;
     }
 
-    const requestCompanyId = activeCompanyId;
+    const requestCompanyId = exactAiCompanyId;
+    if (!requestCompanyId) {
+      setAiPilotError(
+        "Select a current authorized company before running audited AI. No provider request was made.",
+      );
+      return;
+    }
     aiReviewAbortRef.current?.abort();
     aiReviewAbortRef.current = null;
     setReviewingActionId(null);
@@ -40035,6 +40205,7 @@ function AiToolsView({
     try {
       const response = await fetch("/api/ai-tools/command", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
@@ -40044,12 +40215,22 @@ function AiToolsView({
         }),
         signal: controller.signal,
       });
+      const payload = (await response.json().catch(() => null)) as unknown;
 
       if (!response.ok) {
-        throw new Error(`AI pilot endpoint returned ${response.status}.`);
+        throw new Error(
+          getAiEndpointErrorMessage(
+            payload,
+            response.status,
+            "AI pilot endpoint request failed",
+          ),
+        );
       }
 
-      const result = (await response.json()) as AiPilotCommandResult;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("AI pilot endpoint returned an invalid response.");
+      }
+      const result = payload as AiPilotCommandResult;
       if (
         controller.signal.aborted ||
         activeAiCompanyRef.current !== requestCompanyId ||
@@ -40058,6 +40239,7 @@ function AiToolsView({
         return;
       }
       setAiPilotResult(result);
+      setAiResponseCompanyId(requestCompanyId);
       setAiResponses((current) => [result.response, ...current].slice(0, 6));
       setReviewedActionIds({});
     } catch (currentError) {
@@ -40070,6 +40252,7 @@ function AiToolsView({
         setAiPilotError(
           `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
         );
+        setAiResponseCompanyId(requestCompanyId);
         setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
         setAiPilotResult(null);
         setReviewedActionIds({});
@@ -40101,7 +40284,7 @@ function AiToolsView({
     decision: "approved" | "rejected",
   ) => {
     const reviewCompanyId = activeCompanyId;
-    const preview = aiPilotResult?.actionPreviews.find(
+    const preview = currentAiPilotResult?.actionPreviews.find(
       (candidate) => candidate.id === action.id,
     );
 
@@ -40118,7 +40301,7 @@ function AiToolsView({
     if (
       reviewCompanyId === "all" ||
       activeAiCompanyRef.current !== reviewCompanyId ||
-      aiPilotResult?.companyId !== reviewCompanyId ||
+      currentAiPilotResult?.companyId !== reviewCompanyId ||
       action.companyId !== reviewCompanyId ||
       preview.companyId !== reviewCompanyId
     ) {
@@ -40250,7 +40433,7 @@ function AiToolsView({
       ? `${selectedCustomer.display_name} at ${selectedCustomer.property_address}`
       : "the selected property";
     setScopeDraft(
-      `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- Live AI provider is not configured; this draft uses approved template language and visible CRM context only.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
+      `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- This deterministic draft uses approved template language and visible CRM context only; no provider or customer action was executed.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
     );
   };
 
@@ -40286,7 +40469,8 @@ function AiToolsView({
         category: selectedTemplate.category,
         status: "draft",
         scope_body: scopeDraft,
-        notes: "Created from AI Scope Writer 2.0 in rule-based disabled-provider mode. Human review required.",
+        notes:
+          "Created from AI Scope Writer 2.0 deterministic template mode. No provider or customer action was executed. Human review required.",
       });
       await createDocument(client, {
         company_id: savedScope.company_id,
@@ -40382,7 +40566,7 @@ function AiToolsView({
           coats: selectedEstimate.coats,
           primer_required: selectedEstimate.primer_required,
           notes:
-            "Created from AI Estimate Assistant 2.0 in rule-based disabled-provider mode using existing estimate line items. Human review required.",
+            "Created from AI Estimate Assistant 2.0 deterministic source-record mode using existing estimate line items. No provider or customer action was executed. Human review required.",
         },
         estimateDraft,
       );
@@ -40445,7 +40629,14 @@ function AiToolsView({
               customer-facing and provider actions remain disabled.
             </p>
           </div>
-          <AiProviderCard model={aiWorkspace} readiness={aiPilotResult?.readiness ?? null} />
+          <AiProviderCard
+            companyId={exactAiCompanyId}
+            companyName={exactAiCompany?.name ?? null}
+            requestSequence={aiProviderStatusRequestSequence}
+            status={currentAiProviderStatus}
+            statusError={currentAiProviderStatusError}
+            isLoading={isAiProviderStatusLoading}
+          />
         </div>
 
         <form
@@ -40537,13 +40728,14 @@ function AiToolsView({
         />
 
         <AiPilotControlPanel
-          result={aiPilotResult}
-          latestResponse={aiResponses[0] ?? null}
+          result={currentAiPilotResult}
+          latestResponse={currentAiResponses[0] ?? null}
+          providerStatus={currentAiProviderStatus}
         />
 
         <AiGroundedResponsePanel
-          response={aiResponses[0] ?? null}
-          actionPreviews={aiPilotResult?.actionPreviews ?? []}
+          response={currentAiResponses[0] ?? null}
+          actionPreviews={currentAiPilotResult?.actionPreviews ?? []}
           reviewedActionIds={reviewedActionIds}
           reviewingActionId={reviewingActionId}
           onReviewAction={markActionReviewed}
@@ -40831,11 +41023,11 @@ function AiToolsView({
           <div>
             <h3 className="text-lg font-bold text-slate-950">Saved AI analyses</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Persistence is architecture-ready through migration 0033. This run did not
-              apply remote migrations or configure a live AI provider.
+              Production persistence is deployed. This view does not save or share a new
+              analysis without a separate reviewed workflow.
             </p>
           </div>
-          <AiStatusBadge label="Production disabled" tone="slate" />
+          <AiStatusBadge label="Persistence available" tone="blue" />
         </div>
         <AiDraftList drafts={aiWorkspace.savedAnalyses} />
       </section>
@@ -41346,43 +41538,97 @@ function aiRecommendationMatchesAdvisor(
 }
 
 function AiProviderCard({
-  model,
-  readiness,
+  companyId,
+  companyName,
+  requestSequence,
+  status,
+  statusError,
+  isLoading,
 }: {
-  model: AiWorkspaceModel;
-  readiness: AiPilotReadiness | null;
+  companyId: string | null;
+  companyName: string | null;
+  requestSequence: number;
+  status: AiCompanyPilotStatus | null;
+  statusError: string;
+  isLoading: boolean;
 }) {
-  const label = readiness?.label ?? model.provider.label;
-  const summary = readiness?.summary ?? model.provider.summary;
-  const providerLabel = readiness
-    ? `${readiness.provider} / ${readiness.model}`
-    : "disabled / not selected";
+  const isEnabled = Boolean(status?.aiEnabled && status.readiness.liveProviderEnabled);
+  const statusPhase = !companyName
+    ? "selection_required"
+    : isLoading
+      ? "loading"
+      : status
+        ? "loaded"
+        : statusError
+          ? "error"
+          : "pending";
+  const label = !companyName
+    ? "Select a company for Production AI"
+    : isLoading
+      ? "Checking Production AI status"
+      : status
+        ? status.readiness.label
+        : "Production AI status unavailable";
+  const summary = !companyName
+    ? "Choose WeatherTech Roofing LLC or IHC Painting to load its authenticated AI policy and monthly budget."
+    : isLoading
+      ? `Loading the authenticated, company-scoped provider policy for ${companyName}.`
+      : status
+        ? `${companyName}: ${status.readiness.summary}`
+        : `${companyName}: ${statusError || "The authenticated provider status could not be loaded."}`;
+  const providerLabel = status
+    ? `${status.readiness.provider} / ${status.readiness.model}`
+    : companyName
+      ? "authenticated status pending"
+      : "exact company scope required";
+  const cardClass = isEnabled
+    ? "rounded-2xl border border-sky-200 bg-sky-50 p-4"
+    : "rounded-2xl border border-amber-200 bg-amber-50 p-4";
+  const textClass = isEnabled ? "text-sky-950" : "text-amber-950";
+  const mutedTextClass = isEnabled ? "text-sky-900" : "text-amber-900";
+  const accentTextClass = isEnabled ? "text-sky-800" : "text-amber-800";
 
   return (
     <div
-      className="rounded-2xl border border-amber-200 bg-amber-50 p-4"
-      data-testid="ai-disabled-state"
+      className={cardClass}
+      data-testid="ai-provider-status"
+      data-ai-enabled={isEnabled ? "true" : "false"}
+      data-ai-status-phase={statusPhase}
+      data-ai-request-company-id={companyId ?? ""}
+      data-ai-status-request-sequence={String(requestSequence)}
+      data-ai-status-company-id={status?.companyId ?? ""}
+      data-ai-monthly-budget-cents={status ? String(status.monthlyBudgetCents) : ""}
+      role="status"
+      aria-live="polite"
+      aria-busy={isLoading}
     >
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+        {isEnabled ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-sky-700" />
+        ) : (
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+        )}
         <div>
-          <p className="font-semibold text-amber-950">{label}</p>
-          <p className="mt-1 text-sm leading-5 text-amber-900">{summary}</p>
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+          <p className={`font-semibold ${textClass}`}>{label}</p>
+          <p className={`mt-1 text-sm leading-5 ${mutedTextClass}`}>{summary}</p>
+          <p className={`mt-2 text-xs font-semibold uppercase tracking-wide ${accentTextClass}`}>
             {providerLabel}
           </p>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <AiStatusBadge
-          label={readiness?.state.replace(/_/g, " ") ?? "AI_ENABLED=false"}
-          tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+          label={status?.readiness.state.replace(/_/g, " ") ?? "status not loaded"}
+          tone={isEnabled ? "blue" : "amber"}
         />
-        <AiStatusBadge label="No fake AI output" tone="slate" />
-        <AiStatusBadge
-          label={readiness?.migrationStatus ?? "Owner setup required"}
-          tone={readiness?.migrationStatus === "applied" ? "blue" : "amber"}
-        />
+        {status ? (
+          <AiStatusBadge
+            label={`${formatMoney(status.monthlyBudgetCents / 100)}/month`}
+            tone={status.monthlyBudgetCents > 0 ? "blue" : "amber"}
+          />
+        ) : null}
+        <AiStatusBadge label="External actions disabled" tone="slate" />
+        {status ? <AiStatusBadge label={status.readiness.migrationStatus} tone="blue" /> : null}
       </div>
     </div>
   );
@@ -41391,12 +41637,14 @@ function AiProviderCard({
 function AiPilotControlPanel({
   result,
   latestResponse,
+  providerStatus,
 }: {
   result: AiPilotCommandResult | null;
   latestResponse: AiGroundedResponse | null;
+  providerStatus: AiCompanyPilotStatus | null;
 }) {
   const usage = result?.usage;
-  const readiness = result?.readiness;
+  const readiness = result?.readiness ?? providerStatus?.readiness;
   const sourceCount = result?.context.records.length ?? latestResponse?.supportingRecords.length ?? 0;
 
   return (
@@ -41424,9 +41672,15 @@ function AiPilotControlPanel({
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Usage and cost controls</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {usage?.reason ?? "Daily budgets, per-user limits, per-company limits, token caps, timeout, and retry limits are required before live testing."}
+          {usage?.reason ??
+            (providerStatus
+              ? `Usage accounting is configured with a ${formatMoney(providerStatus.monthlyBudgetCents / 100)} monthly company budget.`
+              : "Select one company to load its authenticated usage and cost controls.")}
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+          <span>
+            Monthly budget: {providerStatus ? formatMoney(providerStatus.monthlyBudgetCents / 100) : "$0"}
+          </span>
           <span>Request tokens: {usage?.estimatedRequestTokens ?? 0}</span>
           <span>Max response: {usage?.maxResponseTokens ?? 0}</span>
           <span>Budget: ${usage?.dailyBudgetUsd ?? 0}</span>
@@ -41472,7 +41726,7 @@ function AiGroundedResponsePanel({
       <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
         Ask a read-only question or choose a suggested command. Responses will show the
         answer, supporting records, missing information, approval requirements, and
-        whether production activation is disabled.
+        whether external actions remain disabled.
       </div>
     );
   }
@@ -41607,7 +41861,7 @@ function AiAssistantPanel({
           </span>
           <h3 className="text-base font-bold text-slate-950">{title}</h3>
         </div>
-        <AiStatusBadge label={draft?.mode.replace(/_/g, " ") ?? "provider disabled"} tone="blue" />
+        <AiStatusBadge label={draft?.mode.replace(/_/g, " ") ?? "no local preview"} tone="blue" />
       </div>
       {draft ? (
         <div className="mt-4">

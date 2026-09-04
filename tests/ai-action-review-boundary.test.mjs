@@ -19,7 +19,12 @@ const boundedJson = readFileSync(
   "utf8",
 );
 const aiProvider = readFileSync(join(cwd, "lib/crm/aiProvider.ts"), "utf8");
+const aiToolsSource = readFileSync(join(cwd, "lib/crm/aiTools.ts"), "utf8");
 const crmApp = readFileSync(join(cwd, "components/CrmApp.tsx"), "utf8");
+const browserRegression = readFileSync(
+  join(cwd, "tests/codex-browser/weathertech-os-regression.mjs"),
+  "utf8",
+);
 const automationMigration = readFileSync(
   join(
     cwd,
@@ -27,6 +32,10 @@ const automationMigration = readFileSync(
   ),
   "utf8",
 );
+const statusRouteStart = commandRoute.indexOf("export async function GET(");
+const commandRouteStart = commandRoute.indexOf("export async function POST(");
+const statusRoute = commandRoute.slice(statusRouteStart, commandRouteStart);
+const commandPost = commandRoute.slice(commandRouteStart);
 
 function assert(condition, message) {
   if (!condition) {
@@ -38,10 +47,52 @@ function includes(source, value, message) {
   assert(source.includes(value), message);
 }
 
-const membershipLookupIndex = commandRoute.indexOf('.from("company_memberships")');
-const preflightIndex = commandRoute.indexOf("const localResult = preflightAiPilotCommand({");
-const requestAuditIndex = commandRoute.indexOf('serviceClient.rpc("wtos_reserve_ai_request_v1"');
-const providerCallIndex = commandRoute.indexOf("runAiPilotCommand({");
+assert(
+  statusRouteStart >= 0 && commandRouteStart > statusRouteStart,
+  "The command route must expose a distinct read-only Production AI status handler.",
+);
+const statusAuthIndex = statusRoute.indexOf("client.auth.getUser()");
+const statusMembershipIndex = statusRoute.indexOf('.from("company_memberships")');
+const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
+const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
+assert(
+  statusAuthIndex >= 0 &&
+    statusMembershipIndex > statusAuthIndex &&
+    statusPolicyIndex > statusMembershipIndex &&
+    statusBuildIndex > statusPolicyIndex,
+  "AI status must authenticate and authorize the exact company before reading its policy.",
+);
+for (const statusBoundary of [
+  'request.nextUrl.searchParams.get("companyId")',
+  "resolveExactAiCompanyAuthorization",
+  '.eq("user_id", user.id)',
+  '.eq("company_id", requestedCompanyId)',
+  '.eq("company_id", authorization.companyId)',
+  ".limit(2)",
+  "policyRows?.length !== 1",
+  "getAiPilotProviderConfig()",
+  "return noStoreJson(status, 200)",
+]) {
+  includes(
+    statusRoute,
+    statusBoundary,
+    `Production AI status is missing fail-closed boundary ${statusBoundary}.`,
+  );
+}
+assert(
+  !statusRoute.includes("getSupabaseServiceRoleClient") &&
+    !statusRoute.includes("runAiPilotCommand") &&
+    !statusRoute.includes("wtos_reserve_ai_request_v1") &&
+    !statusRoute.includes(".insert(") &&
+    !statusRoute.includes(".update(") &&
+    !statusRoute.includes(".delete("),
+  "Production AI status must remain an authenticated, RLS-scoped, mutation-free read.",
+);
+
+const membershipLookupIndex = commandPost.indexOf('.from("company_memberships")');
+const preflightIndex = commandPost.indexOf("const localResult = preflightAiPilotCommand({");
+const requestAuditIndex = commandPost.indexOf('serviceClient.rpc("wtos_reserve_ai_request_v1"');
+const providerCallIndex = commandPost.indexOf("runAiPilotCommand({");
 
 assert(
   membershipLookupIndex >= 0 &&
@@ -51,7 +102,7 @@ assert(
     providerCallIndex > requestAuditIndex,
   "Command authorization and network-free local preflight must complete before the atomic reservation and provider call.",
 );
-const localExitBlock = commandRoute.slice(preflightIndex, requestAuditIndex);
+const localExitBlock = commandPost.slice(preflightIndex, requestAuditIndex);
 for (const localExitBoundary of [
   "if (localResult)",
   "requestAuditEventId: null",
@@ -90,42 +141,42 @@ assert(
   "AI preflight must be structurally network-free and ignore only the not-yet-created reservation requirement.",
 );
 includes(
-  commandRoute,
+  commandPost,
   '.eq("company_id", requestedCompanyId)',
   "Command authorization must query the exact requested company.",
 );
 includes(
-  commandRoute,
+  commandPost,
   "resolveExactAiCompanyAuthorization",
   "Command authorization must use the fail-closed exact-company role validator.",
 );
 includes(
-  commandRoute,
+  commandPost,
   'event_type: "action_proposed"',
   "Every returned action preview must receive a durable action_proposed audit event.",
 );
 includes(
-  commandRoute,
+  commandPost,
   "contractVersion: AI_ACTION_CONTRACT_VERSION",
   "Persisted action previews must bind the explicit review contract version.",
 );
 includes(
-  commandRoute,
+  commandPost,
   '.select("id, metadata")',
   "The command route must reload inserted audit IDs.",
 );
 includes(
-  commandRoute,
+  commandPost,
   "auditReferenceByPreviewId",
   "The command response must surface durable per-preview audit references.",
 );
 includes(
-  commandRoute,
+  commandPost,
   "No provider call was attempted",
   "The provider must fail closed when pre-call audit persistence is unavailable.",
 );
 includes(
-  commandRoute,
+  commandPost,
   'createHash("sha256").update(prompt).digest("hex")',
   "Request audit evidence must fingerprint rather than persist raw prompt text.",
 );
@@ -154,33 +205,36 @@ for (const quotaBoundary of [
   "requestAuditEventId ? result.actionPreviews : []",
 ]) {
   includes(
-    commandRoute,
+    commandPost,
     quotaBoundary,
     `Atomic AI quota enforcement is missing boundary ${quotaBoundary}.`,
   );
 }
 assert(
-  !commandRoute.includes("recordAiRequestInitiated") &&
-    commandRoute.indexOf("parseQuotaReservation(reservationData, {") >= 0 &&
-    commandRoute.indexOf("runAiPilotCommand({") >
-      commandRoute.indexOf("parseQuotaReservation(reservationData, {"),
+  !commandPost.includes("recordAiRequestInitiated") &&
+    commandPost.indexOf("parseQuotaReservation(reservationData, {") >= 0 &&
+    commandPost.indexOf("runAiPilotCommand({") >
+      commandPost.indexOf("parseQuotaReservation(reservationData, {"),
   "The trusted atomic reservation must replace direct request inserts and precede the provider call.",
 );
 includes(
-  commandRoute,
+  commandPost,
   "result.companyId !== companyId",
   "Persisted AI results must remain bound to the exact authorized company.",
 );
 
 for (const companySwitchBoundary of [
   "aiCommandAbortRef.current?.abort()",
+  "aiProviderStatusAbortRef.current?.abort()",
   "aiReviewAbortRef.current?.abort()",
   "activeAiCompanyRef.current = activeCompanyId",
   "setAiResponses([])",
+  "setAiResponseCompanyId(null)",
   "setAiPilotResult(null)",
   "result.companyId !== requestCompanyId",
+  "aiResponseCompanyId === exactAiCompanyId",
   'reviewCompanyId === "all"',
-  "aiPilotResult?.companyId !== reviewCompanyId",
+  "currentAiPilotResult?.companyId !== reviewCompanyId",
   "action.companyId !== reviewCompanyId",
   "preview.companyId !== reviewCompanyId",
 ]) {
@@ -191,7 +245,10 @@ for (const companySwitchBoundary of [
   );
 }
 for (const exactCompanyUiBoundary of [
-  'const exactAiCompanySelected = activeCompanyId !== "all"',
+  "companyMap.get(activeCompanyId)",
+  "const exactAiCompanyId = exactAiCompany?.id ?? null",
+  "const exactAiCompanySelected = exactAiCompanyId !== null",
+  "const requestCompanyId = exactAiCompanyId",
   'if (!exactAiCompanySelected)',
   'disabled={!exactAiCompanySelected}',
   'disabled={isAiCommandRunning || !exactAiCompanySelected}',
@@ -202,6 +259,83 @@ for (const exactCompanyUiBoundary of [
     crmApp,
     exactCompanyUiBoundary,
     `AI live-provider UI must fail closed without an exact company: ${exactCompanyUiBoundary}.`,
+  );
+}
+for (const statusUiBoundary of [
+  'useState<AiCompanyPilotStatus | null>(null)',
+  '`/api/ai-tools/command?companyId=${encodeURIComponent(requestCompanyId)}`',
+  'credentials: "same-origin"',
+  'cache: "no-store"',
+  "isAiCompanyPilotStatus(payload, requestCompanyId)",
+  "activeAiCompanyRef.current !== requestCompanyId",
+  "aiProviderStatus?.companyId === exactAiCompanyId",
+  "companyId={exactAiCompanyId}",
+  'data-testid="ai-provider-status"',
+  'data-ai-status-phase={statusPhase}',
+  'data-ai-request-company-id={companyId ?? ""}',
+  'data-ai-status-request-sequence={String(requestSequence)}',
+  'data-ai-status-company-id={status?.companyId ?? ""}',
+  'data-ai-monthly-budget-cents={status ? String(status.monthlyBudgetCents) : ""}',
+  'role="status"',
+  'aria-live="polite"',
+  'aria-busy={isLoading}',
+  'label={`${formatMoney(status.monthlyBudgetCents / 100)}/month`}',
+  'label="External actions disabled"',
+  "getAiEndpointErrorMessage(",
+  "aiProviderStatusRequestSequenceRef.current + 1",
+  "setAiProviderStatusRequestSequence(requestSequence)",
+]) {
+  includes(
+    crmApp,
+    statusUiBoundary,
+    `Production AI UI status is missing boundary ${statusUiBoundary}.`,
+  );
+}
+for (const staleProviderClaim of [
+  "AI provider not configured",
+  "Live AI is disabled",
+  "AI_ENABLED=false",
+  "disabled / not selected",
+  "Live AI provider is not configured",
+  "Live model provider not configured",
+  "rule-based disabled-provider mode",
+  "whether production activation is disabled",
+  '?? "provider disabled"',
+]) {
+  assert(
+    !`${crmApp}\n${aiToolsSource}`.includes(staleProviderClaim),
+    `The Production AI UI must not retain stale provider claim: ${staleProviderClaim}.`,
+  );
+}
+for (const companyScopeHydrationBoundary of [
+  'useState<CompanyScopeId>("all")',
+  "companyScopeStorageReady",
+  'window.localStorage.getItem("weathertech-company-scope")',
+  "snapshot.companies.some((company) => company.id === storedCompanyId)",
+]) {
+  includes(
+    crmApp,
+    companyScopeHydrationBoundary,
+    `Company scope hydration is missing safe boundary ${companyScopeHydrationBoundary}.`,
+  );
+}
+for (const browserStatusBoundary of [
+  "async function waitForAiProviderStatus(",
+  '!["loaded", "error"].includes(phase)',
+  "requestSequence <= priorRequestSequence",
+  "async function getAiProviderStatusRequestSequence(tab)",
+  'card.getAttribute("data-ai-status-request-sequence")',
+  "const weatherTechRequestSequenceBaseline =",
+  "const ihcRequestSequenceBaseline = await getAiProviderStatusRequestSequence(tab)",
+  "const weatherTechReturnRequestSequenceBaseline =",
+  'differentFromCompanyId: weatherTechProviderStatus.requestCompanyId',
+  'expectedCompanyId: weatherTechProviderStatus.requestCompanyId',
+  'differentFromCompanyId: ihcProviderStatus.requestCompanyId',
+]) {
+  includes(
+    browserRegression,
+    browserStatusBoundary,
+    `Browser regression must exercise company-bound asynchronous AI status: ${browserStatusBoundary}.`,
   );
 }
 for (const boundedBodyBoundary of [
@@ -217,7 +351,7 @@ for (const boundedBodyBoundary of [
   );
 }
 includes(
-  commandRoute,
+  commandPost,
   "readBoundedJsonBody(",
   "The command route must enforce the actual streamed request-byte limit.",
 );
@@ -237,7 +371,7 @@ assert(
   "The stateless AI UI must not claim or send unsupported provider continuation state.",
 );
 const companyResetStart = crmApp.indexOf(
-  "aiCommandAbortRef.current?.abort();\n    aiReviewAbortRef.current?.abort();",
+  "aiCommandAbortRef.current?.abort();\n    aiProviderStatusAbortRef.current?.abort();\n    aiReviewAbortRef.current?.abort();",
 );
 const companyResetEnd = crmApp.indexOf("}, [activeCompanyId]);", companyResetStart);
 assert(

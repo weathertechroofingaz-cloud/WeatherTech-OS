@@ -499,6 +499,64 @@ try {
   assertEqual(scopedConfig.config.perUserDailyRequestLimit, 4, "Company policy must tighten the user cap");
   assertEqual(scopedConfig.config.maxRequestTokens, 6000, "Company policy must tighten the request token cap");
   assertEqual(scopedConfig.config.retryLimit, 0, "Company policy must tighten the retry cap");
+
+  const productionStatusConfig = aiProvider.getAiPilotProviderConfig({
+    AI_ENABLED: "true",
+    AI_PROVIDER: "openai",
+    AI_MODEL: "owner-approved-openai-model",
+    AI_OPENAI_API_KEY: "test-secret-key-never-serialized",
+    AI_DAILY_BUDGET_USD: "5",
+    AI_DAILY_REQUEST_LIMIT: "20",
+    AI_PER_USER_DAILY_REQUEST_LIMIT: "10",
+    AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
+    AI_MAX_REQUEST_TOKENS: "12000",
+    AI_MAX_RESPONSE_TOKENS: "1200",
+    AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+    AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
+    AI_TIMEOUT_MS: "5000",
+    AI_RETRY_LIMIT: "2",
+  });
+  const enabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+  });
+  assertEqual(enabledCompanyStatus.companyId, wtCompanyId, "AI status echoes the exact company");
+  assertEqual(enabledCompanyStatus.aiEnabled, true, "Environment and company policy enable live AI together");
+  assertEqual(enabledCompanyStatus.monthlyBudgetCents, 5000, "AI status exposes the exact company monthly budget");
+  assertEqual(enabledCompanyStatus.readiness.state, "live_ai_enabled", "Enabled company status is explicit");
+  assertEqual(enabledCompanyStatus.readiness.requiredOwnerSetup.length, 0, "Enabled company status has no provider setup action");
+  assertEqual(enabledCompanyStatus.usageAccountingConfigured, true, "Enabled company status confirms usage accounting controls");
+  assertEqual(enabledCompanyStatus.externalActionExecutionEnabled, false, "External action execution remains disabled");
+  const serializedCompanyStatus = JSON.stringify(enabledCompanyStatus);
+  assert(
+    !serializedCompanyStatus.includes("test-secret-key-never-serialized") &&
+      !serializedCompanyStatus.includes("apiKeyConfigured"),
+    "Sanitized company status must never serialize provider credentials or raw config",
+  );
+
+  const disabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: ihcCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      company_id: ihcCompanyId,
+      ai_enabled: false,
+      per_company_monthly_budget_cents: 5000,
+    },
+    config: productionStatusConfig,
+  });
+  assertEqual(disabledCompanyStatus.aiEnabled, false, "A disabled exact-company policy remains disabled");
+  assertEqual(disabledCompanyStatus.readiness.state, "production_ai_disabled", "Disabled company status stays fail closed");
+  assertEqual(disabledCompanyStatus.monthlyBudgetCents, 5000, "One company receives only its own policy budget");
+
+  const mismatchedCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, company_id: ihcCompanyId },
+    config: productionStatusConfig,
+  });
+  assertEqual(mismatchedCompanyStatus.aiEnabled, false, "A cross-company policy cannot enable AI");
+  assertEqual(mismatchedCompanyStatus.monthlyBudgetCents, 0, "A cross-company policy budget is never exposed");
+
   assert(
     !aiProvider.resolveCompanyAiProviderConfig({
       config: scopedConfig.config,

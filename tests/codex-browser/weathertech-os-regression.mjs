@@ -4084,6 +4084,81 @@ async function clickCompanyScope(tab, companyName) {
   );
 }
 
+async function waitForAiProviderStatus(
+  tab,
+  companyName,
+  {
+    expectedCompanyId = null,
+    differentFromCompanyId = null,
+    requestSequenceBaseline = 0,
+  } = {},
+) {
+  return waitFor(
+    tab,
+    ({ expectedName, expectedId, differentFromId, priorRequestSequence }) => {
+      const card = document.querySelector('[data-testid="ai-provider-status"]');
+      if (!card) {
+        return false;
+      }
+
+      const phase = card.getAttribute("data-ai-status-phase") ?? "";
+      const requestCompanyId = card.getAttribute("data-ai-request-company-id") ?? "";
+      const loadedCompanyId = card.getAttribute("data-ai-status-company-id") ?? "";
+      const budgetCents = card.getAttribute("data-ai-monthly-budget-cents") ?? "";
+      const requestSequence = Number(
+        card.getAttribute("data-ai-status-request-sequence") ?? "0",
+      );
+      const text = card.textContent?.toLowerCase() ?? "";
+
+      if (
+        !["loaded", "error"].includes(phase) ||
+        !requestCompanyId ||
+        !Number.isSafeInteger(requestSequence) ||
+        requestSequence <= priorRequestSequence ||
+        (expectedId && requestCompanyId !== expectedId) ||
+        (differentFromId && requestCompanyId === differentFromId) ||
+        !text.includes(expectedName.toLowerCase()) ||
+        card.getAttribute("role") !== "status" ||
+        card.getAttribute("aria-live") !== "polite" ||
+        card.getAttribute("aria-busy") !== "false"
+      ) {
+        return false;
+      }
+
+      if (phase === "loaded") {
+        if (
+          loadedCompanyId !== requestCompanyId ||
+          !/^\d+$/.test(budgetCents) ||
+          !text.includes("/month") ||
+          !text.includes("external actions disabled")
+        ) {
+          return false;
+        }
+      } else if (loadedCompanyId || budgetCents) {
+        return false;
+      }
+
+      return { phase, requestCompanyId, loadedCompanyId, budgetCents, requestSequence };
+    },
+    `authenticated Production AI status for ${companyName}`,
+    15000,
+    {
+      expectedName: companyName,
+      expectedId: expectedCompanyId,
+      differentFromId: differentFromCompanyId,
+      priorRequestSequence: requestSequenceBaseline,
+    },
+  );
+}
+
+async function getAiProviderStatusRequestSequence(tab) {
+  return tab.playwright
+    .locator('[data-testid="ai-provider-status"]')
+    .evaluate((card) =>
+      Number(card.getAttribute("data-ai-status-request-sequence") ?? "0"),
+    );
+}
+
 async function selectTestJob(tab, jobTitle) {
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await clickNav(tab, "Jobs");
@@ -5183,7 +5258,9 @@ async function testAiToolsOperatingBrain(browser, tab) {
         text.includes("ai confidence") &&
         text.includes("short-term session memory") &&
         text.includes("live provider readiness") &&
-        text.includes("no fake ai output") &&
+        text.includes("select a company for production ai") &&
+        text.includes("exact company scope required") &&
+        text.includes("external actions disabled") &&
         text.includes("usage and cost controls") &&
         text.includes("controlled test mode") &&
         text.includes("approval gates active") &&
@@ -5202,7 +5279,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
         text.includes("document intelligence") &&
         text.includes("approval gates") &&
         text.includes("saved ai analyses") &&
-        text.includes("production disabled")
+        text.includes("persistence available")
       );
     },
     "AI Command Center 3.0 workspace",
@@ -5217,21 +5294,31 @@ async function testAiToolsOperatingBrain(browser, tab) {
         button.textContent?.includes("Analyze"),
       );
       const note = form.querySelector('[data-testid="ai-exact-company-required"]');
+      const providerStatus = document.querySelector('[data-testid="ai-provider-status"]');
       return {
         inputDisabled: input?.tagName === "INPUT" && input.disabled,
         analyzeDisabled: analyze?.tagName === "BUTTON" && analyze.disabled,
         note: note?.textContent?.toLowerCase() ?? "",
+        providerPhase: providerStatus?.getAttribute("data-ai-status-phase") ?? "",
+        providerCompanyId:
+          providerStatus?.getAttribute("data-ai-request-company-id") ?? "",
+        providerBusy: providerStatus?.getAttribute("aria-busy") ?? "",
       };
     });
   if (
     !allCompanyGate.inputDisabled ||
     !allCompanyGate.analyzeDisabled ||
     !allCompanyGate.note.includes("select weathertech roofing llc or ihc painting") ||
-    !allCompanyGate.note.includes("combined workspace below remains read-only")
+    !allCompanyGate.note.includes("combined workspace below remains read-only") ||
+    allCompanyGate.providerPhase !== "selection_required" ||
+    allCompanyGate.providerCompanyId !== "" ||
+    allCompanyGate.providerBusy !== "false"
   ) {
     throw new Error("AI all-company scope did not fail closed with an exact-company instruction.");
   }
 
+  const weatherTechRequestSequenceBaseline =
+    await getAiProviderStatusRequestSequence(tab);
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
   await waitFor(
     tab,
@@ -5241,6 +5328,11 @@ async function testAiToolsOperatingBrain(browser, tab) {
     },
     "AI exact WeatherTech company scope",
     10000,
+  );
+  const weatherTechProviderStatus = await waitForAiProviderStatus(
+    tab,
+    "WeatherTech Roofing LLC",
+    { requestSequenceBaseline: weatherTechRequestSequenceBaseline },
   );
 
   await tab.playwright.locator("#ai-command-input").fill("Show overdue invoices.");
@@ -5303,27 +5395,27 @@ async function testAiToolsOperatingBrain(browser, tab) {
     15000,
   );
 
+  const ihcRequestSequenceBaseline = await getAiProviderStatusRequestSequence(tab);
   await clickCompanyScope(tab, "IHC Painting");
-  await waitFor(
+  const ihcProviderStatus = await waitForAiProviderStatus(
     tab,
-    () => {
-      const workspace = document.querySelector('[data-testid="ai-tools-2-workspace"]');
-      const text = workspace?.textContent ?? "";
-      return text.includes("IHC Painting");
+    "IHC Painting",
+    {
+      differentFromCompanyId: weatherTechProviderStatus.requestCompanyId,
+      requestSequenceBaseline: ihcRequestSequenceBaseline,
     },
-    "AI Tools IHC company scope",
-    10000,
   );
+  const weatherTechReturnRequestSequenceBaseline =
+    await getAiProviderStatusRequestSequence(tab);
   await clickCompanyScope(tab, "WeatherTech Roofing LLC");
-  await waitFor(
+  await waitForAiProviderStatus(
     tab,
-    () => {
-      const workspace = document.querySelector('[data-testid="ai-tools-2-workspace"]');
-      const text = workspace?.textContent ?? "";
-      return text.includes("WeatherTech Roofing LLC");
+    "WeatherTech Roofing LLC",
+    {
+      expectedCompanyId: weatherTechProviderStatus.requestCompanyId,
+      differentFromCompanyId: ihcProviderStatus.requestCompanyId,
+      requestSequenceBaseline: weatherTechReturnRequestSequenceBaseline,
     },
-    "AI Tools WeatherTech company scope",
-    10000,
   );
   await clickCompanyScope(tab, "All companies");
 
@@ -5334,7 +5426,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
     hasAdvisorModes: Boolean(document.querySelector('[data-testid="ai-advisor-modes"]')),
     hasExecutiveRecommendations: Boolean(document.querySelector('[data-testid="ai-executive-recommendations"]')),
     hasSessionMemory: Boolean(document.querySelector('[data-testid="ai-session-memory"]')),
-    hasDisabledState: Boolean(document.querySelector('[data-testid="ai-disabled-state"]')),
+    hasProviderStatus: Boolean(document.querySelector('[data-testid="ai-provider-status"]')),
     hasPilotControls: Boolean(document.querySelector('[data-testid="ai-live-pilot-controls"]')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 8,
   }));
@@ -5346,7 +5438,7 @@ async function testAiToolsOperatingBrain(browser, tab) {
     !desktopLayout.hasAdvisorModes ||
     !desktopLayout.hasExecutiveRecommendations ||
     !desktopLayout.hasSessionMemory ||
-    !desktopLayout.hasDisabledState ||
+    !desktopLayout.hasProviderStatus ||
     !desktopLayout.hasPilotControls
   ) {
     throw new Error("AI Command Center desktop layout did not render its core regions.");

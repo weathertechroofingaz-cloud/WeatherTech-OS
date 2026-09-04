@@ -82,6 +82,22 @@ export type AiPilotReadiness = {
   health: "disabled" | "configuration_required" | "ready" | "failed";
 };
 
+export type AiCompanyPilotStatus = {
+  companyId: string;
+  aiEnabled: boolean;
+  monthlyBudgetCents: number;
+  readiness: AiPilotReadiness;
+  companyPolicy: {
+    configured: true;
+    aiEnabled: boolean;
+    providerAllowed: boolean;
+    modelAllowed: boolean;
+    lastReviewedAt: string | null;
+  };
+  usageAccountingConfigured: boolean;
+  externalActionExecutionEnabled: false;
+};
+
 export type AiContextRecord = AiSourceRecord & {
   snippet: string;
   relevance: number;
@@ -464,6 +480,82 @@ export function resolveCompanyAiProviderConfig({
       timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
       retryLimit: Math.min(config.retryLimit, policy.retry_limit),
     },
+  };
+}
+
+export function buildAiCompanyPilotStatus({
+  companyId,
+  policy,
+  config = getAiPilotProviderConfig(),
+}: {
+  companyId: string;
+  policy: AiUsageLimitRecord;
+  config?: AiPilotProviderConfig;
+}): AiCompanyPilotStatus {
+  const environmentReadiness = buildAiPilotReadiness({
+    config,
+    migrationApplied: true,
+  });
+  const policyMatchesCompany = policy.company_id === companyId;
+  const providerAllowed =
+    policyMatchesCompany && policy.allowed_providers.includes(config.provider);
+  const modelAllowed =
+    policyMatchesCompany &&
+    Boolean(config.model) &&
+    policy.allowed_models.includes(config.model);
+  const monthlyBudgetCents = policyMatchesCompany
+    ? policy.per_company_monthly_budget_cents
+    : 0;
+  const companyConfig = resolveCompanyAiProviderConfig({
+    config,
+    usageLimits: [policy],
+    companyId,
+  });
+  const companyConfigFailureReason =
+    "reason" in companyConfig ? companyConfig.reason : null;
+  const liveProviderEnabled =
+    environmentReadiness.liveProviderEnabled && companyConfig.ok;
+
+  let readiness = environmentReadiness;
+  if (liveProviderEnabled) {
+    readiness = {
+      ...environmentReadiness,
+      state: "live_ai_enabled",
+      label: "Production AI enabled",
+      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. Customer-facing and external provider actions remain disabled.`,
+      liveProviderEnabled: true,
+      requiredOwnerSetup: [],
+      health: "ready",
+    };
+  } else if (environmentReadiness.liveProviderEnabled) {
+    readiness = {
+      ...environmentReadiness,
+      state: "production_ai_disabled",
+      label: "Company AI policy incomplete",
+      summary: `${companyConfigFailureReason ?? "The company AI policy is not active."} No provider call can run until the policy is complete.`,
+      liveProviderEnabled: false,
+      requiredOwnerSetup: companyConfigFailureReason
+        ? [companyConfigFailureReason]
+        : [],
+      health: "disabled",
+    };
+  }
+
+  return {
+    companyId,
+    aiEnabled: liveProviderEnabled,
+    monthlyBudgetCents,
+    readiness,
+    companyPolicy: {
+      configured: true,
+      aiEnabled: policyMatchesCompany && policy.ai_enabled,
+      providerAllowed,
+      modelAllowed,
+      lastReviewedAt: policyMatchesCompany ? policy.last_reviewed_at : null,
+    },
+    usageAccountingConfigured:
+      companyConfig.ok && hasConfiguredUsageLimits(companyConfig.config),
+    externalActionExecutionEnabled: false,
   };
 }
 

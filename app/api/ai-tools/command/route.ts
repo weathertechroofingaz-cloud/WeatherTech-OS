@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCrmSnapshot } from "../../../../lib/crm/repository";
 import {
+  buildAiCompanyPilotStatus,
   getAiPilotProviderConfig,
   estimateAiRequestUsage,
   preflightAiPilotCommand,
@@ -18,6 +19,7 @@ import {
 import type {
   AiAuditEventInsert,
   AiAuditEventType,
+  AiUsageLimitRecord,
 } from "../../../../lib/crm/types";
 import { readBoundedJsonBody } from "../../../../lib/http/boundedJson";
 import { getSupabaseServerClient } from "../../../../lib/supabase/server";
@@ -37,6 +39,84 @@ const MAX_AI_COMMAND_BODY_BYTES = 65_536;
 const MAX_AI_PROMPT_CHARACTERS = 24_000;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function GET(request: NextRequest) {
+  const requestedCompanyId = request.nextUrl.searchParams.get("companyId")?.trim() ?? "";
+  const client = await getSupabaseServerClient();
+  if (!client) {
+    return noStoreJson(
+      { error: "Supabase is not configured. Production AI status is unavailable." },
+      503,
+    );
+  }
+
+  const { data: userResult, error: userError } = await client.auth.getUser();
+  const user = userResult.user;
+  if (userError || !user) {
+    return noStoreJson({ error: "Sign in before checking Production AI status." }, 401);
+  }
+
+  const initialAuthorization = resolveExactAiCompanyAuthorization({
+    memberships: [],
+    userId: user.id,
+    requestedCompanyId,
+  });
+  if (!initialAuthorization.ok && initialAuthorization.code === "exact_company_required") {
+    return noStoreJson(
+      { error: initialAuthorization.message, code: initialAuthorization.code },
+      initialAuthorization.status,
+    );
+  }
+
+  const { data: memberships, error: membershipError } = await client
+    .from("company_memberships")
+    .select("user_id, company_id, role")
+    .eq("user_id", user.id)
+    .eq("company_id", requestedCompanyId)
+    .limit(2);
+  if (membershipError) {
+    return noStoreJson(
+      { error: "Company authorization could not be verified. Production AI status is unavailable." },
+      503,
+    );
+  }
+
+  const authorization = resolveExactAiCompanyAuthorization({
+    memberships: memberships ?? [],
+    userId: user.id,
+    requestedCompanyId,
+  });
+  if (!authorization.ok) {
+    return noStoreJson(
+      { error: authorization.message, code: authorization.code },
+      authorization.status,
+    );
+  }
+
+  const { data: policyRows, error: policyError } = await client
+    .from("ai_usage_limits")
+    .select(
+      "id, company_id, ai_enabled, allowed_providers, allowed_models, daily_request_limit, per_user_daily_request_limit, per_company_monthly_budget_cents, expensive_task_confirmation_cents, token_limit, timeout_ms, retry_limit, last_reviewed_at, created_at, updated_at",
+    )
+    .eq("company_id", authorization.companyId)
+    .limit(2);
+  if (policyError || policyRows?.length !== 1) {
+    return noStoreJson(
+      {
+        error:
+          "Exactly one authorized company AI policy is required before Production AI status can be shown.",
+      },
+      503,
+    );
+  }
+
+  const status = buildAiCompanyPilotStatus({
+    companyId: authorization.companyId,
+    policy: policyRows[0] as AiUsageLimitRecord,
+    config: getAiPilotProviderConfig(),
+  });
+  return noStoreJson(status, 200);
+}
 
 export async function POST(request: NextRequest) {
   const bodyResult = await readBoundedJsonBody(
