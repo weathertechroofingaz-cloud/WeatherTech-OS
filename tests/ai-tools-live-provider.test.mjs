@@ -540,7 +540,7 @@ try {
   assertEqual(scopedConfig.config.maxRequestTokens, 6000, "Company policy must tighten the request token cap");
   assertEqual(scopedConfig.config.retryLimit, 0, "Company policy must tighten the retry cap");
 
-  const productionStatusConfig = aiProvider.getAiPilotProviderConfig({
+  const productionStatusEnv = {
     AI_ENABLED: "true",
     AI_PROVIDER: "openai",
     AI_MODEL: "owner-approved-openai-model",
@@ -555,7 +555,156 @@ try {
     AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
     AI_TIMEOUT_MS: "5000",
     AI_RETRY_LIMIT: "2",
+  };
+  const productionStatusConfig =
+    aiProvider.getAiPilotProviderConfig(productionStatusEnv);
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({}).timeoutMs,
+    15_000,
+    "An absent provider timeout keeps the explicit default",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({ AI_TIMEOUT_MS: "   " }).timeoutMs,
+    15_000,
+    "An empty provider timeout keeps the explicit default",
+  );
+  const maximumTimerReadiness = aiProvider.buildAiPilotReadiness({
+    config: aiProvider.getAiPilotProviderConfig({
+      ...productionStatusEnv,
+      AI_TIMEOUT_MS: String(aiProvider.aiQuotaBounds.maxProviderTimeoutMs),
+    }),
+    migrationApplied: true,
   });
+  assertEqual(
+    maximumTimerReadiness.liveProviderEnabled,
+    true,
+    "The largest Node-supported provider timeout remains ready",
+  );
+  for (const invalidTimeoutValue of [
+    String(aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1),
+    "4294967296",
+    String(Number.MAX_SAFE_INTEGER),
+    "9".repeat(400),
+    "2147483647ms",
+    "1.5",
+    "0",
+    "-1",
+  ]) {
+    const overflowTimerReadiness = aiProvider.buildAiPilotReadiness({
+      config: aiProvider.getAiPilotProviderConfig({
+        ...productionStatusEnv,
+        AI_TIMEOUT_MS: invalidTimeoutValue,
+      }),
+      migrationApplied: true,
+    });
+    assertEqual(
+      overflowTimerReadiness.liveProviderEnabled,
+      false,
+      `Provider timeout ${invalidTimeoutValue.slice(0, 24)} cannot enable Production AI`,
+    );
+    assertEqual(
+      overflowTimerReadiness.state,
+      "usage_limit_reached",
+      `Provider timeout ${invalidTimeoutValue.slice(0, 24)} fails the bounded configuration gate`,
+    );
+  }
+  assertEqual(
+    aiProvider.buildAiPilotReadiness({
+      config: {
+        ...productionStatusConfig,
+        timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+      },
+      migrationApplied: true,
+    }).liveProviderEnabled,
+    false,
+    "An injected overbound timeout fails closed independently of environment parsing",
+  );
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: {
+        ...productionStatusConfig,
+        timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+      },
+      usageLimits: [baseCompanyPolicy],
+      companyId: wtCompanyId,
+    }).ok,
+    "A safe company policy cannot launder an invalid environment timeout",
+  );
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: productionStatusConfig,
+      usageLimits: [
+        {
+          ...baseCompanyPolicy,
+          timeout_ms: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+        },
+      ],
+      companyId: wtCompanyId,
+    }).ok,
+    "A safe environment timeout cannot launder an invalid company policy timeout",
+  );
+  const minimumTimerConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: { ...productionStatusConfig, timeoutMs: 1 },
+    usageLimits: [{ ...baseCompanyPolicy, timeout_ms: 1 }],
+    companyId: wtCompanyId,
+  });
+  assert(minimumTimerConfig.ok, "The minimum Node-supported timeout remains valid");
+  assertEqual(
+    minimumTimerConfig.config.timeoutMs,
+    1,
+    "Company timeout policy is enforced exactly without silently widening it",
+  );
+  const maximumTimerConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: {
+      ...productionStatusConfig,
+      timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+    },
+    usageLimits: [
+      {
+        ...baseCompanyPolicy,
+        timeout_ms: aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+      },
+    ],
+    companyId: wtCompanyId,
+  });
+  assert(maximumTimerConfig.ok, "The maximum Node-supported timeout remains valid");
+  assertEqual(
+    maximumTimerConfig.config.timeoutMs,
+    aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+    "The maximum Node-supported timeout is preserved exactly",
+  );
+  let invalidTimeoutFetchCalls = 0;
+  const invalidTimeoutResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    providerConfig: {
+      ...scopedConfig.config,
+      timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+    },
+    quotaReservation,
+    fetchImpl: async () => {
+      invalidTimeoutFetchCalls += 1;
+      throw new Error("Invalid provider timeout must not call fetch.");
+    },
+  });
+  assertEqual(
+    invalidTimeoutResult.readiness.liveProviderEnabled,
+    false,
+    "An invalid injected timeout disables live provider readiness",
+  );
+  assertEqual(
+    invalidTimeoutResult.providerHealth.tested,
+    false,
+    "An invalid injected timeout does not test provider health",
+  );
+  assertEqual(
+    invalidTimeoutFetchCalls,
+    0,
+    "An invalid injected timeout is rejected before any provider request",
+  );
   const quotaActorUserId = "99999999-9999-4999-8999-999999999999";
   const availableQuotaStatus = {
     contractVersion: 1,

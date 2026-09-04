@@ -1323,6 +1323,7 @@ for (const quotaContractBoundary of [
   "maxTokens: 1_000_000",
   "maxEstimatedCostCents: 100_000_000",
   "maxProviderAttempts: 3",
+  "maxProviderTimeoutMs: 2_147_483_647",
   "maxDailyRequests: 100_000",
   "maxDailyBudgetCents: 100_000_000",
   "maxCompanyMonthlyBudgetCents: 1_000_000_000",
@@ -1333,6 +1334,7 @@ for (const quotaContractBoundary of [
   "export function getAiCurrentQuotaAvailability({",
   "export function buildAiQuotaStatusRequest({",
   "!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents)",
+  "isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs)",
   "export function estimateAiQuotaStatusProbe({",
   "const context = retrieveAuthorizedAiContext(snapshot, {",
   "return estimateAiRequestUsage({",
@@ -1350,6 +1352,23 @@ for (const quotaContractBoundary of [
     aiProvider,
     quotaContractBoundary,
     `AI quota readiness is missing bounded contract ${quotaContractBoundary}.`,
+  );
+}
+for (const timeoutBoundary of [
+  "timeoutMs: parseProviderTimeoutMs(env.AI_TIMEOUT_MS)",
+  "function parseProviderTimeoutMs(value: string | undefined)",
+  "if (!/^\\d+$/.test(normalized))",
+  "Number.isSafeInteger(parsed) ? parsed : 0",
+  "!isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs)",
+  "!isIntegerWithin(policy.timeout_ms, 1, aiQuotaBounds.maxProviderTimeoutMs)",
+  "if (!isIntegerWithin(timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs))",
+  'throw new Error("AI provider timeout configuration is invalid.")',
+  "setTimeout(() => controller.abort(), timeoutMs)",
+]) {
+  includes(
+    aiProvider,
+    timeoutBoundary,
+    `AI provider timeout handling is missing boundary ${timeoutBoundary}.`,
   );
 }
 for (const quotaSqlBound of [

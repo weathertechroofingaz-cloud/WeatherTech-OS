@@ -397,6 +397,7 @@ export const aiQuotaBounds = {
   maxTokens: 1_000_000,
   maxEstimatedCostCents: 100_000_000,
   maxProviderAttempts: 3,
+  maxProviderTimeoutMs: 2_147_483_647,
   maxDailyRequests: 100_000,
   maxDailyBudgetCents: 100_000_000,
   maxCompanyMonthlyBudgetCents: 1_000_000_000,
@@ -443,7 +444,7 @@ export function getAiPilotProviderConfig(
       env.AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS,
       0,
     ),
-    timeoutMs: parseInteger(env.AI_TIMEOUT_MS, 15000),
+    timeoutMs: parseProviderTimeoutMs(env.AI_TIMEOUT_MS),
     retryLimit: Math.max(0, Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2)),
     streamingEnabled: parseBoolean(env.AI_STREAMING_ENABLED, false),
     structuredOutputEnabled: parseBoolean(env.AI_STRUCTURED_OUTPUT_ENABLED, true),
@@ -871,7 +872,8 @@ export function resolveCompanyAiProviderConfig({
     policy.per_company_monthly_budget_cents >
       aiQuotaBounds.maxCompanyMonthlyBudgetCents ||
     policy.token_limit <= 0 ||
-    policy.timeout_ms <= 0 ||
+    !isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
+    !isIntegerWithin(policy.timeout_ms, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
     policy.retry_limit < 0
   ) {
     return {
@@ -2071,8 +2073,7 @@ function hasQuotaCompatibleProviderConfig(
     config.maxInputCostUsdPer1kTokens <= 0 ||
     !Number.isFinite(config.maxOutputCostUsdPer1kTokens) ||
     config.maxOutputCostUsdPer1kTokens <= 0 ||
-    !Number.isInteger(config.timeoutMs) ||
-    config.timeoutMs <= 0 ||
+    !isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
     !isIntegerWithin(config.retryLimit, 0, aiQuotaBounds.maxProviderAttempts - 1)
   ) {
     return false;
@@ -2211,6 +2212,18 @@ function parseInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseProviderTimeoutMs(value: string | undefined) {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return 15_000;
+  }
+  if (!/^\d+$/.test(normalized)) {
+    return 0;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
+}
+
 function providerLabel(provider: AiProviderKey) {
   return provider === "openai"
     ? "OpenAI"
@@ -2307,8 +2320,11 @@ async function withTimeout<T>(
   parentSignal: AbortSignal | undefined,
   fn: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  if (!isIntegerWithin(timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs)) {
+    throw new Error("AI provider timeout configuration is invalid.");
+  }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const abortParent = () => controller.abort();
   parentSignal?.addEventListener("abort", abortParent);
 
