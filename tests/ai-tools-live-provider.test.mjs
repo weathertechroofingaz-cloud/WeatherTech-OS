@@ -464,6 +464,38 @@ try {
     "usage_limit_reached",
     "Live provider is blocked until explicit usage limits are configured",
   );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "openai",
+      AI_MODEL: "owner-approved-openai-model",
+      AI_OPENAI_API_KEY: "   ",
+    }).apiKeyConfigured,
+    false,
+    "Whitespace-only OpenAI credentials cannot enable provider readiness",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "anthropic",
+      AI_MODEL: "owner-approved-anthropic-model",
+      AI_ANTHROPIC_API_KEY: " \t ",
+      ANTHROPIC_API_KEY: " \n ",
+    }).apiKeyConfigured,
+    false,
+    "Whitespace-only Anthropic credentials cannot enable provider readiness",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "anthropic",
+      AI_MODEL: "owner-approved-anthropic-model",
+      AI_ANTHROPIC_API_KEY: "   ",
+      ANTHROPIC_API_KEY: " legacy-test-key ",
+    }).apiKeyConfigured,
+    true,
+    "A trimmed legacy Anthropic credential remains an accepted server-only fallback",
+  );
 
   const baseCompanyPolicy = {
     id: "44444444-4444-4444-8444-444444444444",
@@ -933,7 +965,7 @@ try {
     "A disabled provider never tests a provider",
   );
 
-  process.env.AI_OPENAI_API_KEY = "test-openai-key";
+  process.env.AI_OPENAI_API_KEY = "  test-openai-key  ";
   let openAiRequest = null;
   const openAiResult = await aiProvider.runAiPilotCommand({
     prompt: "Which estimates need follow-up?",
@@ -960,7 +992,11 @@ try {
     },
     quotaReservation,
     fetchImpl: async (url, init) => {
-      openAiRequest = { url: String(url), body: JSON.parse(init.body) };
+      openAiRequest = {
+        url: String(url),
+        headers: init.headers,
+        body: JSON.parse(init.body),
+      };
       return new Response(
         JSON.stringify({
           id: "resp-test",
@@ -994,6 +1030,11 @@ try {
   assertEqual(openAiResult.providerHealth.tested, true, "A successful provider request records a tested provider");
   assertEqual(openAiResult.providerHealth.ok, true, "Provider health is healthy after success");
   assert(openAiRequest.url.includes("api.openai.com/v1/responses"), "OpenAI adapter uses Responses API");
+  assertEqual(
+    openAiRequest.headers.Authorization,
+    "Bearer test-openai-key",
+    "OpenAI adapter trims the configured server credential before use",
+  );
   assertEqual(openAiRequest.body.store, false, "OpenAI request disables provider-side storage");
   assertEqual(
     openAiRequest.body.text.format.type,
@@ -1387,7 +1428,8 @@ try {
     "An unknown provider action type is rejected",
   );
 
-  process.env.AI_ANTHROPIC_API_KEY = "test-anthropic-key";
+  process.env.AI_ANTHROPIC_API_KEY = "   ";
+  process.env.ANTHROPIC_API_KEY = "  test-anthropic-key  ";
   let anthropicRequest = null;
   const anthropicResult = await aiProvider.runAiPilotCommand({
     prompt: "Summarize this customer.",
@@ -1449,6 +1491,11 @@ try {
     "2023-06-01",
     "Anthropic adapter sends the documented API version header",
   );
+  assertEqual(
+    anthropicRequest.headers["x-api-key"],
+    "test-anthropic-key",
+    "Anthropic adapter ignores a blank primary key and trims the legacy fallback",
+  );
   assertEqual(anthropicRequest.body.max_tokens, 1200, "Anthropic adapter applies max response tokens");
 
   const unsafe = await aiProvider.runAiPilotCommand({
@@ -1479,6 +1526,7 @@ try {
 
   delete process.env.AI_OPENAI_API_KEY;
   delete process.env.AI_ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
   console.log("AI Tools 2.1 live provider pilot regression passed.");
 } finally {
   rmSync(outDir, { recursive: true, force: true });

@@ -617,6 +617,20 @@ for (const retryBoundary of [
     `AI retry configuration is missing boundary ${retryBoundary}.`,
   );
 }
+for (const providerCredentialBoundary of [
+  "Boolean(readAiProviderApiKey(provider, env))",
+  'env.AI_OPENAI_API_KEY?.trim() ?? ""',
+  "env.AI_ANTHROPIC_API_KEY?.trim() ||",
+  "env.ANTHROPIC_API_KEY?.trim() ||",
+  'readAiProviderApiKey("openai", process.env)',
+  'readAiProviderApiKey("anthropic", process.env)',
+]) {
+  includes(
+    aiProvider,
+    providerCredentialBoundary,
+    `AI provider credential readiness and use must share a trimmed server-only reader: ${providerCredentialBoundary}.`,
+  );
+}
 for (const quotaContractBoundary of [
   "maxModelCharacters: 160",
   "maxPromptCharacters: 50_000",

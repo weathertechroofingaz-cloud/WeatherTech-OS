@@ -363,12 +363,7 @@ export function getAiPilotProviderConfig(
 ): AiPilotProviderConfig {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const model = env.AI_MODEL?.trim() ?? "";
-  const apiKeyConfigured =
-    provider === "openai"
-      ? Boolean(env.AI_OPENAI_API_KEY)
-      : provider === "anthropic"
-        ? Boolean(env.AI_ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY)
-        : false;
+  const apiKeyConfigured = Boolean(readAiProviderApiKey(provider, env));
 
   return {
     enabled: parseBoolean(env.AI_ENABLED, false),
@@ -1441,7 +1436,7 @@ async function callOpenAiProvider({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.AI_OPENAI_API_KEY ?? ""}`,
+            Authorization: `Bearer ${readAiProviderApiKey("openai", process.env)}`,
           },
           body: JSON.stringify(requestBody),
           signal: controllerSignal,
@@ -1485,7 +1480,7 @@ async function callAnthropicProvider({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": process.env.AI_ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "",
+            "x-api-key": readAiProviderApiKey("anthropic", process.env),
             "anthropic-version": process.env.AI_ANTHROPIC_VERSION ?? "2023-06-01",
           },
           body: JSON.stringify(requestBody),
@@ -1834,6 +1829,23 @@ function normalizeProvider(value: string | undefined): AiProviderKey {
     return "owner_approved";
   }
   return "disabled";
+}
+
+function readAiProviderApiKey(
+  provider: AiProviderKey,
+  env: Record<string, string | undefined>,
+) {
+  if (provider === "openai") {
+    return env.AI_OPENAI_API_KEY?.trim() ?? "";
+  }
+  if (provider === "anthropic") {
+    return (
+      env.AI_ANTHROPIC_API_KEY?.trim() ||
+      env.ANTHROPIC_API_KEY?.trim() ||
+      ""
+    );
+  }
+  return "";
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean) {
