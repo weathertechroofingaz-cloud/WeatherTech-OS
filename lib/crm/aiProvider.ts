@@ -633,6 +633,8 @@ export async function runAiPilotCommand({
         state: "provider_test_failed",
         label: "Provider test failed",
         summary: "The configured provider call failed. WeatherTech OS returned the safe rule-based fallback.",
+        productionDisabled: true,
+        liveProviderEnabled: false,
         health: "failed",
       },
       context,

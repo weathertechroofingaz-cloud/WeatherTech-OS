@@ -4280,6 +4280,7 @@ async function waitForAiProviderStatus(
         loadedCompanyId !== requestCompanyId ||
         budgetCents !== "5000" ||
         card.getAttribute("data-ai-enabled") !== "false" ||
+        card.getAttribute("data-ai-runtime-provider-health") !== "not_tested" ||
         !text.includes("$50/month") ||
         !text.includes("external actions disabled") ||
         savedWork.getAttribute("data-ai-saved-analyses-phase") !== "loaded" ||
@@ -5504,6 +5505,27 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
       requestSequenceBaseline: weatherTechRequestSequenceBaseline,
     },
   );
+  const weatherTechRefreshRequestSequenceBaseline =
+    await getAiProviderStatusRequestSequence(tab);
+  await clickUnique(
+    tab.playwright.locator('[data-testid="workspace-refresh"]'),
+    "AI workspace header refresh",
+    { retryTransientClick: true },
+  );
+  const weatherTechRefreshedProviderStatus = await waitForAiProviderStatus(
+    tab,
+    "WeatherTech Roofing LLC",
+    {
+      expectedCompanyId: companies.weatherTech.id,
+      requestSequenceBaseline: weatherTechRefreshRequestSequenceBaseline,
+    },
+  );
+  if (
+    weatherTechRefreshedProviderStatus.requestCompanyId !==
+    weatherTechProviderStatus.requestCompanyId
+  ) {
+    throw new Error("AI workspace refresh changed the exact company status scope.");
+  }
 
   const usageAccountingBoundary = await tab.playwright
     .locator('[data-testid="ai-live-pilot-controls"]')

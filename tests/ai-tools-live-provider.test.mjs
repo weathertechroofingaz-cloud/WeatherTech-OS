@@ -720,6 +720,8 @@ try {
   });
   assertEqual(openAiResult.response.mode, "live_provider", "Configured OpenAI mock returns live-provider mode");
   assertEqual(openAiResult.readiness.state, "provider_connected", "Provider readiness reports connected after a successful mock call");
+  assertEqual(openAiResult.readiness.liveProviderEnabled, true, "A successful provider test keeps live-provider readiness enabled");
+  assertEqual(openAiResult.providerHealth.tested, true, "A successful provider request records a tested provider");
   assertEqual(openAiResult.providerHealth.ok, true, "Provider health is healthy after success");
   assert(openAiRequest.url.includes("api.openai.com/v1/responses"), "OpenAI adapter uses Responses API");
   assertEqual(openAiRequest.body.store, false, "OpenAI request disables provider-side storage");
@@ -839,6 +841,31 @@ try {
     tightenedRetryResult.response.mode,
     "provider_disabled",
     "A bounded provider failure returns the safe fallback",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.state,
+    "provider_test_failed",
+    "A bounded provider failure reports the exact failed runtime state",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.liveProviderEnabled,
+    false,
+    "A failed provider test cannot retain live-provider readiness",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.productionDisabled,
+    true,
+    "A failed provider test preserves the external-action boundary",
+  );
+  assertEqual(
+    tightenedRetryResult.providerHealth.tested,
+    true,
+    "A failed provider request records that the provider was tested",
+  );
+  assertEqual(
+    tightenedRetryResult.providerHealth.ok,
+    false,
+    "A failed provider request cannot report healthy provider runtime",
   );
 
   const actionContext = openAiResult.context.records;

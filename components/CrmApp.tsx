@@ -6411,6 +6411,8 @@ function CrmWorkspace({
   onError,
 }: CrmWorkspaceProps) {
   const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>("all");
+  const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =
+    useState(0);
   const [companyScopeStorageReady, setCompanyScopeStorageReady] = useState(false);
   const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
     useState<string | null>(null);
@@ -6458,6 +6460,13 @@ function CrmWorkspace({
     },
     [],
   );
+  const handleWorkspaceRefresh = useCallback(async () => {
+    try {
+      await onScrollPreservingReload();
+    } finally {
+      setAiProviderStatusRefreshSequence((current) => current + 1);
+    }
+  }, [onScrollPreservingReload]);
 
   useEffect(() => {
     jobPhotoRecoveryNoticeRef.current = onNotice;
@@ -6891,7 +6900,8 @@ function CrmWorkspace({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onReload()}
+                  onClick={() => void handleWorkspaceRefresh()}
+                  data-testid="workspace-refresh"
                   className="wt-control-button wt-control-button-secondary inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   <RefreshCcw className="h-4 w-4" />
@@ -7188,6 +7198,7 @@ function CrmWorkspace({
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
+              statusRefreshSequence={aiProviderStatusRefreshSequence}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -39816,6 +39827,7 @@ type AiToolsViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
+  statusRefreshSequence: number;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -39890,6 +39902,7 @@ function AiToolsView({
   snapshot,
   companyMap,
   activeCompanyId,
+  statusRefreshSequence,
   onReload,
   onNotice,
   onError,
@@ -39918,6 +39931,10 @@ function AiToolsView({
     useState<string | null>(null);
   const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
     useState(0);
+  const [aiRuntimeProviderHealth, setAiRuntimeProviderHealth] = useState<{
+    companyId: string;
+    state: "ready" | "failed";
+  } | null>(null);
   const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
   const [reviewingActionId, setReviewingActionId] = useState<string | null>(null);
@@ -39958,6 +39975,10 @@ function AiToolsView({
     aiProviderStatusError?.companyId === exactAiCompanyId
       ? aiProviderStatusError.message
       : "";
+  const currentAiRuntimeProviderHealth =
+    aiRuntimeProviderHealth?.companyId === exactAiCompanyId
+      ? aiRuntimeProviderHealth.state
+      : null;
   const isAiProviderStatusLoading =
     aiProviderStatusLoadingCompanyId === exactAiCompanyId &&
     exactAiCompanyId !== null;
@@ -40011,6 +40032,7 @@ function AiToolsView({
     setAiProviderStatus(null);
     setAiProviderStatusError(null);
     setAiProviderStatusLoadingCompanyId(null);
+    setAiRuntimeProviderHealth(null);
     setIsAiCommandRunning(false);
     setReviewedActionIds({});
     setReviewingActionId(null);
@@ -40093,7 +40115,7 @@ function AiToolsView({
 
     void loadAiProviderStatus();
     return () => controller.abort();
-  }, [exactAiCompanyId]);
+  }, [exactAiCompanyId, statusRefreshSequence]);
 
   useEffect(
     () => () => {
@@ -40249,6 +40271,12 @@ function AiToolsView({
         result.companyId !== requestCompanyId
       ) {
         return;
+      }
+      if (result.providerHealth.tested) {
+        setAiRuntimeProviderHealth({
+          companyId: requestCompanyId,
+          state: result.providerHealth.ok ? "ready" : "failed",
+        });
       }
       setAiPilotResult(result);
       setAiResponseCompanyId(requestCompanyId);
@@ -40648,6 +40676,7 @@ function AiToolsView({
             status={currentAiProviderStatus}
             statusError={currentAiProviderStatusError}
             isLoading={isAiProviderStatusLoading}
+            runtimeProviderHealth={currentAiRuntimeProviderHealth}
           />
         </div>
 
@@ -41571,6 +41600,7 @@ function AiProviderCard({
   status,
   statusError,
   isLoading,
+  runtimeProviderHealth,
 }: {
   companyId: string | null;
   companyName: string | null;
@@ -41578,8 +41608,12 @@ function AiProviderCard({
   status: AiCompanyPilotStatus | null;
   statusError: string;
   isLoading: boolean;
+  runtimeProviderHealth: "ready" | "failed" | null;
 }) {
-  const isEnabled = Boolean(status?.aiEnabled && status.readiness.liveProviderEnabled);
+  const runtimeProviderFailed = runtimeProviderHealth === "failed";
+  const isEnabled = Boolean(
+    !runtimeProviderFailed && status?.aiEnabled && status.readiness.liveProviderEnabled,
+  );
   const statusPhase = !companyName
     ? "selection_required"
     : isLoading
@@ -41593,16 +41627,20 @@ function AiProviderCard({
     ? "Select a company for Production AI"
     : isLoading
       ? "Checking Production AI status"
-      : status
-        ? status.readiness.label
-        : "Production AI status unavailable";
+      : runtimeProviderFailed
+        ? "Provider test failed"
+        : status
+          ? status.readiness.label
+          : "Production AI status unavailable";
   const summary = !companyName
     ? "Choose WeatherTech Roofing LLC or IHC Painting to load its authenticated AI policy and monthly budget."
     : isLoading
       ? `Loading the authenticated, company-scoped provider policy for ${companyName}.`
-      : status
-        ? `${companyName}: ${status.readiness.summary}`
-        : `${companyName}: ${statusError || "The authenticated provider status could not be loaded."}`;
+      : runtimeProviderFailed
+        ? `${companyName}: The latest live provider test failed. Production AI will remain unavailable until a later tested request succeeds.`
+        : status
+          ? `${companyName}: ${status.readiness.summary}`
+          : `${companyName}: ${statusError || "The authenticated provider status could not be loaded."}`;
   const providerLabel = status
     ? `${status.readiness.provider} / ${status.readiness.model}`
     : companyName
@@ -41625,6 +41663,7 @@ function AiProviderCard({
       data-ai-status-request-sequence={String(requestSequence)}
       data-ai-status-company-id={status?.companyId ?? ""}
       data-ai-monthly-budget-cents={status ? String(status.monthlyBudgetCents) : ""}
+      data-ai-runtime-provider-health={runtimeProviderHealth ?? "not_tested"}
       role="status"
       aria-live="polite"
       aria-busy={isLoading}
@@ -41645,7 +41684,11 @@ function AiProviderCard({
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <AiStatusBadge
-          label={status?.readiness.state.replace(/_/g, " ") ?? "status not loaded"}
+          label={
+            runtimeProviderFailed
+              ? "provider test failed"
+              : status?.readiness.state.replace(/_/g, " ") ?? "status not loaded"
+          }
           tone={isEnabled ? "blue" : "amber"}
         />
         {status ? (
