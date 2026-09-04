@@ -161,6 +161,46 @@ try {
     "ready",
     "A tested success from the current generation restores provider health",
   );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: wtCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    true,
+    "An exact-company command may publish only in its current refresh generation",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: wtCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 12,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A pre-Refresh command cannot publish a late answer in the new generation",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: ihcCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A WeatherTech command cannot publish after switching to IHC",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: null,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A command cannot publish without an exact active company",
+  );
   const snapshot = emptySnapshot({
     companies: [
       {

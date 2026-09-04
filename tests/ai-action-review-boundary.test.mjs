@@ -839,6 +839,11 @@ for (const statusUiBoundary of [
   "type AiPilotResultEvidence = {",
   "statusRefreshSequence: number",
   "const requestStatusRefreshSequence = statusRefreshSequence",
+  "const currentStatusRefreshSequenceRef = useRef(statusRefreshSequence)",
+  "useLayoutEffect(() => {",
+  "currentStatusRefreshSequenceRef.current = statusRefreshSequence",
+  "isCurrentAiCommandCompletion({",
+  "currentStatusRefreshSequence: currentStatusRefreshSequenceRef.current",
   "setAiPilotResultEvidence({",
   "statusRefreshSequence: requestStatusRefreshSequence",
   "aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence",
@@ -867,6 +872,31 @@ for (const statusUiBoundary of [
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
   );
 }
+
+const aiCommandCompletionGuardIndex = crmApp.indexOf(
+  "!isCurrentAiCommandCompletion({",
+  crmApp.indexOf("const requestStatusRefreshSequence = statusRefreshSequence"),
+);
+const aiCommandSuccessResponseIndex = crmApp.indexOf(
+  "setAiResponses((current) => [result.response, ...current].slice(0, 6))",
+  aiCommandCompletionGuardIndex,
+);
+const aiCommandCatchIndex = crmApp.indexOf("} catch (currentError) {", aiCommandSuccessResponseIndex);
+const aiCommandCatchGuardIndex = crmApp.indexOf(
+  "!isCurrentAiCommandCompletion({",
+  aiCommandCatchIndex,
+);
+const aiCommandFallbackResponseIndex = crmApp.indexOf(
+  "setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6))",
+  aiCommandCatchGuardIndex,
+);
+assert(
+  aiCommandCompletionGuardIndex >= 0 &&
+    aiCommandSuccessResponseIndex > aiCommandCompletionGuardIndex &&
+    aiCommandCatchGuardIndex > aiCommandCatchIndex &&
+    aiCommandFallbackResponseIndex > aiCommandCatchGuardIndex,
+  "Current company and Refresh generation must be verified before publishing live or fallback AI responses.",
+);
 for (const runtimeHealthSelectorBoundary of [
   "export function getCurrentAiRuntimeProviderHealth({",
   "evidence.companyId !== companyId",

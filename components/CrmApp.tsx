@@ -53,6 +53,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -188,6 +189,7 @@ import {
   answerAiCommand,
   buildAiWorkspaceModel,
   getCurrentAiRuntimeProviderHealth,
+  isCurrentAiCommandCompletion,
   type AiAdvisorModeKey,
   type AiAssistantDraft,
   type AiCommandCenterRecommendation,
@@ -39954,6 +39956,11 @@ function AiToolsView({
   const aiProviderStatusRequestSequenceRef = useRef(0);
   const aiReviewAbortRef = useRef<AbortController | null>(null);
   const activeAiCompanyRef = useRef<CompanyScopeId>(activeCompanyId);
+  const currentStatusRefreshSequenceRef = useRef(statusRefreshSequence);
+
+  useLayoutEffect(() => {
+    currentStatusRefreshSequenceRef.current = statusRefreshSequence;
+  }, [statusRefreshSequence]);
 
   const aiWorkspace = useMemo(
     () =>
@@ -40275,8 +40282,13 @@ function AiToolsView({
       const result = payload as AiPilotCommandResult;
       if (
         controller.signal.aborted ||
-        activeAiCompanyRef.current !== requestCompanyId ||
-        result.companyId !== requestCompanyId
+        result.companyId !== requestCompanyId ||
+        !isCurrentAiCommandCompletion({
+          activeCompanyId: activeAiCompanyRef.current,
+          requestCompanyId,
+          currentStatusRefreshSequence: currentStatusRefreshSequenceRef.current,
+          requestStatusRefreshSequence,
+        })
       ) {
         return;
       }
@@ -40295,10 +40307,17 @@ function AiToolsView({
       setAiResponses((current) => [result.response, ...current].slice(0, 6));
       setReviewedActionIds({});
     } catch (currentError) {
+      if (
+        !isCurrentAiCommandCompletion({
+          activeCompanyId: activeAiCompanyRef.current,
+          requestCompanyId,
+          currentStatusRefreshSequence: currentStatusRefreshSequenceRef.current,
+          requestStatusRefreshSequence,
+        })
+      ) {
+        return;
+      }
       if (controller.signal.aborted) {
-        if (activeAiCompanyRef.current !== requestCompanyId) {
-          return;
-        }
         setAiPilotError("AI request canceled. No action was taken.");
       } else {
         setAiPilotError(

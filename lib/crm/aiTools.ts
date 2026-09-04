@@ -46,6 +46,26 @@ export type AiRuntimeProviderHealthEvidence = {
   statusRefreshSequence: number;
   state: AiRuntimeProviderHealthState;
 };
+
+export function isCurrentAiCommandCompletion({
+  activeCompanyId,
+  requestCompanyId,
+  currentStatusRefreshSequence,
+  requestStatusRefreshSequence,
+}: {
+  activeCompanyId: string | null;
+  requestCompanyId: string;
+  currentStatusRefreshSequence: number;
+  requestStatusRefreshSequence: number;
+}) {
+  return (
+    Boolean(requestCompanyId) &&
+    activeCompanyId === requestCompanyId &&
+    Number.isSafeInteger(currentStatusRefreshSequence) &&
+    Number.isSafeInteger(requestStatusRefreshSequence) &&
+    currentStatusRefreshSequence === requestStatusRefreshSequence
+  );
+}
 export type AiDailyOperationsTopic =
   | "attention_today"
   | "uncontacted_leads"
