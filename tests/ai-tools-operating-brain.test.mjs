@@ -118,6 +118,118 @@ try {
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
   const consumedQuotaProbeRefreshes = new Map();
   const attemptedQuotaProbeRefreshes = new Map();
+  const priorGenerationConsumed = new Map([
+    [wtCompanyId, 1],
+    [ihcCompanyId, 1],
+  ]);
+  const currentGenerationAttempted = new Map([
+    [wtCompanyId, 2],
+    [ihcCompanyId, 2],
+  ]);
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "Returning to WeatherTech must release its current aborted attempt after a prior acknowledged generation",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "Company-effect and request-finally release must be idempotent",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "An aborted current WeatherTech generation must admit one replacement status operation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "The replacement WeatherTech status operation must remain one-shot",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "A stale finally block must not release WeatherTech's newer attempt",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A stale release must leave the newer WeatherTech attempt intact",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      ihcCompanyId,
+      2,
+    ),
+    false,
+    "Releasing WeatherTech must preserve IHC's independent current attempt",
+  );
+  assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "The replacement WeatherTech operation must remain acknowledgeable",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "An acknowledged attempt must not be released",
+  );
+  assertEqual(
+    currentGenerationAttempted.get(wtCompanyId),
+    2,
+    "Rejecting an acknowledged release must leave the exact attempt marker intact",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A rejected acknowledged release must leave WeatherTech consumed",
+  );
   const validQuotaProbeRateLimitPayload = {
     code: "ai_quota_probe_refresh_rate_limited",
     retryAfterSeconds: 17,
@@ -226,6 +338,56 @@ try {
     "An unacknowledged WeatherTech generation must not start a second status operation after reloads or remounts",
   );
   assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A company switch must not release a different WeatherTech refresh generation",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    false,
+    "A company switch must not release another company's refresh attempt",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "Aborting WeatherTech on a real company switch must release its exact unacknowledged attempt",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Concurrent company-effect and request-finally cleanup must release an attempt idempotently",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "Returning to WeatherTech must allow one replacement operation for the aborted attempt",
+  );
+  assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
       wtCompanyId,
@@ -260,6 +422,16 @@ try {
     ),
     false,
     "Repeated acknowledgement must not claim a new refresh-state transition",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An acknowledged WeatherTech refresh must never be released by a later company switch",
   );
   assertEqual(
     aiTools.beginAiQuotaProbeRefreshAttempt(

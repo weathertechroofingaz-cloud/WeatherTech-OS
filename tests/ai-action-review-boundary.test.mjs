@@ -1791,6 +1791,7 @@ for (const statusUiBoundary of [
   'response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"',
   "shouldForceQuotaProbeRefresh(",
   "beginAiQuotaProbeRefreshAttempt(",
+  "releaseAiQuotaProbeRefreshAttempt(",
   "getAiQuotaProbeRefreshRetryAfterSeconds(",
   "waitForAiProviderStatusRetry(",
   'signal.addEventListener("abort", handleAbort, { once: true })',
@@ -1798,6 +1799,7 @@ for (const statusUiBoundary of [
   "const handleAbort = () => finish(false)",
   "retryAfterSeconds * 1_000 + 100",
   "beginQuotaProbeRefreshAttempt(",
+  "releaseQuotaProbeRefreshAttempt(",
   "acknowledgeQuotaProbeRefresh(",
   'credentials: "same-origin"',
   'cache: "no-store"',
@@ -1850,6 +1852,7 @@ for (const statusUiBoundary of [
   "statusRefreshSequence={aiProviderStatusRefreshSequence}",
   "shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}",
   "beginQuotaProbeRefreshAttempt={beginQuotaProbeRefreshAttempt}",
+  "releaseQuotaProbeRefreshAttempt={releaseQuotaProbeRefreshAttempt}",
   "acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}",
   "quotaProbeRefreshStateVersion={aiQuotaProbeRefreshStateVersion}",
   "type AiPilotResultEvidence = {",
@@ -2206,7 +2209,10 @@ assert(
     .includes("return () => controller.abort()") &&
     !crmApp
       .slice(providerStatusUnmountCleanupIndex, providerStatusUnmountCleanupEndIndex)
-      .includes("aiProviderStatusAbortRef.current?.abort()"),
+      .includes("aiProviderStatusAbortRef.current?.abort()") &&
+    !crmApp
+      .slice(providerStatusUnmountCleanupIndex, providerStatusUnmountCleanupEndIndex)
+      .includes("releaseQuotaProbeRefreshAttempt("),
   "Same-generation status effect replay and view remounts must not abort their sole durable refresh attempt.",
 );
 const providerStatusCatchContextGuardIndex = crmApp.indexOf(
@@ -2225,6 +2231,43 @@ const providerStatusErrorGenerationIndex = crmApp.indexOf(
   "statusRefreshSequence: requestStatusRefreshSequence",
   providerStatusErrorPublishIndex,
 );
+const providerStatusFinallyIndex = crmApp.indexOf(
+  "} finally {",
+  providerStatusErrorGenerationIndex,
+);
+const providerStatusFinallySelectionGuardIndex = crmApp.indexOf(
+  "if (!isAiCompanySelectionCurrent(requestCompanyId))",
+  providerStatusFinallyIndex,
+);
+const providerStatusFinallyReleaseIndex = crmApp.indexOf(
+  "releaseQuotaProbeRefreshAttempt(",
+  providerStatusFinallySelectionGuardIndex,
+);
+const providerStatusFinallyReleaseEndIndex = crmApp.indexOf(
+  ");",
+  providerStatusFinallyReleaseIndex,
+);
+const providerStatusFinallyReleaseBoundary = crmApp.slice(
+  providerStatusFinallyReleaseIndex,
+  providerStatusFinallyReleaseEndIndex,
+);
+const providerStatusFinallyControllerClearIndex = crmApp.indexOf(
+  "if (aiProviderStatusAbortRef.current === controller)",
+  providerStatusFinallyIndex,
+);
+const providerStatusFinallyControllerNullIndex = crmApp.indexOf(
+  "aiProviderStatusAbortRef.current = null",
+  providerStatusFinallyReleaseIndex,
+);
+const providerStatusCatchBoundary = crmApp.slice(
+  providerStatusCatchIndex,
+  providerStatusFinallyIndex,
+);
+const providerStatusFinallyBoundary = crmApp.slice(
+  providerStatusFinallyIndex,
+  providerStatusFinallyControllerNullIndex +
+    "aiProviderStatusAbortRef.current = null".length,
+);
 assert(
   providerStatusPendingGuardIndex >= 0 &&
     providerStatusPendingGuardIndex < providerStatusEffectIndex &&
@@ -2232,8 +2275,39 @@ assert(
     providerStatusCatchSelectionGuardIndex > providerStatusCatchIndex &&
     providerStatusCatchContextGuardIndex > providerStatusCatchSelectionGuardIndex &&
     providerStatusErrorPublishIndex > providerStatusCatchContextGuardIndex &&
-    providerStatusErrorGenerationIndex > providerStatusErrorPublishIndex,
-  "AI status loading and errors must pause during snapshot transitions and reject stale root context.",
+    providerStatusErrorGenerationIndex > providerStatusErrorPublishIndex &&
+    providerStatusFinallyIndex > providerStatusErrorGenerationIndex &&
+    providerStatusFinallyControllerClearIndex > providerStatusFinallyIndex &&
+    providerStatusFinallySelectionGuardIndex >
+      providerStatusFinallyControllerClearIndex &&
+    providerStatusFinallyReleaseIndex > providerStatusFinallySelectionGuardIndex &&
+    providerStatusFinallyReleaseEndIndex > providerStatusFinallyReleaseIndex &&
+    providerStatusFinallyReleaseBoundary.includes("requestCompanyId") &&
+    providerStatusFinallyReleaseBoundary.includes(
+      "requestStatusRefreshSequence",
+    ) &&
+    providerStatusFinallyControllerNullIndex > providerStatusFinallyReleaseIndex &&
+    providerStatusFinallyBoundary.includes(
+      "if (aiProviderStatusAbortRef.current === controller) {\n          if (!isAiCompanySelectionCurrent(requestCompanyId)) {\n            releaseQuotaProbeRefreshAttempt(\n              requestCompanyId,\n              requestStatusRefreshSequence,\n            );\n          }\n          aiProviderStatusAbortRef.current = null",
+    ) &&
+    !providerStatusCatchBoundary.includes("releaseQuotaProbeRefreshAttempt("),
+  "AI status loading and errors must reject stale root context, and only the owning controller may release a synchronous company-selection change before clearing itself.",
+);
+const aiToolsViewStartIndex = crmApp.indexOf("function AiToolsView({");
+const aiToolsViewEndIndex = crmApp.indexOf(
+  "function AiCommandCenterPanel(",
+  providerStatusFinallyControllerNullIndex,
+);
+const aiToolsViewBoundary = crmApp.slice(
+  aiToolsViewStartIndex,
+  aiToolsViewEndIndex,
+);
+assert(
+  aiToolsViewStartIndex >= 0 &&
+    aiToolsViewEndIndex > providerStatusFinallyControllerNullIndex &&
+    (aiToolsViewBoundary.match(/\breleaseQuotaProbeRefreshAttempt\s*\(/g) ?? [])
+      .length === 2,
+  "AiToolsView may release an attempted refresh only from its real-company-switch path or the owning request's selection-mismatch finally path.",
 );
 for (const snapshotPendingUiBoundary of [
   "aiProviderStatusEvidence?.status.companyId === exactAiCompanyId",
@@ -3103,24 +3177,101 @@ assert(
     quotaProbeAcknowledgeReturnIndex > quotaProbeAcknowledgeVersionIndex,
   "A completed detached status request must notify the mounted workspace after acknowledging a generation.",
 );
-const companyResetStart = crmApp.indexOf(
-  "aiCommandAbortRef.current?.abort();\n    aiProviderStatusAbortRef.current?.abort();\n    aiReviewAbortRef.current?.abort();",
+const selectedCompanySetterStartIndex = crmApp.indexOf(
+  "const setSelectedCompanyId = useCallback((companyId: CompanyScopeId) =>",
 );
-const companyResetEffectStart = crmApp.lastIndexOf(
-  "  useEffect(() => {",
-  companyResetStart,
+const selectedCompanyRefWriteIndex = crmApp.indexOf(
+  "selectedCompanyIdRef.current = companyId",
+  selectedCompanySetterStartIndex,
+);
+const selectedCompanyStateWriteIndex = crmApp.indexOf(
+  "setSelectedCompanyIdState(companyId)",
+  selectedCompanyRefWriteIndex,
+);
+const selectedCompanyCurrentPredicateIndex = crmApp.indexOf(
+  "const isAiCompanySelectionCurrent = useCallback(",
+  selectedCompanyStateWriteIndex,
+);
+const selectedCompanyCurrentRefReadIndex = crmApp.indexOf(
+  "selectedCompanyIdRef.current === companyId",
+  selectedCompanyCurrentPredicateIndex,
+);
+assert(
+  selectedCompanySetterStartIndex >= 0 &&
+    selectedCompanyRefWriteIndex > selectedCompanySetterStartIndex &&
+    selectedCompanyStateWriteIndex > selectedCompanyRefWriteIndex &&
+    selectedCompanyCurrentPredicateIndex > selectedCompanyStateWriteIndex &&
+    selectedCompanyCurrentRefReadIndex > selectedCompanyCurrentPredicateIndex,
+  "Company selection must synchronously publish its ref before React state so status requests can observe a pre-effect scope switch.",
 );
 const companyResetSameCompanyGuardIndex = crmApp.indexOf(
   "if (activeAiCompanyRef.current === activeCompanyId)",
-  companyResetEffectStart,
 );
-const companyResetEnd = crmApp.indexOf("}, [activeCompanyId]);", companyResetStart);
+const companyResetEffectStart = crmApp.lastIndexOf(
+  "  useEffect(() => {",
+  companyResetSameCompanyGuardIndex,
+);
+const companyResetPreviousCompanyIndex = crmApp.indexOf(
+  "const previousAiCompanyId = activeAiCompanyRef.current",
+  companyResetSameCompanyGuardIndex,
+);
+const companyResetPreviousControllerIndex = crmApp.indexOf(
+  "const previousStatusController = aiProviderStatusAbortRef.current",
+  companyResetPreviousCompanyIndex,
+);
+const companyResetCommandAbortIndex = crmApp.indexOf(
+  "aiCommandAbortRef.current?.abort()",
+  companyResetPreviousControllerIndex,
+);
+const companyResetStatusAbortIndex = crmApp.indexOf(
+  "previousStatusController?.abort()",
+  companyResetCommandAbortIndex,
+);
+const companyResetReleaseGuardIndex = crmApp.indexOf(
+  'if (previousStatusController && previousAiCompanyId !== "all")',
+  companyResetStatusAbortIndex,
+);
+const companyResetReleaseIndex = crmApp.indexOf(
+  "releaseQuotaProbeRefreshAttempt(",
+  companyResetReleaseGuardIndex,
+);
+const companyResetReleaseEndIndex = crmApp.indexOf(
+  ");",
+  companyResetReleaseIndex,
+);
+const companyResetReleaseBoundary = crmApp.slice(
+  companyResetReleaseIndex,
+  companyResetReleaseEndIndex,
+);
+const companyResetActiveCompanyPublishIndex = crmApp.indexOf(
+  "activeAiCompanyRef.current = activeCompanyId",
+  companyResetReleaseIndex,
+);
+const companyResetEnd = crmApp.indexOf(
+  "}, [activeCompanyId, releaseQuotaProbeRefreshAttempt, statusRefreshSequence]);",
+  companyResetActiveCompanyPublishIndex,
+);
+const companyResetBoundary = crmApp.slice(companyResetEffectStart, companyResetEnd);
 assert(
   companyResetEffectStart >= 0 &&
     companyResetSameCompanyGuardIndex > companyResetEffectStart &&
-    companyResetSameCompanyGuardIndex < companyResetStart &&
-    companyResetEnd > companyResetStart,
-  "AI abort and session reset must execute only for a real active-company transition, not StrictMode effect replay.",
+    companyResetPreviousCompanyIndex > companyResetSameCompanyGuardIndex &&
+    companyResetPreviousControllerIndex > companyResetPreviousCompanyIndex &&
+    companyResetCommandAbortIndex > companyResetPreviousControllerIndex &&
+    companyResetStatusAbortIndex > companyResetCommandAbortIndex &&
+    companyResetReleaseGuardIndex > companyResetStatusAbortIndex &&
+    companyResetReleaseIndex > companyResetReleaseGuardIndex &&
+    companyResetReleaseEndIndex > companyResetReleaseIndex &&
+    companyResetReleaseBoundary.includes("previousAiCompanyId") &&
+    companyResetReleaseBoundary.includes("statusRefreshSequence") &&
+    companyResetBoundary.includes(
+      'if (previousStatusController && previousAiCompanyId !== "all") {\n      releaseQuotaProbeRefreshAttempt(\n        previousAiCompanyId,\n        statusRefreshSequence,\n      );\n    }',
+    ) &&
+    companyResetActiveCompanyPublishIndex > companyResetReleaseIndex &&
+    companyResetEnd > companyResetActiveCompanyPublishIndex &&
+    (companyResetBoundary.match(/releaseQuotaProbeRefreshAttempt\(/g) ?? [])
+      .length === 1,
+  "A real company switch must abort and release only its active exact unacknowledged status attempt; StrictMode replay and terminal failures must not rearm it.",
 );
 
 includes(

@@ -99,6 +99,21 @@ export function beginAiQuotaProbeRefreshAttempt(
   return true;
 }
 
+export function releaseAiQuotaProbeRefreshAttempt(
+  attemptedByCompany: Map<string, number>,
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (
+    !shouldForceAiQuotaProbeRefresh(consumedByCompany, companyId, sequence) ||
+    attemptedByCompany.get(companyId) !== sequence
+  ) {
+    return false;
+  }
+  return attemptedByCompany.delete(companyId);
+}
+
 export function getAiQuotaProbeRefreshRetryAfterSeconds({
   status,
   retryAfterHeader,

@@ -195,6 +195,7 @@ import {
   getCurrentAiResponses,
   getCurrentAiRuntimeProviderHealth,
   isCurrentAiCommandCompletion,
+  releaseAiQuotaProbeRefreshAttempt,
   shouldForceAiQuotaProbeRefresh,
   type AiAdvisorModeKey,
   type AiAssistantDraft,
@@ -6584,6 +6585,16 @@ function CrmWorkspace({
       ),
     [],
   );
+  const releaseQuotaProbeRefreshAttempt = useCallback(
+    (companyId: string, sequence: number) =>
+      releaseAiQuotaProbeRefreshAttempt(
+        attemptedAiQuotaProbeRefreshSequenceRef.current,
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
+    [],
+  );
   const acknowledgeQuotaProbeRefresh = useCallback(
     (companyId: string, sequence: number) => {
       const acknowledged = acknowledgeAiQuotaProbeRefresh(
@@ -7338,6 +7349,7 @@ function CrmWorkspace({
               isAiCompanySelectionCurrent={isAiCompanySelectionCurrent}
               shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}
               beginQuotaProbeRefreshAttempt={beginQuotaProbeRefreshAttempt}
+              releaseQuotaProbeRefreshAttempt={releaseQuotaProbeRefreshAttempt}
               acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}
               quotaProbeRefreshStateVersion={aiQuotaProbeRefreshStateVersion}
               onReload={onReload}
@@ -39974,6 +39986,7 @@ type AiToolsViewProps = {
   isAiCompanySelectionCurrent: (companyId: string) => boolean;
   shouldForceQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   beginQuotaProbeRefreshAttempt: (companyId: string, sequence: number) => boolean;
+  releaseQuotaProbeRefreshAttempt: (companyId: string, sequence: number) => boolean;
   acknowledgeQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   quotaProbeRefreshStateVersion: number;
   onReload: () => Promise<void>;
@@ -40111,6 +40124,7 @@ function AiToolsView({
   isAiCompanySelectionCurrent,
   shouldForceQuotaProbeRefresh,
   beginQuotaProbeRefreshAttempt,
+  releaseQuotaProbeRefreshAttempt,
   acknowledgeQuotaProbeRefresh,
   quotaProbeRefreshStateVersion,
   onReload,
@@ -40271,9 +40285,17 @@ function AiToolsView({
     if (activeAiCompanyRef.current === activeCompanyId) {
       return;
     }
+    const previousAiCompanyId = activeAiCompanyRef.current;
+    const previousStatusController = aiProviderStatusAbortRef.current;
     aiCommandAbortRef.current?.abort();
-    aiProviderStatusAbortRef.current?.abort();
+    previousStatusController?.abort();
     aiReviewAbortRef.current?.abort();
+    if (previousStatusController && previousAiCompanyId !== "all") {
+      releaseQuotaProbeRefreshAttempt(
+        previousAiCompanyId,
+        statusRefreshSequence,
+      );
+    }
     aiCommandAbortRef.current = null;
     aiProviderStatusAbortRef.current = null;
     aiReviewAbortRef.current = null;
@@ -40296,7 +40318,7 @@ function AiToolsView({
       employeeId: "all",
       propertyKey: "all",
     });
-  }, [activeCompanyId]);
+  }, [activeCompanyId, releaseQuotaProbeRefreshAttempt, statusRefreshSequence]);
 
   useEffect(() => {
     const quotaProbeRefreshStateChanged =
@@ -40489,6 +40511,12 @@ function AiToolsView({
         });
       } finally {
         if (aiProviderStatusAbortRef.current === controller) {
+          if (!isAiCompanySelectionCurrent(requestCompanyId)) {
+            releaseQuotaProbeRefreshAttempt(
+              requestCompanyId,
+              requestStatusRefreshSequence,
+            );
+          }
           aiProviderStatusAbortRef.current = null;
           setAiProviderStatusLoadingCompanyId(null);
         }
@@ -40503,6 +40531,7 @@ function AiToolsView({
     exactAiCompanyId,
     isAiCompanySelectionCurrent,
     isSnapshotContextCurrent,
+    releaseQuotaProbeRefreshAttempt,
     snapshotTransitionPending,
     quotaProbeRefreshStateVersion,
     shouldForceQuotaProbeRefresh,
