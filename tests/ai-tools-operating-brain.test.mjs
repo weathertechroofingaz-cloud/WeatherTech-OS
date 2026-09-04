@@ -117,6 +117,7 @@ try {
   const wtCompanyId = "11111111-1111-4111-8111-111111111111";
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
   const consumedQuotaProbeRefreshes = new Map();
+  const attemptedQuotaProbeRefreshes = new Map();
   assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
@@ -136,13 +137,33 @@ try {
     "WeatherTech must require its first explicit Refresh generation",
   );
   assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "WeatherTech must issue exactly one explicit refresh attempt for a new generation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An unacknowledged WeatherTech generation must not auto-retry after reloads or remounts",
+  );
+  assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
       wtCompanyId,
       1,
     ),
     true,
-    "An unacknowledged or aborted WeatherTech Refresh must keep forcing a fresh snapshot",
+    "A failed attempt must remain unacknowledged until a new explicit Refresh generation",
   );
   assertEqual(
     aiTools.acknowledgeAiQuotaProbeRefresh(
@@ -163,6 +184,25 @@ try {
     "Repeated WeatherTech status reloads after acknowledgement must reuse the fresh estimate",
   );
   assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Repeated acknowledgement must not claim a new refresh-state transition",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      new Map(),
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An acknowledged generation must never start another forced attempt even with fresh local attempt state",
+  );
+  assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
       ihcCompanyId,
@@ -172,6 +212,16 @@ try {
     "IHC must independently consume the same global Refresh generation",
   );
   assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    true,
+    "IHC must receive its own single attempt for the shared generation",
+  );
+  assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
       wtCompanyId,
@@ -179,6 +229,16 @@ try {
     ),
     true,
     "A later WeatherTech Refresh generation must force one new context estimate",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "A genuinely new WeatherTech generation must restore one explicit refresh attempt",
   );
   const currentFailedProviderHealth = {
     companyId: wtCompanyId,

@@ -256,6 +256,10 @@ const expectedMigrations = [
     "20260904060243_ai_quota_status_read_model.sql",
     "4e0ec9cdbf7c8264c2d2781f10a87a82fa2069a963e5948feee58357e9425079",
   ],
+  [
+    "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+    "a139c0628f8dc84c9297e40dc1e7e38ea64b3580e313d7df5a1badf448003b7b",
+  ],
 ];
 
 const files = fs
@@ -431,6 +435,9 @@ const goHighLevelReconciliationEventRecoveryIndex = files.indexOf(
 const aiQuotaStatusReadModelIndex = files.indexOf(
   "20260904060243_ai_quota_status_read_model.sql",
 );
+const aiQuotaProbeRefreshCooldownIndex = files.indexOf(
+  "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -553,6 +560,7 @@ if (
   goHighLevelReconciliationAutomationTransitionFixIndex === -1 ||
   goHighLevelReconciliationEventRecoveryIndex === -1 ||
   aiQuotaStatusReadModelIndex === -1 ||
+  aiQuotaProbeRefreshCooldownIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -601,12 +609,13 @@ if (
       goHighLevelReconciliationAutomationTransitionFixIndex &&
     goHighLevelReconciliationAutomationTransitionFixIndex <
       goHighLevelReconciliationEventRecoveryIndex &&
-    goHighLevelReconciliationEventRecoveryIndex < aiQuotaStatusReadModelIndex
+    goHighLevelReconciliationEventRecoveryIndex < aiQuotaStatusReadModelIndex &&
+    aiQuotaStatusReadModelIndex < aiQuotaProbeRefreshCooldownIndex
   ) ||
-  aiQuotaStatusReadModelIndex !== files.length - 1
+  aiQuotaProbeRefreshCooldownIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, forward-only event-recovery/Twilio compatibility, and the AI quota read model must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, forward-only event-recovery/Twilio compatibility, the AI quota read model, and its durable refresh cooldown must remain in reviewed order.",
   );
 }
 
@@ -1692,6 +1701,15 @@ const normalizedAiQuotaStatusReadModelMigration = aiQuotaStatusReadModelMigratio
   .replace(/\s+/g, " ")
   .trim()
   .toLowerCase();
+const aiQuotaProbeRefreshCooldownMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+  ),
+  "utf8",
+);
+const normalizedAiQuotaProbeRefreshCooldownMigration =
+  aiQuotaProbeRefreshCooldownMigration.replace(/\s+/g, " ").trim().toLowerCase();
 const goHighLevelWebhookStateMachineMigration = fs.readFileSync(
   path.join(
     migrationsDir,
@@ -3250,6 +3268,80 @@ if (
   )
 ) {
   failures.push("CRM database types must expose the exact AI quota status RPC signature.");
+}
+
+if (
+  !normalizedAiQuotaProbeRefreshCooldownMigration.startsWith("begin;") ||
+  !normalizedAiQuotaProbeRefreshCooldownMigration.endsWith("commit;")
+) {
+  failures.push("AI quota-probe refresh cooldown must execute as one transaction.");
+}
+
+for (const quotaProbeRefreshContract of [
+  "create table public.ai_quota_probe_refresh_cooldowns",
+  "company_id uuid not null references public.companies(id) on delete cascade",
+  "actor_user_id uuid not null references auth.users(id) on delete cascade",
+  "primary key (company_id, actor_user_id)",
+  "alter table public.ai_quota_probe_refresh_cooldowns enable row level security",
+  "alter table public.ai_quota_probe_refresh_cooldowns force row level security",
+  "revoke all on table public.ai_quota_probe_refresh_cooldowns from public, anon, authenticated, service_role",
+  "grant select, insert, update on table public.ai_quota_probe_refresh_cooldowns to service_role",
+  "create or replace function public.wtos_claim_ai_quota_probe_refresh_v1( p_company_id uuid, p_actor_user_id uuid )",
+  "returns jsonb language plpgsql volatile security invoker set search_path = ''",
+  "trusted_claims jsonb := coalesce((select auth.jwt()), '{}'::jsonb)",
+  "if trusted_claims ->> 'role' is distinct from 'service_role'",
+  "from public.company_memberships as membership where membership.company_id = p_company_id and membership.user_id = p_actor_user_id and membership.role not in ('customer_portal', 'employee_portal')",
+  "checked_at timestamptz := clock_timestamp()",
+  "checked_at + interval '30 seconds'",
+  "on conflict (company_id, actor_user_id) do update",
+  "where cooldown.next_allowed_at <= checked_at",
+  "returning next_allowed_at into claimed_next_allowed_at",
+  "retry_after_seconds := greatest( 1, least( 30, ceil(extract(epoch from claimed_next_allowed_at - checked_at))::integer ) )",
+  "revoke all on function public.wtos_claim_ai_quota_probe_refresh_v1(uuid, uuid) from public, anon, authenticated, service_role",
+  "grant execute on function public.wtos_claim_ai_quota_probe_refresh_v1(uuid, uuid) to service_role",
+]) {
+  if (!normalizedAiQuotaProbeRefreshCooldownMigration.includes(quotaProbeRefreshContract)) {
+    failures.push(
+      `AI quota-probe refresh cooldown is missing ${quotaProbeRefreshContract}.`,
+    );
+  }
+}
+
+for (const receiptKey of [
+  "contractVersion",
+  "companyId",
+  "actorUserId",
+  "allowed",
+  "retryAfterSeconds",
+  "checkedAt",
+]) {
+  if (!aiQuotaProbeRefreshCooldownMigration.includes(`'${receiptKey}'`)) {
+    failures.push(`AI quota-probe refresh claim receipt is missing ${receiptKey}.`);
+  }
+}
+
+if (
+  /\bsecurity\s+definer\b/i.test(aiQuotaProbeRefreshCooldownMigration) ||
+  /\b(?:delete\s+from|truncate|pg_advisory(?:_xact)?_lock)\b/i.test(
+    aiQuotaProbeRefreshCooldownMigration,
+  )
+) {
+  failures.push(
+    "AI quota-probe refresh cooldown must remain invoker-rights, bounded-row, and free of destructive or advisory-lock operations.",
+  );
+}
+
+if (
+  !normalizedCrmDatabaseTypes.includes(
+    "ai_quota_probe_refresh_cooldowns: { Row: { company_id: string; actor_user_id: string; next_allowed_at: string; updated_at: string; }; Insert: { company_id: string; actor_user_id: string; next_allowed_at: string; updated_at: string; }; Update: Partial< Database[\"public\"][\"Tables\"][\"ai_quota_probe_refresh_cooldowns\"][\"Insert\"] >; Relationships: []; };",
+  ) ||
+  !normalizedCrmDatabaseTypes.includes(
+    "wtos_claim_ai_quota_probe_refresh_v1: { Args: { p_company_id: string; p_actor_user_id: string; }; Returns: Record<string, unknown>; };",
+  )
+) {
+  failures.push(
+    "CRM database types must expose the exact AI quota-probe refresh table and RPC signature.",
+  );
 }
 
 if (

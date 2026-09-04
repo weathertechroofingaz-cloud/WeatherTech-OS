@@ -9,6 +9,10 @@ import type { Database } from "../crm/types";
 
 const AI_QUOTA_RPC_PATH = "/rpc/wtos_reserve_ai_request_v1";
 const AI_QUOTA_STATUS_RPC_PATH = "/rest/v1/rpc/wtos_get_ai_quota_status_v1";
+const AI_QUOTA_PROBE_REFRESH_CLAIM_OPENAPI_PATH =
+  "/rpc/wtos_claim_ai_quota_probe_refresh_v1";
+const AI_QUOTA_PROBE_REFRESH_CLAIM_RPC_PATH =
+  "/rest/v1/rpc/wtos_claim_ai_quota_probe_refresh_v1";
 const AI_QUOTA_RPC_ARGUMENTS = [
   "p_company_id",
   "p_actor_user_id",
@@ -19,6 +23,8 @@ const SUPABASE_OPENAPI_MAX_BYTES = 2 * 1024 * 1024;
 const SUPABASE_OPENAPI_TIMEOUT_MS = 8_000;
 const SUPABASE_AI_QUOTA_STATUS_MAX_BYTES = 16 * 1024;
 const SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS = 8_000;
+const SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_MAX_BYTES = 4 * 1024;
+const SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_TIMEOUT_MS = 8_000;
 const AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000;
 const AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000;
 const AI_QUOTA_PROBE_SUCCESS_TTL_MS = 30_000;
@@ -105,7 +111,7 @@ function hasExactAiQuotaRpcContract(document: unknown) {
     return false;
   }
   const properties = bodyParameter.schema.properties;
-  return (
+  const reservationContractMatches =
     isRecord(properties.p_company_id) &&
     properties.p_company_id.type === "string" &&
     properties.p_company_id.format === "uuid" &&
@@ -116,7 +122,60 @@ function hasExactAiQuotaRpcContract(document: unknown) {
     properties.p_request_id.type === "string" &&
     properties.p_request_id.format === "uuid" &&
     isRecord(properties.p_request) &&
-    properties.p_request.format === "jsonb"
+    properties.p_request.format === "jsonb";
+  if (!reservationContractMatches) {
+    return false;
+  }
+
+  const refreshClaimPath =
+    document.paths[AI_QUOTA_PROBE_REFRESH_CLAIM_OPENAPI_PATH];
+  if (
+    !isRecord(refreshClaimPath) ||
+    "get" in refreshClaimPath ||
+    !isRecord(refreshClaimPath.post)
+  ) {
+    return false;
+  }
+  const refreshClaimParameters = refreshClaimPath.post.parameters;
+  if (!Array.isArray(refreshClaimParameters)) {
+    return false;
+  }
+  const refreshClaimBodyParameters = refreshClaimParameters.filter(
+    (parameter) =>
+      isRecord(parameter) &&
+      parameter.in === "body" &&
+      parameter.name === "args",
+  );
+  if (refreshClaimBodyParameters.length !== 1) {
+    return false;
+  }
+  const refreshClaimBodyParameter = refreshClaimBodyParameters[0];
+  if (
+    !isRecord(refreshClaimBodyParameter) ||
+    refreshClaimBodyParameter.required !== true ||
+    !isRecord(refreshClaimBodyParameter.schema) ||
+    refreshClaimBodyParameter.schema.type !== "object" ||
+    !isRecord(refreshClaimBodyParameter.schema.properties) ||
+    !Array.isArray(refreshClaimBodyParameter.schema.required)
+  ) {
+    return false;
+  }
+  const refreshClaimRequiredArguments = refreshClaimBodyParameter.schema.required;
+  const refreshClaimProperties = refreshClaimBodyParameter.schema.properties;
+  const refreshClaimPropertyNames = Object.keys(refreshClaimProperties);
+  return (
+    refreshClaimRequiredArguments.length === 2 &&
+    refreshClaimPropertyNames.length === 2 &&
+    refreshClaimRequiredArguments.includes("p_company_id") &&
+    refreshClaimRequiredArguments.includes("p_actor_user_id") &&
+    refreshClaimPropertyNames.includes("p_company_id") &&
+    refreshClaimPropertyNames.includes("p_actor_user_id") &&
+    isRecord(refreshClaimProperties.p_company_id) &&
+    refreshClaimProperties.p_company_id.type === "string" &&
+    refreshClaimProperties.p_company_id.format === "uuid" &&
+    isRecord(refreshClaimProperties.p_actor_user_id) &&
+    refreshClaimProperties.p_actor_user_id.type === "string" &&
+    refreshClaimProperties.p_actor_user_id.format === "uuid"
   );
 }
 
@@ -400,9 +459,10 @@ function queueAiQuotaProbeRefresh(
 /**
  * Coalesces the expensive authenticated CRM snapshot used only to estimate a
  * concrete quota probe. Cache entries retain a bounded token count, never CRM
- * rows, credentials, identifiers, or errors. Explicit Refresh requests bypass
- * a settled value and serialize behind at most one active plus one queued load
- * per stable key. Quota counters remain uncached.
+ * rows, credentials, identifiers, or errors. Only the server status handler
+ * may set forceRefresh after acquiring the durable database cooldown claim;
+ * that admitted refresh serializes behind at most one active plus one queued
+ * load per stable key. Quota counters remain uncached.
  */
 export async function readCachedAiQuotaProbeEstimatedRequestTokens(
   {
@@ -477,6 +537,119 @@ export async function readCachedAiQuotaProbeEstimatedRequestTokens(
   }
 
   return startAiQuotaProbeLoad(cacheEntry, load, now);
+}
+
+export type AiQuotaProbeRefreshClaim = {
+  contractVersion: 1;
+  companyId: string;
+  actorUserId: string;
+  allowed: boolean;
+  retryAfterSeconds: number;
+  checkedAt: string;
+};
+
+function parseAiQuotaProbeRefreshClaim(
+  value: unknown,
+  expected: { companyId: string; actorUserId: string },
+): AiQuotaProbeRefreshClaim | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const exactKeys = [
+    "contractVersion",
+    "companyId",
+    "actorUserId",
+    "allowed",
+    "retryAfterSeconds",
+    "checkedAt",
+  ];
+  if (
+    Object.keys(value).length !== exactKeys.length ||
+    !exactKeys.every((key) => key in value) ||
+    value.contractVersion !== 1 ||
+    value.companyId !== expected.companyId ||
+    value.actorUserId !== expected.actorUserId ||
+    typeof value.allowed !== "boolean" ||
+    !Number.isSafeInteger(value.retryAfterSeconds) ||
+    (value.allowed
+      ? value.retryAfterSeconds !== 0
+      : Number(value.retryAfterSeconds) < 1 ||
+        Number(value.retryAfterSeconds) > 30) ||
+    typeof value.checkedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.checkedAt))
+  ) {
+    return null;
+  }
+  return value as AiQuotaProbeRefreshClaim;
+}
+
+/**
+ * Atomically claims the one fleet-wide explicit quota-probe refresh allowed
+ * for an exact company and actor during the database-owned cooldown. The
+ * caller must still authorize the same company before invoking this helper.
+ */
+export async function claimSupabaseAiQuotaProbeRefresh(
+  {
+    companyId,
+    actorUserId,
+  }: {
+    companyId: string;
+    actorUserId: string;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
+): Promise<AiQuotaProbeRefreshClaim | null> {
+  const config = readSupabaseServiceRoleConfig(env);
+  if (
+    !config ||
+    !uuidPattern.test(companyId) ||
+    !uuidPattern.test(actorUserId)
+  ) {
+    return null;
+  }
+
+  try {
+    const endpoint = new URL(AI_QUOTA_PROBE_REFRESH_CLAIM_RPC_PATH, config.url);
+    const response = await fetcher(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Content-Profile": "public",
+        apikey: config.serviceRoleKey,
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+      },
+      body: JSON.stringify({
+        p_company_id: companyId,
+        p_actor_user_id: actorUserId,
+      }),
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(
+        SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_TIMEOUT_MS,
+      ),
+    });
+    if (
+      !response.ok ||
+      !response.headers.get("content-type")?.startsWith("application/json")
+    ) {
+      await response.body?.cancel();
+      return null;
+    }
+    const responseText = await readBoundedResponseText(
+      response,
+      SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_MAX_BYTES,
+    );
+    if (!responseText) {
+      return null;
+    }
+    return parseAiQuotaProbeRefreshClaim(JSON.parse(responseText) as unknown, {
+      companyId,
+      actorUserId,
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**

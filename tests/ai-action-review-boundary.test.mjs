@@ -8,6 +8,10 @@ const commandRoute = readFileSync(
   join(cwd, "app/api/ai-tools/command/route.ts"),
   "utf8",
 );
+const statusRoute = readFileSync(
+  join(cwd, "app/api/ai-tools/status/route.ts"),
+  "utf8",
+);
 const reviewRoute = readFileSync(
   join(cwd, "app/api/ai-tools/actions/review/route.ts"),
   "utf8",
@@ -38,10 +42,16 @@ const automationMigration = readFileSync(
   ),
   "utf8",
 );
-const statusRouteStart = commandRoute.indexOf("export async function GET(");
 const commandRouteStart = commandRoute.indexOf("export async function POST(");
-const statusRoute = commandRoute.slice(statusRouteStart, commandRouteStart);
 const commandPost = commandRoute.slice(commandRouteStart);
+const statusHandlerStart = statusRoute.indexOf(
+  "async function readAiCompanyPilotStatus({",
+);
+const statusGetStart = statusRoute.indexOf("export async function GET(");
+const statusRefreshPostStart = statusRoute.indexOf("export async function POST(");
+const statusHandler = statusRoute.slice(statusHandlerStart, statusGetStart);
+const statusGet = statusRoute.slice(statusGetStart, statusRefreshPostStart);
+const statusRefreshPost = statusRoute.slice(statusRefreshPostStart);
 
 function assert(condition, message) {
   if (!condition) {
@@ -54,46 +64,51 @@ function includes(source, value, message) {
 }
 
 assert(
-  statusRouteStart >= 0 && commandRouteStart > statusRouteStart,
-  "The command route must expose a distinct read-only Production AI status handler.",
+  statusHandlerStart >= 0 &&
+    statusGetStart > statusHandlerStart &&
+    statusRefreshPostStart > statusGetStart &&
+    commandRouteStart >= 0 &&
+    !commandRoute.includes("export async function GET(") &&
+    !commandRoute.includes("x-wtos-ai-quota-probe-refresh"),
+  "Production AI status must expose a distinct read-only GET and rate-limited explicit-refresh POST.",
 );
-const statusAuthIndex = statusRoute.indexOf("client.auth.getUser()");
-const statusMembershipIndex = statusRoute.indexOf('.from("company_memberships")');
-const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
-const statusQuotaCapabilityIndex = statusRoute.indexOf(
+const statusAuthIndex = statusHandler.indexOf("client.auth.getUser()");
+const statusMembershipIndex = statusHandler.indexOf('.from("company_memberships")');
+const statusPolicyIndex = statusHandler.indexOf('.from("ai_usage_limits")');
+const statusQuotaCapabilityIndex = statusHandler.indexOf(
   "await verifySupabaseAiQuotaServiceCapability()",
 );
-const statusCompanyConfigIndex = statusRoute.indexOf(
+const statusCompanyConfigIndex = statusHandler.indexOf(
   "const companyConfig = resolveCompanyAiProviderConfig({",
 );
-const statusQuotaProbeRefreshIndex = statusRoute.indexOf(
-  'request.headers.get("x-wtos-ai-quota-probe-refresh") === "1"',
+const statusQuotaProbeRefreshClaimIndex = statusHandler.indexOf(
+  "await claimSupabaseAiQuotaProbeRefresh({",
 );
-const statusQuotaProbeCacheIndex = statusRoute.indexOf(
+const statusQuotaProbeCacheIndex = statusHandler.indexOf(
   "await readCachedAiQuotaProbeEstimatedRequestTokens({",
 );
-const statusQuotaSnapshotIndex = statusRoute.indexOf(
+const statusQuotaSnapshotIndex = statusHandler.indexOf(
   "const quotaProbeSnapshot = await fetchCrmSnapshot(client)",
 );
-const statusQuotaEstimateIndex = statusRoute.indexOf(
+const statusQuotaEstimateIndex = statusHandler.indexOf(
   "return estimateAiQuotaStatusProbe({",
 );
-const statusQuotaReadIndex = statusRoute.indexOf(
+const statusQuotaReadIndex = statusHandler.indexOf(
   "await readSupabaseAiQuotaStatus({",
 );
-const statusQuotaParseIndex = statusRoute.indexOf(
+const statusQuotaParseIndex = statusHandler.indexOf(
   "parseAiQuotaStatusReceipt(quotaStatusPayload",
 );
-const statusSavedAnalysesIndex = statusRoute.indexOf('.from("ai_saved_analyses")');
-const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
+const statusSavedAnalysesIndex = statusHandler.indexOf('.from("ai_saved_analyses")');
+const statusBuildIndex = statusHandler.indexOf("buildAiCompanyPilotStatus({");
 assert(
   statusAuthIndex >= 0 &&
     statusMembershipIndex > statusAuthIndex &&
     statusPolicyIndex > statusMembershipIndex &&
     statusQuotaCapabilityIndex > statusPolicyIndex &&
     statusCompanyConfigIndex > statusQuotaCapabilityIndex &&
-    statusQuotaProbeRefreshIndex > statusCompanyConfigIndex &&
-    statusQuotaProbeCacheIndex > statusQuotaProbeRefreshIndex &&
+    statusQuotaProbeRefreshClaimIndex > statusCompanyConfigIndex &&
+    statusQuotaProbeCacheIndex > statusQuotaProbeRefreshClaimIndex &&
     statusQuotaSnapshotIndex > statusQuotaProbeCacheIndex &&
     statusQuotaEstimateIndex > statusQuotaSnapshotIndex &&
     statusQuotaReadIndex > statusQuotaEstimateIndex &&
@@ -107,8 +122,8 @@ assert(
   "AI status must authenticate and authorize the exact company before reading its policy.",
 );
 for (const statusBoundary of [
-  'request.nextUrl.searchParams.get("companyId")',
-  'request.headers.get("x-wtos-ai-quota-probe-refresh") === "1"',
+  "requestedCompanyId: string",
+  "explicitRefresh: boolean",
   "resolveExactAiCompanyAuthorization",
   '.eq("user_id", user.id)',
   '.eq("company_id", requestedCompanyId)',
@@ -123,7 +138,6 @@ for (const statusBoundary of [
   "actorUserId: user.id",
   "policyId: companyPolicy.id",
   "policyUpdatedAt: companyPolicy.updated_at",
-  "forceRefresh: forceQuotaProbeRefresh",
   "const quotaProbeSnapshot = await fetchCrmSnapshot(client)",
   "estimateAiQuotaStatusProbe({",
   "companyId: authorization.companyId",
@@ -138,7 +152,12 @@ for (const statusBoundary of [
   "savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null",
   "quotaStatus,",
   "quotaProbeEstimatedRequestTokens,",
-  'statusResponse.headers.set("x-wtos-ai-quota-probe-refresh", "1")',
+  "await claimSupabaseAiQuotaProbeRefresh({",
+  "if (!refreshClaim.allowed)",
+  'code: "ai_quota_probe_refresh_rate_limited"',
+  "{ \"Retry-After\": String(refreshClaim.retryAfterSeconds) }",
+  "forceRefresh: refreshClaimed",
+  'statusResponse.headers.set(REFRESH_ACKNOWLEDGEMENT_HEADER, "1")',
   "const statusResponse = noStoreJson(status, 200)",
   "return statusResponse",
 ]) {
@@ -157,7 +176,47 @@ assert(
     !statusRoute.includes(".upsert(") &&
     !statusRoute.includes(".update(") &&
     !statusRoute.includes(".delete("),
-  "Production AI status must remain authenticated, RLS-scoped, and mutation-free.",
+  "Production AI status must remain authenticated, exact-company scoped, and free of provider, quota-reservation, or business-data mutations.",
+);
+assert(
+  statusGet.includes("request.headers.has(LEGACY_FORCE_REFRESH_HEADER)") &&
+    statusGet.includes("explicitRefresh: false") &&
+    !statusGet.includes("claimSupabaseAiQuotaProbeRefresh") &&
+    statusRefreshPost.includes('contentType !== "application/json"') &&
+    statusRefreshPost.includes("readBoundedJsonBody(request, MAX_AI_STATUS_BODY_BYTES)") &&
+    statusRefreshPost.includes("Object.keys(body).length !== 1") &&
+    statusRefreshPost.includes("explicitRefresh: true"),
+  "Safe GET must reject the legacy override, while only the bounded JSON POST can request a durable explicit refresh.",
+);
+const statusRefreshClaimUnavailableIndex = statusHandler.indexOf(
+  "if (!refreshClaim)",
+  statusQuotaProbeRefreshClaimIndex,
+);
+const statusRefreshClaimDeniedIndex = statusHandler.indexOf(
+  "if (!refreshClaim.allowed)",
+  statusRefreshClaimUnavailableIndex,
+);
+const statusRefreshDeniedResponseIndex = statusHandler.indexOf(
+  'code: "ai_quota_probe_refresh_rate_limited"',
+  statusRefreshClaimDeniedIndex,
+);
+const statusRefreshClaimedIndex = statusHandler.indexOf(
+  "refreshClaimed = true",
+  statusRefreshDeniedResponseIndex,
+);
+const statusRefreshAcknowledgementIndex = statusHandler.indexOf(
+  'statusResponse.headers.set(REFRESH_ACKNOWLEDGEMENT_HEADER, "1")',
+  statusBuildIndex,
+);
+assert(
+  statusRefreshClaimUnavailableIndex > statusQuotaProbeRefreshClaimIndex &&
+    statusRefreshClaimDeniedIndex > statusRefreshClaimUnavailableIndex &&
+    statusRefreshDeniedResponseIndex > statusRefreshClaimDeniedIndex &&
+    statusRefreshClaimedIndex > statusRefreshDeniedResponseIndex &&
+    statusQuotaProbeCacheIndex > statusRefreshClaimedIndex &&
+    statusQuotaSnapshotIndex > statusRefreshClaimedIndex &&
+    statusRefreshAcknowledgementIndex > statusBuildIndex,
+  "A missing or denied durable refresh claim must return before the expensive snapshot loader, and only a completed claimed status may acknowledge Refresh.",
 );
 
 for (const serviceBoundary of [
@@ -180,6 +239,11 @@ for (const serviceBoundary of [
   "AbortSignal.timeout(SUPABASE_OPENAPI_TIMEOUT_MS)",
   "SUPABASE_OPENAPI_MAX_BYTES",
   'const AI_QUOTA_STATUS_RPC_PATH = "/rest/v1/rpc/wtos_get_ai_quota_status_v1"',
+  'const AI_QUOTA_PROBE_REFRESH_CLAIM_RPC_PATH =',
+  '"/rest/v1/rpc/wtos_claim_ai_quota_probe_refresh_v1"',
+  "export async function claimSupabaseAiQuotaProbeRefresh",
+  "SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_MAX_BYTES",
+  "SUPABASE_AI_QUOTA_PROBE_REFRESH_CLAIM_TIMEOUT_MS",
   "export async function readSupabaseAiQuotaStatus",
   "SUPABASE_AI_QUOTA_STATUS_MAX_BYTES",
   "SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS",
@@ -268,6 +332,7 @@ new Function("require", "module", "exports", compiledSupabaseService)(
   serviceModuleUnderTest.exports,
 );
 const {
+  claimSupabaseAiQuotaProbeRefresh,
   readCachedAiQuotaProbeEstimatedRequestTokens,
   readSupabaseAiQuotaStatus,
   verifySupabaseAiQuotaServiceCapability,
@@ -298,6 +363,27 @@ function exactQuotaOpenApiDocument() {
                   "p_request_id",
                   "p_request",
                 ],
+                type: "object",
+              },
+            },
+            { $ref: "#/parameters/preferParams" },
+          ],
+          responses: { 200: { description: "OK" } },
+        },
+      },
+      "/rpc/wtos_claim_ai_quota_probe_refresh_v1": {
+        post: {
+          parameters: [
+            {
+              in: "body",
+              name: "args",
+              required: true,
+              schema: {
+                properties: {
+                  p_actor_user_id: { format: "uuid", type: "string" },
+                  p_company_id: { format: "uuid", type: "string" },
+                },
+                required: ["p_company_id", "p_actor_user_id"],
                 type: "object",
               },
             },
@@ -449,6 +535,152 @@ assert(
   "Missing service-role configuration must fail before a network request.",
 );
 
+const refreshClaimCompanyId = "11111111-1111-4111-8111-111111111111";
+const refreshClaimActorUserId = "99999999-9999-4999-8999-999999999999";
+let capturedRefreshClaimRequest = null;
+const allowedRefreshClaim = await claimSupabaseAiQuotaProbeRefresh(
+  {
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+  },
+  testServiceEnv,
+  async (input, init) => {
+    capturedRefreshClaimRequest = { input: String(input), init };
+    return new Response(
+      JSON.stringify({
+        contractVersion: 1,
+        companyId: refreshClaimCompanyId,
+        actorUserId: refreshClaimActorUserId,
+        allowed: true,
+        retryAfterSeconds: 0,
+        checkedAt: "2026-09-04T10:00:00.000Z",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  },
+);
+assert(
+  allowedRefreshClaim?.allowed === true &&
+    allowedRefreshClaim.retryAfterSeconds === 0 &&
+    capturedRefreshClaimRequest?.input ===
+      "https://quota-capability.test/rest/v1/rpc/wtos_claim_ai_quota_probe_refresh_v1" &&
+    capturedRefreshClaimRequest?.init?.method === "POST" &&
+    capturedRefreshClaimRequest?.init?.cache === "no-store" &&
+    capturedRefreshClaimRequest?.init?.redirect === "error" &&
+    capturedRefreshClaimRequest?.init?.headers?.Accept === "application/json" &&
+    capturedRefreshClaimRequest?.init?.headers?.["Content-Type"] === "application/json" &&
+    capturedRefreshClaimRequest?.init?.headers?.["Content-Profile"] === "public" &&
+    capturedRefreshClaimRequest?.init?.headers?.apikey ===
+      "unit-test-service-role-secret" &&
+    capturedRefreshClaimRequest?.init?.headers?.Authorization ===
+      "Bearer unit-test-service-role-secret" &&
+    JSON.parse(capturedRefreshClaimRequest.init.body).p_company_id ===
+      refreshClaimCompanyId &&
+    JSON.parse(capturedRefreshClaimRequest.init.body).p_actor_user_id ===
+      refreshClaimActorUserId &&
+    !capturedRefreshClaimRequest.input.includes("unit-test-service-role-secret"),
+  "An explicit refresh claim must use a bounded, non-cached, service-authenticated POST with exact company and actor arguments.",
+);
+
+const deniedRefreshClaim = await claimSupabaseAiQuotaProbeRefresh(
+  {
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+  },
+  testServiceEnv,
+  async () =>
+    new Response(
+      JSON.stringify({
+        contractVersion: 1,
+        companyId: refreshClaimCompanyId,
+        actorUserId: refreshClaimActorUserId,
+        allowed: false,
+        retryAfterSeconds: 30,
+        checkedAt: "2026-09-04T10:00:01.000Z",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+);
+assert(
+  deniedRefreshClaim?.allowed === false &&
+    deniedRefreshClaim.retryAfterSeconds === 30,
+  "A bounded cooldown denial must remain distinguishable from a service failure.",
+);
+
+for (const malformedRefreshClaim of [
+  {
+    contractVersion: 1,
+    companyId: "22222222-2222-4222-8222-222222222222",
+    actorUserId: refreshClaimActorUserId,
+    allowed: true,
+    retryAfterSeconds: 0,
+    checkedAt: "2026-09-04T10:00:00.000Z",
+  },
+  {
+    contractVersion: 1,
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+    allowed: true,
+    retryAfterSeconds: 1,
+    checkedAt: "2026-09-04T10:00:00.000Z",
+  },
+  {
+    contractVersion: 1,
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+    allowed: false,
+    retryAfterSeconds: 31,
+    checkedAt: "2026-09-04T10:00:00.000Z",
+  },
+  {
+    contractVersion: 1,
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+    allowed: false,
+    retryAfterSeconds: 4,
+    checkedAt: "not-a-timestamp",
+  },
+  {
+    contractVersion: 1,
+    companyId: refreshClaimCompanyId,
+    actorUserId: refreshClaimActorUserId,
+    allowed: false,
+    retryAfterSeconds: 4,
+    checkedAt: "2026-09-04T10:00:00.000Z",
+    extra: "not allowed",
+  },
+]) {
+  const parsedMalformedClaim = await claimSupabaseAiQuotaProbeRefresh(
+    {
+      companyId: refreshClaimCompanyId,
+      actorUserId: refreshClaimActorUserId,
+    },
+    testServiceEnv,
+    async () =>
+      new Response(JSON.stringify(malformedRefreshClaim), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  assert(
+    parsedMalformedClaim === null,
+    "Malformed, cross-company, overbound, or non-exact refresh claims must fail closed.",
+  );
+}
+
+let invalidRefreshClaimFetchCalls = 0;
+assert(
+  (await claimSupabaseAiQuotaProbeRefresh(
+    { companyId: "not-a-uuid", actorUserId: refreshClaimActorUserId },
+    testServiceEnv,
+    async () => {
+      invalidRefreshClaimFetchCalls += 1;
+      throw new Error("must not run");
+    },
+  )) === null && invalidRefreshClaimFetchCalls === 0,
+  "Invalid refresh-claim identities must fail before service-role transport.",
+);
+
 const quotaProbeCacheInput = {
   companyId: "11111111-1111-4111-8111-111111111111",
   actorUserId: "99999999-9999-4999-8999-999999999999",
@@ -578,21 +810,6 @@ assert(
   )) === 4_200 && explicitRefreshLoads === 2,
   "A normal status reload after explicit Refresh must reuse its fresh estimate.",
 );
-assert(
-  (await readCachedAiQuotaProbeEstimatedRequestTokens(
-    {
-      ...explicitRefreshInput,
-      forceRefresh: true,
-      load: async () => {
-        explicitRefreshLoads += 1;
-        return 4_300;
-      },
-    },
-    () => 50_003,
-  )) === 4_300 && explicitRefreshLoads === 3,
-  "Each later explicit Refresh must replace the prior estimate in the same stable slot.",
-);
-
 let queuedRefreshLoads = 0;
 const queuedRefreshResolvers = [];
 const queuedRefreshInput = {
@@ -1011,6 +1228,37 @@ const invalidQuotaDocuments = [
     const document = exactQuotaOpenApiDocument();
     document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.p_request.format =
       "json";
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    delete document.paths["/rpc/wtos_claim_ai_quota_probe_refresh_v1"];
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_claim_ai_quota_probe_refresh_v1"].get = {};
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths[
+      "/rpc/wtos_claim_ai_quota_probe_refresh_v1"
+    ].post.parameters[0].schema.required.pop();
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths[
+      "/rpc/wtos_claim_ai_quota_probe_refresh_v1"
+    ].post.parameters[0].schema.properties.extra = { type: "string" };
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths[
+      "/rpc/wtos_claim_ai_quota_probe_refresh_v1"
+    ].post.parameters[0].schema.properties.p_actor_user_id.format = "text";
     return document;
   })(),
 ];
@@ -1533,11 +1781,17 @@ for (const exactCompanyUiBoundary of [
 }
 for (const statusUiBoundary of [
   "type AiProviderStatusEvidence = {",
+  "type AiProviderStatusCompletionEvidence = {",
   "useState<AiProviderStatusEvidence | null>(null)",
-  '`/api/ai-tools/command?companyId=${encodeURIComponent(requestCompanyId)}`',
-  '"x-wtos-ai-quota-probe-refresh": "1"',
-  'response.headers.get("x-wtos-ai-quota-probe-refresh") !== "1"',
+  '"/api/ai-tools/status"',
+  '`/api/ai-tools/status?companyId=${encodeURIComponent(requestCompanyId)}`',
+  'method: forceQuotaProbeRefresh ? "POST" : "GET"',
+  '? { "Content-Type": "application/json" }',
+  "? JSON.stringify({ companyId: requestCompanyId })",
+  'response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"',
   "shouldForceQuotaProbeRefresh(",
+  "beginAiQuotaProbeRefreshAttempt(",
+  "beginQuotaProbeRefreshAttempt(",
   "acknowledgeQuotaProbeRefresh(",
   'credentials: "same-origin"',
   'cache: "no-store"',
@@ -1573,12 +1827,21 @@ for (const statusUiBoundary of [
   "setAiProviderStatusReloadSequence((current) => current + 1)",
   "const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence]",
   "const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>())",
+  "const attemptedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>())",
+  "const [aiQuotaProbeRefreshStateVersion, setAiQuotaProbeRefreshStateVersion] =",
+  "quotaProbeRefreshStateVersion: number",
+  "setAiQuotaProbeRefreshStateVersion((current) => current + 1)",
+  "const observedQuotaProbeRefreshStateVersionRef = useRef(",
+  "const locallyCompletedAiProviderStatusRef =",
+  "const quotaProbeRefreshStateChanged =",
   "await onScrollPreservingReload()",
   "setAiProviderStatusRefreshSequence((current) => current + 1)",
   'data-testid="workspace-refresh"',
   "statusRefreshSequence={aiProviderStatusRefreshSequence}",
   "shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}",
+  "beginQuotaProbeRefreshAttempt={beginQuotaProbeRefreshAttempt}",
   "acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}",
+  "quotaProbeRefreshStateVersion={aiQuotaProbeRefreshStateVersion}",
   "type AiPilotResultEvidence = {",
   "statusRefreshSequence: number",
   "const requestStatusRefreshSequence = statusRefreshSequence",
@@ -1635,6 +1898,42 @@ for (const errorEvidenceBoundary of [
   );
 }
 const providerStatusEffectIndex = crmApp.indexOf("const loadAiProviderStatus = async () =>");
+const providerStatusRefreshRequiredIndex = crmApp.lastIndexOf(
+  "const quotaProbeRefreshRequired = shouldForceQuotaProbeRefresh(",
+  providerStatusEffectIndex,
+);
+const providerStatusAttemptIndex = crmApp.indexOf(
+  "beginQuotaProbeRefreshAttempt(",
+  providerStatusRefreshRequiredIndex,
+);
+const providerStatusLocalCompletionIndex = crmApp.indexOf(
+  "const locallyCompletedStatus = locallyCompletedAiProviderStatusRef.current",
+  providerStatusRefreshRequiredIndex,
+);
+const providerStatusLocalCompletionSkipIndex = crmApp.indexOf(
+  "!quotaProbeRefreshRequired &&",
+  providerStatusLocalCompletionIndex,
+);
+const providerStatusRepeatAttemptGuardIndex = crmApp.indexOf(
+  "if (quotaProbeRefreshRequired && !forceQuotaProbeRefresh)",
+  providerStatusAttemptIndex,
+);
+const providerStatusActiveRequestGuardIndex = crmApp.indexOf(
+  "aiProviderStatusAbortRef.current &&",
+  providerStatusRepeatAttemptGuardIndex,
+);
+const providerStatusRepeatAttemptErrorIndex = crmApp.indexOf(
+  "Production AI context refresh did not complete. Use Refresh to start a new bounded attempt.",
+  providerStatusRepeatAttemptGuardIndex,
+);
+const providerStatusRefreshPostIndex = crmApp.indexOf(
+  'method: forceQuotaProbeRefresh ? "POST" : "GET"',
+  providerStatusEffectIndex,
+);
+const providerStatusRefreshBodyIndex = crmApp.indexOf(
+  "? JSON.stringify({ companyId: requestCompanyId })",
+  providerStatusRefreshPostIndex,
+);
 const providerStatusValidationIndex = crmApp.indexOf(
   "isAiCompanyPilotStatus(payload, requestCompanyId)",
   providerStatusEffectIndex,
@@ -1651,6 +1950,14 @@ const providerStatusRefreshAckIndex = crmApp.indexOf(
   "acknowledgeQuotaProbeRefresh(",
   providerStatusSnapshotGuardIndex,
 );
+const providerStatusLocalCompletionPublishIndex = crmApp.indexOf(
+  "locallyCompletedAiProviderStatusRef.current = {",
+  providerStatusSnapshotGuardIndex,
+);
+const providerStatusLocalCompletionReloadIndex = crmApp.indexOf(
+  "statusReloadSequence: requestStatusReloadSequence",
+  providerStatusLocalCompletionPublishIndex,
+);
 const providerStatusPublishIndex = crmApp.indexOf(
   "setAiProviderStatusEvidence({",
   providerStatusRefreshAckIndex,
@@ -1659,15 +1966,35 @@ const providerStatusPublishGenerationIndex = crmApp.indexOf(
   "statusRefreshSequence: requestStatusRefreshSequence",
   providerStatusPublishIndex,
 );
+const providerStatusStateVersionDependencyIndex = crmApp.indexOf(
+  "quotaProbeRefreshStateVersion,",
+  providerStatusPublishGenerationIndex,
+);
 assert(
   providerStatusEffectIndex >= 0 &&
+    providerStatusRefreshRequiredIndex >= 0 &&
+    providerStatusRefreshRequiredIndex < providerStatusEffectIndex &&
+    providerStatusLocalCompletionIndex > providerStatusRefreshRequiredIndex &&
+    providerStatusLocalCompletionSkipIndex > providerStatusLocalCompletionIndex &&
+    providerStatusLocalCompletionSkipIndex < providerStatusAttemptIndex &&
+    providerStatusAttemptIndex > providerStatusRefreshRequiredIndex &&
+    providerStatusRepeatAttemptGuardIndex > providerStatusAttemptIndex &&
+    providerStatusActiveRequestGuardIndex > providerStatusRepeatAttemptGuardIndex &&
+    providerStatusRepeatAttemptErrorIndex > providerStatusActiveRequestGuardIndex &&
+    providerStatusRepeatAttemptErrorIndex < providerStatusEffectIndex &&
+    providerStatusRefreshPostIndex > providerStatusEffectIndex &&
+    providerStatusRefreshBodyIndex > providerStatusRefreshPostIndex &&
     providerStatusValidationIndex > providerStatusEffectIndex &&
     providerStatusAbortGuardIndex > providerStatusValidationIndex &&
     providerStatusSnapshotGuardIndex > providerStatusAbortGuardIndex &&
-    providerStatusRefreshAckIndex > providerStatusSnapshotGuardIndex &&
+    providerStatusLocalCompletionPublishIndex > providerStatusSnapshotGuardIndex &&
+    providerStatusLocalCompletionReloadIndex >
+      providerStatusLocalCompletionPublishIndex &&
+    providerStatusRefreshAckIndex > providerStatusLocalCompletionReloadIndex &&
     providerStatusPublishIndex > providerStatusRefreshAckIndex &&
-    providerStatusPublishGenerationIndex > providerStatusPublishIndex,
-  "An explicit quota-probe Refresh must be acknowledged only after a valid, current exact-company status response.",
+    providerStatusPublishGenerationIndex > providerStatusPublishIndex &&
+    providerStatusStateVersionDependencyIndex > providerStatusPublishGenerationIndex,
+  "Explicit status refresh must make one persistent attempt per company/generation, use bounded POST data, and acknowledge only a valid current response.",
 );
 const providerStatusPendingGuardIndex = crmApp.lastIndexOf(
   "if (!exactAiCompanyId || snapshotTransitionPending)",
@@ -1676,6 +2003,25 @@ const providerStatusPendingGuardIndex = crmApp.lastIndexOf(
 const providerStatusCatchIndex = crmApp.indexOf(
   "} catch (currentError) {",
   providerStatusPublishIndex,
+);
+const providerStatusUnmountCleanupIndex = crmApp.indexOf(
+  "  useEffect(\n    () => () => {",
+  providerStatusCatchIndex,
+);
+const providerStatusUnmountCleanupEndIndex = crmApp.indexOf(
+  "  const selectedTemplate =",
+  providerStatusUnmountCleanupIndex,
+);
+assert(
+  providerStatusUnmountCleanupIndex > providerStatusCatchIndex &&
+  providerStatusUnmountCleanupEndIndex > providerStatusUnmountCleanupIndex &&
+  !crmApp
+    .slice(providerStatusPendingGuardIndex, providerStatusUnmountCleanupIndex)
+    .includes("return () => controller.abort()") &&
+    !crmApp
+      .slice(providerStatusUnmountCleanupIndex, providerStatusUnmountCleanupEndIndex)
+      .includes("aiProviderStatusAbortRef.current?.abort()"),
+  "Same-generation status effect replay and view remounts must not abort their sole durable refresh attempt.",
 );
 const providerStatusCatchContextGuardIndex = crmApp.indexOf(
   "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
@@ -2544,13 +2890,46 @@ assert(
     !crmApp.includes("setPreviousAiResponseId"),
   "The stateless AI UI must not claim or send unsupported provider continuation state.",
 );
+const quotaProbeAcknowledgeCallbackIndex = crmApp.indexOf(
+  "const acknowledgeQuotaProbeRefresh = useCallback(",
+);
+const quotaProbeAcknowledgeHelperIndex = crmApp.indexOf(
+  "const acknowledged = acknowledgeAiQuotaProbeRefresh(",
+  quotaProbeAcknowledgeCallbackIndex,
+);
+const quotaProbeAcknowledgeVersionIndex = crmApp.indexOf(
+  "setAiQuotaProbeRefreshStateVersion((current) => current + 1)",
+  quotaProbeAcknowledgeHelperIndex,
+);
+const quotaProbeAcknowledgeReturnIndex = crmApp.indexOf(
+  "return acknowledged;",
+  quotaProbeAcknowledgeVersionIndex,
+);
+assert(
+  quotaProbeAcknowledgeCallbackIndex >= 0 &&
+    quotaProbeAcknowledgeHelperIndex > quotaProbeAcknowledgeCallbackIndex &&
+    quotaProbeAcknowledgeVersionIndex > quotaProbeAcknowledgeHelperIndex &&
+    quotaProbeAcknowledgeReturnIndex > quotaProbeAcknowledgeVersionIndex,
+  "A completed detached status request must notify the mounted workspace after acknowledging a generation.",
+);
 const companyResetStart = crmApp.indexOf(
   "aiCommandAbortRef.current?.abort();\n    aiProviderStatusAbortRef.current?.abort();\n    aiReviewAbortRef.current?.abort();",
 );
+const companyResetEffectStart = crmApp.lastIndexOf(
+  "  useEffect(() => {",
+  companyResetStart,
+);
+const companyResetSameCompanyGuardIndex = crmApp.indexOf(
+  "if (activeAiCompanyRef.current === activeCompanyId)",
+  companyResetEffectStart,
+);
 const companyResetEnd = crmApp.indexOf("}, [activeCompanyId]);", companyResetStart);
 assert(
-  companyResetStart >= 0 && companyResetEnd > companyResetStart,
-  "AI abort and session reset must execute inside the active-company dependency effect.",
+  companyResetEffectStart >= 0 &&
+    companyResetSameCompanyGuardIndex > companyResetEffectStart &&
+    companyResetSameCompanyGuardIndex < companyResetStart &&
+    companyResetEnd > companyResetStart,
+  "AI abort and session reset must execute only for a real active-company transition, not StrictMode effect replay.",
 );
 
 includes(

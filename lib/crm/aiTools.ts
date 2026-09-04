@@ -83,12 +83,33 @@ export function shouldForceAiQuotaProbeRefresh(
   return consumedByCompany.get(companyId) !== sequence;
 }
 
+export function beginAiQuotaProbeRefreshAttempt(
+  attemptedByCompany: Map<string, number>,
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (
+    !shouldForceAiQuotaProbeRefresh(consumedByCompany, companyId, sequence) ||
+    attemptedByCompany.get(companyId) === sequence
+  ) {
+    return false;
+  }
+  attemptedByCompany.set(companyId, sequence);
+  return true;
+}
+
 export function acknowledgeAiQuotaProbeRefresh(
   consumedByCompany: Map<string, number>,
   companyId: string,
   sequence: number,
 ) {
-  if (!companyId || !Number.isSafeInteger(sequence) || sequence <= 0) {
+  if (
+    !companyId ||
+    !Number.isSafeInteger(sequence) ||
+    sequence <= 0 ||
+    consumedByCompany.get(companyId) === sequence
+  ) {
     return false;
   }
   consumedByCompany.set(companyId, sequence);
