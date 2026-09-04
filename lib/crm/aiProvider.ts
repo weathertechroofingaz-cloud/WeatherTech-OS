@@ -672,9 +672,14 @@ export function buildAiQuotaStatusRequest({
   config: AiPilotProviderConfig;
   companyMonthlyBudgetCents: number;
 }): AiQuotaStatusRequest | null {
+  if (!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents)) {
+    return null;
+  }
+  const minimumReservationCostCents =
+    getAiMinimumReservationCostCents(config);
   const request = {
     contractVersion: 1,
-    estimatedCostCents: getAiMaximumReservationCostCents(config),
+    estimatedCostCents: minimumReservationCostCents,
     globalDailyRequestLimit: config.dailyRequestLimit,
     companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
     userDailyRequestLimit: config.perUserDailyRequestLimit,
@@ -700,11 +705,11 @@ export function getAiCurrentQuotaAvailability({
     config,
     companyMonthlyBudgetCents,
   });
-  const maximumEstimatedCostCents = quotaRequest?.estimatedCostCents ?? null;
+  const minimumReservationCostCents = quotaRequest?.estimatedCostCents ?? null;
   if (
-    maximumEstimatedCostCents === null ||
+    minimumReservationCostCents === null ||
     !isIntegerWithin(
-      maximumEstimatedCostCents,
+      minimumReservationCostCents,
       1,
       aiQuotaBounds.maxEstimatedCostCents,
     )
@@ -724,12 +729,12 @@ export function getAiCurrentQuotaAvailability({
   } else if (quotaStatus.userRequestsToday >= config.perUserDailyRequestLimit) {
     blockingReason = "user_daily_request_limit";
   } else if (
-    quotaStatus.reservedCostCentsToday + maximumEstimatedCostCents >
+    quotaStatus.reservedCostCentsToday + minimumReservationCostCents >
     Math.floor(config.dailyBudgetUsd * 100)
   ) {
     blockingReason = "global_daily_budget";
   } else if (
-    quotaStatus.companyReservedCostCentsThisMonth + maximumEstimatedCostCents >
+    quotaStatus.companyReservedCostCentsThisMonth + minimumReservationCostCents >
     companyMonthlyBudgetCents
   ) {
     blockingReason = "company_monthly_budget";
@@ -952,7 +957,7 @@ export function buildAiCompanyPilotStatus({
       ...environmentReadiness,
       state: "live_ai_enabled",
       label: "Production AI enabled",
-      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. Customer-facing and external provider actions remain disabled.`,
+      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. Minimum quota headroom is available; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
       liveProviderEnabled: true,
       requiredOwnerSetup: [],
       health: "ready",
@@ -2093,6 +2098,22 @@ export function getAiMaximumReservationCostCents(
   );
   return Math.ceil(
     maximumEstimatedCostUsd * 100 * (config.retryLimit + 1),
+  );
+}
+
+export function getAiMinimumReservationCostCents(
+  config: AiPilotProviderConfig,
+) {
+  const minimumEstimatedCostUsd = estimateCostUsd(
+    1,
+    config.maxResponseTokens,
+    config,
+  );
+  return Math.max(
+    1,
+    Math.ceil(
+      minimumEstimatedCostUsd * 100 * (config.retryLimit + 1),
+    ),
   );
 }
 

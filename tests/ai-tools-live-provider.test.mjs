@@ -904,7 +904,23 @@ try {
     true,
     "The current-quota read request shares the bounded reservation contract",
   );
-  const maximumReservationCostCents = quotaStatusRequest.estimatedCostCents;
+  assertEqual(
+    quotaStatusRequest.estimatedCostCents,
+    aiProvider.getAiMinimumReservationCostCents(effectiveStatusConfig.config),
+    "Current quota status probes the provider reservation cost floor",
+  );
+  const minimumReservationCostCents = quotaStatusRequest.estimatedCostCents;
+  assertEqual(
+    minimumReservationCostCents,
+    37,
+    "The provider reservation floor includes fixed response tokens and allowed attempts",
+  );
+  const maximumReservationCostCents =
+    aiProvider.getAiMaximumReservationCostCents(effectiveStatusConfig.config);
+  assert(
+    maximumReservationCostCents > minimumReservationCostCents,
+    "The status fixture must distinguish minimum current capacity from maximum configuration capacity",
+  );
   const buildQuotaAwareStatus = (quotaOverrides) =>
     aiProvider.buildAiCompanyPilotStatus({
       companyId: wtCompanyId,
@@ -915,15 +931,20 @@ try {
     });
   const availableAtExactCostBoundary = buildQuotaAwareStatus({
     reservedCostCentsToday:
-      quotaStatusRequest.dailyBudgetCents - maximumReservationCostCents,
+      quotaStatusRequest.dailyBudgetCents - minimumReservationCostCents,
     companyReservedCostCentsThisMonth:
       quotaStatusRequest.companyMonthlyBudgetCents -
-      maximumReservationCostCents,
+      minimumReservationCostCents,
   });
   assertEqual(
     availableAtExactCostBoundary.currentQuotaAvailable,
     true,
-    "A maximum reservation that exactly fits both remaining budgets remains available",
+    "A provider reservation floor that exactly fits both remaining budgets remains available",
+  );
+  assert(
+    availableAtExactCostBoundary.currentQuotaAvailable &&
+      maximumReservationCostCents > minimumReservationCostCents,
+    "Status remains available when minimum quota headroom remains even though the maximum request cannot fit",
   );
   for (const [label, quotaOverrides] of [
     [
@@ -959,7 +980,7 @@ try {
         requestCapacityAvailable: false,
         blockingReason: "global_daily_budget",
         reservedCostCentsToday:
-          quotaStatusRequest.dailyBudgetCents - maximumReservationCostCents + 1,
+          quotaStatusRequest.dailyBudgetCents - minimumReservationCostCents + 1,
       },
     ],
     [
@@ -969,7 +990,7 @@ try {
         blockingReason: "company_monthly_budget",
         companyReservedCostCentsThisMonth:
           quotaStatusRequest.companyMonthlyBudgetCents -
-          maximumReservationCostCents +
+          minimumReservationCostCents +
           1,
       },
     ],
