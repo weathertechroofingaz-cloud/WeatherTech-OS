@@ -1308,6 +1308,7 @@ try {
 
   const reviewQuery = sync.buildGoHighLevelReviewQuery({
     locationId: "location-weathertech",
+    status: "approved",
     offset: 25,
     pageLimit: 50,
   });
@@ -1327,6 +1328,11 @@ try {
     "Product review reads use provider offset pagination",
   );
   assertEqual(
+    reviewQuery.status,
+    "approved",
+    "Product review reads include the live provider-required status filter",
+  );
+  assertEqual(
     "locationId" in reviewQuery,
     false,
     "Product review reads do not send the rejected locationId parameter",
@@ -1344,8 +1350,19 @@ try {
         offset: requestUrl.searchParams.get("offset"),
         altId: requestUrl.searchParams.get("altId"),
         altType: requestUrl.searchParams.get("altType"),
+        status: requestUrl.searchParams.get("status"),
         version: init.headers.Version,
       });
+
+      if (requestUrl.searchParams.get("status") === "pending") {
+        return jsonResponse(200, {
+          reviews: [
+            { id: "review-2", locationId: "location-weathertech" },
+            { id: "review-4", locationId: "location-weathertech" },
+          ],
+          total: 2,
+        });
+      }
 
       return requestUrl.searchParams.get("offset") === "0"
         ? jsonResponse(200, {
@@ -1363,15 +1380,22 @@ try {
           });
     },
   });
-  assertEqual(reviewPages.ok, true, "Official product review envelopes are accepted");
-  assertEqual(reviewPages.pages, 2, "Product reviews follow offset pagination");
-  assertEqual(reviewPages.fetched, 3, "Product review pagination counts every row");
-  assertEqual(reviewPages.records.length, 3, "Product review pages retain every identity");
-  assertEqual(reviewPages.failedPages, 0, "Official product review pages do not fail");
   assertEqual(
-    reviewPageRequests.map((request) => request.offset).join(","),
-    "0,2",
-    "Product review offsets advance by the returned page size",
+    reviewPages.ok,
+    true,
+    "Official and live product review envelopes are accepted",
+  );
+  assertEqual(reviewPages.pages, 3, "Both review statuses follow offset pagination");
+  assertEqual(reviewPages.fetched, 5, "Product review pagination counts every row read");
+  assertEqual(reviewPages.records.length, 4, "Review identities are retained once");
+  assertEqual(reviewPages.duplicatesSuppressed, 1, "Cross-status reviews are deduplicated");
+  assertEqual(reviewPages.failedPages, 0, "Compatible product review pages do not fail");
+  assertEqual(
+    reviewPageRequests
+      .map((request) => `${request.status}:${request.offset}`)
+      .join(","),
+    "approved:0,pending:0,approved:2",
+    "Product review statuses are paged fairly with independent offsets",
   );
   assert(
     reviewPageRequests.every(
@@ -1379,9 +1403,91 @@ try {
         request.pathname === "/products/reviews" &&
         request.altId === "location-weathertech" &&
         request.altType === "location" &&
+        ["approved", "pending"].includes(request.status) &&
         request.version === "v3",
     ),
-    "Every product review page uses the documented location-scoped v3 contract",
+    "Every product review page uses the location-scoped v3 contract and a live-required status",
+  );
+
+  const saturatedReviewRequests = [];
+  const saturatedReviewPages = await sync.fetchGoHighLevelReviewPages({
+    accessToken: "test-token",
+    locationId: "location-weathertech",
+    pageLimit: 100,
+    fetchImpl: async (url) => {
+      const requestUrl = new URL(String(url));
+      const status = requestUrl.searchParams.get("status");
+      const offset = Number(requestUrl.searchParams.get("offset"));
+      saturatedReviewRequests.push(`${status}:${offset}`);
+      return jsonResponse(200, {
+        reviews: Array.from({ length: 100 }, (_, index) => ({
+          id: `${status}-review-${offset + index}`,
+          locationId: "location-weathertech",
+        })),
+        total: 1_000,
+      });
+    },
+  });
+  assertEqual(saturatedReviewPages.ok, true, "Bounded review saturation succeeds");
+  assertEqual(
+    saturatedReviewPages.paginationTruncated,
+    true,
+    "Review saturation reports the shared record ceiling",
+  );
+  assertEqual(
+    saturatedReviewPages.pages,
+    5,
+    "Review saturation keeps the existing shared page and record ceilings",
+  );
+  assertEqual(
+    saturatedReviewPages.fetched,
+    500,
+    "Review saturation reads no more than the shared record ceiling",
+  );
+  assertEqual(
+    saturatedReviewRequests.join(","),
+    "approved:0,pending:0,approved:100,pending:100,approved:200",
+    "Review saturation round-robins statuses before truncation",
+  );
+
+  const repeatedReviewPage = await sync.fetchGoHighLevelReviewPages({
+    accessToken: "test-token",
+    locationId: "location-weathertech",
+    pageLimit: 2,
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        reviews: [
+          { id: "review-repeated-1", locationId: "location-weathertech" },
+          { id: "review-repeated-2", locationId: "location-weathertech" },
+        ],
+        total: 4,
+      }),
+  });
+  assertEqual(repeatedReviewPage.ok, false, "Repeated final review pages fail closed");
+  assertEqual(
+    repeatedReviewPage.error,
+    "HighLevel review pagination did not advance.",
+    "A reported total cannot hide a repeated review page",
+  );
+
+  const nestedReviewEnvelope = await sync.fetchGoHighLevelReviewPages({
+    accessToken: "test-token",
+    locationId: "location-weathertech",
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        reviews: {
+          messages: [
+            { id: "not-a-review", locationId: "location-weathertech" },
+          ],
+        },
+        total: 1,
+      }),
+  });
+  assertEqual(nestedReviewEnvelope.ok, false, "Nested review envelopes fail closed");
+  assertEqual(
+    nestedReviewEnvelope.error,
+    "HighLevel product review response schema or location scope was invalid.",
+    "Review reads accept only direct documented or live arrays",
   );
 
   const connection = {

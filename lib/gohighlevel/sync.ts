@@ -30,6 +30,7 @@ const MAX_SYNC_PAGE_LIMIT = 100;
 const MAX_SYNC_PAGES = 10;
 const MAX_SYNC_RECORDS = 500;
 const MAX_COMMUNICATION_CONTACT_HYDRATIONS_PER_CHANNEL = 25;
+const GOHIGHLEVEL_PRODUCT_REVIEW_STATUSES = ["approved", "pending"] as const;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -52,10 +53,12 @@ export function buildGoHighLevelCalendarEventQuery({
 
 export function buildGoHighLevelReviewQuery({
   locationId,
+  status,
   offset = 0,
   pageLimit,
 }: {
   locationId: string;
+  status: (typeof GOHIGHLEVEL_PRODUCT_REVIEW_STATUSES)[number];
   offset?: number;
   pageLimit?: number;
 }) {
@@ -66,6 +69,7 @@ export function buildGoHighLevelReviewQuery({
     offset: Math.max(0, Math.floor(offset)),
     sortField: "createdAt",
     sortOrder: "desc",
+    status,
   };
 }
 
@@ -244,6 +248,24 @@ function extractExpectedList(payload: unknown, keys: string[]) {
         ? { ok: true as const, records: records as ProviderRecord[] }
         : { ok: false as const, records: [] as ProviderRecord[] };
     }
+  }
+
+  return { ok: false as const, records: [] as ProviderRecord[] };
+}
+
+function extractDirectExpectedList(payload: unknown, keys: string[]) {
+  const record = asRecord(payload);
+  if (!record) {
+    return { ok: false as const, records: [] as ProviderRecord[] };
+  }
+
+  for (const key of keys) {
+    const direct = record[key];
+    if (!Array.isArray(direct)) continue;
+    const records = direct.map(asRecord);
+    return records.every(Boolean)
+      ? { ok: true as const, records: records as ProviderRecord[] }
+      : { ok: false as const, records: [] as ProviderRecord[] };
   }
 
   return { ok: false as const, records: [] as ProviderRecord[] };
@@ -1241,112 +1263,142 @@ export async function fetchGoHighLevelReviewPages({
   const limit = boundedPageLimit(pageLimit);
   const records: ProviderRecord[] = [];
   const seenExternalIds = new Set<string>();
-  let offset = 0;
   let fetched = 0;
   let pages = 0;
   let duplicatesSuppressed = 0;
   let paginationTruncated = false;
 
-  while (true) {
-    if (!claimPaginationPage(budget)) {
-      paginationTruncated = true;
-      break;
-    }
-    pages += 1;
-    const response = await requestGoHighLevelApi({
-      accessToken,
-      path: "/products/reviews",
-      query: buildGoHighLevelReviewQuery({ locationId, offset, pageLimit: limit }),
-      version: GOHIGHLEVEL_SYNC_API_VERSION,
-      fetchImpl,
-      sleepImpl,
-      requestBudget,
-    });
-    if (!response.ok) {
-      return {
-        ok: false,
-        records,
-        fetched,
-        pages,
-        duplicatesSuppressed,
-        paginationTruncated,
-        failedPages: 1,
-        error: response.error,
-      };
-    }
+  const statusStreams = GOHIGHLEVEL_PRODUCT_REVIEW_STATUSES.map((status) => ({
+    status,
+    offset: 0,
+    done: false,
+    records: [] as ProviderRecord[],
+    externalIds: new Set<string>(),
+  }));
 
-    const extracted = extractExpectedList(response.payload, ["data"]);
-    if (
-      !extracted.ok ||
-      !validateProviderRecordLocations(extracted.records, locationId)
-    ) {
-      return {
-        ok: false,
-        records,
-        fetched,
-        pages,
-        duplicatesSuppressed,
-        paginationTruncated,
-        failedPages: 1,
-        error: "HighLevel product review response schema or location scope was invalid.",
-      };
-    }
-    const pageRecords = extracted.records;
-    const boundedRecords = takeBoundedPageRecords(pageRecords, budget);
-    const uniqueCountBeforePage = records.length;
-    fetched += boundedRecords.length;
-    duplicatesSuppressed += appendUniqueProviderRecords(
-      boundedRecords,
-      records,
-      seenExternalIds,
-    );
-    if (boundedRecords.length < pageRecords.length) {
-      paginationTruncated = true;
-      break;
-    }
+  statusLoop: while (statusStreams.some((stream) => !stream.done)) {
+    for (const stream of statusStreams) {
+      if (stream.done) continue;
+      if (!claimPaginationPage(budget)) {
+        paginationTruncated = true;
+        break statusLoop;
+      }
+      pages += 1;
+      const response = await requestGoHighLevelApi({
+        accessToken,
+        path: "/products/reviews",
+        query: buildGoHighLevelReviewQuery({
+          locationId,
+          status: stream.status,
+          offset: stream.offset,
+          pageLimit: limit,
+        }),
+        version: GOHIGHLEVEL_SYNC_API_VERSION,
+        fetchImpl,
+        sleepImpl,
+        requestBudget,
+      });
+      if (!response.ok) {
+        return {
+          ok: false,
+          records,
+          fetched,
+          pages,
+          duplicatesSuppressed,
+          paginationTruncated,
+          failedPages: 1,
+          error: response.error,
+        };
+      }
 
-    const envelope = asRecord(response.payload);
-    const total = envelope ? getNumber(envelope, "total", "totalCount") : null;
-    if (total === null || total < 0) {
-      return {
-        ok: false,
+      // HighLevel's published v3 contract uses `data`; the live endpoint
+      // currently returns `reviews`. Accept only those two explicit envelopes.
+      const extracted = extractDirectExpectedList(response.payload, [
+        "data",
+        "reviews",
+      ]);
+      if (
+        !extracted.ok ||
+        !validateProviderRecordLocations(extracted.records, locationId)
+      ) {
+        return {
+          ok: false,
+          records,
+          fetched,
+          pages,
+          duplicatesSuppressed,
+          paginationTruncated,
+          failedPages: 1,
+          error: "HighLevel product review response schema or location scope was invalid.",
+        };
+      }
+      const pageRecords = extracted.records;
+      const boundedRecords = takeBoundedPageRecords(pageRecords, budget);
+      const statusUniqueCountBeforePage = stream.records.length;
+      fetched += boundedRecords.length;
+      appendUniqueProviderRecords(
+        boundedRecords,
+        stream.records,
+        stream.externalIds,
+      );
+      duplicatesSuppressed += appendUniqueProviderRecords(
+        boundedRecords,
         records,
-        fetched,
-        pages,
-        duplicatesSuppressed,
-        paginationTruncated,
-        failedPages: 1,
-        error: "HighLevel product review total was missing or invalid.",
-      };
+        seenExternalIds,
+      );
+      if (boundedRecords.length < pageRecords.length) {
+        paginationTruncated = true;
+        break statusLoop;
+      }
+
+      const envelope = asRecord(response.payload);
+      const total = envelope ? getNumber(envelope, "total", "totalCount") : null;
+      if (total === null || total < 0) {
+        return {
+          ok: false,
+          records,
+          fetched,
+          pages,
+          duplicatesSuppressed,
+          paginationTruncated,
+          failedPages: 1,
+          error: "HighLevel product review total was missing or invalid.",
+        };
+      }
+      if (pageRecords.length === 0) {
+        if (stream.offset >= total) {
+          stream.done = true;
+          continue;
+        }
+        return {
+          ok: false,
+          records,
+          fetched,
+          pages,
+          duplicatesSuppressed,
+          paginationTruncated,
+          failedPages: 1,
+          error: "HighLevel product review pagination ended before its reported total.",
+        };
+      }
+      if (stream.records.length === statusUniqueCountBeforePage) {
+        return {
+          ok: false,
+          records,
+          fetched,
+          pages,
+          duplicatesSuppressed,
+          paginationTruncated,
+          failedPages: 1,
+          error: "HighLevel review pagination did not advance.",
+        };
+      }
+      if (stream.offset + pageRecords.length >= total) {
+        stream.done = true;
+        continue;
+      }
+      stream.offset += pageRecords.length;
     }
-    if (offset + pageRecords.length >= total) {
-      break;
-    }
-    if (pageRecords.length === 0) {
-      return {
-        ok: false,
-        records,
-        fetched,
-        pages,
-        duplicatesSuppressed,
-        paginationTruncated,
-        failedPages: 1,
-        error: "HighLevel product review pagination ended before its reported total.",
-      };
-    }
-    if (records.length === uniqueCountBeforePage) {
-      return {
-        ok: false,
-        records,
-        fetched,
-        pages,
-        duplicatesSuppressed,
-        paginationTruncated,
-        failedPages: 1,
-        error: "HighLevel review pagination did not advance.",
-      };
-    }
-    offset += pageRecords.length;
   }
 
   return {
