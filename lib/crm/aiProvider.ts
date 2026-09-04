@@ -185,6 +185,24 @@ export type AiQuotaReservationReceipt = {
   companyReservedCostCentsThisMonth: number;
 };
 
+export type AiQuotaReservationRequest = {
+  contractVersion: 1;
+  provider: AiProviderKey;
+  model: string | null;
+  promptSha256: string;
+  promptCharacters: number;
+  estimatedRequestTokens: number;
+  maxResponseTokens: number;
+  estimatedCostCents: number;
+  maxProviderAttempts: number;
+  globalDailyRequestLimit: number;
+  companyDailyRequestLimit: number;
+  userDailyRequestLimit: number;
+  dailyBudgetCents: number;
+  companyMonthlyBudgetCents: number;
+  maxRequestTokens: number;
+};
+
 export type CompanyAiProviderConfigResolution =
   | {
       ok: true;
@@ -298,6 +316,37 @@ const aiProviderCapabilities: AiProviderCapability[] = [
   "provider_disabled_fallback",
 ];
 
+const aiQuotaRequestKeys = [
+  "contractVersion",
+  "provider",
+  "model",
+  "promptSha256",
+  "promptCharacters",
+  "estimatedRequestTokens",
+  "maxResponseTokens",
+  "estimatedCostCents",
+  "maxProviderAttempts",
+  "globalDailyRequestLimit",
+  "companyDailyRequestLimit",
+  "userDailyRequestLimit",
+  "dailyBudgetCents",
+  "companyMonthlyBudgetCents",
+  "maxRequestTokens",
+] as const satisfies readonly (keyof AiQuotaReservationRequest)[];
+
+export const aiQuotaBounds = {
+  maxModelCharacters: 160,
+  maxPromptCharacters: 50_000,
+  maxTokens: 1_000_000,
+  maxEstimatedCostCents: 100_000_000,
+  maxProviderAttempts: 3,
+  maxDailyRequests: 100_000,
+  maxDailyBudgetCents: 100_000_000,
+  maxCompanyMonthlyBudgetCents: 1_000_000_000,
+} as const;
+
+const aiPromptSha256Pattern = /^[0-9a-f]{64}$/;
+
 const untrustedContentPatterns = [
   /ignore (all )?(previous|system|developer) instructions/i,
   /system prompt/i,
@@ -346,6 +395,105 @@ export function getAiPilotProviderConfig(
     structuredOutputEnabled: parseBoolean(env.AI_STRUCTURED_OUTPUT_ENABLED, true),
     actionExecutionEnabled: false,
   };
+}
+
+export function isAiQuotaReservationRequestWithinBounds(
+  request: AiQuotaReservationRequest,
+) {
+  const requestKeys = Object.keys(request);
+  const modelHasValidType = request.model === null || typeof request.model === "string";
+  const model =
+    typeof request.model === "string" ? request.model.trim() || null : null;
+  const providerRequiresModel =
+    request.provider === "openai" || request.provider === "anthropic";
+  const validProvider =
+    request.provider === "disabled" ||
+    request.provider === "openai" ||
+    request.provider === "anthropic" ||
+    request.provider === "owner_approved";
+
+  return (
+    requestKeys.length === aiQuotaRequestKeys.length &&
+    aiQuotaRequestKeys.every((key) =>
+      Object.prototype.hasOwnProperty.call(request, key),
+    ) &&
+    request.contractVersion === 1 &&
+    validProvider &&
+    modelHasValidType &&
+    (!providerRequiresModel || model !== null) &&
+    (model === null ||
+      (model.length >= 1 && model.length <= aiQuotaBounds.maxModelCharacters)) &&
+    typeof request.promptSha256 === "string" &&
+    aiPromptSha256Pattern.test(request.promptSha256) &&
+    isIntegerWithin(request.promptCharacters, 1, aiQuotaBounds.maxPromptCharacters) &&
+    isIntegerWithin(request.estimatedRequestTokens, 1, aiQuotaBounds.maxTokens) &&
+    request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8) &&
+    isIntegerWithin(request.maxResponseTokens, 1, aiQuotaBounds.maxTokens) &&
+    isIntegerWithin(
+      request.estimatedCostCents,
+      providerRequiresModel ? 1 : 0,
+      aiQuotaBounds.maxEstimatedCostCents,
+    ) &&
+    isIntegerWithin(request.maxProviderAttempts, 1, aiQuotaBounds.maxProviderAttempts) &&
+    isIntegerWithin(
+      request.globalDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.companyDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.userDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(request.dailyBudgetCents, 1, aiQuotaBounds.maxDailyBudgetCents) &&
+    isIntegerWithin(
+      request.companyMonthlyBudgetCents,
+      1,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+    ) &&
+    isIntegerWithin(request.maxRequestTokens, 1, aiQuotaBounds.maxTokens) &&
+    request.estimatedRequestTokens <= request.maxRequestTokens
+  );
+}
+
+export function isAiQuotaReservationReceiptWithinBounds(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const receipt = value as Record<string, unknown>;
+
+  return (
+    isIntegerWithin(
+      receipt.globalRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.companyRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.userRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.reservedCostCentsToday,
+      1,
+      aiQuotaBounds.maxDailyBudgetCents,
+    ) &&
+    isIntegerWithin(
+      receipt.companyReservedCostCentsThisMonth,
+      1,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+    )
+  );
 }
 
 export function buildAiPilotReadiness({
@@ -454,6 +602,9 @@ export function resolveCompanyAiProviderConfig({
     policy.daily_request_limit <= 0 ||
     policy.per_user_daily_request_limit <= 0 ||
     policy.per_company_monthly_budget_cents <= 0 ||
+    !Number.isInteger(policy.per_company_monthly_budget_cents) ||
+    policy.per_company_monthly_budget_cents >
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents ||
     policy.token_limit <= 0 ||
     policy.timeout_ms <= 0 ||
     policy.retry_limit < 0
@@ -464,23 +615,36 @@ export function resolveCompanyAiProviderConfig({
     };
   }
 
+  const effectiveConfig = {
+    ...config,
+    perCompanyDailyRequestLimit: Math.min(
+      config.perCompanyDailyRequestLimit,
+      policy.daily_request_limit,
+    ),
+    perUserDailyRequestLimit: Math.min(
+      config.perUserDailyRequestLimit,
+      policy.per_user_daily_request_limit,
+    ),
+    maxRequestTokens: Math.min(config.maxRequestTokens, policy.token_limit),
+    timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
+    retryLimit: Math.min(config.retryLimit, policy.retry_limit),
+  };
+  if (
+    !hasQuotaCompatibleProviderConfig(
+      effectiveConfig,
+      policy.per_company_monthly_budget_cents,
+    )
+  ) {
+    return {
+      ok: false,
+      reason: "The effective company AI configuration exceeds the bounded quota contract.",
+    };
+  }
+
   return {
     ok: true,
     companyMonthlyBudgetCents: policy.per_company_monthly_budget_cents,
-    config: {
-      ...config,
-      perCompanyDailyRequestLimit: Math.min(
-        config.perCompanyDailyRequestLimit,
-        policy.daily_request_limit,
-      ),
-      perUserDailyRequestLimit: Math.min(
-        config.perUserDailyRequestLimit,
-        policy.per_user_daily_request_limit,
-      ),
-      maxRequestTokens: Math.min(config.maxRequestTokens, policy.token_limit),
-      timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
-      retryLimit: Math.min(config.retryLimit, policy.retry_limit),
-    },
+    config: effectiveConfig,
   };
 }
 
@@ -1598,22 +1762,62 @@ function hasAiPersistenceTables(snapshot: CrmSnapshot) {
   );
 }
 
-function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
+function isIntegerWithin(value: unknown, minimum: number, maximum: number) {
   return (
-    config.dailyBudgetUsd > 0 &&
-    config.dailyRequestLimit > 0 &&
-    config.perUserDailyRequestLimit > 0 &&
-    config.perCompanyDailyRequestLimit > 0 &&
-    config.maxRequestTokens > 0 &&
-    config.maxResponseTokens > 0 &&
-    config.maxInputCostUsdPer1kTokens > 0 &&
-    config.maxOutputCostUsdPer1kTokens > 0 &&
-    Number.isInteger(config.timeoutMs) &&
-    config.timeoutMs > 0 &&
-    Number.isInteger(config.retryLimit) &&
-    config.retryLimit >= 0 &&
-    config.retryLimit <= 2
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
   );
+}
+
+function hasQuotaCompatibleProviderConfig(
+  config: AiPilotProviderConfig,
+  companyMonthlyBudgetCents: number,
+) {
+  if (
+    !Number.isFinite(config.maxInputCostUsdPer1kTokens) ||
+    config.maxInputCostUsdPer1kTokens <= 0 ||
+    !Number.isFinite(config.maxOutputCostUsdPer1kTokens) ||
+    config.maxOutputCostUsdPer1kTokens <= 0 ||
+    !Number.isInteger(config.timeoutMs) ||
+    config.timeoutMs <= 0 ||
+    !isIntegerWithin(config.retryLimit, 0, aiQuotaBounds.maxProviderAttempts - 1)
+  ) {
+    return false;
+  }
+
+  const maxProviderAttempts = config.retryLimit + 1;
+  const maximumEstimatedCostUsd = estimateCostUsd(
+    config.maxRequestTokens,
+    config.maxResponseTokens,
+    config,
+  );
+  const maximumEstimatedCostCents = Math.ceil(
+    maximumEstimatedCostUsd * 100 * maxProviderAttempts,
+  );
+
+  return isAiQuotaReservationRequestWithinBounds({
+    contractVersion: 1,
+    provider: config.provider,
+    model: config.model || null,
+    promptSha256: "0".repeat(64),
+    promptCharacters: 1,
+    estimatedRequestTokens: config.maxRequestTokens,
+    maxResponseTokens: config.maxResponseTokens,
+    estimatedCostCents: maximumEstimatedCostCents,
+    maxProviderAttempts,
+    globalDailyRequestLimit: config.dailyRequestLimit,
+    companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
+    userDailyRequestLimit: config.perUserDailyRequestLimit,
+    dailyBudgetCents: Math.floor(config.dailyBudgetUsd * 100),
+    companyMonthlyBudgetCents,
+    maxRequestTokens: config.maxRequestTokens,
+  });
+}
+
+function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
+  return hasQuotaCompatibleProviderConfig(config, 1);
 }
 
 function normalizeProvider(value: string | undefined): AiProviderKey {

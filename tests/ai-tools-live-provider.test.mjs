@@ -538,6 +538,171 @@ try {
     "usage_limit_reached",
     "Invalid effective retry controls must report incomplete usage limits",
   );
+  const exactQuotaMaximums = {
+    contractVersion: 1,
+    provider: "openai",
+    model: "m".repeat(160),
+    promptSha256: "a".repeat(64),
+    promptCharacters: 50_000,
+    estimatedRequestTokens: 1_000_000,
+    maxResponseTokens: 1_000_000,
+    estimatedCostCents: 100_000_000,
+    maxProviderAttempts: 3,
+    globalDailyRequestLimit: 100_000,
+    companyDailyRequestLimit: 100_000,
+    userDailyRequestLimit: 100_000,
+    dailyBudgetCents: 100_000_000,
+    companyMonthlyBudgetCents: 1_000_000_000,
+    maxRequestTokens: 1_000_000,
+  };
+  assertEqual(
+    aiProvider.isAiQuotaReservationRequestWithinBounds(exactQuotaMaximums),
+    true,
+    "The exact quota RPC upper bounds remain valid",
+  );
+  const exactReceiptMaximums = {
+    globalRequestsToday: 100_000,
+    companyRequestsToday: 100_000,
+    userRequestsToday: 100_000,
+    reservedCostCentsToday: 100_000_000,
+    companyReservedCostCentsThisMonth: 1_000_000_000,
+  };
+  assertEqual(
+    aiProvider.isAiQuotaReservationReceiptWithinBounds(exactReceiptMaximums),
+    true,
+    "The exact quota receipt upper bounds remain valid",
+  );
+  for (const [label, invalidReceipt] of [
+    ["global request count", { ...exactReceiptMaximums, globalRequestsToday: 100_001 }],
+    ["company request count", { ...exactReceiptMaximums, companyRequestsToday: 100_001 }],
+    ["user request count", { ...exactReceiptMaximums, userRequestsToday: 100_001 }],
+    ["daily reserved cost", { ...exactReceiptMaximums, reservedCostCentsToday: 100_000_001 }],
+    [
+      "monthly company reserved cost",
+      { ...exactReceiptMaximums, companyReservedCostCentsThisMonth: 1_000_000_001 },
+    ],
+  ]) {
+    assertEqual(
+      aiProvider.isAiQuotaReservationReceiptWithinBounds(invalidReceipt),
+      false,
+      `The quota receipt rejects ${label} above its bound`,
+    );
+  }
+  for (const [label, invalidQuotaRequest] of [
+    ["model length", { ...exactQuotaMaximums, model: "m".repeat(161) }],
+    ["model type", { ...exactQuotaMaximums, model: 7 }],
+    ["empty model", { ...exactQuotaMaximums, model: "   " }],
+    ["prompt characters", { ...exactQuotaMaximums, promptCharacters: 50_001 }],
+    ["estimated request tokens", { ...exactQuotaMaximums, estimatedRequestTokens: 1_000_001 }],
+    [
+      "prompt-to-token floor",
+      {
+        ...exactQuotaMaximums,
+        promptCharacters: 50_000,
+        estimatedRequestTokens: 6_249,
+      },
+    ],
+    ["response tokens", { ...exactQuotaMaximums, maxResponseTokens: 1_000_001 }],
+    ["estimated cost", { ...exactQuotaMaximums, estimatedCostCents: 100_000_001 }],
+    ["provider attempts", { ...exactQuotaMaximums, maxProviderAttempts: 4 }],
+    ["global request limit", { ...exactQuotaMaximums, globalDailyRequestLimit: 100_001 }],
+    ["company request limit", { ...exactQuotaMaximums, companyDailyRequestLimit: 100_001 }],
+    ["user request limit", { ...exactQuotaMaximums, userDailyRequestLimit: 100_001 }],
+    ["daily budget", { ...exactQuotaMaximums, dailyBudgetCents: 100_000_001 }],
+    ["company monthly budget", { ...exactQuotaMaximums, companyMonthlyBudgetCents: 1_000_000_001 }],
+    ["request token cap", { ...exactQuotaMaximums, maxRequestTokens: 1_000_001 }],
+    ["extra property", { ...exactQuotaMaximums, unexpected: true }],
+  ]) {
+    assertEqual(
+      aiProvider.isAiQuotaReservationRequestWithinBounds(invalidQuotaRequest),
+      false,
+      `The quota contract rejects ${label} above its bound`,
+    );
+  }
+  for (const [label, configOverride] of [
+    ["model length", { model: "m".repeat(161) }],
+    ["global request limit", { dailyRequestLimit: 100_001 }],
+    ["company request limit", { perCompanyDailyRequestLimit: 100_001 }],
+    ["user request limit", { perUserDailyRequestLimit: 100_001 }],
+    ["request token cap", { maxRequestTokens: 1_000_001 }],
+    ["response token cap", { maxResponseTokens: 1_000_001 }],
+    ["daily budget", { dailyBudgetUsd: 1_000_001 }],
+    ["price-derived reservation cost", { maxInputCostUsdPer1kTokens: 1_000_000 }],
+  ]) {
+    const invalidBoundedReadiness = aiProvider.buildAiPilotReadiness({
+      config: { ...productionStatusConfig, ...configOverride },
+      migrationApplied: true,
+    });
+    assertEqual(
+      invalidBoundedReadiness.liveProviderEnabled,
+      false,
+      `Readiness fails closed for an excessive ${label}`,
+    );
+    assertEqual(
+      invalidBoundedReadiness.state,
+      "usage_limit_reached",
+      `An excessive ${label} reports bounded usage controls as incomplete`,
+    );
+    const invalidBoundedStatus = aiProvider.buildAiCompanyPilotStatus({
+      companyId: wtCompanyId,
+      policy: {
+        ...baseCompanyPolicy,
+        allowed_models: [
+          typeof configOverride.model === "string"
+            ? configOverride.model
+            : productionStatusConfig.model,
+        ],
+        daily_request_limit: 100_001,
+        per_user_daily_request_limit: 100_001,
+        per_company_monthly_budget_cents: 5000,
+        token_limit: 1_000_001,
+      },
+      config: { ...productionStatusConfig, ...configOverride },
+    });
+    assertEqual(
+      invalidBoundedStatus.aiEnabled,
+      false,
+      `Company status cannot enable AI with an excessive ${label}`,
+    );
+    assertEqual(
+      invalidBoundedStatus.usageAccountingConfigured,
+      false,
+      `Company status cannot claim accounting readiness with an excessive ${label}`,
+    );
+  }
+  const maximumBoundedStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      allowed_models: ["m".repeat(160)],
+      daily_request_limit: 100_000,
+      per_user_daily_request_limit: 100_000,
+      per_company_monthly_budget_cents: 1_000_000_000,
+      token_limit: 1_000_000,
+      retry_limit: 2,
+    },
+    config: {
+      ...productionStatusConfig,
+      model: "m".repeat(160),
+      dailyBudgetUsd: 1_000_000,
+      dailyRequestLimit: 100_000,
+      perCompanyDailyRequestLimit: 100_000,
+      perUserDailyRequestLimit: 100_000,
+      maxRequestTokens: 1_000_000,
+      maxResponseTokens: 1_000_000,
+      retryLimit: 2,
+    },
+  });
+  assertEqual(
+    maximumBoundedStatus.aiEnabled,
+    true,
+    "Exact quota RPC maximums can enable a valid company status",
+  );
+  assertEqual(
+    maximumBoundedStatus.usageAccountingConfigured,
+    true,
+    "Exact quota RPC maximums retain accounting readiness",
+  );
   const enabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
@@ -557,6 +722,24 @@ try {
     !serializedCompanyStatus.includes("test-secret-key-never-serialized") &&
       !serializedCompanyStatus.includes("apiKeyConfigured"),
     "Sanitized company status must never serialize provider credentials or raw config",
+  );
+  const excessiveCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 1_000_000_001,
+    },
+    config: productionStatusConfig,
+  });
+  assertEqual(
+    excessiveCompanyBudgetStatus.aiEnabled,
+    false,
+    "A company budget above the quota RPC bound cannot enable live AI",
+  );
+  assertEqual(
+    excessiveCompanyBudgetStatus.usageAccountingConfigured,
+    false,
+    "A company budget above the quota RPC bound cannot claim accounting readiness",
   );
 
   const disabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({

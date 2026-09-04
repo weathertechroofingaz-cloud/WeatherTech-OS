@@ -5,11 +5,14 @@ import {
   buildAiCompanyPilotStatus,
   getAiPilotProviderConfig,
   estimateAiRequestUsage,
+  isAiQuotaReservationRequestWithinBounds,
+  isAiQuotaReservationReceiptWithinBounds,
   preflightAiPilotCommand,
   retrieveAuthorizedAiContext,
   resolveCompanyAiProviderConfig,
   runAiPilotCommand,
   type AiPilotCommandResult,
+  type AiQuotaReservationRequest,
   type AiQuotaReservationReceipt,
 } from "../../../../lib/crm/aiProvider";
 import {
@@ -319,28 +322,38 @@ export async function POST(request: NextRequest) {
   );
   const maxProviderAttempts = providerConfig.retryLimit + 1;
   const dailyBudgetCents = Math.floor(providerConfig.dailyBudgetUsd * 100);
+  const quotaRequest = {
+    contractVersion: 1,
+    provider: providerConfig.provider,
+    model: providerConfig.model || null,
+    promptSha256: createHash("sha256").update(prompt).digest("hex"),
+    promptCharacters: prompt.length,
+    estimatedRequestTokens: requestEstimate.estimatedRequestTokens,
+    maxResponseTokens: providerConfig.maxResponseTokens,
+    estimatedCostCents,
+    maxProviderAttempts,
+    globalDailyRequestLimit: providerConfig.dailyRequestLimit,
+    companyDailyRequestLimit: providerConfig.perCompanyDailyRequestLimit,
+    userDailyRequestLimit: providerConfig.perUserDailyRequestLimit,
+    dailyBudgetCents,
+    companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
+    maxRequestTokens: providerConfig.maxRequestTokens,
+  } satisfies AiQuotaReservationRequest;
+  if (!isAiQuotaReservationRequestWithinBounds(quotaRequest)) {
+    return noStoreJson(
+      {
+        error:
+          "The AI quota controls are outside their bounded contract. No provider call was attempted.",
+      },
+      503,
+    );
+  }
   const { data: reservationData, error: reservationError } =
     await serviceClient.rpc("wtos_reserve_ai_request_v1", {
       p_company_id: authorization.companyId,
       p_actor_user_id: user.id,
       p_request_id: requestId,
-      p_request: {
-        contractVersion: 1,
-        provider: providerConfig.provider,
-        model: providerConfig.model || null,
-        promptSha256: createHash("sha256").update(prompt).digest("hex"),
-        promptCharacters: prompt.length,
-        estimatedRequestTokens: requestEstimate.estimatedRequestTokens,
-        maxResponseTokens: providerConfig.maxResponseTokens,
-        estimatedCostCents,
-        maxProviderAttempts,
-        globalDailyRequestLimit: providerConfig.dailyRequestLimit,
-        companyDailyRequestLimit: providerConfig.perCompanyDailyRequestLimit,
-        userDailyRequestLimit: providerConfig.perUserDailyRequestLimit,
-        dailyBudgetCents,
-        companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
-        maxRequestTokens: providerConfig.maxRequestTokens,
-      },
+      p_request: quotaRequest,
     });
   if (reservationError) {
     return noStoreJson(
@@ -617,11 +630,7 @@ function parseQuotaReservation(
     receipt.maxProviderAttempts !== expected.maxProviderAttempts ||
     receipt.status !== "reserved" ||
     typeof receipt.idempotent !== "boolean" ||
-    !isBoundedPositiveInteger(receipt.globalRequestsToday) ||
-    !isBoundedPositiveInteger(receipt.companyRequestsToday) ||
-    !isBoundedPositiveInteger(receipt.userRequestsToday) ||
-    !isBoundedPositiveInteger(receipt.reservedCostCentsToday) ||
-    !isBoundedPositiveInteger(receipt.companyReservedCostCentsThisMonth) ||
+    !isAiQuotaReservationReceiptWithinBounds(receipt) ||
     Number(receipt.companyRequestsToday) > Number(receipt.globalRequestsToday) ||
     Number(receipt.userRequestsToday) > Number(receipt.companyRequestsToday) ||
     Number(receipt.reservedCostCentsToday) < expected.estimatedCostCents ||
@@ -633,10 +642,6 @@ function parseQuotaReservation(
     return null;
   }
   return receipt as AiQuotaReservationReceipt;
-}
-
-function isBoundedPositiveInteger(value: unknown) {
-  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 100_000_000;
 }
 
 function quotaFailureStatus(code: string | undefined): 403 | 409 | 429 | 503 {

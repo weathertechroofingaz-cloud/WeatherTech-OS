@@ -607,14 +607,56 @@ assert(
 );
 for (const retryBoundary of [
   "Math.max(0, Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2))",
-  "Number.isInteger(config.retryLimit)",
-  "config.retryLimit >= 0",
-  "config.retryLimit <= 2",
+  "isIntegerWithin(config.retryLimit, 0, aiQuotaBounds.maxProviderAttempts - 1)",
+  "const maxProviderAttempts = config.retryLimit + 1",
 ]) {
   includes(
     aiProvider,
     retryBoundary,
     `AI retry configuration is missing boundary ${retryBoundary}.`,
+  );
+}
+for (const quotaContractBoundary of [
+  "maxModelCharacters: 160",
+  "maxPromptCharacters: 50_000",
+  "maxTokens: 1_000_000",
+  "maxEstimatedCostCents: 100_000_000",
+  "maxProviderAttempts: 3",
+  "maxDailyRequests: 100_000",
+  "maxDailyBudgetCents: 100_000_000",
+  "maxCompanyMonthlyBudgetCents: 1_000_000_000",
+  "export function isAiQuotaReservationRequestWithinBounds(",
+  "export function isAiQuotaReservationReceiptWithinBounds(",
+  "request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8)",
+  "request.estimatedRequestTokens <= request.maxRequestTokens",
+  "maximumEstimatedCostUsd * 100 * maxProviderAttempts",
+  "hasQuotaCompatibleProviderConfig(",
+]) {
+  includes(
+    aiProvider,
+    quotaContractBoundary,
+    `AI quota readiness is missing bounded contract ${quotaContractBoundary}.`,
+  );
+}
+for (const quotaSqlBound of [
+  "length(request_model) not between 1 and 160",
+  "prompt_characters not between 1 and 50000",
+  "estimated_request_tokens not between 1 and 1000000",
+  "max_response_tokens not between 1 and 1000000",
+  "estimated_cost_cents not between 0 and 100000000",
+  "max_provider_attempts not between 1 and 3",
+  "global_daily_request_limit not between 1 and 100000",
+  "company_daily_request_limit not between 1 and 100000",
+  "user_daily_request_limit not between 1 and 100000",
+  "daily_budget_cents not between 1 and 100000000",
+  "company_monthly_budget_cents not between 1 and 1000000000",
+  "max_request_tokens not between 1 and 1000000",
+  "estimated_request_tokens > max_request_tokens",
+]) {
+  includes(
+    automationMigration,
+    quotaSqlBound,
+    `The shared TypeScript quota bounds must stay paired with migration contract ${quotaSqlBound}.`,
   );
 }
 includes(
@@ -662,7 +704,11 @@ for (const quotaBoundary of [
   "MAX_AI_PROMPT_CHARACTERS",
   "resolveCompanyAiProviderConfig",
   "preflightAiPilotCommand",
+  "const quotaRequest = {",
+  "isAiQuotaReservationRequestWithinBounds(quotaRequest)",
+  "isAiQuotaReservationReceiptWithinBounds(receipt)",
   'serviceClient.rpc("wtos_reserve_ai_request_v1"',
+  "p_request: quotaRequest",
   "estimatedCostUsd *",
   "(providerConfig.retryLimit + 1)",
   "const maxProviderAttempts = providerConfig.retryLimit + 1",
@@ -687,6 +733,21 @@ for (const quotaBoundary of [
     `Atomic AI quota enforcement is missing boundary ${quotaBoundary}.`,
   );
 }
+const quotaRequestBuildIndex = commandPost.indexOf("const quotaRequest = {");
+const quotaRequestValidationIndex = commandPost.indexOf(
+  "isAiQuotaReservationRequestWithinBounds(quotaRequest)",
+  quotaRequestBuildIndex,
+);
+const quotaReservationRpcIndex = commandPost.indexOf(
+  'serviceClient.rpc("wtos_reserve_ai_request_v1"',
+  quotaRequestValidationIndex,
+);
+assert(
+  quotaRequestBuildIndex >= 0 &&
+    quotaRequestValidationIndex > quotaRequestBuildIndex &&
+    quotaReservationRpcIndex > quotaRequestValidationIndex,
+  "The exact quota request must pass the shared bounded validator before the reservation RPC.",
+);
 assert(
   !commandPost.includes("recordAiRequestInitiated") &&
     commandPost.indexOf("parseQuotaReservation(reservationData, {") >= 0 &&
@@ -707,7 +768,7 @@ for (const companySwitchBoundary of [
   "activeAiCompanyRef.current = activeCompanyId",
   "setAiResponses([])",
   "setAiResponseCompanyId(null)",
-  "setAiPilotResult(null)",
+  "setAiPilotResultEvidence(null)",
   "result.companyId !== requestCompanyId",
   "aiResponseCompanyId === exactAiCompanyId",
   'reviewCompanyId === "all"',
@@ -771,6 +832,15 @@ for (const statusUiBoundary of [
   "setAiProviderStatusRefreshSequence((current) => current + 1)",
   'data-testid="workspace-refresh"',
   "statusRefreshSequence={aiProviderStatusRefreshSequence}",
+  "type AiPilotResultEvidence = {",
+  "statusRefreshSequence: number",
+  "const requestStatusRefreshSequence = statusRefreshSequence",
+  "setAiPilotResultEvidence({",
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  "aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence",
+  "result={currentAiPilotResult}",
+  'data-ai-current-command-result={result ? "true" : "false"}',
+  "runtimeProviderHealth={currentAiRuntimeProviderHealth}",
   "setAiRuntimeProviderHealth(null)",
   "if (result.providerHealth.tested)",
   'state: result.providerHealth.ok ? "ready" : "failed"',

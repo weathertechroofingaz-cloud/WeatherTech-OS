@@ -39840,6 +39840,11 @@ type AiCommandCenterFilterState = {
   propertyKey: string;
 };
 
+type AiPilotResultEvidence = {
+  result: AiPilotCommandResult;
+  statusRefreshSequence: number;
+};
+
 type AiActionReviewReceipt = {
   aiAuditEventId: string;
   decision: "approve" | "reject";
@@ -39919,7 +39924,8 @@ function AiToolsView({
   const [aiCommand, setAiCommand] = useState("");
   const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
   const [aiResponseCompanyId, setAiResponseCompanyId] = useState<string | null>(null);
-  const [aiPilotResult, setAiPilotResult] = useState<AiPilotCommandResult | null>(null);
+  const [aiPilotResultEvidence, setAiPilotResultEvidence] =
+    useState<AiPilotResultEvidence | null>(null);
   const [aiPilotError, setAiPilotError] = useState("");
   const [aiProviderStatus, setAiProviderStatus] =
     useState<AiCompanyPilotStatus | null>(null);
@@ -39968,7 +39974,10 @@ function AiToolsView({
   const currentAiProviderStatus =
     aiProviderStatus?.companyId === exactAiCompanyId ? aiProviderStatus : null;
   const currentAiPilotResult =
-    aiPilotResult?.companyId === exactAiCompanyId ? aiPilotResult : null;
+    aiPilotResultEvidence?.result.companyId === exactAiCompanyId &&
+    aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiPilotResultEvidence.result
+      : null;
   const currentAiResponses =
     aiResponseCompanyId === exactAiCompanyId ? aiResponses : [];
   const currentAiProviderStatusError =
@@ -40027,7 +40036,7 @@ function AiToolsView({
     setAiCommand("");
     setAiResponses([]);
     setAiResponseCompanyId(null);
-    setAiPilotResult(null);
+    setAiPilotResultEvidence(null);
     setAiPilotError("");
     setAiProviderStatus(null);
     setAiProviderStatusError(null);
@@ -40218,6 +40227,7 @@ function AiToolsView({
       );
       return;
     }
+    const requestStatusRefreshSequence = statusRefreshSequence;
     aiReviewAbortRef.current?.abort();
     aiReviewAbortRef.current = null;
     setReviewingActionId(null);
@@ -40278,7 +40288,10 @@ function AiToolsView({
           state: result.providerHealth.ok ? "ready" : "failed",
         });
       }
-      setAiPilotResult(result);
+      setAiPilotResultEvidence({
+        result,
+        statusRefreshSequence: requestStatusRefreshSequence,
+      });
       setAiResponseCompanyId(requestCompanyId);
       setAiResponses((current) => [result.response, ...current].slice(0, 6));
       setReviewedActionIds({});
@@ -40294,7 +40307,7 @@ function AiToolsView({
         );
         setAiResponseCompanyId(requestCompanyId);
         setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
-        setAiPilotResult(null);
+        setAiPilotResultEvidence(null);
         setReviewedActionIds({});
       }
     } finally {
@@ -40772,6 +40785,7 @@ function AiToolsView({
           result={currentAiPilotResult}
           latestResponse={currentAiResponses[0] ?? null}
           providerStatus={currentAiProviderStatus}
+          runtimeProviderHealth={currentAiRuntimeProviderHealth}
         />
 
         <AiGroundedResponsePanel
@@ -41708,30 +41722,45 @@ function AiPilotControlPanel({
   result,
   latestResponse,
   providerStatus,
+  runtimeProviderHealth,
 }: {
   result: AiPilotCommandResult | null;
   latestResponse: AiGroundedResponse | null;
   providerStatus: AiCompanyPilotStatus | null;
+  runtimeProviderHealth: "ready" | "failed" | null;
 }) {
   const usage = result?.usage;
   const readiness = result?.readiness ?? providerStatus?.readiness;
+  const runtimeProviderFailed = runtimeProviderHealth === "failed";
   const sourceCount = result?.context.records.length ?? latestResponse?.supportingRecords.length ?? 0;
 
   return (
     <div
       className="mt-4 grid gap-3 lg:grid-cols-3"
       data-testid="ai-live-pilot-controls"
+      data-ai-current-command-result={result ? "true" : "false"}
+      data-ai-runtime-provider-health={runtimeProviderHealth ?? "not_tested"}
     >
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Live provider readiness</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {readiness?.summary ??
-            "No server-side AI pilot result yet. Ask a command to test provider readiness."}
+          {runtimeProviderFailed
+            ? "The latest live provider test failed. Production AI will remain unavailable until a later tested request succeeds."
+            : readiness?.summary ??
+              "No server-side AI pilot result yet. Ask a command to test provider readiness."}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AiStatusBadge
-            label={readiness?.state.replace(/_/g, " ") ?? "not tested"}
-            tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+            label={
+              runtimeProviderFailed
+                ? "provider test failed"
+                : readiness?.state.replace(/_/g, " ") ?? "not tested"
+            }
+            tone={
+              !runtimeProviderFailed && readiness?.liveProviderEnabled
+                ? "blue"
+                : "amber"
+            }
           />
           <AiStatusBadge
             label={readiness?.productionDisabled === false ? "external actions enabled" : "external actions disabled"}
