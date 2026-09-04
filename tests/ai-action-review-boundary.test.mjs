@@ -1791,6 +1791,12 @@ for (const statusUiBoundary of [
   'response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"',
   "shouldForceQuotaProbeRefresh(",
   "beginAiQuotaProbeRefreshAttempt(",
+  "getAiQuotaProbeRefreshRetryAfterSeconds(",
+  "waitForAiProviderStatusRetry(",
+  'signal.addEventListener("abort", handleAbort, { once: true })',
+  'signal.removeEventListener("abort", handleAbort)',
+  "const handleAbort = () => finish(false)",
+  "retryAfterSeconds * 1_000 + 100",
   "beginQuotaProbeRefreshAttempt(",
   "acknowledgeQuotaProbeRefresh(",
   'credentials: "same-origin"',
@@ -1830,6 +1836,10 @@ for (const statusUiBoundary of [
   "const attemptedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>())",
   "const [aiQuotaProbeRefreshStateVersion, setAiQuotaProbeRefreshStateVersion] =",
   "quotaProbeRefreshStateVersion: number",
+  "isAiCompanySelectionCurrent: (companyId: string) => boolean",
+  'const selectedCompanyIdRef = useRef<CompanyScopeId>("all")',
+  "selectedCompanyIdRef.current = companyId",
+  "isAiCompanySelectionCurrent={isAiCompanySelectionCurrent}",
   "setAiQuotaProbeRefreshStateVersion((current) => current + 1)",
   "const observedQuotaProbeRefreshStateVersionRef = useRef(",
   "const locallyCompletedAiProviderStatusRef =",
@@ -1879,6 +1889,54 @@ for (const statusUiBoundary of [
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
   );
 }
+const providerStatusRetryWaitHelperStartIndex = crmApp.indexOf(
+  "function waitForAiProviderStatusRetry(",
+);
+const providerStatusRetryWaitHelperEndIndex = crmApp.indexOf(
+  "function isAiCompanyPilotStatus(",
+  providerStatusRetryWaitHelperStartIndex,
+);
+const providerStatusRetryWaitHelper = crmApp.slice(
+  providerStatusRetryWaitHelperStartIndex,
+  providerStatusRetryWaitHelperEndIndex,
+);
+const providerStatusRetryWaitClearIndex = providerStatusRetryWaitHelper.indexOf(
+  "window.clearTimeout(timeoutId)",
+);
+const providerStatusRetryWaitRemoveAbortIndex =
+  providerStatusRetryWaitHelper.indexOf(
+    'signal.removeEventListener("abort", handleAbort)',
+  );
+const providerStatusRetryWaitResolveIndex = providerStatusRetryWaitHelper.indexOf(
+  "resolve(ready)",
+);
+const providerStatusRetryWaitAbortIndex = providerStatusRetryWaitHelper.indexOf(
+  "const handleAbort = () => finish(false)",
+);
+const providerStatusRetryWaitAddAbortIndex = providerStatusRetryWaitHelper.indexOf(
+  'signal.addEventListener("abort", handleAbort, { once: true })',
+);
+const providerStatusRetryWaitAlreadyAbortedIndex =
+  providerStatusRetryWaitHelper.indexOf("if (signal.aborted)");
+const providerStatusRetryWaitTimeoutIndex = providerStatusRetryWaitHelper.indexOf(
+  "timeoutId = window.setTimeout(",
+);
+const providerStatusRetryWaitReadyIndex = providerStatusRetryWaitHelper.indexOf(
+  "() => finish(true)",
+);
+assert(
+  providerStatusRetryWaitHelperStartIndex >= 0 &&
+    providerStatusRetryWaitHelperEndIndex > providerStatusRetryWaitHelperStartIndex &&
+    providerStatusRetryWaitClearIndex >= 0 &&
+    providerStatusRetryWaitRemoveAbortIndex > providerStatusRetryWaitClearIndex &&
+    providerStatusRetryWaitResolveIndex > providerStatusRetryWaitRemoveAbortIndex &&
+    providerStatusRetryWaitAbortIndex > providerStatusRetryWaitResolveIndex &&
+    providerStatusRetryWaitAddAbortIndex > providerStatusRetryWaitAbortIndex &&
+    providerStatusRetryWaitAlreadyAbortedIndex > providerStatusRetryWaitAddAbortIndex &&
+    providerStatusRetryWaitTimeoutIndex > providerStatusRetryWaitAlreadyAbortedIndex &&
+    providerStatusRetryWaitReadyIndex > providerStatusRetryWaitTimeoutIndex,
+  "Quota-probe cooldown wait must resolve false on abort, true only after its bounded timer, and clean up before resolving.",
+);
 
 for (const errorEvidenceBoundary of [
   "export type AiPilotErrorEvidence = {",
@@ -1938,13 +1996,89 @@ const providerStatusValidationIndex = crmApp.indexOf(
   "isAiCompanyPilotStatus(payload, requestCompanyId)",
   providerStatusEffectIndex,
 );
+const providerStatusMaximumAttemptsIndex = crmApp.indexOf(
+  "const maximumStatusAttempts = forceQuotaProbeRefresh ? 2 : 1",
+  providerStatusEffectIndex,
+);
+const providerStatusAttemptLoopIndex = crmApp.indexOf(
+  "statusAttemptIndex < maximumStatusAttempts",
+  providerStatusMaximumAttemptsIndex,
+);
+const providerStatusRetryParserIndex = crmApp.indexOf(
+  "getAiQuotaProbeRefreshRetryAfterSeconds({",
+  providerStatusAttemptLoopIndex,
+);
+const providerStatusRetryConditionIndex = crmApp.indexOf(
+  "if (retryAfterSeconds !== null)",
+  providerStatusRetryParserIndex,
+);
+const providerStatusRetryHeaderIndex = crmApp.indexOf(
+  'retryAfterHeader: response.headers.get("Retry-After")',
+  providerStatusRetryParserIndex,
+);
+const providerStatusRetryAlreadyAttemptedIndex = crmApp.indexOf(
+  "retryAlreadyAttempted: statusAttemptIndex > 0",
+  providerStatusRetryHeaderIndex,
+);
+const providerStatusRetryPreWaitControllerGuardIndex = crmApp.indexOf(
+  "aiProviderStatusAbortRef.current !== controller",
+  providerStatusRetryConditionIndex,
+);
+const providerStatusRetryPreWaitAbortGuardIndex = crmApp.lastIndexOf(
+  "controller.signal.aborted ||",
+  providerStatusRetryPreWaitControllerGuardIndex,
+);
+const providerStatusRetryPreWaitCompanyGuardIndex = crmApp.indexOf(
+  "!isAiCompanySelectionCurrent(requestCompanyId)",
+  providerStatusRetryPreWaitControllerGuardIndex,
+);
+const providerStatusRetryPreWaitSnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
+  providerStatusRetryPreWaitCompanyGuardIndex,
+);
+const providerStatusRetryWaitIndex = crmApp.indexOf(
+  "await waitForAiProviderStatusRetry(",
+  providerStatusRetryPreWaitSnapshotGuardIndex,
+);
+const providerStatusRetryControllerGuardIndex = crmApp.indexOf(
+  "aiProviderStatusAbortRef.current !== controller",
+  providerStatusRetryWaitIndex,
+);
+const providerStatusRetryReadyGuardIndex = crmApp.lastIndexOf(
+  "!retryReady ||",
+  providerStatusRetryControllerGuardIndex,
+);
+const providerStatusRetryCompanyGuardIndex = crmApp.indexOf(
+  "!isAiCompanySelectionCurrent(requestCompanyId)",
+  providerStatusRetryControllerGuardIndex,
+);
+const providerStatusRetrySnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
+  providerStatusRetryCompanyGuardIndex,
+);
+const providerStatusRetryContinueIndex = crmApp.indexOf(
+  "continue;",
+  providerStatusRetrySnapshotGuardIndex,
+);
+const providerStatusResponseErrorIndex = crmApp.indexOf(
+  "if (!response.ok)",
+  providerStatusRetryContinueIndex,
+);
 const providerStatusAbortGuardIndex = crmApp.indexOf(
   "controller.signal.aborted ||",
   providerStatusValidationIndex,
 );
+const providerStatusRefreshHeaderValidationIndex = crmApp.indexOf(
+  'response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"',
+  providerStatusValidationIndex,
+);
+const providerStatusSelectionGuardIndex = crmApp.indexOf(
+  "!isAiCompanySelectionCurrent(requestCompanyId)",
+  providerStatusAbortGuardIndex,
+);
 const providerStatusSnapshotGuardIndex = crmApp.indexOf(
   "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
-  providerStatusAbortGuardIndex,
+  providerStatusSelectionGuardIndex,
 );
 const providerStatusRefreshAckIndex = crmApp.indexOf(
   "acknowledgeQuotaProbeRefresh(",
@@ -1966,6 +2100,14 @@ const providerStatusPublishGenerationIndex = crmApp.indexOf(
   "statusRefreshSequence: requestStatusRefreshSequence",
   providerStatusPublishIndex,
 );
+const providerStatusSuccessReturnIndex = crmApp.indexOf(
+  "return;",
+  providerStatusPublishGenerationIndex,
+);
+const providerStatusCatchIndex = crmApp.indexOf(
+  "} catch (currentError) {",
+  providerStatusSuccessReturnIndex,
+);
 const providerStatusStateVersionDependencyIndex = crmApp.indexOf(
   "quotaProbeRefreshStateVersion,",
   providerStatusPublishGenerationIndex,
@@ -1982,27 +2124,71 @@ assert(
     providerStatusActiveRequestGuardIndex > providerStatusRepeatAttemptGuardIndex &&
     providerStatusRepeatAttemptErrorIndex > providerStatusActiveRequestGuardIndex &&
     providerStatusRepeatAttemptErrorIndex < providerStatusEffectIndex &&
+    providerStatusMaximumAttemptsIndex > providerStatusEffectIndex &&
+    providerStatusAttemptLoopIndex > providerStatusMaximumAttemptsIndex &&
     providerStatusRefreshPostIndex > providerStatusEffectIndex &&
     providerStatusRefreshBodyIndex > providerStatusRefreshPostIndex &&
-    providerStatusValidationIndex > providerStatusEffectIndex &&
-    providerStatusAbortGuardIndex > providerStatusValidationIndex &&
-    providerStatusSnapshotGuardIndex > providerStatusAbortGuardIndex &&
+    providerStatusRetryParserIndex > providerStatusRefreshBodyIndex &&
+    providerStatusRetryConditionIndex > providerStatusRetryParserIndex &&
+    providerStatusRetryHeaderIndex > providerStatusRetryParserIndex &&
+    providerStatusRetryAlreadyAttemptedIndex > providerStatusRetryHeaderIndex &&
+    providerStatusRetryPreWaitControllerGuardIndex >
+      providerStatusRetryConditionIndex &&
+    providerStatusRetryPreWaitAbortGuardIndex >
+      providerStatusRetryAlreadyAttemptedIndex &&
+    providerStatusRetryPreWaitAbortGuardIndex <
+      providerStatusRetryPreWaitControllerGuardIndex &&
+    providerStatusRetryPreWaitCompanyGuardIndex >
+      providerStatusRetryPreWaitControllerGuardIndex &&
+    providerStatusRetryPreWaitSnapshotGuardIndex >
+      providerStatusRetryPreWaitCompanyGuardIndex &&
+    providerStatusRetryWaitIndex > providerStatusRetryPreWaitSnapshotGuardIndex &&
+    providerStatusRetryControllerGuardIndex > providerStatusRetryWaitIndex &&
+    providerStatusRetryReadyGuardIndex > providerStatusRetryWaitIndex &&
+    providerStatusRetryReadyGuardIndex < providerStatusRetryControllerGuardIndex &&
+    providerStatusRetryCompanyGuardIndex > providerStatusRetryControllerGuardIndex &&
+    providerStatusRetrySnapshotGuardIndex > providerStatusRetryCompanyGuardIndex &&
+    providerStatusRetryContinueIndex > providerStatusRetrySnapshotGuardIndex &&
+    providerStatusResponseErrorIndex > providerStatusRetryContinueIndex &&
+    providerStatusValidationIndex > providerStatusResponseErrorIndex &&
+    providerStatusRefreshHeaderValidationIndex > providerStatusValidationIndex &&
+    providerStatusAbortGuardIndex > providerStatusRefreshHeaderValidationIndex &&
+    providerStatusSelectionGuardIndex > providerStatusAbortGuardIndex &&
+    providerStatusSnapshotGuardIndex > providerStatusSelectionGuardIndex &&
     providerStatusLocalCompletionPublishIndex > providerStatusSnapshotGuardIndex &&
     providerStatusLocalCompletionReloadIndex >
       providerStatusLocalCompletionPublishIndex &&
     providerStatusRefreshAckIndex > providerStatusLocalCompletionReloadIndex &&
     providerStatusPublishIndex > providerStatusRefreshAckIndex &&
     providerStatusPublishGenerationIndex > providerStatusPublishIndex &&
-    providerStatusStateVersionDependencyIndex > providerStatusPublishGenerationIndex,
-  "Explicit status refresh must make one persistent attempt per company/generation, use bounded POST data, and acknowledge only a valid current response.",
+    providerStatusSuccessReturnIndex > providerStatusPublishGenerationIndex &&
+    providerStatusCatchIndex > providerStatusSuccessReturnIndex &&
+    providerStatusStateVersionDependencyIndex > providerStatusCatchIndex,
+  "Explicit status refresh must make one persistent operation per company/generation, allow only one receipt-bound abortable cooldown retry, and acknowledge only a valid current response.",
+);
+const aiCommandPromptStartIndex = crmApp.indexOf(
+  "const runAiCommandPrompt = async (prompt: string) =>",
+);
+const aiCommandPromptEndIndex = crmApp.indexOf(
+  "const markActionReviewed = async (",
+  aiCommandPromptStartIndex,
+);
+const aiCommandPromptBoundary = crmApp.slice(
+  aiCommandPromptStartIndex,
+  aiCommandPromptEndIndex,
+);
+assert(
+  aiCommandPromptStartIndex >= 0 &&
+    aiCommandPromptEndIndex > aiCommandPromptStartIndex &&
+    !aiCommandPromptBoundary.includes("getAiQuotaProbeRefreshRetryAfterSeconds") &&
+    !aiCommandPromptBoundary.includes("waitForAiProviderStatusRetry") &&
+    !aiCommandPromptBoundary.includes("maximumStatusAttempts") &&
+    !aiCommandPromptBoundary.includes("statusAttemptIndex"),
+  "The bounded quota-probe status retry must never extend to paid AI command requests.",
 );
 const providerStatusPendingGuardIndex = crmApp.lastIndexOf(
   "if (!exactAiCompanyId || snapshotTransitionPending)",
   providerStatusEffectIndex,
-);
-const providerStatusCatchIndex = crmApp.indexOf(
-  "} catch (currentError) {",
-  providerStatusPublishIndex,
 );
 const providerStatusUnmountCleanupIndex = crmApp.indexOf(
   "  useEffect(\n    () => () => {",
@@ -2027,6 +2213,10 @@ const providerStatusCatchContextGuardIndex = crmApp.indexOf(
   "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
   providerStatusCatchIndex,
 );
+const providerStatusCatchSelectionGuardIndex = crmApp.indexOf(
+  "!isAiCompanySelectionCurrent(requestCompanyId)",
+  providerStatusCatchIndex,
+);
 const providerStatusErrorPublishIndex = crmApp.indexOf(
   "setAiProviderStatusErrorEvidence({",
   providerStatusCatchContextGuardIndex,
@@ -2039,7 +2229,8 @@ assert(
   providerStatusPendingGuardIndex >= 0 &&
     providerStatusPendingGuardIndex < providerStatusEffectIndex &&
     providerStatusCatchIndex > providerStatusPublishIndex &&
-    providerStatusCatchContextGuardIndex > providerStatusCatchIndex &&
+    providerStatusCatchSelectionGuardIndex > providerStatusCatchIndex &&
+    providerStatusCatchContextGuardIndex > providerStatusCatchSelectionGuardIndex &&
     providerStatusErrorPublishIndex > providerStatusCatchContextGuardIndex &&
     providerStatusErrorGenerationIndex > providerStatusErrorPublishIndex,
   "AI status loading and errors must pause during snapshot transitions and reject stale root context.",

@@ -99,6 +99,44 @@ export function beginAiQuotaProbeRefreshAttempt(
   return true;
 }
 
+export function getAiQuotaProbeRefreshRetryAfterSeconds({
+  status,
+  retryAfterHeader,
+  payload,
+  retryAlreadyAttempted,
+}: {
+  status: number;
+  retryAfterHeader: string | null;
+  payload: unknown;
+  retryAlreadyAttempted: boolean;
+}) {
+  if (
+    status !== 429 ||
+    retryAlreadyAttempted ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+
+  const normalizedRetryAfter = retryAfterHeader?.trim() ?? "";
+  if (!/^(?:[1-9]|[12][0-9]|30)$/.test(normalizedRetryAfter)) {
+    return null;
+  }
+
+  const retryAfterSeconds = Number(normalizedRetryAfter);
+  const receipt = payload as {
+    code?: unknown;
+    retryAfterSeconds?: unknown;
+  };
+  return receipt.code === "ai_quota_probe_refresh_rate_limited" &&
+    Number.isSafeInteger(receipt.retryAfterSeconds) &&
+    receipt.retryAfterSeconds === retryAfterSeconds
+    ? retryAfterSeconds
+    : null;
+}
+
 export function acknowledgeAiQuotaProbeRefresh(
   consumedByCompany: Map<string, number>,
   companyId: string,

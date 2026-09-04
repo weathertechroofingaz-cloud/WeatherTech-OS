@@ -118,6 +118,75 @@ try {
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
   const consumedQuotaProbeRefreshes = new Map();
   const attemptedQuotaProbeRefreshes = new Map();
+  const validQuotaProbeRateLimitPayload = {
+    code: "ai_quota_probe_refresh_rate_limited",
+    retryAfterSeconds: 17,
+  };
+  assertEqual(
+    aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+      status: 429,
+      retryAfterHeader: "17",
+      payload: validQuotaProbeRateLimitPayload,
+      retryAlreadyAttempted: false,
+    }),
+    17,
+    "A first exact bounded quota-probe cooldown receipt must allow one delayed retry",
+  );
+  for (const [name, input] of [
+    ["ordinary success", { status: 200 }],
+    ["service unavailable", { status: 503 }],
+    ["already retried", { retryAlreadyAttempted: true }],
+    ["missing header", { retryAfterHeader: null }],
+    ["zero header", { retryAfterHeader: "0" }],
+    ["negative header", { retryAfterHeader: "-1" }],
+    ["fractional header", { retryAfterHeader: "1.5" }],
+    ["HTTP-date header", { retryAfterHeader: "Fri, 04 Sep 2026 12:00:00 GMT" }],
+    ["overbound header", { retryAfterHeader: "31" }],
+    ["missing payload", { payload: null }],
+    ["array payload", { payload: [] }],
+    ["wrong code", { payload: { ...validQuotaProbeRateLimitPayload, code: "other" } }],
+    ["missing body delay", { payload: { code: "ai_quota_probe_refresh_rate_limited" } }],
+    [
+      "string body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: "17" } },
+    ],
+    [
+      "mismatched body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: 16 } },
+    ],
+    [
+      "fractional body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: 17.5 } },
+    ],
+  ]) {
+    assertEqual(
+      aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+        status: input.status ?? 429,
+        retryAfterHeader:
+          input.retryAfterHeader === undefined ? "17" : input.retryAfterHeader,
+        payload:
+          input.payload === undefined ? validQuotaProbeRateLimitPayload : input.payload,
+        retryAlreadyAttempted: input.retryAlreadyAttempted ?? false,
+      }),
+      null,
+      `Quota-probe status must not retry an invalid cooldown receipt: ${name}`,
+    );
+  }
+  for (const retryAfterSeconds of [1, 30]) {
+    assertEqual(
+      aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+        status: 429,
+        retryAfterHeader: ` ${retryAfterSeconds} `,
+        payload: {
+          code: "ai_quota_probe_refresh_rate_limited",
+          retryAfterSeconds,
+        },
+        retryAlreadyAttempted: false,
+      }),
+      retryAfterSeconds,
+      `Quota-probe retry boundary ${retryAfterSeconds} seconds must remain valid`,
+    );
+  }
   assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(
       consumedQuotaProbeRefreshes,
@@ -154,7 +223,7 @@ try {
       1,
     ),
     false,
-    "An unacknowledged WeatherTech generation must not auto-retry after reloads or remounts",
+    "An unacknowledged WeatherTech generation must not start a second status operation after reloads or remounts",
   );
   assertEqual(
     aiTools.shouldForceAiQuotaProbeRefresh(

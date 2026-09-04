@@ -190,6 +190,7 @@ import {
   acknowledgeAiQuotaProbeRefresh,
   beginAiQuotaProbeRefreshAttempt,
   buildAiWorkspaceModel,
+  getAiQuotaProbeRefreshRetryAfterSeconds,
   getCurrentAiPilotError,
   getCurrentAiResponses,
   getCurrentAiRuntimeProviderHealth,
@@ -6502,7 +6503,17 @@ function CrmWorkspace({
   onNotice,
   onError,
 }: CrmWorkspaceProps) {
-  const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>("all");
+  const [selectedCompanyId, setSelectedCompanyIdState] =
+    useState<CompanyScopeId>("all");
+  const selectedCompanyIdRef = useRef<CompanyScopeId>("all");
+  const setSelectedCompanyId = useCallback((companyId: CompanyScopeId) => {
+    selectedCompanyIdRef.current = companyId;
+    setSelectedCompanyIdState(companyId);
+  }, []);
+  const isAiCompanySelectionCurrent = useCallback(
+    (companyId: string) => selectedCompanyIdRef.current === companyId,
+    [],
+  );
   const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
   const attemptedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
   const [aiQuotaProbeRefreshStateVersion, setAiQuotaProbeRefreshStateVersion] =
@@ -6743,7 +6754,7 @@ function CrmWorkspace({
         : "all",
     );
     setCompanyScopeStorageReady(true);
-  }, [companyScopeStorageReady, snapshot.companies]);
+  }, [companyScopeStorageReady, setSelectedCompanyId, snapshot.companies]);
   const focusedRecordCompanyId = useMemo(() => {
     if (!workspaceRecordFocus) {
       return null;
@@ -6769,7 +6780,7 @@ function CrmWorkspace({
     if (focusedRecordCompanyId && selectedCompanyId !== focusedRecordCompanyId) {
       setSelectedCompanyId(focusedRecordCompanyId);
     }
-  }, [focusedRecordCompanyId, selectedCompanyId]);
+  }, [focusedRecordCompanyId, selectedCompanyId, setSelectedCompanyId]);
   useEffect(() => {
     if (workspaceRecordFocus && !focusedRecordCompanyId) {
       onViewChange(view, null);
@@ -6839,7 +6850,7 @@ function CrmWorkspace({
         return next;
       });
     },
-    [onViewChange],
+    [onViewChange, setSelectedCompanyId],
   );
   const handleOpenIdentityReconciliation = useCallback(
     (leadId: string) => {
@@ -6856,7 +6867,7 @@ function CrmWorkspace({
     ) {
       setSelectedCompanyId("all");
     }
-  }, [selectedCompanyId, snapshot.companies]);
+  }, [selectedCompanyId, setSelectedCompanyId, snapshot.companies]);
 
   useEffect(() => {
     if (companyScopeStorageReady) {
@@ -7324,6 +7335,7 @@ function CrmWorkspace({
               statusRefreshSequence={aiProviderStatusRefreshSequence}
               snapshotTransitionPending={snapshotTransitionPending}
               isSnapshotContextCurrent={isSnapshotContextCurrent}
+              isAiCompanySelectionCurrent={isAiCompanySelectionCurrent}
               shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}
               beginQuotaProbeRefreshAttempt={beginQuotaProbeRefreshAttempt}
               acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}
@@ -39959,6 +39971,7 @@ type AiToolsViewProps = {
   statusRefreshSequence: number;
   snapshotTransitionPending: boolean;
   isSnapshotContextCurrent: (requestSequence: number) => boolean;
+  isAiCompanySelectionCurrent: (companyId: string) => boolean;
   shouldForceQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   beginQuotaProbeRefreshAttempt: (companyId: string, sequence: number) => boolean;
   acknowledgeQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
@@ -40025,6 +40038,38 @@ function getAiEndpointErrorMessage(
   return `${fallback} (${status}).`;
 }
 
+function waitForAiProviderStatusRetry(
+  retryAfterSeconds: number,
+  signal: AbortSignal,
+) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timeoutId: number | null = null;
+    const finish = (ready: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      signal.removeEventListener("abort", handleAbort);
+      resolve(ready);
+    };
+    const handleAbort = () => finish(false);
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+    if (signal.aborted) {
+      finish(false);
+      return;
+    }
+    timeoutId = window.setTimeout(
+      () => finish(true),
+      retryAfterSeconds * 1_000 + 100,
+    );
+  });
+}
+
 function isAiCompanyPilotStatus(
   value: unknown,
   expectedCompanyId: string,
@@ -40063,6 +40108,7 @@ function AiToolsView({
   statusRefreshSequence,
   snapshotTransitionPending,
   isSnapshotContextCurrent,
+  isAiCompanySelectionCurrent,
   shouldForceQuotaProbeRefresh,
   beginQuotaProbeRefreshAttempt,
   acknowledgeQuotaProbeRefresh,
@@ -40320,69 +40366,115 @@ function AiToolsView({
 
     const loadAiProviderStatus = async () => {
       try {
-        const response = await fetch(
-          forceQuotaProbeRefresh
-            ? "/api/ai-tools/status"
-            : `/api/ai-tools/status?companyId=${encodeURIComponent(requestCompanyId)}`,
-          {
-            method: forceQuotaProbeRefresh ? "POST" : "GET",
-            credentials: "same-origin",
-            cache: "no-store",
-            headers: forceQuotaProbeRefresh
-              ? { "Content-Type": "application/json" }
-              : undefined,
-            body: forceQuotaProbeRefresh
-              ? JSON.stringify({ companyId: requestCompanyId })
-              : undefined,
-            signal: controller.signal,
-          },
-        );
-        const payload = (await response.json().catch(() => null)) as unknown;
-        if (!response.ok) {
-          throw new Error(
-            getAiEndpointErrorMessage(
-              payload,
-              response.status,
-              "Production AI status could not be loaded",
-            ),
-          );
-        }
-        if (!isAiCompanyPilotStatus(payload, requestCompanyId)) {
-          throw new Error("Production AI status returned an invalid company-scoped response.");
-        }
-        if (
-          forceQuotaProbeRefresh &&
-          response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"
+        const maximumStatusAttempts = forceQuotaProbeRefresh ? 2 : 1;
+        for (
+          let statusAttemptIndex = 0;
+          statusAttemptIndex < maximumStatusAttempts;
+          statusAttemptIndex += 1
         ) {
-          throw new Error(
-            "Production AI status did not acknowledge the requested context refresh.",
+          const response = await fetch(
+            forceQuotaProbeRefresh
+              ? "/api/ai-tools/status"
+              : `/api/ai-tools/status?companyId=${encodeURIComponent(requestCompanyId)}`,
+            {
+              method: forceQuotaProbeRefresh ? "POST" : "GET",
+              credentials: "same-origin",
+              cache: "no-store",
+              headers: forceQuotaProbeRefresh
+                ? { "Content-Type": "application/json" }
+                : undefined,
+              body: forceQuotaProbeRefresh
+                ? JSON.stringify({ companyId: requestCompanyId })
+                : undefined,
+              signal: controller.signal,
+            },
           );
-        }
-        if (
-          controller.signal.aborted ||
-          activeAiCompanyRef.current !== requestCompanyId ||
-          !isSnapshotContextCurrent(requestStatusRefreshSequence)
-        ) {
+          const payload = (await response.json().catch(() => null)) as unknown;
+          const retryAfterSeconds = forceQuotaProbeRefresh
+            ? getAiQuotaProbeRefreshRetryAfterSeconds({
+                status: response.status,
+                retryAfterHeader: response.headers.get("Retry-After"),
+                payload,
+                retryAlreadyAttempted: statusAttemptIndex > 0,
+              })
+            : null;
+          if (retryAfterSeconds !== null) {
+            if (
+              controller.signal.aborted ||
+              aiProviderStatusAbortRef.current !== controller ||
+              activeAiCompanyRef.current !== requestCompanyId ||
+              !isAiCompanySelectionCurrent(requestCompanyId) ||
+              !isSnapshotContextCurrent(requestStatusRefreshSequence)
+            ) {
+              return;
+            }
+            const retryReady = await waitForAiProviderStatusRetry(
+              retryAfterSeconds,
+              controller.signal,
+            );
+            if (
+              !retryReady ||
+              controller.signal.aborted ||
+              aiProviderStatusAbortRef.current !== controller ||
+              activeAiCompanyRef.current !== requestCompanyId ||
+              !isAiCompanySelectionCurrent(requestCompanyId) ||
+              !isSnapshotContextCurrent(requestStatusRefreshSequence)
+            ) {
+              return;
+            }
+            continue;
+          }
+          if (!response.ok) {
+            throw new Error(
+              getAiEndpointErrorMessage(
+                payload,
+                response.status,
+                "Production AI status could not be loaded",
+              ),
+            );
+          }
+          if (!isAiCompanyPilotStatus(payload, requestCompanyId)) {
+            throw new Error(
+              "Production AI status returned an invalid company-scoped response.",
+            );
+          }
+          if (
+            forceQuotaProbeRefresh &&
+            response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"
+          ) {
+            throw new Error(
+              "Production AI status did not acknowledge the requested context refresh.",
+            );
+          }
+          if (
+            controller.signal.aborted ||
+            activeAiCompanyRef.current !== requestCompanyId ||
+            !isAiCompanySelectionCurrent(requestCompanyId) ||
+            !isSnapshotContextCurrent(requestStatusRefreshSequence)
+          ) {
+            return;
+          }
+          locallyCompletedAiProviderStatusRef.current = {
+            companyId: requestCompanyId,
+            statusRefreshSequence: requestStatusRefreshSequence,
+            statusReloadSequence: requestStatusReloadSequence,
+          };
+          acknowledgeQuotaProbeRefresh(
+            requestCompanyId,
+            requestStatusRefreshSequence,
+          );
+          setAiProviderStatusErrorEvidence(null);
+          setAiProviderStatusEvidence({
+            status: payload,
+            statusRefreshSequence: requestStatusRefreshSequence,
+          });
           return;
         }
-        locallyCompletedAiProviderStatusRef.current = {
-          companyId: requestCompanyId,
-          statusRefreshSequence: requestStatusRefreshSequence,
-          statusReloadSequence: requestStatusReloadSequence,
-        };
-        acknowledgeQuotaProbeRefresh(
-          requestCompanyId,
-          requestStatusRefreshSequence,
-        );
-        setAiProviderStatusErrorEvidence(null);
-        setAiProviderStatusEvidence({
-          status: payload,
-          statusRefreshSequence: requestStatusRefreshSequence,
-        });
       } catch (currentError) {
         if (
           controller.signal.aborted ||
           activeAiCompanyRef.current !== requestCompanyId ||
+          !isAiCompanySelectionCurrent(requestCompanyId) ||
           !isSnapshotContextCurrent(requestStatusRefreshSequence)
         ) {
           return;
@@ -40409,6 +40501,7 @@ function AiToolsView({
     acknowledgeQuotaProbeRefresh,
     beginQuotaProbeRefreshAttempt,
     exactAiCompanyId,
+    isAiCompanySelectionCurrent,
     isSnapshotContextCurrent,
     snapshotTransitionPending,
     quotaProbeRefreshStateVersion,
