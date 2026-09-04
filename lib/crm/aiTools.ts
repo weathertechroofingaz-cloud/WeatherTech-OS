@@ -506,6 +506,7 @@ export type AiWorkspaceModel = {
     invoices: number;
     documents: number;
     communications: number;
+    goHighLevelRecords: number;
     integrationEvents: number;
   };
 };
@@ -636,7 +637,11 @@ export function buildAiWorkspaceModel(
         authorizedSnapshot.emailMessages.length +
         authorizedSnapshot.smsMessages.length +
         authorizedSnapshot.callRecords.length +
-        authorizedSnapshot.communicationProviderEvents.length,
+        authorizedSnapshot.communicationProviderEvents.length +
+        authorizedSnapshot.goHighLevelResourceSnapshots.filter(
+          (record) => record.resource_type === "message" || record.resource_type === "call",
+        ).length,
+      goHighLevelRecords: authorizedSnapshot.goHighLevelResourceSnapshots.length,
       integrationEvents: authorizedSnapshot.integrationSyncLogs.length,
     },
   };
@@ -1537,7 +1542,13 @@ export function buildAiPriorityItems(
           (sms) => sms.id === event.sms_message_id && sms.company_id === companyId,
         )) ||
       authorizedSnapshot.callRecords.some(
-        (call) => call.correlation_id === event.correlation_id,
+        (call) =>
+          call.correlation_id === event.correlation_id ||
+          (event.provider === "gohighlevel" &&
+            call.provider === "gohighlevel" &&
+            call.company_id === companyId &&
+            call.integration_connection_id === event.integration_connection_id &&
+            call.provider_call_sid === event.provider_event_sid),
       ) ||
       hasLaterOutboundProviderEvent(authorizedSnapshot, event)
     ) {
@@ -1595,6 +1606,152 @@ export function buildAiPriorityItems(
         linkedLead
           ? "Prepare one internal follow-up task for human review."
           : "Review the inbound provider event without sending or calling.",
+      ),
+    });
+  }
+
+  const persistedGoHighLevelIds = new Set([
+    ...authorizedSnapshot.communicationProviderEvents
+      .filter(
+        (event) =>
+          event.provider === "gohighlevel" &&
+          event.company_id &&
+          event.integration_connection_id &&
+          event.provider_event_sid,
+      )
+      .map(
+        (event) =>
+          `${event.company_id}:${event.integration_connection_id}:${event.channel}:${event.provider_event_sid}`,
+      ),
+    ...authorizedSnapshot.callRecords
+      .filter(
+        (call) =>
+          call.provider === "gohighlevel" &&
+          call.company_id &&
+          call.integration_connection_id &&
+          call.provider_call_sid,
+      )
+      .map(
+        (call) =>
+          `${call.company_id}:${call.integration_connection_id}:voice:${call.provider_call_sid}`,
+      ),
+  ]);
+
+  for (const record of authorizedSnapshot.goHighLevelResourceSnapshots) {
+    const isCommunication =
+      record.resource_type === "message" || record.resource_type === "call";
+    const messageType =
+      typeof record.payload_summary.messageType === "string"
+        ? record.payload_summary.messageType.toLowerCase()
+        : record.resource_type;
+    const isCall =
+      record.resource_type === "call" ||
+      messageType.includes("call") ||
+      messageType.includes("voicemail");
+    const providerChannel = isCall
+      ? "voice"
+      : messageType.includes("email")
+        ? "email"
+        : messageType.includes("sms")
+          ? "sms"
+          : "unknown";
+    const normalizedStatus = record.status?.toLowerCase() ?? "";
+    const needsAttention =
+      !isCall ||
+      messageType.includes("voicemail") ||
+      normalizedStatus.includes("voicemail") ||
+      normalizedStatus.includes("miss") ||
+      normalizedStatus.includes("busy") ||
+      normalizedStatus.includes("fail") ||
+      normalizedStatus.includes("no-answer");
+    const identity = `${record.company_id}:${record.integration_connection_id}:${providerChannel}:${record.external_id}`;
+    if (
+      !isCommunication ||
+      record.direction !== "inbound" ||
+      !needsAttention ||
+      persistedGoHighLevelIds.has(identity)
+    ) {
+      continue;
+    }
+
+    const hasLaterOutbound = authorizedSnapshot.goHighLevelResourceSnapshots.some(
+      (candidate) =>
+        candidate.company_id === record.company_id &&
+        candidate.integration_connection_id === record.integration_connection_id &&
+        candidate.direction === "outbound" &&
+        candidate.external_parent_id === record.external_parent_id &&
+        Boolean(record.external_parent_id) &&
+        new Date(
+          candidate.occurred_at ??
+            candidate.provider_updated_at ??
+            candidate.last_synced_at,
+        ).getTime() >
+          new Date(
+            record.occurred_at ?? record.provider_updated_at ?? record.last_synced_at,
+          ).getTime(),
+    );
+    if (hasLaterOutbound) {
+      continue;
+    }
+
+    const occurredAt =
+      record.occurred_at ?? record.provider_updated_at ?? record.last_synced_at;
+    const sourceRecord = source(
+      "gohighlevel_resource_snapshots",
+      record.id,
+      record.body_preview ?? `${messageType} inbound activity`,
+      record.company_id,
+      "Communications",
+    );
+    const linkedLead = record.lead_id
+      ? authorizedSnapshot.leads.find(
+          (lead) =>
+            lead.id === record.lead_id && lead.company_id === record.company_id,
+        )
+      : null;
+    push({
+      id: `customer-waiting-gohighlevel-${record.id}`,
+      priority: isCall ? "critical" : "high",
+      score: scoreFromFactors({
+        urgency: isCall ? 30 : 22,
+        overdue: ageInDays(occurredAt, now) >= 1 ? 12 : 4,
+        value: 0,
+        ageDays: ageInDays(occurredAt, now),
+      }),
+      title: `GoHighLevel ${messageType.replace(/_/g, " ")} needs review`,
+      summary: "Inbound HighLevel activity has no later outbound record in the same conversation.",
+      reason: `The read-only provider snapshot was received ${occurredAt}.`,
+      category: "customer",
+      companyId: record.company_id,
+      dailyOperationsTopics: [
+        "customers_waiting",
+        "attention_today",
+        "highest_priorities",
+      ],
+      owner: null,
+      dueAt: occurredAt,
+      ageDays: ageInDays(occurredAt, now),
+      source: sourceRecord,
+      supportingFields: {
+        resource_type: record.resource_type,
+        direction: record.direction,
+        status: record.status,
+        occurred_at: occurredAt,
+        body_preview: record.body_preview,
+        match_status:
+          typeof record.payload_summary.matchStatus === "string"
+            ? record.payload_summary.matchStatus
+            : "unmatched",
+        has_later_outbound_record: false,
+      },
+      suggestedAction: action(
+        linkedLead ? "create_follow_up_draft" : "open_record",
+        linkedLead ? "Create follow-up task draft" : "Open Communications",
+        linkedLead ? leadSource(linkedLead, authorizedSnapshot) : sourceRecord,
+        record.company_id,
+        linkedLead
+          ? "Prepare one internal follow-up task for human review."
+          : "Review the inbound HighLevel record without sending or calling.",
       ),
     });
   }
@@ -2536,6 +2693,35 @@ function buildFinancialAssistant(
 }
 
 function buildCommunicationsAssistant(snapshot: CrmSnapshot): AiAssistantDraft[] {
+  const goHighLevelSources = [...snapshot.goHighLevelResourceSnapshots]
+    .filter((record) =>
+      ["message", "call", "calendar_event", "opportunity", "review"].includes(
+        record.resource_type,
+      ),
+    )
+    .sort(
+      (left, right) =>
+        new Date(
+          right.provider_updated_at ?? right.occurred_at ?? right.last_synced_at,
+        ).getTime() -
+        new Date(
+          left.provider_updated_at ?? left.occurred_at ?? left.last_synced_at,
+        ).getTime(),
+    )
+    .slice(0, 6)
+    .map((record) =>
+      source(
+        "gohighlevel_resource_snapshots",
+        record.id,
+        record.body_preview ??
+          (typeof record.payload_summary.name === "string"
+            ? record.payload_summary.name
+            : null) ??
+          `${record.resource_type.replace(/_/g, " ")} ${record.status ?? "synced"}`,
+        record.company_id,
+        "Communications",
+      ),
+    );
   const communicationSources = [
     ...snapshot.emailMessages.slice(0, 2).map((email) =>
       source("email_messages", email.id, email.subject, email.company_id, "Inbox"),
@@ -2544,6 +2730,7 @@ function buildCommunicationsAssistant(snapshot: CrmSnapshot): AiAssistantDraft[]
       source("sms_messages", sms.id, sanitizeBusinessText(sms.body).slice(0, 48) || "SMS", sms.company_id, "Inbox"),
     ),
     ...snapshot.callRecords.slice(0, 2).map((call) => callSource(call)),
+    ...goHighLevelSources,
   ];
 
   return [
@@ -2913,11 +3100,7 @@ function dailyOperationsTopicsForPrompt(
 }
 
 function getAuthorizedAiSnapshot(snapshot: CrmSnapshot, companyId?: CompanyScopeId) {
-  if (!companyId || companyId === "all") {
-    return snapshot;
-  }
-
-  return scopeCrmSnapshotByCompany(snapshot, companyId);
+  return scopeCrmSnapshotByCompany(snapshot, companyId ?? "all");
 }
 
 function getCompanyScopeLabel(

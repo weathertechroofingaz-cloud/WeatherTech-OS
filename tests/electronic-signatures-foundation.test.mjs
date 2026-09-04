@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -50,13 +50,23 @@ try {
     );
   }
 
+  const compiledModulePath = (fileName) => {
+    const candidate = [
+      join(outDir, fileName),
+      join(outDir, "crm", fileName),
+      join(outDir, "lib", "crm", fileName),
+    ].find((path) => existsSync(path));
+    if (!candidate) {
+      throw new Error(`Could not locate compiled ${fileName}.`);
+    }
+    return pathToFileURL(candidate);
+  };
+
   const signatures = await import(
-    pathToFileURL(join(outDir, "electronicSignatureFoundation.js"))
+    compiledModulePath("electronicSignatureFoundation.js")
   );
-  const integrationCenter = await import(
-    pathToFileURL(join(outDir, "integrationCenter.js"))
-  );
-  const communications = await import(pathToFileURL(join(outDir, "communications.js")));
+  const integrationCenter = await import(compiledModulePath("integrationCenter.js"));
+  const communications = await import(compiledModulePath("communications.js"));
 
   assertEqual(
     signatures.electronicSignatureProviderIds.includes("docusign"),

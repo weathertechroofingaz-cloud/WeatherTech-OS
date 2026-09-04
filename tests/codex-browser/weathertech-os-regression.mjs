@@ -888,61 +888,68 @@ async function findMightyApesSyncLogsForRun(env, runId) {
   );
 }
 
-async function findRegressionMarkerResidue(env, runId, leadNameColumn) {
+async function findRegressionMarkerResidue(
+  env,
+  runId,
+  leadNameColumn,
+) {
   const runMarker = buildRegressionRunMarker(runId, TEST_PREFIX);
   const derivedInvoiceMarker = `Invoice for ${runMarker}`;
-  const [checks, automationLedger] = await Promise.all([Promise.all([
-    findByLikeIfPresent(env, "jobs", "title", runMarker),
-    findByLikeIfPresent(
-      env,
-      "lead_accountability_events",
-      "operation_key",
-      runMarker,
-    ),
-    findByLikeIfPresent(env, "estimates", "title", runMarker),
-    findByLikeIfPresent(env, "inspections", "title", runMarker),
-    findByLikeIfPresent(env, "documents", "title", runMarker),
-    findByLikeIfPresent(env, "invoices", "title", runMarker),
-    findByLikeIfPresent(env, "invoices", "title", derivedInvoiceMarker),
-    findByLikeIfPresent(env, "change_orders", "title", runMarker),
-    findByLikeIfPresent(env, "leads", leadNameColumn, runMarker),
-    findByLikeIfPresent(env, "marketing_campaigns", "campaign_name", runMarker),
-    findByLikeIfPresent(env, "marketing_spend_months", "notes", runMarker),
-    findByLikeIfPresent(env, "customers", "display_name", runMarker),
-    findByLikeIfPresent(env, "properties", "display_name", runMarker),
-    findByLikeIfPresent(
-      env,
-      "crm_identity_reconciliation_events",
-      "operation_key",
-      runMarker,
-    ),
-    findByLikeIfPresent(env, "schedule_events", "title", runMarker),
-    findByLikeIfPresent(env, "scopes", "title", runMarker),
-    findByLikeIfPresent(env, "job_tasks", "title", runMarker),
-    findByLikeIfPresent(env, "job_notes", "note", runMarker),
-    findByLikeIfPresent(env, "job_materials", "name", runMarker),
-    findByLikeIfPresent(env, "job_photos", "caption", runMarker),
-    findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker),
-    findByLikeIfPresent(env, "invoice_line_items", "description", runMarker),
-    findByLikeIfPresent(env, "estimate_line_items", "name", runMarker),
-    findByLikeIfPresent(env, "signatures", "signer_name", runMarker),
-    findByLikeIfPresent(env, "payments", "reference", runMarker),
-    findByLikeIfPresent(env, "integration_sync_logs", "external_id", runMarker),
-    findLeadIntakeRecordsForRun(env, runMarker),
-    findByLikeIfPresent(env, "call_records", "correlation_id", runMarker),
-    findByLikeIfPresent(
-      env,
-      "communication_provider_events",
-      "correlation_id",
-      runMarker,
-    ),
-    findByLikeIfPresent(env, "sms_messages", "correlation_id", runMarker),
-    findByLikeIfPresent(env, "email_messages", "subject", runMarker),
-    findByLikeIfPresent(env, "business_phone_numbers", "routing_key", runMarker),
-    findNotificationsForRun(env, runMarker),
-    findMightyApesEventsForRun(env, runId),
-    findMightyApesSyncLogsForRun(env, runId),
-  ]), findAutomationLedgerResidue(env)]);
+  const [checks, automationLedger] = await Promise.all([
+    Promise.all([
+      findByLikeIfPresent(env, "jobs", "title", runMarker),
+      findByLikeIfPresent(
+        env,
+        "lead_accountability_events",
+        "operation_key",
+        runMarker,
+      ),
+      findByLikeIfPresent(env, "estimates", "title", runMarker),
+      findByLikeIfPresent(env, "inspections", "title", runMarker),
+      findByLikeIfPresent(env, "documents", "title", runMarker),
+      findByLikeIfPresent(env, "invoices", "title", runMarker),
+      findByLikeIfPresent(env, "invoices", "title", derivedInvoiceMarker),
+      findByLikeIfPresent(env, "change_orders", "title", runMarker),
+      findByLikeIfPresent(env, "leads", leadNameColumn, runMarker),
+      findByLikeIfPresent(env, "marketing_campaigns", "campaign_name", runMarker),
+      findByLikeIfPresent(env, "marketing_spend_months", "notes", runMarker),
+      findByLikeIfPresent(env, "customers", "display_name", runMarker),
+      findByLikeIfPresent(env, "properties", "display_name", runMarker),
+      findByLikeIfPresent(
+        env,
+        "crm_identity_reconciliation_events",
+        "operation_key",
+        runMarker,
+      ),
+      findByLikeIfPresent(env, "schedule_events", "title", runMarker),
+      findByLikeIfPresent(env, "scopes", "title", runMarker),
+      findByLikeIfPresent(env, "job_tasks", "title", runMarker),
+      findByLikeIfPresent(env, "job_notes", "note", runMarker),
+      findByLikeIfPresent(env, "job_materials", "name", runMarker),
+      findByLikeIfPresent(env, "job_photos", "caption", runMarker),
+      findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker),
+      findByLikeIfPresent(env, "invoice_line_items", "description", runMarker),
+      findByLikeIfPresent(env, "estimate_line_items", "name", runMarker),
+      findByLikeIfPresent(env, "signatures", "signer_name", runMarker),
+      findByLikeIfPresent(env, "payments", "reference", runMarker),
+      findByLikeIfPresent(env, "integration_sync_logs", "external_id", runMarker),
+      findLeadIntakeRecordsForRun(env, runMarker),
+      findByLikeIfPresent(env, "call_records", "correlation_id", runMarker),
+      findByLikeIfPresent(
+        env,
+        "communication_provider_events",
+        "correlation_id",
+        runMarker,
+      ),
+      findByLikeIfPresent(env, "sms_messages", "correlation_id", runMarker),
+      findByLikeIfPresent(env, "email_messages", "subject", runMarker),
+      findByLikeIfPresent(env, "business_phone_numbers", "routing_key", runMarker),
+      findNotificationsForRun(env, runMarker),
+      findMightyApesEventsForRun(env, runId),
+      findMightyApesSyncLogsForRun(env, runId),
+    ]),
+    findAutomationLedgerResidue(env),
+  ]);
   const markerCount = checks.reduce((total, rows) => total + rows.length, 0);
   const count = markerCount + automationLedger.count;
 
@@ -3126,21 +3133,12 @@ async function scrollSelectorIntoView(tab, selector, label, timeoutMs = 8000) {
       throw new Error(`${label} was not found.`);
     }
 
-    const centerX = Math.min(
-      Math.max((lastState.rect.left + lastState.rect.right) / 2, 40),
-      lastState.viewport.width - 40,
-    );
-    const scrollDown = lastState.rect.bottom > lastState.viewport.height;
-    const scrollDistance = scrollDown
-      ? Math.min(700, Math.max(160, lastState.rect.bottom - lastState.viewport.height + 120))
-      : -Math.min(700, Math.max(160, Math.abs(lastState.rect.top) + 120));
-
-    await tab.cua.scroll({
-      x: centerX,
-      y: scrollDown ? lastState.viewport.height - 80 : 80,
-      scrollX: 0,
-      scrollY: scrollDistance,
-    });
+    await tab.playwright
+      .locator(selector)
+      .first()
+      .evaluate((element) =>
+        element.scrollIntoView({ block: "center", behavior: "auto" }),
+      );
     await tab.playwright.waitForTimeout(150);
   }
 
@@ -3374,73 +3372,66 @@ async function clickVisibleButtonByText(
   timeoutMs = 15000,
 ) {
   const input = { selector, text, mode };
-  await waitFor(
-    tab,
-    (input) => {
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const targetText = normalize(input.text);
-      const matchesTarget = (candidate) => {
-        const textContent = normalize(candidate.textContent);
-        const paragraphText = [...candidate.querySelectorAll("p")].some(
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const candidates = await tab.playwright.locator(selector).all();
+
+    for (const candidate of candidates) {
+      const matches = await candidate.evaluate((element, input) => {
+        const normalize = (value) =>
+          (value ?? "").replace(/\s+/g, " ").trim();
+        const targetText = normalize(input.text);
+        const textContent = normalize(element.textContent);
+        const paragraphText = [...element.querySelectorAll("p")].some(
           (paragraph) => normalize(paragraph.textContent) === targetText,
         );
 
-        if (input.mode === "paragraph") {
-          return paragraphText || textContent.includes(targetText);
-        }
-
-        return textContent === targetText;
-      };
-      const hasRenderedBox = (candidate) => {
-        const style = window.getComputedStyle(candidate);
-        const rect = candidate.getBoundingClientRect();
-
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          Number(style.opacity) !== 0 &&
-          rect.width > 0 &&
-          rect.height > 0
-        );
-      };
-      const buttons = [...document.querySelectorAll(input.selector)];
-      const button = buttons.find((candidate) => matchesTarget(candidate) && hasRenderedBox(candidate));
-
-      if (!button) {
+        return input.mode === "paragraph"
+          ? paragraphText || textContent.includes(targetText)
+          : textContent === targetText;
+      }, input).catch((error) => {
+        lastError = error;
         return false;
+      });
+
+      if (!matches) {
+        continue;
       }
 
-      button.scrollIntoView({ block: "center", behavior: "auto" });
-      return true;
-    },
-    `${label} scroll target`,
-    timeoutMs,
-    input,
-  );
-  await tab.playwright.waitForTimeout(200);
+      const scrolled = await candidate.evaluate((element) => {
+        element.scrollIntoView({ block: "center", behavior: "auto" });
+        return true;
+      }).catch((error) => {
+        lastError = error;
+        return false;
+      });
 
-  const box = await waitFor(
-    tab,
-    (input) => {
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const targetText = normalize(input.text);
-      const matchesTarget = (candidate) => {
-        const textContent = normalize(candidate.textContent);
-        const paragraphText = [...candidate.querySelectorAll("p")].some(
+      if (!scrolled) {
+        continue;
+      }
+
+      await tab.playwright.waitForTimeout(150);
+
+      const ready = await candidate.evaluate((element, input) => {
+        const normalize = (value) =>
+          (value ?? "").replace(/\s+/g, " ").trim();
+        const targetText = normalize(input.text);
+        const textContent = normalize(element.textContent);
+        const paragraphText = [...element.querySelectorAll("p")].some(
           (paragraph) => normalize(paragraph.textContent) === targetText,
         );
-
-        if (input.mode === "paragraph") {
-          return paragraphText || textContent.includes(targetText);
-        }
-
-        return textContent === targetText;
-      };
-      const isVisible = (candidate) => {
-        const style = window.getComputedStyle(candidate);
-        const rect = candidate.getBoundingClientRect();
+        const matchesTarget = input.mode === "paragraph"
+          ? paragraphText || textContent.includes(targetText)
+          : textContent === targetText;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
 
         return (
+          matchesTarget &&
+          element.isConnected &&
+          !("disabled" in element && element.disabled) &&
           style.display !== "none" &&
           style.visibility !== "hidden" &&
           Number(style.opacity) !== 0 &&
@@ -3451,44 +3442,33 @@ async function clickVisibleButtonByText(
           rect.right >= 0 &&
           rect.left <= window.innerWidth
         );
-      };
-      const buttons = [...document.querySelectorAll(input.selector)];
-      const button = buttons.find((candidate) => matchesTarget(candidate) && isVisible(candidate));
+      }, input).catch((error) => {
+        lastError = error;
+        return false;
+      });
 
-      if (!button) {
-        return null;
+      if (!ready) {
+        continue;
       }
 
-      const rect = button.getBoundingClientRect();
-      const visibleLeft = Math.max(rect.left, 0);
-      const visibleRight = Math.min(rect.right, window.innerWidth);
-      const visibleTop = Math.max(rect.top, 0);
-      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
-
-      if (
-        visibleRight <= visibleLeft ||
-        visibleBottom <= visibleTop
-      ) {
-        return null;
+      try {
+        await candidate.click({
+          timeoutMs: Math.max(
+            250,
+            Math.min(5000, timeoutMs - (Date.now() - startedAt)),
+          ),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
       }
+    }
 
-      return {
-        x: Math.min(
-          window.innerWidth - 1,
-          Math.max(1, Math.floor((visibleLeft + visibleRight) / 2)),
-        ),
-        y: Math.min(
-          window.innerHeight - 1,
-          Math.max(1, Math.floor((visibleTop + visibleBottom) / 2)),
-        ),
-      };
-    },
-    label,
-    timeoutMs,
-    input,
-  );
+    await tab.playwright.waitForTimeout(250);
+  }
 
-  await tab.cua.click({ x: box.x, y: box.y });
+  const details = lastError instanceof Error ? ` Last browser error: ${lastError.message}` : "";
+  throw new Error(`${label} visible matching button was not clickable.${details}`);
 }
 
 async function fillUnique(locator, value, label) {
@@ -3923,7 +3903,7 @@ async function clickListRowByParagraph(
   }
 
   if (!selected) {
-    const target = await waitFor(
+    await waitFor(
       tab,
       (input) => {
         const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
@@ -3963,7 +3943,7 @@ async function clickListRowByParagraph(
       timeoutMs,
       input,
     );
-    await tab.cua.click(target);
+    await row.click({ timeoutMs: 10000 });
     selected = await waitForSelection(`${label} selected through fallback click`, 4000);
   }
 
@@ -4051,26 +4031,6 @@ async function clickCustomerWorkspaceTab(tab, label) {
   );
 }
 
-function visibleDomButtonNodeId(domText, text, type = "submit") {
-  const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-  const targetText = normalize(text);
-  const buttonPattern = /<button node_id=(\d+)([^>]*)>([\s\S]*?)<\/button>/g;
-
-  for (const match of domText.matchAll(buttonPattern)) {
-    const [, nodeId, attributes, content] = match;
-    const buttonText = normalize(content.replace(/<[^>]*>/g, ""));
-
-    if (
-      buttonText === targetText &&
-      (!type || attributes.includes(`type="${type}"`))
-    ) {
-      return nodeId;
-    }
-  }
-
-  return null;
-}
-
 async function findVisibleExactButton(tab, text, type = "submit") {
   const selector = type ? `button[type="${type}"]` : "button";
   const candidates = await tab.playwright
@@ -4094,7 +4054,6 @@ async function findVisibleExactButton(tab, text, type = "submit") {
 
 async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) {
   const startedAt = Date.now();
-  const input = { text };
   let lastDom = "";
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -4106,51 +4065,21 @@ async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) 
           button.scrollIntoView({ block: "center", behavior: "auto" });
         });
         await tab.playwright.waitForTimeout(200);
-        await clickVisibleButtonByText(
-          tab,
-          'button[type="submit"]',
-          text,
-          `${label} coordinate click`,
-          "exact",
-          5000,
-        );
+        await directButton.click({ timeoutMs: 5000 });
         await tab.playwright.waitForTimeout(500);
         return;
       } catch (error) {
-        lastDom = `Coordinate click error: ${
+        lastDom = `Locator click error: ${
           error instanceof Error ? error.message : String(error)
         }`;
       }
     }
 
-    await tab.playwright.evaluate((input) => {
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const buttons = [...document.querySelectorAll('button[type="submit"]')]
-        .filter((candidate) => normalize(candidate.textContent) === input.text);
-      const button = buttons.find((candidate) =>
-        candidate.getClientRects().length > 0 &&
-        getComputedStyle(candidate).visibility !== "hidden",
-      ) ?? buttons[0];
-
-      button?.scrollIntoView({ block: "center", behavior: "auto" });
-    }, input);
-    await tab.playwright.waitForTimeout(200);
-
-    const visibleDom = await tab.dom_cua.get_visible_dom();
-    lastDom = typeof visibleDom === "string" ? visibleDom : JSON.stringify(visibleDom);
-    const nodeId = visibleDomButtonNodeId(lastDom, text);
-
-    if (nodeId) {
-      try {
-        await tab.dom_cua.click({ node_id: nodeId });
-        await tab.playwright.waitForTimeout(500);
-        return;
-      } catch (error) {
-        lastDom = `${lastDom}\nLast click error: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
-      }
-    }
+    const buttonTexts = await tab.playwright
+      .locator('button[type="submit"]')
+      .allTextContents()
+      .catch(() => []);
+    lastDom = `${lastDom}\nSubmit buttons: ${JSON.stringify(buttonTexts)}`;
 
     await tab.playwright.waitForTimeout(250);
   }
@@ -4160,7 +4089,6 @@ async function clickVisibleDomSubmitByText(tab, text, label, timeoutMs = 30000) 
 
 async function clickVisibleDomButtonByText(tab, text, label, timeoutMs = 30000) {
   const startedAt = Date.now();
-  const input = { text };
   let lastDom = "";
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -4172,51 +4100,21 @@ async function clickVisibleDomButtonByText(tab, text, label, timeoutMs = 30000) 
           button.scrollIntoView({ block: "center", behavior: "auto" });
         });
         await tab.playwright.waitForTimeout(200);
-        await clickVisibleButtonByText(
-          tab,
-          "button",
-          text,
-          `${label} coordinate click`,
-          "exact",
-          5000,
-        );
+        await directButton.click({ timeoutMs: 5000 });
         await tab.playwright.waitForTimeout(500);
         return;
       } catch (error) {
-        lastDom = `Coordinate click error: ${
+        lastDom = `Locator click error: ${
           error instanceof Error ? error.message : String(error)
         }`;
       }
     }
 
-    await tab.playwright.evaluate((input) => {
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim();
-      const buttons = [...document.querySelectorAll("button")]
-        .filter((candidate) => normalize(candidate.textContent) === input.text);
-      const button = buttons.find((candidate) =>
-        candidate.getClientRects().length > 0 &&
-        getComputedStyle(candidate).visibility !== "hidden",
-      ) ?? buttons[0];
-
-      button?.scrollIntoView({ block: "center", behavior: "auto" });
-    }, input);
-    await tab.playwright.waitForTimeout(200);
-
-    const visibleDom = await tab.dom_cua.get_visible_dom();
-    lastDom = typeof visibleDom === "string" ? visibleDom : JSON.stringify(visibleDom);
-    const nodeId = visibleDomButtonNodeId(lastDom, text, null);
-
-    if (nodeId) {
-      try {
-        await tab.dom_cua.click({ node_id: nodeId });
-        await tab.playwright.waitForTimeout(500);
-        return;
-      } catch (error) {
-        lastDom = `${lastDom}\nLast click error: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
-      }
-    }
+    const buttonTexts = await tab.playwright
+      .locator("button")
+      .allTextContents()
+      .catch(() => []);
+    lastDom = `${lastDom}\nButtons: ${JSON.stringify(buttonTexts)}`;
 
     await tab.playwright.waitForTimeout(250);
   }
@@ -4488,7 +4386,7 @@ async function waitForAiProviderStatus(
       return { phase, requestCompanyId, loadedCompanyId, budgetCents, requestSequence };
     },
     `authenticated Production AI status for ${companyName}`,
-    15000,
+    45000,
     {
       expectedName: companyName,
       expectedId: expectedCompanyId,
@@ -4872,7 +4770,7 @@ async function testDashboardLiveMode(tab) {
     "dashboard pipeline all",
   );
 
-  await tab.cua.keypress({ keys: ["CTRL", "K"] });
+  await tab.playwright.locator("body").press("Control+K", { timeoutMs: 8000 });
   await waitFor(
     tab,
     () => {
@@ -12402,7 +12300,7 @@ async function testQuickActionsDoNotOverlap(browser, tab) {
   return { ...overlaps, commandCenter: commandCenterOverlaps, mobileLayout };
 }
 
-async function testSettingsIntegrationCenter(tab) {
+async function testSettingsIntegrationCenter(tab, companies) {
   await clickCompanyScope(tab, "All companies");
   await clickNav(tab, "Settings");
   await waitFor(
@@ -12465,21 +12363,9 @@ async function testSettingsIntegrationCenter(tab) {
         text.includes("/api/integrations/twilio/voice") &&
         text.includes("/api/integrations/twilio/voice/status") &&
         text.includes("/api/integrations/twilio/recording") &&
-        text.includes("gohighlevel live synchronization foundation") &&
-        text.includes("check sync readiness") &&
-        text.includes("no live sync") &&
-        text.includes("credentials required") &&
-        text.includes("validation failed") &&
-        text.includes("ready to sync") &&
-        text.includes("sync disabled") &&
-        text.includes("external ids") &&
-        text.includes("duplicate protection") &&
-        text.includes("conflict detection") &&
-        text.includes("sync timestamps") &&
-        text.includes("retry readiness") &&
-        text.includes("pipeline discovery") &&
-        text.includes("/api/integrations/gohighlevel/readiness") &&
-        text.includes("0022_gohighlevel_sync_foundation.sql") &&
+        text.includes("company-scoped marketplace oauth bridge") &&
+        text.includes("read-only contacts, conversations, calendars, opportunities, reviews") &&
+        text.includes("signed inbound webhooks") &&
         text.includes("website lead capture") &&
         text.includes("secure form-intake foundation") &&
         text.includes("/api/leads/website") &&
@@ -12721,7 +12607,253 @@ async function testSettingsIntegrationCenter(tab) {
     "Close integration connection dialog",
   );
 
-  return { ...result, automation: automationState };
+  await clickNav(tab, "Integrations");
+  await waitFor(
+    tab,
+    () => {
+      const foundation = document.querySelector(
+        '[data-testid="gohighlevel-live-sync-foundation"]',
+      );
+      const health = document.querySelector(
+        '[data-testid="gohighlevel-company-operational-health"]',
+      );
+      const foundationText = foundation?.textContent?.toLowerCase() ?? "";
+      const pageText = document.body.innerText.toLowerCase();
+      const companyOptions = [
+        ...(foundation?.querySelectorAll("select option") ?? []),
+      ].map((option) => option.textContent?.trim());
+      const requiredResources = [
+        "locations",
+        "contacts",
+        "conversations",
+        "messages and calls",
+        "calendars",
+        "calendar events",
+        "pipelines",
+        "opportunities",
+        "reviews",
+      ];
+      const requiredConfig = [
+        "ghl_client_id",
+        "ghl_client_secret",
+        "ghl_redirect_uri",
+        "ghl_marketplace_install_url",
+        "ghl_token_encryption_key",
+        "ghl_sync_enabled",
+      ];
+
+      return (
+        Boolean(foundation) &&
+        Boolean(health) &&
+        pageText.includes("marketplace oauth communications bridge") &&
+        foundationText.includes("exact approved read-only scopes") &&
+        foundationText.includes("tokens stay encrypted server-side") &&
+        foundationText.includes("webhook signatures are verified before parsing") &&
+        (foundationText.includes("inbound sync disabled") ||
+          foundationText.includes("read-only sync enabled")) &&
+        foundationText.includes("approved scopes8") &&
+        foundationText.includes("content resources4") &&
+        foundationText.includes("metadata resources5") &&
+        requiredResources.every((resource) => foundationText.includes(resource)) &&
+        foundationText.includes(
+          "no outbound sms, email, calls, workflows, campaigns, or automations are triggered",
+        ) &&
+        foundationText.includes("no provider-write method or customer-send scope") &&
+        companyOptions.includes("WeatherTech Roofing LLC") &&
+        companyOptions.includes("IHC Painting") &&
+        requiredConfig.every((name) => pageText.includes(name)) &&
+        pageText.includes("no `next_public_` gohighlevel secrets")
+      );
+    },
+    "dedicated GoHighLevel read-only integration controls",
+    15000,
+  );
+
+  const goHighLevelCompanySelect = tab.playwright.locator(
+    'xpath=//*[@data-testid="gohighlevel-live-sync-foundation"]//label[contains(normalize-space(.), "Company mapping")]/select',
+  );
+  const goHighLevelReadinessButton = tab.playwright.locator(
+    'xpath=//*[@data-testid="gohighlevel-live-sync-foundation"]//button[normalize-space(.)="Check sync readiness"]',
+  );
+
+  const checkGoHighLevelCompanyReadiness = async (
+    companyId,
+    companyName,
+    otherCompanyName,
+  ) => {
+    await selectUnique(
+      goHighLevelCompanySelect,
+      companyId,
+      `${companyName} GoHighLevel company mapping`,
+    );
+    await clickUnique(
+      goHighLevelReadinessButton,
+      `${companyName} GoHighLevel readiness check`,
+    );
+    await waitFor(
+      tab,
+      ({ companyName, otherCompanyName }) => {
+        const foundation = document.querySelector(
+          '[data-testid="gohighlevel-live-sync-foundation"]',
+        );
+        const health = document.querySelector(
+          '[data-testid="gohighlevel-company-operational-health"]',
+        );
+        const normalize = (value) =>
+          (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+        const readStat = (root, label) => {
+          const card = [...(root?.querySelectorAll(".wt-standard-card") ?? [])]
+            .find((candidate) =>
+              normalize(candidate.querySelector("p")?.textContent) ===
+              normalize(label),
+            );
+          const paragraphs = card ? [...card.querySelectorAll("p")] : [];
+
+          return normalize(paragraphs[1]?.textContent);
+        };
+        const allowed = (value, values) => values.includes(value);
+        const nonnegativeInteger = (value) => /^\d+$/.test(value);
+        const foundationText = normalize(foundation?.textContent);
+        const foundationCompact = foundationText.replace(/\s+/g, "");
+        const healthText = normalize(health?.textContent);
+        const healthCompact = healthText.replace(/\s+/g, "");
+        const requiredSchemaTables = [
+          "gohighlevel_sync_mappings",
+          "gohighlevel_discovery_snapshots",
+          "gohighlevel_oauth_states",
+          "gohighlevel_oauth_credentials",
+          "gohighlevel_resource_snapshots",
+          "gohighlevel_communication_identities",
+          "gohighlevel_communication_identity_aliases",
+          "gohighlevel_communication_identity_conflicts",
+          "gohighlevel_webhook_events",
+          "communication_provider_events",
+          "call_records",
+          "integration_sync_logs",
+        ];
+
+        return (
+          allowed(readStat(foundation, "OAuth configuration"), [
+            "configured",
+            "incomplete",
+          ]) &&
+          allowed(readStat(foundation, "Authenticated locations"), ["0", "1"]) &&
+          readStat(foundation, "Approved scopes") === "8" &&
+          allowed(readStat(foundation, "Token storage"), [
+            "encrypted",
+            "no token stored",
+          ]) &&
+          allowed(readStat(foundation, "Sync mode"), [
+            "read-only enabled",
+            "disabled",
+          ]) &&
+          readStat(foundation, "Migration") === "applied" &&
+          readStat(foundation, "Content resources") === "4" &&
+          readStat(foundation, "Metadata resources") === "5" &&
+          foundationText.includes(
+            "gohighlevel production communications bridge tables are available",
+          ) &&
+          requiredSchemaTables.every((table) =>
+            foundationCompact.includes(`${table}available`),
+          ) &&
+          healthText.includes(normalize(companyName)) &&
+          !healthText.includes(normalize(otherCompanyName)) &&
+          allowed(readStat(health, "Exact mapping"), [
+            "not connected",
+            "exact",
+            "credential mismatch",
+            "ambiguous",
+          ]) &&
+          allowed(readStat(health, "OAuth authentication"), [
+            "authenticated",
+            "required",
+          ]) &&
+          allowed(readStat(health, "Approved scopes"), ["exact", "invalid"]) &&
+          allowed(readStat(health, "Token"), [
+            "missing",
+            "invalid",
+            "expired",
+            "expiring",
+            "valid",
+          ]) &&
+          allowed(readStat(health, "Inbound sync"), ["enabled", "disabled"]) &&
+          allowed(readStat(health, "Connection"), [
+            "connected",
+            "needs reauth",
+            "paused",
+            "error",
+            "not connected",
+          ]) &&
+          allowed(readStat(health, "Connection count"), ["0", "1"]) &&
+          nonnegativeInteger(readStat(health, "Tracked snapshots")) &&
+          nonnegativeInteger(readStat(health, "Conflicts")) &&
+          nonnegativeInteger(readStat(health, "Recent duplicates suppressed")) &&
+          nonnegativeInteger(readStat(health, "Recent received")) &&
+          nonnegativeInteger(readStat(health, "Requeues")) &&
+          healthCompact.includes("customer-facingactionsdisabled") &&
+          healthCompact.includes("providernumberinventoryno") &&
+          healthCompact.includes("carriersmsreceptionno") &&
+          healthCompact.includes("carrierroutingchangedno") &&
+          healthCompact.includes("twilioroutingpreservedyes")
+        );
+      },
+      `${companyName} exact-company GoHighLevel operational health`,
+      20000,
+      { companyName, otherCompanyName },
+    );
+
+    return tab.playwright.evaluate(({ companyName, otherCompanyName }) => {
+      const health = document.querySelector(
+        '[data-testid="gohighlevel-company-operational-health"]',
+      );
+      const normalize = (value) =>
+        (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      const readStat = (label) => {
+        const card = [...(health?.querySelectorAll(".wt-standard-card") ?? [])]
+          .find((candidate) =>
+            normalize(candidate.querySelector("p")?.textContent) ===
+            normalize(label),
+          );
+        const paragraphs = card ? [...card.querySelectorAll("p")] : [];
+
+        return paragraphs[1]?.textContent?.trim() ?? "";
+      };
+      const text = normalize(health?.textContent);
+
+      return {
+        company: companyName,
+        exactMapping: readStat("Exact mapping"),
+        inboundSync: readStat("Inbound sync"),
+        connection: readStat("Connection"),
+        trackedSnapshots: Number(readStat("Tracked snapshots")),
+        conflicts: Number(readStat("Conflicts")),
+        recentWebhooks: Number(readStat("Recent received")),
+        requeues: Number(readStat("Requeues")),
+        customerFacingActions: "disabled",
+        providerNumberInventory: "not_verified",
+        carrierRoutingChanged: false,
+        twilioRoutingPreserved: true,
+        exactCompanyOnly:
+          text.includes(normalize(companyName)) &&
+          !text.includes(normalize(otherCompanyName)),
+      };
+    }, { companyName, otherCompanyName });
+  };
+
+  const goHighLevel = {
+    ihc: await checkGoHighLevelCompanyReadiness(
+      companies.ihc.id,
+      companies.ihc.name,
+      companies.weatherTech.name,
+    ),
+    weatherTech: await checkGoHighLevelCompanyReadiness(
+      companies.weatherTech.id,
+      companies.weatherTech.name,
+      companies.ihc.name,
+    ),
+  };
+
+  return { ...result, automation: automationState, goHighLevel };
 }
 
 async function testProductionReadinessCenter(browser, tab, baseUrl) {
@@ -13855,11 +13987,11 @@ async function testMarketingAccountabilityWorkflow(
           '[data-testid="marketing-accountability-source-row"]',
         ),
       ];
-      const campaignCompany = document.querySelector(
-        '[data-testid="marketing-campaign-form"] input[name="campaign_company_id"]',
+      const campaignForm = document.querySelector(
+        '[data-testid="marketing-campaign-form"]',
       );
-      const spendCompany = document.querySelector(
-        '[data-testid="marketing-spend-form"] input[name="spend_company_id"]',
+      const spendForm = document.querySelector(
+        '[data-testid="marketing-spend-form"]',
       );
       const campaignName = document.querySelector(
         '[data-testid="marketing-campaign-form"] input[name="campaign_name"]',
@@ -13870,8 +14002,8 @@ async function testMarketingAccountabilityWorkflow(
       return (
         rows.length > 0 &&
         rows.every((row) => row.getAttribute("data-company-id") === companyId) &&
-        campaignCompany?.value === companyId &&
-        spendCompany?.value === companyId &&
+        campaignForm?.getAttribute("data-company-id") === companyId &&
+        spendForm?.getAttribute("data-company-id") === companyId &&
         campaignName?.value === "" &&
         spendAmount?.value === "" &&
         !document
@@ -14975,16 +15107,21 @@ async function testDocumentCenterWorkspace(browser, tab, env, company, testJob, 
     throw new Error(`Renamed document status changed unexpectedly to ${renamedDocument.status}.`);
   }
 
-  await clickVisibleDomButtonByText(tab, "Archive", "Archive document", 15000);
-  const archivedDocument = await waitForAsync(
-    async () => {
+  const archivedDocument = await clickEnabledUntilPersisted({
+    tab,
+    locator: tab.playwright.locator(
+      'xpath=//*[@data-testid="document-selected-panel"]//button[normalize-space(.)="Archive"]',
+    ),
+    clickLabel: "Archive document",
+    persistenceLabel: "archived document persistence",
+    readPersisted: async () => {
       const current = await findDocumentByTitle(env, updatedTitle);
 
       return current?.status === "archived" ? current : null;
     },
-    "archived document persistence",
-    30000,
-  );
+    errorPrefix: "Document archive was refused",
+    timeoutMs: 30000,
+  });
   await waitFor(
     tab,
     () => {
@@ -16527,46 +16664,41 @@ async function testInspectionsWorkflow(tab, env, company, testJob, runId, progre
     throw new Error("Restore inspection confirmation did not explain the action.");
   }
 
+  const restoreDialogSelector =
+    '[role="alertdialog"][aria-label="Restore inspection confirmation"]';
+  const restoreConfirmSelector =
+    `${restoreDialogSelector} [data-testid="inspection-confirm-restore-button"]`;
   await scrollSelectorIntoView(
     tab,
-    '[data-testid="inspection-confirm-restore-button"]',
+    restoreConfirmSelector,
     "Confirm restore inspection button",
   );
-  await clickVisibleDomButtonByText(
+  await clickEnabledUntilPersisted({
     tab,
-    "Confirm restore",
-    "Confirm restore inspection",
-    15000,
-  );
-  await waitForAsync(
-    async () => {
+    locator: tab.playwright.locator(restoreConfirmSelector),
+    clickLabel: "Confirm restore inspection",
+    persistenceLabel: "inspection restored persistence",
+    readPersisted: async () => {
       const inspection = await findInspectionByTitle(env, inspectionTitle);
+
+      if (inspection && inspection.id !== savedInspection.id) {
+        throw new Error(
+          `Restore inspection persistence resolved ${inspection.id}; expected ${savedInspection.id}.`,
+        );
+      }
 
       return inspection && inspection.status !== "canceled" ? inspection : null;
     },
-    "inspection restored persistence",
-    30000,
-  ).catch(async (error) => {
-    const pageState = await tab.playwright.evaluate(() => {
-      const text = document.body.innerText;
-      const confirmation = document.querySelector(
-        '[role="alertdialog"][aria-label="Restore inspection confirmation"]',
-      );
-
-      return {
-        restoreConfirmationOpen: Boolean(confirmation),
-        hasRestoreNotice: text.includes("Inspection restored."),
-        hasRestoreError: text.includes("Unable to restore inspection"),
-        recordManagementText:
-          document.querySelector('[data-testid="inspection-record-management"]')
-            ?.textContent ?? null,
-      };
-    });
-
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)} State: ${JSON.stringify(pageState)}`,
-    );
+    errorPrefix: "Inspection restore was refused",
+    timeoutMs: 30000,
   });
+  await waitFor(
+    tab,
+    () => document.body.innerText.includes("Inspection restored."),
+    "inspection restored UI acknowledgement",
+    15000,
+  );
+  await waitForNoSavingState(tab, "inspection restore save complete");
   progress("inspections:record-management:done");
 
   return {
@@ -16939,12 +17071,18 @@ async function runUiMutationTests(tab, env, testJob, runId, progress) {
         addedTaskTitle,
       );
       await fillUnique(editTitleInput, editedTaskTitle, "edit task title");
-      await clickVisibleDomSubmitByText(tab, "Save task", "Save task");
-      await waitForAsync(
-        () => findJobTaskByTitle(env, selectedJobId, editedTaskTitle),
-        `edited task persistence ${editedTaskTitle}`,
-        15000,
-      );
+      await clickEnabledUntilPersisted({
+        tab,
+        locator: tab.playwright.locator(
+          'xpath=//form[.//*[normalize-space(.)="Save task" or normalize-space(.)="Saving"]]//button[@type="submit"]',
+        ),
+        clickLabel: "Save task",
+        persistenceLabel: `edited task persistence ${editedTaskTitle}`,
+        readPersisted: () =>
+          findJobTaskByTitle(env, selectedJobId, editedTaskTitle),
+        errorPrefix: "Job task edit was refused",
+        timeoutMs: 30000,
+      });
       await waitFor(
         tab,
         (title) => document.body.innerText.includes(title),
@@ -17664,7 +17802,7 @@ export async function* createWeatherTechOsRegressionSession({
 
     if (enabledGroups.has("settings")) {
       yield await record("Settings Integration Center displays provider readiness", () =>
-        testSettingsIntegrationCenter(tab),
+        testSettingsIntegrationCenter(tab, companies),
       );
     }
 

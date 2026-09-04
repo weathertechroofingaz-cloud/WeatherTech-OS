@@ -691,10 +691,10 @@ assert(
     harness.includes('findByLikeIfPresent(env, "job_photos", "caption", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "daily_logs", "work_completed", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "properties", "display_name", runMarker)') &&
-    harness.includes('"lead_accountability_events",\n      "operation_key",\n      runMarker') &&
+    /"lead_accountability_events",\s+"operation_key",\s+runMarker/.test(harness) &&
     harness.includes('findByLikeIfPresent(env, "marketing_campaigns", "campaign_name", runMarker)') &&
     harness.includes('findByLikeIfPresent(env, "marketing_spend_months", "notes", runMarker)') &&
-    harness.includes('"crm_identity_reconciliation_events",\n      "operation_key"') &&
+    /"crm_identity_reconciliation_events",\s+"operation_key"/.test(harness) &&
     harness.includes('"crm_identity_reconciliation_events",\n    "source_lead_id",\n    leadIds') &&
     harness.includes('findByForeignIdsIfPresent(env, "office_tasks", "job_id", jobIds)') &&
     harness.includes('"crm_identity_reconciliation_events",\n    "id",\n    reconciliationEventIds') &&
@@ -1328,7 +1328,7 @@ assert(
   "Browser file uploads use at most three fresh chooser-only attempts with exact transient handling, safe input diagnostics, and selected basename proof",
 );
 assert(
-  harness.includes('"lead_accountability_events",\n      "operation_key",\n      runMarker') &&
+  /"lead_accountability_events",\s+"operation_key",\s+runMarker/.test(harness) &&
     harness.includes('"lead_accountability_events",\n      "lead_id",\n      leadIds') &&
     harness.includes('"lead_accountability_events",\n      "lead_accountability_id",\n      leadAccountabilityIds') &&
     harness.indexOf('"lead_accountability_events",\n    "id",\n    accountabilityEvents.map') <
@@ -1915,8 +1915,38 @@ assert(
         'document.body.innerText.includes("Inspection canceled.")',
       ) &&
     inspectionsWorkflowSource.includes('"canceled inspections filter"') &&
-    inspectionsWorkflowSource.includes('"inspection restored persistence"'),
-  "Inspection cancellation performs at most two exact dialog-scoped visible-coordinate activations, pre-reads and preserves the exact row identity, retries only from a safe dialog state, and retains notice/filter/restore proof with terminal diagnostics",
+    inspectionsWorkflowSource.includes("restoreConfirmSelector") &&
+    inspectionsWorkflowSource.includes("await clickEnabledUntilPersisted({") &&
+    inspectionsWorkflowSource.includes(
+      'clickLabel: "Confirm restore inspection"',
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'persistenceLabel: "inspection restored persistence"',
+    ) &&
+    inspectionsWorkflowSource.includes(
+      "inspection.id !== savedInspection.id",
+    ) &&
+    inspectionsWorkflowSource.includes(
+      'errorPrefix: "Inspection restore was refused"',
+    ),
+  "Inspection cancellation and restoration use exact dialog-scoped, identity-preserving, persistence-verified activation boundaries",
+);
+const jobMutationSource = harness.slice(
+  harness.indexOf("async function runUiMutationTests"),
+  harness.indexOf("async function testJobBuilderEditAndSchedule"),
+);
+assert(
+  jobMutationSource.includes('const editedTaskTitle = `${TEST_PREFIX} ${runId} EDITED TASK`;') &&
+    jobMutationSource.includes('clickLabel: "Save task"') &&
+    jobMutationSource.includes(
+      "persistenceLabel: `edited task persistence ${editedTaskTitle}`",
+    ) &&
+    jobMutationSource.includes(
+      "findJobTaskByTitle(env, selectedJobId, editedTaskTitle)",
+    ) &&
+    jobMutationSource.includes('errorPrefix: "Job task edit was refused"') &&
+    jobMutationSource.includes("timeoutMs: 30000"),
+  "Job task editing retries only an enabled exact submit until the renamed task is database-visible",
 );
 for (const testId of [
   "marketing-accountability-workspace",

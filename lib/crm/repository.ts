@@ -758,6 +758,7 @@ function createEmptyCrmSnapshot(core: CoreCrmSnapshot): CrmSnapshot {
     gmailEmailAttachments: [],
     smsMessages: [],
     businessPhoneNumbers: [],
+    goHighLevelResourceSnapshots: [],
     communicationProviderEvents: [],
     callRecords: [],
     routePlans: [],
@@ -800,6 +801,8 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
   if (!hasCoreRecords) {
     return createEmptyCrmSnapshot(coreSnapshot);
   }
+
+  const accessibleCompanyIds = coreSnapshot.companies.map((company) => company.id);
 
   const [
     companies,
@@ -864,6 +867,7 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     gmailEmailAttachments,
     smsMessages,
     businessPhoneNumbers,
+    goHighLevelResourceSnapshots,
     communicationProviderEvents,
     callRecords,
     routePlans,
@@ -1057,16 +1061,47 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
       .from("business_phone_numbers")
       .select("*")
       .order("display_name", { ascending: true }),
-    client
-      .from("communication_provider_events")
-      .select("*")
-      .order("received_at", { ascending: false })
-      .limit(200),
-    client
-      .from("call_records")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(200),
+    Promise.all(
+      accessibleCompanyIds.map((companyId) =>
+        client
+          .from("gohighlevel_resource_snapshots")
+          .select("*")
+          .eq("company_id", companyId)
+          .order("provider_updated_at", { ascending: false, nullsFirst: false })
+          .order("occurred_at", { ascending: false, nullsFirst: false })
+          .order("last_synced_at", { ascending: false })
+          .limit(500),
+      ),
+    ).then((results) => ({
+      data: results.flatMap((result) => result.data ?? []),
+      error: results.find((result) => result.error)?.error ?? null,
+    })),
+    Promise.all(
+      accessibleCompanyIds.map((companyId) =>
+        client
+          .from("communication_provider_events")
+          .select("*")
+          .eq("company_id", companyId)
+          .order("received_at", { ascending: false })
+          .limit(200),
+      ),
+    ).then((results) => ({
+      data: results.flatMap((result) => result.data ?? []),
+      error: results.find((result) => result.error)?.error ?? null,
+    })),
+    Promise.all(
+      accessibleCompanyIds.map((companyId) =>
+        client
+          .from("call_records")
+          .select("*")
+          .eq("company_id", companyId)
+          .order("created_at", { ascending: false })
+          .limit(200),
+      ),
+    ).then((results) => ({
+      data: results.flatMap((result) => result.data ?? []),
+      error: results.find((result) => result.error)?.error ?? null,
+    })),
     client.from("route_plans").select("*").order("route_date", { ascending: false }),
     client
       .from("route_plan_stops")
@@ -1237,6 +1272,13 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ...(businessPhoneNumbers.error && !isOptionalTableMissingError(businessPhoneNumbers.error)
       ? [["business_phone_numbers", businessPhoneNumbers] as [string, { error: unknown }]]
       : []),
+    ...(goHighLevelResourceSnapshots.error &&
+    !isOptionalTableMissingError(goHighLevelResourceSnapshots.error)
+      ? [["gohighlevel_resource_snapshots", goHighLevelResourceSnapshots] as [
+          string,
+          { error: unknown },
+        ]]
+      : []),
     ...(communicationProviderEvents.error && !isOptionalTableMissingError(communicationProviderEvents.error)
       ? [["communication_provider_events", communicationProviderEvents] as [string, { error: unknown }]]
       : []),
@@ -1383,6 +1425,10 @@ export async function fetchCrmSnapshot(client: CrmClient): Promise<CrmSnapshot> 
     ),
     smsMessages: requireRows("sms_messages", smsMessages),
     businessPhoneNumbers: optionalRows("business_phone_numbers", businessPhoneNumbers),
+    goHighLevelResourceSnapshots: optionalRows(
+      "gohighlevel_resource_snapshots",
+      goHighLevelResourceSnapshots,
+    ),
     communicationProviderEvents: optionalRows(
       "communication_provider_events",
       communicationProviderEvents,

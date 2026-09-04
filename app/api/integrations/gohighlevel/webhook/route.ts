@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import type {
-  GoHighLevelResourceSnapshotInsert,
   GoHighLevelResourceType,
   IntegrationConnectionRecord,
 } from "../../../../../lib/crm/types";
@@ -12,8 +11,12 @@ import {
   verifyGoHighLevelWebhookSignature,
 } from "../../../../../lib/gohighlevel/oauth";
 import {
+  buildGoHighLevelResourceSnapshot,
   persistGoHighLevelCommunication,
   resolveGoHighLevelLocalContactMatch,
+  resolveGoHighLevelCommunicationIdentity,
+  upsertContactMapping,
+  upsertGoHighLevelResourceSnapshots,
 } from "../../../../../lib/gohighlevel/sync";
 import { readBoundedTextBody } from "../../../../../lib/http/boundedJson";
 
@@ -47,6 +50,15 @@ type WebhookTransitionReceipt = {
   idempotent: boolean;
 };
 
+type WebhookDuplicateReceipt = {
+  eventId: string;
+  companyId: string;
+  payloadSha256: string;
+  processingStatus: "processed" | "ignored";
+  duplicateCount: number;
+  lastDuplicateAt: string;
+};
+
 type WebhookUninstallReceipt = WebhookTransitionReceipt & {
   scope: "location" | "company";
   credentialCount: number;
@@ -66,7 +78,15 @@ function getString(payload: Record<string, unknown>, ...keys: string[]) {
 }
 
 function getOccurredAt(payload: Record<string, unknown>) {
-  const raw = payload.timestamp ?? payload.dateAdded ?? payload.createdAt;
+  const appointment = asRecord(payload.appointment);
+  const raw =
+    payload.timestamp ??
+    payload.dateUpdated ??
+    payload.dateAdded ??
+    payload.createdAt ??
+    appointment?.dateUpdated ??
+    appointment?.dateAdded ??
+    appointment?.startTime;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     const milliseconds = raw < 10_000_000_000 ? raw * 1000 : raw;
     const date = new Date(milliseconds);
@@ -104,10 +124,10 @@ function getExternalId(payload: Record<string, unknown>, resourceType: GoHighLev
   if (resourceType === "contact") return getString(payload, "contactId", "id");
   if (resourceType === "conversation") return getString(payload, "conversationId", "id");
   if (resourceType === "message" || resourceType === "call") {
-    return getString(payload, "messageId", "id");
+    return getString(payload, "messageId", "emailMessageId", "id");
   }
   if (resourceType === "opportunity") return getString(payload, "opportunityId", "id");
-  if (resourceType === "calendar_event") return getString(payload, "appointmentId", "calendarId", "id");
+  if (resourceType === "calendar_event") return getString(payload, "appointmentId", "id");
   return getString(payload, "reviewId", "id");
 }
 
@@ -115,6 +135,33 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function buildWebhookProviderRecord(
+  payload: Record<string, unknown>,
+  resourceType: GoHighLevelResourceType | null,
+  webhookId: string,
+) {
+  if (resourceType === "calendar_event") {
+    const appointment = asRecord(payload.appointment);
+    if (appointment) {
+      return {
+        ...appointment,
+        type: payload.type,
+        locationId: getString(payload, "locationId") ?? appointment.locationId,
+        appointmentId: getString(appointment, "id"),
+        webhookId,
+      };
+    }
+  }
+  const providerRecord = { ...payload, webhookId };
+  if (resourceType === "message" || resourceType === "call") {
+    return providerRecord;
+  }
+  const externalId = resourceType
+    ? getExternalId(providerRecord, resourceType)
+    : null;
+  return externalId ? { ...providerRecord, id: externalId } : providerRecord;
 }
 
 function parseClaimReceipt(
@@ -194,6 +241,32 @@ function parseTransitionReceipt(
     return null;
   }
   return receipt as unknown as WebhookTransitionReceipt;
+}
+
+function parseDuplicateReceipt(
+  value: unknown,
+  expected: {
+    eventId: string;
+    companyId: string;
+    payloadSha256: string;
+  },
+): WebhookDuplicateReceipt | null {
+  const receipt = asRecord(value);
+  if (
+    !receipt ||
+    receipt.contractVersion !== GHL_WEBHOOK_CONTRACT_VERSION ||
+    receipt.eventId !== expected.eventId ||
+    receipt.companyId !== expected.companyId ||
+    receipt.payloadSha256 !== expected.payloadSha256 ||
+    !["processed", "ignored"].includes(String(receipt.processingStatus)) ||
+    typeof receipt.duplicateCount !== "number" ||
+    !Number.isInteger(receipt.duplicateCount) ||
+    receipt.duplicateCount < 1 ||
+    typeof receipt.lastDuplicateAt !== "string"
+  ) {
+    return null;
+  }
+  return receipt as unknown as WebhookDuplicateReceipt;
 }
 
 function parseUninstallReceipt(
@@ -299,26 +372,23 @@ export async function POST(request: NextRequest) {
   } else if (externalCompanyId) {
     const { data: credentials, error: credentialsError } = await serviceClient
       .from("gohighlevel_oauth_credentials")
-      .select("company_id, integration_connection_id")
+      .select("company_id, integration_connection_id, external_company_id")
       .eq("external_company_id", externalCompanyId)
+      .is("revoked_at", null)
+      .order("integration_connection_id", { ascending: true })
       .limit(200);
     if (credentialsError) {
       return retryableWebhookResponse("Webhook company mapping could not be verified.");
     }
 
-    const companyIds = new Set((credentials ?? []).map((item) => item.company_id));
-    if (companyIds.size > 1) {
-      return NextResponse.json(
-        { ok: false, message: "Webhook company mapping is ambiguous." },
-        { status: 409 },
-      );
-    }
-    const anchorConnectionId = credentials?.[0]?.integration_connection_id ?? null;
+    const anchorCredential = credentials?.[0] ?? null;
+    const anchorConnectionId = anchorCredential?.integration_connection_id ?? null;
     if (anchorConnectionId) {
       const { data: anchorConnection, error: anchorError } = await serviceClient
         .from("integration_connections")
         .select("*")
         .eq("id", anchorConnectionId)
+        .eq("company_id", anchorCredential.company_id)
         .eq("provider", "gohighlevel")
         .maybeSingle();
       if (anchorError) {
@@ -355,7 +425,11 @@ export async function POST(request: NextRequest) {
         externalLocationId: externalScopeId,
         externalContactId: getString(payload, "contactId"),
         externalConversationId: getString(payload, "conversationId"),
-        externalMessageId: getString(payload, "messageId"),
+        externalMessageId: getString(
+          payload,
+          "messageId",
+          "emailMessageId",
+        ),
         signatureVersion: verification.signatureVersion,
         payloadSha256,
         payloadSummary: summary,
@@ -381,9 +455,29 @@ export async function POST(request: NextRequest) {
     return retryableWebhookResponse("Webhook claim receipt could not be verified.");
   }
   if (webhookEvent.disposition === "duplicate") {
+    const { data: duplicateResult, error: duplicateError } = await serviceClient.rpc(
+      "wtos_record_gohighlevel_webhook_duplicate_v1",
+      {
+        p_event_id: webhookEvent.eventId,
+        p_payload_sha256: payloadSha256,
+      },
+    );
+    const duplicateReceipt = duplicateError
+      ? null
+      : parseDuplicateReceipt(duplicateResult, {
+          eventId: webhookEvent.eventId,
+          companyId: connection.company_id,
+          payloadSha256,
+        });
+    if (!duplicateReceipt) {
+      return retryableWebhookResponse(
+        "Webhook duplicate was suppressed but its delivery count could not be recorded.",
+      );
+    }
     return NextResponse.json({
       ok: true,
       duplicate: true,
+      duplicateCount: duplicateReceipt.duplicateCount,
       message: "Webhook already reached a verified terminal state.",
     });
   }
@@ -475,85 +569,177 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const contactId = getString(payload, "contactId");
   try {
-    const contactLookup = contactId
-      ? await serviceClient
-          .from("gohighlevel_resource_snapshots")
-          .select("customer_id, lead_id")
-          .eq("integration_connection_id", connection.id)
-          .eq("resource_type", "contact")
-          .eq("external_id", contactId)
-          .maybeSingle()
-      : { data: null, error: null };
-    if (contactLookup.error) {
-      throw new Error("HighLevel contact mapping could not be verified.");
-    }
-    const contactSnapshot = contactLookup.data;
     const resourceType = getResourceType(payload);
-    const directMatch =
-      resourceType === "contact" &&
-      !contactSnapshot?.customer_id &&
-      !contactSnapshot?.lead_id
-        ? await resolveGoHighLevelLocalContactMatch({
+    const providerRecord = buildWebhookProviderRecord(payload, resourceType, webhookId);
+    const contactId = getString(providerRecord, "contactId");
+    const directMatch = resourceType === "contact"
+      ? await resolveGoHighLevelLocalContactMatch({
+          serviceClient,
+          companyId: connection.company_id,
+          record: providerRecord,
+        })
+      : null;
+    const effectiveDirectMatch = directMatch
+      ? await upsertContactMapping({
+          serviceClient,
+          connection,
+          record: providerRecord,
+          match: directMatch,
+        })
+      : null;
+    let localMatch:
+      | {
+          customerId: string | null;
+          leadId: string | null;
+          matchStatus: "matched_customer" | "matched_lead" | "unmatched" | "ambiguous";
+          matchCandidateCount: number;
+        }
+      | undefined = effectiveDirectMatch ?? undefined;
+    if (!localMatch && contactId) {
+      const { data: mapping, error: mappingError } = await serviceClient
+        .from("gohighlevel_sync_mappings")
+        .select("id, local_table, local_record_id, sync_status, conflict_status")
+        .eq("company_id", connection.company_id)
+        .eq("integration_connection_id", connection.id)
+        .eq("provider", "gohighlevel")
+        .eq("external_object_type", "contact")
+        .eq("external_id", contactId)
+        .maybeSingle();
+      if (mappingError) {
+        throw new Error("HighLevel contact mapping could not be verified.");
+      }
+      const mappingIsCurrent =
+        mapping?.sync_status === "synced" &&
+        mapping.conflict_status === "none" &&
+        (mapping.local_table === "customers" || mapping.local_table === "leads");
+      if (mapping && mappingIsCurrent) {
+        const localTarget = mapping.local_table === "customers"
+          ? await serviceClient
+              .from("customers")
+              .select("id")
+              .eq("id", mapping.local_record_id)
+              .eq("company_id", connection.company_id)
+              .maybeSingle()
+          : await serviceClient
+              .from("leads")
+              .select("id")
+              .eq("id", mapping.local_record_id)
+              .eq("company_id", connection.company_id)
+              .maybeSingle();
+        if (localTarget.error) {
+          throw new Error("HighLevel mapped contact ownership could not be verified.");
+        }
+        if (localTarget.data) {
+          localMatch = {
+            customerId:
+              mapping.local_table === "customers" ? mapping.local_record_id : null,
+            leadId: mapping.local_table === "leads" ? mapping.local_record_id : null,
+            matchStatus:
+              mapping.local_table === "customers"
+                ? "matched_customer"
+                : "matched_lead",
+            matchCandidateCount: 1,
+          };
+        } else {
+          const { data: quarantined, error: quarantineError } = await serviceClient
+            .from("gohighlevel_sync_mappings")
+            .update({
+              sync_status: "conflict",
+              conflict_status: "pending_review",
+              conflict_summary:
+                "Stored HighLevel contact link is not a current same-company WTOS record.",
+              pending_sync: true,
+              metadata: { staleOrForeignLocalTarget: true },
+            })
+            .eq("id", mapping.id)
+            .eq("company_id", connection.company_id)
+            .eq("integration_connection_id", connection.id)
+            .eq("provider", "gohighlevel")
+            .select("id")
+            .maybeSingle();
+          if (quarantineError || !quarantined) {
+            throw new Error("HighLevel invalid contact mapping could not be quarantined.");
+          }
+        }
+      }
+      localMatch ??= {
+        customerId: null,
+        leadId: null,
+        matchStatus: mapping ? "ambiguous" : "unmatched",
+        matchCandidateCount: mapping ? 2 : 0,
+      };
+    }
+    const communicationIdentity =
+      resourceType === "message" || resourceType === "call"
+        ? await resolveGoHighLevelCommunicationIdentity({
             serviceClient,
-            companyId: connection.company_id,
-            record: payload,
+            connection,
+            record: providerRecord,
           })
         : null;
-    const localMatch = {
-      customerId: contactSnapshot?.customer_id ?? directMatch?.customerId ?? null,
-      leadId: contactSnapshot?.lead_id ?? directMatch?.leadId ?? null,
-    };
-    const externalId = resourceType ? getExternalId(payload, resourceType) : null;
-    if (resourceType && externalId) {
-      const directionValue = getString(payload, "direction")?.toLowerCase();
-      const direction =
-        directionValue === "inbound" || directionValue === "incoming"
-          ? "inbound"
-          : directionValue === "outbound" || directionValue === "outgoing"
-            ? "outbound"
-            : null;
-      const snapshot: GoHighLevelResourceSnapshotInsert = {
-        company_id: connection.company_id,
-        integration_connection_id: connection.id,
-        resource_type: resourceType,
-        external_id: externalId,
-        external_parent_id: getString(payload, "conversationId", "pipelineId", "calendarId"),
-        external_contact_id: contactId,
-        customer_id: localMatch.customerId,
-        lead_id: localMatch.leadId,
-        direction,
-        status: getString(payload, "status", "callStatus"),
-        body_preview:
-          typeof summary.bodyPreview === "string" ? summary.bodyPreview : null,
-        occurred_at: occurredAt,
-        provider_updated_at: occurredAt,
-        payload_summary: summary,
-      };
-      const { error: snapshotError } = await serviceClient
-        .from("gohighlevel_resource_snapshots")
-        .upsert(snapshot, {
-        onConflict: "integration_connection_id,resource_type,external_id",
-      });
-      if (snapshotError) {
-        throw new Error("HighLevel webhook resource metadata could not be saved.");
+    if (
+      communicationIdentity &&
+      (communicationIdentity.disposition === "conflict" ||
+        communicationIdentity.disposition === "incomplete" ||
+        !communicationIdentity.canonicalExternalId)
+    ) {
+      const ignoredReceipt = await transitionWebhook("ignored");
+      if (!ignoredReceipt) {
+        throw new Error(
+          "HighLevel webhook reconciliation quarantine could not be committed.",
+        );
       }
+      return NextResponse.json({
+        ok: true,
+        ignored: true,
+        reconciliationRequired: true,
+        message:
+          "Verified webhook quarantined for provider identity reconciliation.",
+      });
     }
 
-    await persistGoHighLevelCommunication({
-      serviceClient,
-      connection,
-      record: payload,
-      match: localMatch,
-    });
-    const processedAt = new Date().toISOString();
-    const { error: connectionUpdateError } = await serviceClient
-      .from("integration_connections")
-      .update({ last_sync_at: processedAt, last_successful_sync_at: processedAt, last_error: null })
-      .eq("id", connection.id);
-    if (connectionUpdateError) {
-      throw new Error("HighLevel connection health could not be updated.");
+    let communicationSnapshotSafe = true;
+    if (
+      communicationIdentity &&
+      communicationIdentity.channel !== "email"
+    ) {
+      const communicationResult = await persistGoHighLevelCommunication({
+        serviceClient,
+        connection,
+        record: providerRecord,
+        match: localMatch,
+        identity: communicationIdentity,
+      });
+      if (!communicationResult.saved && !communicationResult.ignored) {
+        throw new Error("HighLevel webhook communication metadata was incomplete.");
+      }
+      communicationSnapshotSafe = communicationResult.snapshotSafe === true;
+    }
+
+    if (resourceType && communicationSnapshotSafe) {
+      const snapshot = buildGoHighLevelResourceSnapshot({
+        record: providerRecord,
+        resourceType,
+        connection,
+        match: localMatch,
+        canonicalExternalId:
+          communicationIdentity?.canonicalExternalId ?? undefined,
+      });
+      if (!snapshot) {
+        throw new Error("HighLevel webhook resource identity was incomplete.");
+      }
+      const snapshotReceipt = await upsertGoHighLevelResourceSnapshots(
+        serviceClient,
+        connection,
+        [snapshot],
+      );
+      if (
+        snapshotReceipt.failed !== 0 ||
+        snapshotReceipt.saved + snapshotReceipt.skipped !== 1
+      ) {
+        throw new Error("HighLevel webhook resource metadata could not be saved.");
+      }
     }
     const processedReceipt = await transitionWebhook("processed");
     if (!processedReceipt) {
@@ -561,18 +747,10 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ ok: true, duplicate: false, message: "Webhook processed." });
   } catch {
-    const failedAt = new Date().toISOString();
     const safeFailure = "HighLevel webhook processing failed safely.";
     const failedReceipt = await transitionWebhook("failed", safeFailure);
-    const { error: connectionFailureError } = await serviceClient
-      .from("integration_connections")
-      .update({
-        last_failure_at: failedAt,
-        last_error: safeFailure,
-      })
-      .eq("id", connection.id);
     return retryableWebhookResponse(
-      failedReceipt && !connectionFailureError
+      failedReceipt
         ? "Webhook failed safely and is eligible for signed provider redelivery."
         : "Webhook failure state could not be fully committed.",
     );

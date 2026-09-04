@@ -980,6 +980,7 @@ export function createDemoCrmSnapshot(): CrmSnapshot {
     gmailEmailAttachments: [],
     smsMessages: [],
     businessPhoneNumbers: [],
+    goHighLevelResourceSnapshots: [],
     communicationProviderEvents: [],
     callRecords: [],
     routePlans: [],

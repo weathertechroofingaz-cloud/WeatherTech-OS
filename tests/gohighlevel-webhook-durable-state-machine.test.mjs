@@ -63,8 +63,10 @@ assert(
   route.includes("locationResult.error") &&
     route.includes("credentialsError") &&
     route.includes("anchorError") &&
-    route.includes("contactLookup.error") &&
-    route.includes("connectionUpdateError"),
+    route.includes("mappingError") &&
+    route.includes("localTarget.error") &&
+    route.includes("quarantineError") &&
+    route.includes("wtos_transition_gohighlevel_webhook_v1"),
   "Connection and local-mapping query failures must not be confused with unmapped or successful deliveries.",
 );
 

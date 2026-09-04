@@ -2205,6 +2205,8 @@ export type IntegrationSyncLogRecord = {
   response_summary: Record<string, unknown>;
   error_code: string | null;
   error_message: string | null;
+  claim_token_sha256: string | null;
+  lease_expires_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2282,7 +2284,71 @@ export type GoHighLevelOauthCredentialRecord = {
   user_type: "Location" | "Company";
   token_expires_at: string;
   last_refreshed_at: string | null;
+  refresh_version: number;
+  refresh_lease_id: string | null;
+  refresh_lease_acquired_at: string | null;
+  refresh_lease_expires_at: string | null;
   revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelCommunicationIdentityRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  channel: "sms" | "voice" | "email";
+  canonical_external_id: string;
+  last_observed_tuple_fingerprint: string | null;
+  reconciliation_status: "resolved" | "needs_reconciliation";
+  conflict_count: number;
+  last_conflict_at: string | null;
+  last_conflict_reason:
+    | "provider_alias_collision"
+    | "tuple_fingerprint_collision"
+    | null;
+  last_conflict_alias_fingerprint: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoHighLevelCommunicationIdentityAliasRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  channel: "sms" | "voice" | "email";
+  communication_identity_id: string;
+  alias_type:
+    | "messageId"
+    | "emailMessageId"
+    | "id"
+    | "altId";
+  external_id: string;
+  created_at: string;
+};
+
+export type GoHighLevelCommunicationIdentityConflictRecord = {
+  id: string;
+  company_id: string;
+  integration_connection_id: string;
+  channel: "sms" | "voice" | "email";
+  conflict_key: string;
+  conflict_kind:
+    | "incomplete_identity"
+    | "provider_alias_collision"
+    | "tuple_fingerprint_collision";
+  tuple_fingerprint: string | null;
+  alias_fingerprint: string | null;
+  alias_evidence: Array<{
+    type: "messageId" | "emailMessageId" | "id" | "altId";
+    value: string;
+  }>;
+  candidate_identity_ids: string[];
+  status: "open" | "resolved";
+  occurrence_count: number;
+  first_observed_at: string;
+  last_observed_at: string;
+  resolved_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2343,6 +2409,8 @@ export type GoHighLevelWebhookEventRecord = {
   requeued_at: string | null;
   requeued_by: string | null;
   requeue_count: number;
+  duplicate_count: number;
+  last_duplicate_at: string | null;
   received_at: string;
   created_at: string;
   updated_at: string;
@@ -2719,6 +2787,14 @@ export type CommunicationProviderEventRecord = {
   error_code: string | null;
   error_message: string | null;
   occurred_at: string;
+  provider_updated_at: string | null;
+  provider_version_source:
+    | "updated_at"
+    | "created_at_fallback"
+    | "legacy_backfill"
+    | null;
+  provider_status_rank: number | null;
+  provider_content_sha256: string | null;
   received_at: string;
   created_at: string;
   updated_at: string;
@@ -2806,6 +2882,14 @@ export type CallRecord = {
   follow_up_required: boolean;
   correlation_id: string;
   metadata: Record<string, unknown>;
+  provider_updated_at: string | null;
+  provider_version_source:
+    | "updated_at"
+    | "created_at_fallback"
+    | "legacy_backfill"
+    | null;
+  provider_status_rank: number | null;
+  provider_content_sha256: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -3817,6 +3901,8 @@ export type IntegrationSyncLogInput = {
   response_summary?: Record<string, unknown>;
   error_code?: string | null;
   error_message?: string | null;
+  claim_token_sha256?: string | null;
+  lease_expires_at?: string | null;
 };
 
 export type AiSavedAnalysisInput = {
@@ -3930,12 +4016,81 @@ export type GoHighLevelOauthCredentialInsert = Omit<
   | "updated_at"
   | "bridge_version"
   | "last_refreshed_at"
+  | "refresh_version"
+  | "refresh_lease_id"
+  | "refresh_lease_acquired_at"
+  | "refresh_lease_expires_at"
   | "revoked_at"
 > &
   Partial<
     Pick<
       GoHighLevelOauthCredentialRecord,
-      "id" | "bridge_version" | "last_refreshed_at" | "revoked_at"
+      | "id"
+      | "bridge_version"
+      | "last_refreshed_at"
+      | "refresh_version"
+      | "refresh_lease_id"
+      | "refresh_lease_acquired_at"
+      | "refresh_lease_expires_at"
+      | "revoked_at"
+    >
+  >;
+
+export type GoHighLevelCommunicationIdentityInsert = Omit<
+  GoHighLevelCommunicationIdentityRecord,
+  | "id"
+  | "last_observed_tuple_fingerprint"
+  | "reconciliation_status"
+  | "conflict_count"
+  | "last_conflict_at"
+  | "last_conflict_reason"
+  | "last_conflict_alias_fingerprint"
+  | "created_at"
+  | "updated_at"
+> &
+  Partial<
+    Pick<
+      GoHighLevelCommunicationIdentityRecord,
+      | "id"
+      | "last_observed_tuple_fingerprint"
+      | "reconciliation_status"
+      | "conflict_count"
+      | "last_conflict_at"
+      | "last_conflict_reason"
+      | "last_conflict_alias_fingerprint"
+    >
+  >;
+
+export type GoHighLevelCommunicationIdentityAliasInsert = Omit<
+  GoHighLevelCommunicationIdentityAliasRecord,
+  "id" | "created_at"
+> &
+  Partial<Pick<GoHighLevelCommunicationIdentityAliasRecord, "id">>;
+
+export type GoHighLevelCommunicationIdentityConflictInsert = Omit<
+  GoHighLevelCommunicationIdentityConflictRecord,
+  | "id"
+  | "alias_evidence"
+  | "candidate_identity_ids"
+  | "status"
+  | "occurrence_count"
+  | "first_observed_at"
+  | "last_observed_at"
+  | "resolved_at"
+  | "created_at"
+  | "updated_at"
+> &
+  Partial<
+    Pick<
+      GoHighLevelCommunicationIdentityConflictRecord,
+      | "id"
+      | "alias_evidence"
+      | "candidate_identity_ids"
+      | "status"
+      | "occurrence_count"
+      | "first_observed_at"
+      | "last_observed_at"
+      | "resolved_at"
     >
   >;
 
@@ -3961,6 +4116,8 @@ export type GoHighLevelWebhookEventInsert = Omit<
   | "requeued_at"
   | "requeued_by"
   | "requeue_count"
+  | "duplicate_count"
+  | "last_duplicate_at"
 > &
   Partial<
     Pick<
@@ -3975,6 +4132,8 @@ export type GoHighLevelWebhookEventInsert = Omit<
       | "requeued_at"
       | "requeued_by"
       | "requeue_count"
+      | "duplicate_count"
+      | "last_duplicate_at"
     >
   >;
 
@@ -4245,6 +4404,14 @@ export type CommunicationProviderEventInput = {
   error_code?: string | null;
   error_message?: string | null;
   occurred_at?: string;
+  provider_updated_at?: string | null;
+  provider_version_source?:
+    | "updated_at"
+    | "created_at_fallback"
+    | "legacy_backfill"
+    | null;
+  provider_status_rank?: number | null;
+  provider_content_sha256?: string | null;
 };
 
 export type CallRecordInput = {
@@ -4276,6 +4443,14 @@ export type CallRecordInput = {
   follow_up_required?: boolean;
   correlation_id?: string;
   metadata?: Record<string, unknown>;
+  provider_updated_at?: string | null;
+  provider_version_source?:
+    | "updated_at"
+    | "created_at_fallback"
+    | "legacy_backfill"
+    | null;
+  provider_status_rank?: number | null;
+  provider_content_sha256?: string | null;
 };
 
 export type RoutePlanInput = {
@@ -4846,6 +5021,7 @@ export type CrmSnapshot = {
   gmailEmailAttachments: GmailEmailAttachmentRecord[];
   smsMessages: SmsMessageRecord[];
   businessPhoneNumbers: BusinessPhoneNumberRecord[];
+  goHighLevelResourceSnapshots: GoHighLevelResourceSnapshotRecord[];
   communicationProviderEvents: CommunicationProviderEventRecord[];
   callRecords: CallRecord[];
   routePlans: RoutePlanRecord[];
@@ -5361,6 +5537,24 @@ export type Database = {
         Update: Partial<GoHighLevelOauthCredentialInsert>;
         Relationships: [];
       };
+      gohighlevel_communication_identities: {
+        Row: GoHighLevelCommunicationIdentityRecord;
+        Insert: GoHighLevelCommunicationIdentityInsert;
+        Update: Partial<GoHighLevelCommunicationIdentityInsert>;
+        Relationships: [];
+      };
+      gohighlevel_communication_identity_aliases: {
+        Row: GoHighLevelCommunicationIdentityAliasRecord;
+        Insert: GoHighLevelCommunicationIdentityAliasInsert;
+        Update: Partial<GoHighLevelCommunicationIdentityAliasInsert>;
+        Relationships: [];
+      };
+      gohighlevel_communication_identity_conflicts: {
+        Row: GoHighLevelCommunicationIdentityConflictRecord;
+        Insert: GoHighLevelCommunicationIdentityConflictInsert;
+        Update: Partial<GoHighLevelCommunicationIdentityConflictInsert>;
+        Relationships: [];
+      };
       gohighlevel_resource_snapshots: {
         Row: GoHighLevelResourceSnapshotRecord;
         Insert: GoHighLevelResourceSnapshotInsert;
@@ -5596,6 +5790,57 @@ export type Database = {
       };
       wtos_claim_gohighlevel_webhook_v1: {
         Args: { p_claim: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_bind_gohighlevel_oauth_v1: {
+        Args: { p_binding: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_claim_gohighlevel_sync_v1: {
+        Args: { p_claim: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_renew_gohighlevel_sync_v1: {
+        Args: { p_renewal: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_complete_gohighlevel_sync_v1: {
+        Args: { p_completion: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_upsert_gohighlevel_resource_snapshots_v1: {
+        Args: { p_batch: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_resolve_gohighlevel_communication_identity_v1: {
+        Args: { p_resolution: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_upsert_gohighlevel_communication_v1: {
+        Args: { p_communication: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_claim_gohighlevel_token_refresh_v1: {
+        Args: { p_claim: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_adopt_gohighlevel_token_refresh_v1: {
+        Args: { p_adoption: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_finalize_gohighlevel_token_refresh_v1: {
+        Args: { p_finalization: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_release_gohighlevel_token_refresh_v1: {
+        Args: { p_release: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      wtos_record_gohighlevel_webhook_duplicate_v1: {
+        Args: {
+          p_event_id: string;
+          p_payload_sha256: string;
+        };
         Returns: Record<string, unknown>;
       };
       wtos_transition_gohighlevel_webhook_v1: {

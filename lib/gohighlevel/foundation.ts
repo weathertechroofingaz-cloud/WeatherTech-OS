@@ -7,6 +7,9 @@ export const goHighLevelSyncFoundationMigration =
 export const goHighLevelOAuthBridgeMigration =
   "0036_gohighlevel_oauth_communications_bridge.sql";
 
+export const goHighLevelProductionBridgeMigration =
+  "20260904140401_gohighlevel_bridge_observability_hardening.sql";
+
 export const goHighLevelOAuthEndpoints = {
   start: "/api/integrations/gohighlevel/oauth/start",
   callback: "/api/oauth/marketplace/callback",
@@ -57,100 +60,122 @@ export const goHighLevelLiveSyncStatusLabels: Record<
 };
 
 export type GoHighLevelSyncResourceKey =
+  | "locations"
   | "contacts"
-  | "leads"
-  | "companies"
+  | "conversations"
+  | "messages"
+  | "calendars"
+  | "calendar_events"
+  | "pipelines"
   | "opportunities"
-  | "notes"
-  | "tags"
-  | "tasks";
+  | "reviews";
 
 export type GoHighLevelSyncResource = {
   key: GoHighLevelSyncResourceKey;
   label: string;
   localRecord: string;
   externalRecord: string;
-  phaseOneMode: "metadata_only" | "dry_run_preview";
+  phaseOneMode: "metadata_only" | "content_and_metadata";
   direction: "two_way" | "weathertech_to_provider" | "provider_to_weathertech";
   description: string;
 };
 
 export const goHighLevelSyncResources: GoHighLevelSyncResource[] = [
   {
-    key: "contacts",
-    label: "Contacts",
-    localRecord: "customers",
-    externalRecord: "GoHighLevel contacts",
-    phaseOneMode: "dry_run_preview",
-    direction: "provider_to_weathertech",
-    description:
-      "Reads GoHighLevel contact metadata into a dry-run mapping with duplicate and conflict checks; it performs no provider write.",
-  },
-  {
-    key: "leads",
-    label: "Leads",
-    localRecord: "leads",
-    externalRecord: "GoHighLevel opportunities",
-    phaseOneMode: "dry_run_preview",
-    direction: "provider_to_weathertech",
-    description:
-      "Reads provider opportunity metadata for comparison without automatically moving stages or writing to GoHighLevel.",
-  },
-  {
-    key: "companies",
-    label: "Companies",
-    localRecord: "companies",
-    externalRecord: "GoHighLevel locations",
+    key: "locations",
+    label: "Locations",
+    localRecord: "company integration mapping",
+    externalRecord: "HighLevel sub-account",
     phaseOneMode: "metadata_only",
     direction: "provider_to_weathertech",
     description:
-      "Reads location/account metadata while keeping WeatherTech Roofing LLC and IHC separate.",
+      "Validates one exact HighLevel location for each WeatherTech OS company.",
+  },
+  {
+    key: "contacts",
+    label: "Contacts",
+    localRecord: "company-scoped customer/lead match",
+    externalRecord: "GoHighLevel contacts",
+    phaseOneMode: "metadata_only",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads bounded contact metadata for deterministic matching without creating or overwriting core CRM records.",
+  },
+  {
+    key: "conversations",
+    label: "Conversations",
+    localRecord: "communications timeline",
+    externalRecord: "HighLevel conversations",
+    phaseOneMode: "metadata_only",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads recent conversation state and identity without changing provider conversations.",
+  },
+  {
+    key: "messages",
+    label: "Messages and calls",
+    localRecord: "communications timeline and AI context",
+    externalRecord: "HighLevel conversation messages",
+    phaseOneMode: "content_and_metadata",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads bounded message previews and call metadata for internal review; it cannot send or reply.",
+  },
+  {
+    key: "calendars",
+    label: "Calendars",
+    localRecord: "calendar context",
+    externalRecord: "HighLevel calendars",
+    phaseOneMode: "metadata_only",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads calendar definitions without creating or changing appointments.",
+  },
+  {
+    key: "calendar_events",
+    label: "Calendar events",
+    localRecord: "schedule and AI context",
+    externalRecord: "HighLevel appointments",
+    phaseOneMode: "content_and_metadata",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads a bounded appointment window for operational context without rescheduling anything.",
+  },
+  {
+    key: "pipelines",
+    label: "Pipelines",
+    localRecord: "sales pipeline context",
+    externalRecord: "HighLevel pipelines",
+    phaseOneMode: "metadata_only",
+    direction: "provider_to_weathertech",
+    description:
+      "Reads pipeline and stage definitions without changing provider stages.",
   },
   {
     key: "opportunities",
     label: "Opportunities",
-    localRecord: "estimates and pipeline stages",
-    externalRecord: "GoHighLevel opportunities",
-    phaseOneMode: "metadata_only",
+    localRecord: "sales and AI context",
+    externalRecord: "HighLevel opportunities",
+    phaseOneMode: "content_and_metadata",
     direction: "provider_to_weathertech",
     description:
-      "Reads pipeline and stage metadata without automatic opportunity updates.",
+      "Reads current opportunity status without moving stages or writing to HighLevel.",
   },
   {
-    key: "notes",
-    label: "Notes",
-    localRecord: "customer and job notes",
-    externalRecord: "GoHighLevel notes",
-    phaseOneMode: "metadata_only",
+    key: "reviews",
+    label: "Reviews",
+    localRecord: "reputation and AI context",
+    externalRecord: "HighLevel reviews",
+    phaseOneMode: "content_and_metadata",
     direction: "provider_to_weathertech",
     description:
-      "Reads note metadata while keeping internal-only content out of customer-facing automation.",
-  },
-  {
-    key: "tags",
-    label: "Tags",
-    localRecord: "customer and lead tags",
-    externalRecord: "GoHighLevel tags",
-    phaseOneMode: "metadata_only",
-    direction: "provider_to_weathertech",
-    description:
-      "Reads tag metadata for source, service type, status, and company identity mapping.",
-  },
-  {
-    key: "tasks",
-    label: "Tasks",
-    localRecord: "follow-ups and assignments",
-    externalRecord: "GoHighLevel tasks",
-    phaseOneMode: "metadata_only",
-    direction: "provider_to_weathertech",
-    description:
-      "Reads task metadata for follow-up comparison without assigning live provider automations.",
+      "Reads approved and pending review metadata for internal visibility without posting a response.",
   },
 ];
 
 export const goHighLevelPhaseOneGuardrails = [
   "No outbound SMS, email, calls, workflows, campaigns, or automations are triggered.",
-  "No live provider writes run until owner approval and worker enablement.",
+  "The production bridge has no provider-write method or customer-send scope.",
   "Sync mappings store external IDs and conflict state instead of overwriting records.",
   "Credentials stay server-side and are never stored in browser state.",
   "Sync logs store safe metadata and fingerprints, not raw secrets or full contact payloads.",

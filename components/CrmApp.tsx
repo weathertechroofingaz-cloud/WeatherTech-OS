@@ -107,7 +107,6 @@ import {
   applyLeadAccountabilityAction,
   reconcileCustomerPropertyIdentity,
   updateIntegrationConnection,
-  updateIntegrationSyncLog,
   updateCalendarEventSync,
   updateInspection,
   updateChangeOrder,
@@ -294,12 +293,11 @@ import {
 } from "../lib/crm/productionReadiness";
 import {
   goHighLevelLiveSyncStatusLabels,
-  goHighLevelOAuthBridgeMigration,
   goHighLevelOAuthEndpoints,
   goHighLevelOAuthScopes,
   goHighLevelPhaseOneGuardrails,
+  goHighLevelProductionBridgeMigration,
   goHighLevelReadinessEndpoint,
-  goHighLevelSyncFoundationMigration,
   goHighLevelSyncResources,
   type GoHighLevelLiveSyncStatus,
   type GoHighLevelSyncResource,
@@ -367,9 +365,7 @@ import {
   buildGmailSendPreview,
   buildRouteCandidates,
   buildRoutePreview,
-  buildIntegrationSyncRetryableUpdate,
   calendarSyncStatusLabel,
-  canRetryIntegrationSyncLog,
   createGmailOutboundPayloadFingerprint,
   createPayloadFingerprint,
   emailCategoryLabel,
@@ -379,10 +375,7 @@ import {
   getCalendarSyncRecord,
   getCalendarSyncSummary,
   getEmailOutboxSummary,
-  getFailedIntegrationSyncLogs,
   getIntegrationSyncLogSummary,
-  getRetryableIntegrationSyncLogs,
-  goHighLevelEnvVars,
   googleMapsEnvVars,
   googleWorkspaceEnvVars,
   gmailScopes,
@@ -390,7 +383,6 @@ import {
   hasGoogleMapsBrowserKey,
   integrationSyncLogStatusLabel,
   integrationStatusLabel,
-  sanitizeIntegrationSyncLogText,
   smsCategoryLabel,
   smsMessageStatusLabel,
   routePreviewToStopInputs,
@@ -16880,6 +16872,7 @@ function MarketingAccountabilityPanel({
           key={`campaign-form-${companyId}-${campaignEditId || "new"}`}
           onSubmit={handleCampaignSubmit}
           data-testid="marketing-campaign-form"
+          data-company-id={companyId}
           className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
         >
           <div>
@@ -16934,6 +16927,7 @@ function MarketingAccountabilityPanel({
           key={`spend-form-${companyId}-${spendEditId || "new"}`}
           onSubmit={handleSpendSubmit}
           data-testid="marketing-spend-form"
+          data-company-id={companyId}
           className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
         >
           <div>
@@ -48686,8 +48680,9 @@ const integrationCards = [
   },
   {
     name: "GoHighLevel",
-    status: "Settings ready",
-    detail: "Server-only token checks, location ID visibility, and sync-log placeholders.",
+    status: "Marketplace OAuth",
+    detail:
+      "Company-scoped OAuth mapping, read-only synchronization, webhook health, and duplicate-safe operational visibility.",
   },
   {
     name: "DocuSign / Dropbox Sign / Native signatures",
@@ -48733,6 +48728,120 @@ function getIntegrationStatusTone(status: IntegrationConnectionStatus) {
   return status === "connected" ? "green" : status === "paused" ? "amber" : "amber";
 }
 
+type GoHighLevelResourceMetricKey =
+  | "contact"
+  | "conversation"
+  | "message"
+  | "call"
+  | "calendar"
+  | "calendar_event"
+  | "pipeline"
+  | "opportunity"
+  | "review";
+
+type GoHighLevelWebhookFailure = {
+  eventId: string;
+  eventType: string;
+  attemptCount: number;
+  maxAttempts: number;
+  requeueCount: number;
+  awaitingSignedRedelivery: boolean;
+  error: string | null;
+  receivedAt: string;
+  lastAttemptedAt: string | null;
+};
+
+type GoHighLevelCompanyReadiness = {
+  companyId: string;
+  companyName: string;
+  connectionId: string | null;
+  connectionStatus: IntegrationConnectionStatus | "not_connected";
+  connectionCount: number;
+  ambiguousConnections: boolean;
+  authenticated: boolean;
+  credentialBindingValid: boolean;
+  scopesValid: boolean;
+  locationId: string | null;
+  locationName: string | null;
+  tokenState: "missing" | "invalid" | "expired" | "expiring" | "valid";
+  tokenExpiresAt: string | null;
+  syncEnabled: boolean;
+  syncHealth:
+    | "not_connected"
+    | "ambiguous_connections"
+    | "reauthorization_required"
+    | "attention"
+    | "token_refresh_required"
+    | "inbound_disabled"
+    | "healthy"
+    | "ready_for_first_sync";
+  lastSyncAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+  resources: {
+    total: number;
+    truncated: boolean;
+    byType: Record<GoHighLevelResourceMetricKey, number>;
+    matchedContacts: number;
+    unresolvedContacts: number;
+    conflictCount: number;
+    mappingConflictCount: number;
+    communicationIdentityConflictCount: number;
+    pendingMappingCount: number;
+    duplicatesSuppressed: number;
+    lastSyncedAt: string | null;
+  };
+  syncRuns: {
+    recentTotal: number;
+    truncated: boolean;
+    succeeded: number;
+    failed: number;
+    active: number;
+    expiredActive: number;
+    lastRunAt: string | null;
+    lastStatus: IntegrationSyncLogStatus | null;
+  };
+  automationEvents: {
+    total: number;
+    truncated: boolean;
+    communications: number;
+    missedCalls: number;
+    lastEventAt: string | null;
+    customerFacingActionsEnabled: false;
+  };
+  webhooks: {
+    health: "attention" | "processing" | "verified" | "awaiting_first_delivery";
+    verified: boolean;
+    total: number;
+    truncated: boolean;
+    processed: number;
+    ignored: number;
+    failed: number;
+    processing: number;
+    queued: number;
+    stalled: number;
+    duplicatesSuppressed: number;
+    requeueCount: number;
+    awaitingSignedRedelivery: number;
+    lastVerifiedAt: string | null;
+    lastProcessedAt: string | null;
+    lastFailureAt: string | null;
+    lastSignatureVersion: "ed25519" | "rsa_legacy" | null;
+    recentFailures: GoHighLevelWebhookFailure[];
+  };
+  evidence: {
+    truncated: boolean;
+    resources: boolean;
+    mappings: boolean;
+    communicationIdentityConflicts: boolean;
+    webhooks: boolean;
+    syncRuns: boolean;
+    automationEvents: boolean;
+    countsAreLowerBounds: boolean;
+  };
+};
+
 type GoHighLevelReadinessResult = {
   ok: boolean;
   dryRun: boolean;
@@ -48747,50 +48856,44 @@ type GoHighLevelReadinessResult = {
   configuredLocationIds: string[];
   apiBaseUrl: string;
   checkedAt: string;
+  selectedCompanyId: string | null;
+  companies: GoHighLevelCompanyReadiness[];
   accountMetadata: {
-    authMethod: "private_integration_token" | "marketplace_oauth";
-    oauthSupported: boolean;
-    accessMode?: "read_only";
-    webhookVerification?: string;
-    locationEndpoint?: string;
-    pipelineEndpoint?: string;
-    opportunitySearchEndpoint?: string;
-    contactsEndpoint?: string;
+    authMethod: "marketplace_oauth";
+    oauthSupported: true;
+    accessMode: "read_only";
+    webhookVerification: "ed25519_with_rsa_legacy_fallback";
+  };
+  phoneCapabilities: {
+    phoneNumberScopeGranted: false;
+    providerNumberInventoryVerified: false;
+    carrierSmsReceptionVerified: false;
+    carrierRoutingChanged: false;
+    twilioRoutingPreserved: true;
   };
   locations: Array<{
     key: string;
     label: string;
-    envVar: string;
+    envVar: "Marketplace OAuth";
     locationId: string | null;
     configured: boolean;
-    readCheck: "skipped" | "ok" | "unsupported" | "unauthorized" | "error";
-    statusCode: number | null;
+    readCheck: "ok" | "unauthorized";
+    statusCode: null;
     message: string;
     locationName: string | null;
   }>;
-  pipelines: Array<{
-    key: "weathertech" | "ihc";
-    label: string;
-    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
-    locationId: string | null;
-    configured: boolean;
-    readCheck: "skipped" | "ok" | "unauthorized" | "error";
-    statusCode: number | null;
-    message: string;
-    pipelineCount: number | null;
-    pipelineNames: string[];
-  }>;
+  pipelines: [];
   syncResources: GoHighLevelSyncResource[];
   phaseOneGuardrails: string[];
   migration: {
     required: string;
-    applied: boolean | null;
+    applied: boolean;
     checked: boolean;
     message: string;
   };
   schema: {
     checked: boolean;
-    applied: boolean | null;
+    applied: boolean;
     migration: string;
     tables: Array<{
       table: string;
@@ -48800,7 +48903,7 @@ type GoHighLevelReadinessResult = {
     message: string;
   };
   syncResourceCount: number;
-  oauth?: {
+  oauth: {
     configured: boolean;
     missing: string[];
     malformed: string[];
@@ -48815,37 +48918,19 @@ type GoHighLevelReadinessResult = {
   nextStep: string;
 };
 
-type GoHighLevelLeadDryRunResult = {
+type GoHighLevelWebhookRequeueResult = {
   ok: boolean;
-  dryRun: boolean;
-  communicationsSent: boolean;
-  automationTriggered: boolean;
-  status:
-    | "validated"
-    | "missing_config"
-    | "validation_failed"
-    | "not_found"
-    | "log_failed"
-    | "error";
   message: string;
-  tokenConfigured: boolean;
-  requiredFields: string[];
-  missingFields: string[];
-  location: {
-    key: "weathertech" | "ihc";
-    label: string;
-    envVar: "GHL_LOCATION_ID_WEATHERTECH" | "GHL_LOCATION_ID_IHC";
-    locationId: string | null;
-    configured: boolean;
-  } | null;
-  payload: Record<string, unknown> | null;
-  requestFingerprint: string | null;
-  checkedAt: string;
-  nextStep: string;
-  leadId: string | null;
-  companyId: string | null;
-  syncLogId: string | null;
+  eventId?: string;
+  companyId?: string;
+  status?: "failed";
+  attemptCount?: number;
+  requeueCount?: number;
+  awaitingSignedRedelivery?: boolean;
 };
+
+const goHighLevelWebhookRequeueEndpoint =
+  "/api/integrations/gohighlevel/webhook/requeue";
 
 type TwilioInboundReadinessResult = {
   ok: boolean;
@@ -49120,12 +49205,6 @@ function goHighLevelSyncDirectionLabel(direction: IntegrationSyncDirection) {
   };
 
   return labels[direction];
-}
-
-function getGoHighLevelDryRunStatusTone(
-  status: GoHighLevelLeadDryRunResult["status"] | IntegrationSyncLogStatus,
-): "blue" | "green" | "amber" {
-  return status === "validated" || status === "succeeded" ? "green" : "amber";
 }
 
 function getGoHighLevelReadinessStatusTone(
@@ -49958,6 +50037,7 @@ function IntegrationsView({
   const [goHighLevelCompanyId, setGoHighLevelCompanyId] = useState(
     snapshot.companies[0]?.id ?? "",
   );
+  const goHighLevelCompanyIdRef = useRef(goHighLevelCompanyId);
   const googleConnections = snapshot.integrationConnections.filter(
     (connection) => connection.provider === "google_calendar",
   );
@@ -50005,20 +50085,14 @@ function IntegrationsView({
   const primaryGoHighLevelConnection =
     goHighLevelConnections.find(
       (connection) => connection.company_id === goHighLevelCompanyId,
-    ) ?? goHighLevelConnections[0];
+    ) ?? null;
   const goHighLevelSyncLogs = snapshot.integrationSyncLogs.filter(
-    (log) => log.provider === "gohighlevel",
-  );
-  const goHighLevelLeadDryRunLogs = goHighLevelSyncLogs.filter(
-    (log) => log.event_type === goHighLevelEnvVars.leadDryRunEventType,
+    (log) =>
+      log.provider === "gohighlevel" &&
+      log.company_id === goHighLevelCompanyId,
   );
   const goHighLevelSyncSummary = getIntegrationSyncLogSummary(goHighLevelSyncLogs);
-  const failedGoHighLevelSyncLogs = getFailedIntegrationSyncLogs(goHighLevelSyncLogs);
-  const retryableGoHighLevelSyncLogs =
-    getRetryableIntegrationSyncLogs(goHighLevelSyncLogs);
-  const recentFailedGoHighLevelSyncLogs = failedGoHighLevelSyncLogs.slice(0, 4);
   const recentGoHighLevelSyncLogs = goHighLevelSyncLogs.slice(0, 5);
-  const latestGoHighLevelLeadDryRunLog = goHighLevelLeadDryRunLogs[0];
   const latestGoHighLevelSyncLog = goHighLevelSyncLogs[0];
   const latestGoHighLevelLogAt = latestGoHighLevelSyncLog
     ? getIntegrationSyncLogTimestamp(latestGoHighLevelSyncLog)
@@ -50030,13 +50104,9 @@ function IntegrationsView({
   const [isStartingGoHighLevelOAuth, setIsStartingGoHighLevelOAuth] =
     useState(false);
   const [isSyncingGoHighLevel, setIsSyncingGoHighLevel] = useState(false);
-  const [goHighLevelLeadDryRunResult, setGoHighLevelLeadDryRunResult] =
-    useState<GoHighLevelLeadDryRunResult | null>(null);
-  const [isRunningGoHighLevelLeadDryRun, setIsRunningGoHighLevelLeadDryRun] =
-    useState(false);
-  const [goHighLevelLeadDryRunLeadId, setGoHighLevelLeadDryRunLeadId] = useState(
-    snapshot.leads[0]?.id ?? "",
-  );
+  const [requeueingGoHighLevelWebhookId, setRequeueingGoHighLevelWebhookId] =
+    useState<string | null>(null);
+  const goHighLevelReadinessRequestSequenceRef = useRef(0);
   const [twilioReadinessResult, setTwilioReadinessResult] =
     useState<TwilioInboundReadinessResult | null>(null);
   const [twilioReadinessError, setTwilioReadinessError] = useState("");
@@ -50060,10 +50130,10 @@ function IntegrationsView({
   );
   const [pendingGmailApprovalMessageId, setPendingGmailApprovalMessageId] =
     useState<string | null>(null);
-  const selectedGoHighLevelLead =
-    snapshot.leads.find((lead) => lead.id === goHighLevelLeadDryRunLeadId) ??
-    snapshot.leads[0] ??
-    null;
+  const goHighLevelCompanyReadiness =
+    goHighLevelReadinessResult?.companies.find(
+      (company) => company.companyId === goHighLevelCompanyId,
+    ) ?? null;
   const goHighLevelReadinessStatus =
     goHighLevelReadinessResult?.status ??
     (primaryGoHighLevelConnection
@@ -50078,26 +50148,14 @@ function IntegrationsView({
     goHighLevelLiveSyncStatusLabels[goHighLevelReadinessStatus];
   const goHighLevelReadinessResources =
     goHighLevelReadinessResult?.syncResources ?? goHighLevelSyncResources;
-  const goHighLevelDryRunResourceCount = countGoHighLevelResourceMode(
+  const goHighLevelContentResourceCount = countGoHighLevelResourceMode(
     goHighLevelReadinessResources,
-    "dry_run_preview",
+    "content_and_metadata",
   );
   const goHighLevelMetadataResourceCount = countGoHighLevelResourceMode(
     goHighLevelReadinessResources,
     "metadata_only",
   );
-  const goHighLevelLeadDryRunStatusLabel = goHighLevelLeadDryRunResult
-    ? goHighLevelLeadDryRunResult.ok
-      ? "Validated"
-      : "Needs attention"
-    : latestGoHighLevelLeadDryRunLog
-      ? integrationSyncLogStatusLabel(latestGoHighLevelLeadDryRunLog.status)
-      : "Not run";
-  const goHighLevelLeadDryRunStatusTone = goHighLevelLeadDryRunResult
-    ? getGoHighLevelDryRunStatusTone(goHighLevelLeadDryRunResult.status)
-    : latestGoHighLevelLeadDryRunLog
-      ? getGoHighLevelDryRunStatusTone(latestGoHighLevelLeadDryRunLog.status)
-      : "blue";
   const goHighLevelStatusLabel = primaryGoHighLevelConnection
     ? integrationStatusLabel(primaryGoHighLevelConnection.status)
     : goHighLevelSyncSummary.total
@@ -50115,6 +50173,11 @@ function IntegrationsView({
       : latestGoHighLevelLogAt
         ? formatDateTime(latestGoHighLevelLogAt)
         : "Not synced yet";
+  const goHighLevelLastSuccessfulSyncLabel = goHighLevelCompanyReadiness?.lastSuccessfulSyncAt
+    ? formatDateTime(goHighLevelCompanyReadiness.lastSuccessfulSyncAt)
+    : primaryGoHighLevelConnection?.last_successful_sync_at
+      ? formatDateTime(primaryGoHighLevelConnection.last_successful_sync_at)
+      : "Not synced yet";
   const twilioStatus = twilioReadinessResult?.status ?? "not_checked";
   const googleWorkspaceStatusLabel =
     googleWorkspaceReadinessResult?.statusLabel ??
@@ -50172,20 +50235,27 @@ function IntegrationsView({
   }, [gmailCompanyId, snapshot.companies]);
 
   useEffect(() => {
-    if (!snapshot.leads.length) {
-      setGoHighLevelLeadDryRunLeadId("");
+    if (!snapshot.companies.length) {
+      if (goHighLevelCompanyId) {
+        goHighLevelReadinessRequestSequenceRef.current += 1;
+        goHighLevelCompanyIdRef.current = "";
+        setGoHighLevelCompanyId("");
+        setGoHighLevelReadinessResult(null);
+        setIsCheckingGoHighLevelReadiness(false);
+      }
       return;
     }
 
-    if (
-      goHighLevelLeadDryRunLeadId &&
-      snapshot.leads.some((lead) => lead.id === goHighLevelLeadDryRunLeadId)
-    ) {
+    if (snapshot.companies.some((company) => company.id === goHighLevelCompanyId)) {
       return;
     }
 
-    setGoHighLevelLeadDryRunLeadId(snapshot.leads[0].id);
-  }, [goHighLevelLeadDryRunLeadId, snapshot.leads]);
+    goHighLevelReadinessRequestSequenceRef.current += 1;
+    goHighLevelCompanyIdRef.current = snapshot.companies[0].id;
+    setGoHighLevelCompanyId(snapshot.companies[0].id);
+    setGoHighLevelReadinessResult(null);
+    setIsCheckingGoHighLevelReadiness(false);
+  }, [goHighLevelCompanyId, snapshot.companies]);
 
   const handleCheckTwilioReadiness = useCallback(
     async ({ showNotice = true }: { showNotice?: boolean } = {}) => {
@@ -50524,33 +50594,71 @@ function IntegrationsView({
     }
   };
 
-  const handleCheckGoHighLevelReadiness = async () => {
+  const handleCheckGoHighLevelReadiness = async (
+    { showNotice = true }: { showNotice?: boolean } = {},
+  ) => {
+    if (!goHighLevelCompanyId) {
+      onError("Select a company before checking HighLevel readiness.");
+      return;
+    }
+
+    const requestedCompanyId = goHighLevelCompanyId;
+    const requestSequence = goHighLevelReadinessRequestSequenceRef.current + 1;
+    goHighLevelReadinessRequestSequenceRef.current = requestSequence;
     setIsCheckingGoHighLevelReadiness(true);
     setGoHighLevelReadinessResult(null);
 
     try {
-      const response = await fetch(`${goHighLevelReadinessEndpoint}?probe=1&pipelines=1`, {
+      const query = new URLSearchParams({ companyId: requestedCompanyId });
+      const response = await fetch(`${goHighLevelReadinessEndpoint}?${query.toString()}`, {
         method: "GET",
         headers: {
           Accept: "application/json",
         },
       });
       const result = (await response.json()) as GoHighLevelReadinessResult;
+      if (!response.ok) {
+        throw new Error(result.message || "GoHighLevel readiness could not be checked.");
+      }
+      if (
+        result.selectedCompanyId !== requestedCompanyId ||
+        !Array.isArray(result.companies) ||
+        !result.companies.some((company) => company.companyId === requestedCompanyId)
+      ) {
+        throw new Error("GoHighLevel readiness did not return the exact selected company.");
+      }
+      if (
+        requestSequence !== goHighLevelReadinessRequestSequenceRef.current ||
+        goHighLevelCompanyIdRef.current !== requestedCompanyId
+      ) {
+        return;
+      }
       setGoHighLevelReadinessResult(result);
 
-      if (result.ok) {
+      if (result.ok && showNotice) {
         onNotice("GoHighLevel Marketplace OAuth readiness checked. No sync ran.");
-      } else {
+      } else if (!result.ok) {
         onError(result.message);
       }
     } catch (error) {
+      if (
+        requestSequence !== goHighLevelReadinessRequestSequenceRef.current ||
+        goHighLevelCompanyIdRef.current !== requestedCompanyId
+      ) {
+        return;
+      }
       onError(
         error instanceof Error
           ? error.message
           : "Could not check GoHighLevel readiness.",
       );
     } finally {
-      setIsCheckingGoHighLevelReadiness(false);
+      if (
+        requestSequence === goHighLevelReadinessRequestSequenceRef.current &&
+        goHighLevelCompanyIdRef.current === requestedCompanyId
+      ) {
+        setIsCheckingGoHighLevelReadiness(false);
+      }
     }
   };
 
@@ -50623,7 +50731,7 @@ function IntegrationsView({
         `HighLevel inbound sync completed: ${result.totalFetched ?? 0} read, ${result.totalSaved ?? 0} stored.`,
       );
       await onReload();
-      await handleCheckGoHighLevelReadiness();
+      await handleCheckGoHighLevelReadiness({ showNotice: false });
     } catch (error) {
       onError(
         error instanceof Error ? error.message : "HighLevel synchronization failed.",
@@ -50633,77 +50741,46 @@ function IntegrationsView({
     }
   };
 
-  const handleRunGoHighLevelLeadDryRun = async () => {
-    if (!selectedGoHighLevelLead) {
-      onError("Create or select a lead before running the dry run.");
+  const handleRequeueGoHighLevelWebhook = async (
+    failure: GoHighLevelWebhookFailure,
+  ) => {
+    if (failure.attemptCount < 1 || failure.awaitingSignedRedelivery) {
+      onError("This webhook is already awaiting signed redelivery or is not requeueable.");
       return;
     }
 
-    setIsRunningGoHighLevelLeadDryRun(true);
-    setGoHighLevelLeadDryRunResult(null);
+    setRequeueingGoHighLevelWebhookId(failure.eventId);
 
     try {
-      const response = await fetch(goHighLevelEnvVars.leadDryRunEndpoint, {
+      const response = await fetch(goHighLevelWebhookRequeueEndpoint, {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ leadId: selectedGoHighLevelLead.id }),
+        body: JSON.stringify({
+          eventId: failure.eventId,
+          expectedAttemptCount: failure.attemptCount,
+          reason: "Operator requested signed redelivery from the GoHighLevel operational health panel.",
+        }),
       });
-      const result = (await response.json()) as GoHighLevelLeadDryRunResult;
-      setGoHighLevelLeadDryRunResult(result);
-
-      if (response.ok && result.ok) {
-        onNotice("GoHighLevel dry run validated. No communications were sent.");
-      } else {
-        onError(result.message);
+      const result = (await response.json()) as GoHighLevelWebhookRequeueResult;
+      if (!response.ok || !result.ok || !result.awaitingSignedRedelivery) {
+        throw new Error(result.message || "GoHighLevel webhook could not be requeued.");
       }
 
-      await onReload();
+      onNotice(
+        "Webhook is awaiting an exact signed HighLevel redelivery. No provider request or customer communication was sent.",
+      );
+      await handleCheckGoHighLevelReadiness({ showNotice: false });
     } catch (error) {
       onError(
         error instanceof Error
           ? error.message
-          : "Could not run the GoHighLevel lead dry run.",
+          : "GoHighLevel webhook could not be requeued.",
       );
     } finally {
-      setIsRunningGoHighLevelLeadDryRun(false);
-    }
-  };
-
-  const handleQueueGoHighLevelRetry = async (log: IntegrationSyncLogRecord) => {
-    if (!canRetryIntegrationSyncLog(log)) {
-      onError("This sync log is not retryable yet.");
-      return;
-    }
-
-    const now = new Date();
-
-    try {
-      await updateIntegrationSyncLog(
-        client,
-        log.id,
-        buildIntegrationSyncRetryableUpdate(log, {
-          now,
-          retryDelayMinutes: 0,
-          incrementAttempt: false,
-          errorMessage:
-            log.error_message ??
-            "Retry requested from WeatherTech OS. Worker dispatch is not enabled yet.",
-          responseSummary: {
-            ...log.response_summary,
-            dryRun: true,
-            communicationsSent: false,
-            retryRequestedAt: now.toISOString(),
-            retryRequestedFrom: "weathertech_os_integration_screen",
-          },
-        }),
-      );
-      onNotice("Retry marked for review. No customer communications were sent.");
-      await onReload();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not mark sync retry.");
+      setRequeueingGoHighLevelWebhookId(null);
     }
   };
 
@@ -52585,8 +52662,8 @@ function IntegrationsView({
             />
             <ProfileStat label="Last sync" value={goHighLevelLastSyncLabel} />
             <ProfileStat
-              label="Dry run lead sync"
-              value={goHighLevelLeadDryRunStatusLabel}
+              label="Last successful sync"
+              value={goHighLevelLastSuccessfulSyncLabel}
             />
           </div>
 
@@ -52606,12 +52683,12 @@ function IntegrationsView({
                   />
                   <Badge
                     label={
-                      goHighLevelReadinessResult?.oauth?.syncEnabled
+                      goHighLevelCompanyReadiness?.syncEnabled
                         ? "Read-only sync enabled"
                         : "Inbound sync disabled"
                     }
                     tone={
-                      goHighLevelReadinessResult?.oauth?.syncEnabled
+                      goHighLevelCompanyReadiness?.syncEnabled
                         ? "green"
                         : "blue"
                     }
@@ -52642,7 +52719,14 @@ function IntegrationsView({
                   Company mapping
                   <select
                     value={goHighLevelCompanyId}
-                    onChange={(event) => setGoHighLevelCompanyId(event.target.value)}
+                    onChange={(event) => {
+                      goHighLevelReadinessRequestSequenceRef.current += 1;
+                      goHighLevelCompanyIdRef.current = event.target.value;
+                      setGoHighLevelCompanyId(event.target.value);
+                      setGoHighLevelReadinessResult(null);
+                      setIsCheckingGoHighLevelReadiness(false);
+                      setRequeueingGoHighLevelWebhookId(null);
+                    }}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                   >
                     {snapshot.companies.map((company) => (
@@ -52672,7 +52756,8 @@ function IntegrationsView({
                     disabled={
                       isSyncingGoHighLevel ||
                       primaryGoHighLevelConnection?.company_id !== goHighLevelCompanyId ||
-                      !goHighLevelReadinessResult?.oauth?.syncEnabled
+                      !goHighLevelCompanyReadiness?.authenticated ||
+                      !goHighLevelCompanyReadiness.syncEnabled
                     }
                     className="inline-flex items-center justify-center gap-2 rounded-md border border-indigo-300 bg-white px-4 py-2 text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -52695,9 +52780,7 @@ function IntegrationsView({
                 />
                 <ProfileStat
                   label="Authenticated locations"
-                  value={
-                    goHighLevelReadinessResult?.oauth?.authenticatedLocationCount ?? 0
-                  }
+                  value={goHighLevelCompanyReadiness?.authenticated ? 1 : 0}
                 />
                 <ProfileStat
                   label="Approved scopes"
@@ -52706,7 +52789,8 @@ function IntegrationsView({
                 <ProfileStat
                   label="Token storage"
                   value={
-                    goHighLevelReadinessResult?.oauth?.encryptedCredentialCount
+                    goHighLevelCompanyReadiness?.tokenState &&
+                    goHighLevelCompanyReadiness.tokenState !== "missing"
                       ? "Encrypted"
                       : "No token stored"
                   }
@@ -52729,24 +52813,24 @@ function IntegrationsView({
               <ProfileStat
                 label="Sync mode"
                 value={
-                  goHighLevelReadinessResult?.liveSyncEnabled
-                    ? "Live enabled"
+                  goHighLevelCompanyReadiness?.syncEnabled
+                    ? "Read-only enabled"
                     : "Disabled"
                 }
               />
               <ProfileStat
                 label="Migration"
                 value={
-                  goHighLevelReadinessResult
-                    ? goHighLevelReadinessResult.migration.applied
-                      ? "Applied"
-                      : "Required"
-                    : goHighLevelOAuthBridgeMigration
+                    goHighLevelReadinessResult
+                      ? goHighLevelReadinessResult.migration.applied
+                        ? "Applied"
+                        : "Required"
+                    : goHighLevelProductionBridgeMigration
                 }
               />
               <ProfileStat
-                label="Dry-run resources"
-                value={goHighLevelDryRunResourceCount}
+                label="Content resources"
+                value={goHighLevelContentResourceCount}
               />
               <ProfileStat
                 label="Metadata resources"
@@ -52791,8 +52875,8 @@ function IntegrationsView({
                         </p>
                         <Badge
                           label={
-                            resource.phaseOneMode === "dry_run_preview"
-                              ? "Dry-run"
+                            resource.phaseOneMode === "content_and_metadata"
+                              ? "Content + metadata"
                               : "Metadata"
                           }
                           tone="blue"
@@ -52823,353 +52907,476 @@ function IntegrationsView({
             </div>
 
             {goHighLevelReadinessResult ? (
-              <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                <div className="rounded-lg border border-indigo-200 bg-white p-4">
-                  <p className="text-sm font-bold text-slate-950">
-                    Location discovery
-                  </p>
-                  <div className="mt-3 grid gap-2">
-                    {goHighLevelReadinessResult.locations.map((location) => (
-                      <div
-                        key={location.key}
-                        className="rounded-md border border-slate-200 bg-slate-50 p-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-950">
-                            {location.label}
-                          </p>
-                          <Badge
-                            label={location.readCheck.replace("_", " ")}
-                            tone={location.readCheck === "ok" ? "green" : "amber"}
-                          />
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {location.locationName ?? location.envVar} · {location.message}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-indigo-200 bg-white p-4">
-                  <p className="text-sm font-bold text-slate-950">
-                    Pipeline discovery
-                  </p>
-                  <div className="mt-3 grid gap-2">
-                    {goHighLevelReadinessResult.pipelines.map((pipeline) => (
-                      <div
-                        key={pipeline.key}
-                        className="rounded-md border border-slate-200 bg-slate-50 p-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-950">
-                            {pipeline.label}
-                          </p>
-                          <Badge
-                            label={
-                              pipeline.pipelineCount === null
-                                ? pipeline.readCheck.replace("_", " ")
-                                : `${pipeline.pipelineCount} pipelines`
-                            }
-                            tone={pipeline.readCheck === "ok" ? "green" : "amber"}
-                          />
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {pipeline.message}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-indigo-200 bg-white p-4">
-                  <p className="text-sm font-bold text-slate-950">
-                    Schema readiness
-                  </p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    {goHighLevelReadinessResult.schema.message}
-                  </p>
-                  <div className="mt-3 grid gap-2">
-                    {goHighLevelReadinessResult.schema.tables.map((table) => (
-                      <div
-                        key={table.table}
-                        className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-                      >
-                        <code className="break-all text-xs font-semibold text-slate-700">
-                          {table.table}
-                        </code>
-                        <Badge
-                          label={table.available ? "Available" : "Required"}
-                          tone={table.available ? "green" : "amber"}
-                        />
-                      </div>
-                    ))}
-                  </div>
+              <div className="mt-4 rounded-lg border border-indigo-200 bg-white p-4">
+                <p className="text-sm font-bold text-slate-950">Schema readiness</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {goHighLevelReadinessResult.schema.message}
+                </p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {goHighLevelReadinessResult.schema.tables.map((table) => (
+                    <div
+                      key={table.table}
+                      className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                    >
+                      <code className="break-all text-xs font-semibold text-slate-700">
+                        {table.table}
+                      </code>
+                      <Badge
+                        label={table.available ? "Available" : "Required"}
+                        tone={table.available ? "green" : "amber"}
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
             ) : null}
           </div>
 
-          <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4">
+          <section
+            className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4"
+            data-testid="gohighlevel-company-operational-health"
+          >
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-bold text-slate-950">
-                    Dry run lead sync
-                  </p>
-                  <Badge
-                    label={goHighLevelLeadDryRunStatusLabel}
-                    tone={goHighLevelLeadDryRunStatusTone}
-                  />
-                </div>
+                <p className="text-sm font-bold text-slate-950">
+                  Company operational health
+                </p>
                 <p className="mt-1 text-sm text-slate-600">
-                  Validates the GoHighLevel contact payload and stores a dry-run sync log.
+                  Exact-company Marketplace OAuth, inbound sync, resource, and verified
+                  webhook metrics. This surface cannot send customer communications or
+                  write to HighLevel.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => void handleRunGoHighLevelLeadDryRun()}
-                disabled={!selectedGoHighLevelLead || isRunningGoHighLevelLeadDryRun}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <RefreshCcw className="h-4 w-4" />
-                {isRunningGoHighLevelLeadDryRun ? "Running dry run" : "Run dry run"}
-              </button>
+              {goHighLevelCompanyReadiness ? (
+                <Badge
+                  label={formatSyncLogEventType(goHighLevelCompanyReadiness.syncHealth)}
+                  tone={
+                    goHighLevelCompanyReadiness.syncHealth === "healthy"
+                      ? "green"
+                      : goHighLevelCompanyReadiness.syncHealth === "inbound_disabled" ||
+                          goHighLevelCompanyReadiness.syncHealth === "ready_for_first_sync"
+                        ? "blue"
+                        : "amber"
+                  }
+                />
+              ) : null}
             </div>
 
-            {snapshot.leads.length ? (
-              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.6fr)]">
-                <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                  Lead
-                  <select
-                    value={goHighLevelLeadDryRunLeadId}
-                    onChange={(event) =>
-                      setGoHighLevelLeadDryRunLeadId(event.target.value)
-                    }
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950"
-                  >
-                    {snapshot.leads.map((lead) => (
-                      <option key={lead.id} value={lead.id}>
-                        {lead.contact_name} -{" "}
-                        {companyMap.get(lead.company_id)?.name ?? "Company"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="grid gap-2 text-sm">
+            {goHighLevelCompanyReadiness ? (
+              <div className="mt-4 grid gap-4">
+                {goHighLevelCompanyReadiness.evidence.truncated ? (
+                  <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+                    A safe evidence limit was reached. Displayed operational counts are
+                    lower bounds; review the affected records before treating zero or
+                    healthy counts as conclusive.
+                  </p>
+                ) : null}
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                   <ProfileStat
-                    label="Selected lead"
-                    value={selectedGoHighLevelLead?.contact_name ?? "None"}
-                  />
-                  <ProfileStat
-                    label="Last dry run"
+                    label="Exact mapping"
                     value={
-                      goHighLevelLeadDryRunResult
-                        ? formatDateTime(goHighLevelLeadDryRunResult.checkedAt)
-                        : latestGoHighLevelLeadDryRunLog
-                          ? formatDateTime(
-                              getIntegrationSyncLogTimestamp(
-                                latestGoHighLevelLeadDryRunLog,
-                              ),
-                            )
-                          : "Not run"
+                      goHighLevelCompanyReadiness.ambiguousConnections
+                        ? "Ambiguous"
+                        : goHighLevelCompanyReadiness.connectionCount === 1 &&
+                            goHighLevelCompanyReadiness.locationId &&
+                            goHighLevelCompanyReadiness.credentialBindingValid
+                          ? "Exact"
+                          : goHighLevelCompanyReadiness.connectionCount === 1 &&
+                              goHighLevelCompanyReadiness.locationId
+                            ? "Credential mismatch"
+                            : "Not connected"
                     }
                   />
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4">
-                <EmptyState label="No leads available for a GoHighLevel dry run." />
-              </div>
-            )}
-
-            {goHighLevelLeadDryRunResult ? (
-              <div className="mt-4 rounded-lg border border-sky-200 bg-white p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="font-semibold text-slate-950">
-                      {goHighLevelLeadDryRunResult.message}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Communications sent:{" "}
-                      {goHighLevelLeadDryRunResult.communicationsSent ? "yes" : "no"} ·
-                      Automations triggered:{" "}
-                      {goHighLevelLeadDryRunResult.automationTriggered ? "yes" : "no"}
-                    </p>
-                  </div>
-                  <Badge
-                    label={goHighLevelLeadDryRunResult.status.replace("_", " ")}
-                    tone={getGoHighLevelDryRunStatusTone(
-                      goHighLevelLeadDryRunResult.status,
+                  <ProfileStat
+                    label="OAuth authentication"
+                    value={
+                      goHighLevelCompanyReadiness.authenticated
+                        ? "Authenticated"
+                        : "Required"
+                    }
+                  />
+                  <ProfileStat
+                    label="Approved scopes"
+                    value={goHighLevelCompanyReadiness.scopesValid ? "Exact" : "Invalid"}
+                  />
+                  <ProfileStat
+                    label="Token"
+                    value={formatSyncLogEventType(goHighLevelCompanyReadiness.tokenState)}
+                  />
+                  <ProfileStat
+                    label="Inbound sync"
+                    value={goHighLevelCompanyReadiness.syncEnabled ? "Enabled" : "Disabled"}
+                  />
+                  <ProfileStat
+                    label="Connection"
+                    value={formatSyncLogEventType(
+                      goHighLevelCompanyReadiness.connectionStatus,
                     )}
                   />
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <ProfileStat
-                    label="Location"
-                    value={goHighLevelLeadDryRunResult.location?.label ?? "None"}
-                  />
-                  <ProfileStat
-                    label="Missing fields"
-                    value={goHighLevelLeadDryRunResult.missingFields.length || "None"}
-                  />
-                  <ProfileStat
-                    label="Sync log"
-                    value={goHighLevelLeadDryRunResult.syncLogId ?? "Not saved"}
-                  />
-                </div>
-                {goHighLevelLeadDryRunResult.missingFields.length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {goHighLevelLeadDryRunResult.missingFields.map((field) => (
-                      <span
-                        key={field}
-                        className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
-                      >
-                        {field}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {goHighLevelLeadDryRunResult.payload ? (
-                  <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
-                    {JSON.stringify(goHighLevelLeadDryRunResult.payload, null, 2)}
-                  </pre>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {[
-              {
-                title: "Lead push log",
-                value: goHighLevelSyncSummary.queued + goHighLevelSyncSummary.running,
-                detail: "Queued or in-progress outbound lead syncs.",
-                badge: "Pending",
-                tone: "blue" as const,
-              },
-              {
-                title: "Retry queue",
-                value: goHighLevelSyncSummary.failed + goHighLevelSyncSummary.retrying,
-                detail: "Failed or retrying sync attempts for review.",
-                badge: "Safe retry",
-                tone:
-                  goHighLevelSyncSummary.failed || goHighLevelSyncSummary.retrying
-                    ? ("amber" as const)
-                    : ("green" as const),
-              },
-              {
-                title: "Inbound webhooks",
-                value: goHighLevelSyncSummary.inbound,
-                detail: "Future provider-to-WeatherTech events.",
-                badge: "Tracked",
-                tone: "blue" as const,
-              },
-              {
-                title: "Audit trail",
-                value: goHighLevelSyncSummary.total,
-                detail: "Stored sync attempts with timestamps and status.",
-                badge: "Logged",
-                tone: goHighLevelSyncSummary.total ? ("green" as const) : ("blue" as const),
-              },
-            ].map((item) => (
-              <article
-                key={item.title}
-                className="rounded-lg border border-slate-200 bg-slate-50 p-4"
-              >
-                <div className="flex items-start gap-3">
-                  <ClipboardList className="mt-0.5 h-4 w-4 text-sky-600" />
-                  <div>
-                    <p className="font-bold text-slate-950">{item.title}</p>
-                    <p className="mt-2 text-2xl font-bold text-slate-950">
-                      {item.value}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
-                    <div className="mt-3">
-                      <Badge label={item.badge} tone={item.tone} />
-                    </div>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-
-          <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-sm font-bold text-slate-950">
-                  Failed and retryable activity
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Retry buttons only mark sync logs for future worker handling. They do
-                  not call GoHighLevel or send customer communications.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge
-                  label={`${failedGoHighLevelSyncLogs.length} failed`}
-                  tone={failedGoHighLevelSyncLogs.length ? "amber" : "green"}
-                />
-                <Badge
-                  label={`${retryableGoHighLevelSyncLogs.length} retryable`}
-                  tone={retryableGoHighLevelSyncLogs.length ? "amber" : "blue"}
-                />
-              </div>
-            </div>
-            {recentFailedGoHighLevelSyncLogs.length ? (
-              <div className="mt-4 divide-y divide-amber-200 overflow-hidden rounded-lg border border-amber-200 bg-white">
-                {recentFailedGoHighLevelSyncLogs.map((log) => {
-                  const isRetryable = canRetryIntegrationSyncLog(log);
-                  const safeError =
-                    sanitizeIntegrationSyncLogText(log.error_message) ??
-                    "No error message captured.";
-
-                  return (
-                    <article key={log.id} className="p-4">
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold capitalize text-slate-950">
-                              {formatSyncLogEventType(log.event_type)}
-                            </p>
-                            <Badge
-                              label={integrationSyncLogStatusLabel(log.status)}
-                              tone={getIntegrationSyncLogStatusTone(log.status)}
-                            />
-                          </div>
-                          <p className="mt-1 text-sm text-slate-600">
-                            Attempt {log.attempt_count} of {log.max_attempts} ·{" "}
-                            {formatDateTime(getIntegrationSyncLogTimestamp(log))}
-                          </p>
-                          <p className="mt-2 text-sm font-semibold text-amber-800">
-                            {safeError}
-                          </p>
-                          {log.next_retry_at ? (
-                            <p className="mt-1 text-sm text-slate-500">
-                              Next retry window {formatDateTime(log.next_retry_at)}
-                            </p>
-                          ) : null}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleQueueGoHighLevelRetry(log)}
-                          disabled={!isRetryable}
-                          className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <RefreshCcw className="h-4 w-4" />
-                          {isRetryable ? "Queue retry dry run" : "Retry held"}
-                        </button>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <article className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-bold text-slate-950">Mapping and sync</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {goHighLevelCompanyReadiness.companyName}
+                        </p>
                       </div>
-                    </article>
-                  );
-                })}
+                      <Badge
+                        label={
+                          goHighLevelCompanyReadiness.authenticated
+                            ? "Read-only authenticated"
+                            : "Authentication required"
+                        }
+                        tone={goHighLevelCompanyReadiness.authenticated ? "green" : "amber"}
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <ProfileStat
+                        label="Location"
+                        value={goHighLevelCompanyReadiness.locationName ?? "Not mapped"}
+                      />
+                      <ProfileStat
+                        label="Connection count"
+                        value={goHighLevelCompanyReadiness.connectionCount}
+                      />
+                      <ProfileStat
+                        label="Last sync"
+                        value={
+                          goHighLevelCompanyReadiness.lastSyncAt
+                            ? formatDateTime(goHighLevelCompanyReadiness.lastSyncAt)
+                            : "Not synced"
+                        }
+                      />
+                      <ProfileStat
+                        label="Last successful sync"
+                        value={
+                          goHighLevelCompanyReadiness.lastSuccessfulSyncAt
+                            ? formatDateTime(goHighLevelCompanyReadiness.lastSuccessfulSyncAt)
+                            : "Not synced"
+                        }
+                      />
+                      <ProfileStat
+                        label="Recent sync runs"
+                        value={goHighLevelCompanyReadiness.syncRuns.recentTotal}
+                      />
+                      <ProfileStat
+                        label="Succeeded / failed / active"
+                        value={`${goHighLevelCompanyReadiness.syncRuns.succeeded} / ${goHighLevelCompanyReadiness.syncRuns.failed} / ${goHighLevelCompanyReadiness.syncRuns.active}`}
+                      />
+                      <ProfileStat
+                        label="Expired active leases"
+                        value={goHighLevelCompanyReadiness.syncRuns.expiredActive}
+                      />
+                    </div>
+                    {goHighLevelCompanyReadiness.locationId ? (
+                      <p className="mt-3 break-all font-mono text-xs text-slate-500">
+                        Location ID {goHighLevelCompanyReadiness.locationId}
+                      </p>
+                    ) : null}
+                    {goHighLevelCompanyReadiness.lastError ? (
+                      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                        {goHighLevelCompanyReadiness.lastError}
+                      </p>
+                    ) : null}
+                  </article>
+
+                  <article className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="font-bold text-slate-950">Inbound automation events</p>
+                      <Badge
+                        label={
+                          goHighLevelCompanyReadiness.automationEvents
+                            .customerFacingActionsEnabled
+                            ? "Customer-facing actions enabled"
+                            : "Customer-facing actions disabled"
+                        }
+                        tone={
+                          goHighLevelCompanyReadiness.automationEvents
+                            .customerFacingActionsEnabled
+                            ? "amber"
+                            : "green"
+                        }
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <ProfileStat
+                        label="Recent tracked"
+                        value={goHighLevelCompanyReadiness.automationEvents.total}
+                      />
+                      <ProfileStat
+                        label="Communications"
+                        value={goHighLevelCompanyReadiness.automationEvents.communications}
+                      />
+                      <ProfileStat
+                        label="Missed calls"
+                        value={goHighLevelCompanyReadiness.automationEvents.missedCalls}
+                      />
+                      <ProfileStat
+                        label="Last event"
+                        value={
+                          goHighLevelCompanyReadiness.automationEvents.lastEventAt
+                            ? formatDateTime(goHighLevelCompanyReadiness.automationEvents.lastEventAt)
+                            : "No event"
+                        }
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                      {[
+                        [
+                          "HighLevel phone-number scope",
+                          goHighLevelReadinessResult?.phoneCapabilities
+                            .phoneNumberScopeGranted ?? false,
+                        ],
+                        [
+                          "Provider number inventory",
+                          goHighLevelReadinessResult?.phoneCapabilities
+                            .providerNumberInventoryVerified ?? false,
+                        ],
+                        [
+                          "Carrier SMS reception",
+                          goHighLevelReadinessResult?.phoneCapabilities
+                            .carrierSmsReceptionVerified ?? false,
+                        ],
+                        [
+                          "Carrier routing changed",
+                          goHighLevelReadinessResult?.phoneCapabilities.carrierRoutingChanged ??
+                            false,
+                        ],
+                        [
+                          "Twilio routing preserved",
+                          goHighLevelReadinessResult?.phoneCapabilities.twilioRoutingPreserved ??
+                            false,
+                        ],
+                      ].map(([label, enabled]) => (
+                        <div
+                          key={String(label)}
+                          className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+                        >
+                          <span className="text-slate-600">{label}</span>
+                          <Badge
+                            label={enabled ? "Yes" : "No"}
+                            tone={
+                              label === "Twilio routing preserved" && enabled
+                                ? "green"
+                                : "blue"
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500">
+                      These are inbound WTOS events only. No customer-facing automation,
+                      carrier change, provider-number claim, SMS, or call is enabled.
+                    </p>
+                  </article>
+
+                  <article className="rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="font-bold text-slate-950">Stored resources</p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <ProfileStat
+                        label="Tracked snapshots"
+                        value={goHighLevelCompanyReadiness.resources.total}
+                      />
+                      <ProfileStat
+                        label="Matched contacts"
+                        value={goHighLevelCompanyReadiness.resources.matchedContacts}
+                      />
+                      <ProfileStat
+                        label="Unresolved contacts"
+                        value={goHighLevelCompanyReadiness.resources.unresolvedContacts}
+                      />
+                      <ProfileStat
+                        label="Conflicts"
+                        value={goHighLevelCompanyReadiness.resources.conflictCount}
+                      />
+                      <ProfileStat
+                        label="Identity conflicts"
+                        value={
+                          goHighLevelCompanyReadiness.resources
+                            .communicationIdentityConflictCount
+                        }
+                      />
+                      <ProfileStat
+                        label="Pending mappings"
+                        value={goHighLevelCompanyReadiness.resources.pendingMappingCount}
+                      />
+                      <ProfileStat
+                        label="Recent duplicates suppressed"
+                        value={goHighLevelCompanyReadiness.resources.duplicatesSuppressed}
+                      />
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+                      {Object.entries(goHighLevelCompanyReadiness.resources.byType).map(
+                        ([resourceType, count]) => (
+                          <div
+                            key={resourceType}
+                            className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+                          >
+                            <span className="capitalize text-slate-600">
+                              {resourceType.replace(/_/g, " ")}
+                            </span>
+                            <span className="font-bold text-slate-950">{count}</span>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="font-bold text-slate-950">Verified webhooks</p>
+                      <Badge
+                        label={formatSyncLogEventType(goHighLevelCompanyReadiness.webhooks.health)}
+                        tone={
+                          goHighLevelCompanyReadiness.webhooks.health === "verified"
+                            ? "green"
+                            : goHighLevelCompanyReadiness.webhooks.health ===
+                                "awaiting_first_delivery"
+                              ? "blue"
+                              : "amber"
+                        }
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <ProfileStat
+                        label="Recent received"
+                        value={goHighLevelCompanyReadiness.webhooks.total}
+                      />
+                      <ProfileStat
+                        label="Processed"
+                        value={goHighLevelCompanyReadiness.webhooks.processed}
+                      />
+                      <ProfileStat
+                        label="Ignored"
+                        value={goHighLevelCompanyReadiness.webhooks.ignored}
+                      />
+                      <ProfileStat
+                        label="Processing"
+                        value={goHighLevelCompanyReadiness.webhooks.processing}
+                      />
+                      <ProfileStat
+                        label="Queued"
+                        value={goHighLevelCompanyReadiness.webhooks.queued}
+                      />
+                      <ProfileStat
+                        label="Stalled"
+                        value={goHighLevelCompanyReadiness.webhooks.stalled}
+                      />
+                      <ProfileStat
+                        label="Failed"
+                        value={goHighLevelCompanyReadiness.webhooks.failed}
+                      />
+                      <ProfileStat
+                        label="Duplicates suppressed"
+                        value={goHighLevelCompanyReadiness.webhooks.duplicatesSuppressed}
+                      />
+                      <ProfileStat
+                        label="Requeues"
+                        value={goHighLevelCompanyReadiness.webhooks.requeueCount}
+                      />
+                      <ProfileStat
+                        label="Awaiting signed redelivery"
+                        value={
+                          goHighLevelCompanyReadiness.webhooks.awaitingSignedRedelivery
+                        }
+                      />
+                      <ProfileStat
+                        label="Signature"
+                        value={
+                          goHighLevelCompanyReadiness.webhooks.lastSignatureVersion ??
+                          "Not received"
+                        }
+                      />
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500">
+                      Last verified{" "}
+                      {goHighLevelCompanyReadiness.webhooks.lastVerifiedAt
+                        ? formatDateTime(
+                            goHighLevelCompanyReadiness.webhooks.lastVerifiedAt,
+                          )
+                        : "not received"}{" "}
+                      · Last processed{" "}
+                      {goHighLevelCompanyReadiness.webhooks.lastProcessedAt
+                        ? formatDateTime(
+                            goHighLevelCompanyReadiness.webhooks.lastProcessedAt,
+                          )
+                        : "not processed"}
+                    </p>
+                  </article>
+                </div>
+
+                <article className="rounded-lg border border-amber-200 bg-white p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-bold text-slate-950">Failed webhook deliveries</p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Requeue resets only the durable WTOS receipt. It never calls HighLevel;
+                        processing resumes only after an exact signed provider redelivery.
+                      </p>
+                    </div>
+                    <Badge
+                      label={`${goHighLevelCompanyReadiness.webhooks.failed} failed`}
+                      tone={goHighLevelCompanyReadiness.webhooks.failed ? "amber" : "green"}
+                    />
+                  </div>
+                  {goHighLevelCompanyReadiness.webhooks.recentFailures.length ? (
+                    <div className="mt-4 divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200">
+                      {goHighLevelCompanyReadiness.webhooks.recentFailures.map((failure) => {
+                        const requeueDisabled =
+                          failure.attemptCount < 1 ||
+                          failure.awaitingSignedRedelivery ||
+                          requeueingGoHighLevelWebhookId !== null;
+
+                        return (
+                          <div
+                            key={failure.eventId}
+                            className="flex flex-col gap-3 bg-slate-50 p-4 lg:flex-row lg:items-start lg:justify-between"
+                          >
+                            <div>
+                              <p className="font-semibold capitalize text-slate-950">
+                                {formatSyncLogEventType(failure.eventType)}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-600">
+                                Attempt {failure.attemptCount} of {failure.maxAttempts} ·
+                                Received {formatDateTime(failure.receivedAt)}
+                              </p>
+                              <p className="mt-2 text-sm font-semibold text-amber-800">
+                                {failure.error ?? "No provider-safe error detail was captured."}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleRequeueGoHighLevelWebhook(failure)}
+                              disabled={requeueDisabled}
+                              className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <RefreshCcw className="h-4 w-4" />
+                              {failure.awaitingSignedRedelivery
+                                ? "Awaiting signed redelivery"
+                                : requeueingGoHighLevelWebhookId === failure.eventId
+                                  ? "Requeueing"
+                                  : "Requeue for signed redelivery"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mt-4">
+                      <EmptyState label="No failed GoHighLevel webhook deliveries." />
+                    </div>
+                  )}
+                </article>
               </div>
             ) : (
               <div className="mt-4">
-                <EmptyState label="No failed GoHighLevel sync activity." />
+                <EmptyState label="Check readiness to load exact-company operational health." />
               </div>
             )}
-          </div>
+          </section>
 
           <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -53178,8 +53385,8 @@ function IntegrationsView({
                   Recent GoHighLevel sync logs
                 </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Future lead pushes, webhook events, retries, and failures will appear
-                  here after the server workers are approved.
+                  Owner-approved inbound sync runs and safe provider-to-WTOS activity
+                  for the selected company.
                 </p>
               </div>
               <Badge
@@ -53273,7 +53480,7 @@ function IntegrationsView({
                 },
                 { label: "OAuth start", value: goHighLevelOAuthEndpoints.start },
                 { label: "Webhook", value: goHighLevelOAuthEndpoints.webhook },
-                { label: "Migration", value: goHighLevelOAuthBridgeMigration },
+                { label: "Migration", value: goHighLevelProductionBridgeMigration },
               ].map((item) => (
                 <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase text-slate-500">
@@ -53857,143 +54064,6 @@ function TwilioLiveFoundationPanel() {
               <span>{item}</span>
             </div>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function GoHighLevelLiveSyncFoundationPanel() {
-  const statuses: GoHighLevelLiveSyncStatus[] = [
-    "not_connected",
-    "credentials_required",
-    "connected",
-    "validation_failed",
-    "ready_to_sync",
-    "sync_disabled",
-    "sync_error",
-  ];
-  const dryRunResources = countGoHighLevelResourceMode(
-    goHighLevelSyncResources,
-    "dry_run_preview",
-  );
-  const metadataResources = countGoHighLevelResourceMode(
-    goHighLevelSyncResources,
-    "metadata_only",
-  );
-
-  return (
-    <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase text-indigo-700">
-            GoHighLevel Live Synchronization Foundation
-          </p>
-          <h3 className="mt-1 text-xl font-bold text-slate-950">
-            CRM sync, account metadata, and pipeline discovery setup
-          </h3>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Server-side architecture is prepared for contacts, leads, companies,
-            opportunities, notes, tags, tasks, external IDs, last sync timestamps,
-            pending sync flags, duplicate protection, conflict detection, and retry
-            readiness. No live sync or provider write is enabled here.
-          </p>
-        </div>
-        <ProviderStatusBadge label="No Live Sync" tone="blue" />
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-2">
-        {statuses.map((status) => (
-          <ProviderStatusBadge
-            key={status}
-            label={goHighLevelLiveSyncStatusLabels[status]}
-            tone={getGoHighLevelReadinessStatusTone(status)}
-          />
-        ))}
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <ProfileStat label="Sync resources" value={goHighLevelSyncResources.length} />
-        <ProfileStat label="Dry-run resources" value={dryRunResources} />
-        <ProfileStat label="Metadata resources" value={metadataResources} />
-        <ProfileStat label="Live sync" value="Disabled" />
-      </div>
-
-      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
-        <div className="grid gap-3">
-          <p className="text-sm font-bold uppercase text-slate-500">
-            Phase 1 Sync Coverage
-          </p>
-          {goHighLevelSyncResources.map((resource) => (
-            <div
-              key={resource.key}
-              className="rounded-lg border border-slate-200 bg-white p-3"
-            >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="font-bold text-slate-950">{resource.label}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    {resource.localRecord} to {resource.externalRecord}
-                  </p>
-                </div>
-                <ProviderStatusBadge
-                  label={
-                    resource.phaseOneMode === "dry_run_preview"
-                      ? "Dry-run preview"
-                      : "Metadata only"
-                  }
-                  tone="blue"
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid gap-3">
-          <p className="text-sm font-bold uppercase text-slate-500">
-            Read-only Readiness API
-          </p>
-          {[
-            {
-              label: "Readiness endpoint",
-              value: goHighLevelEnvVars.readinessEndpoint,
-            },
-            {
-              label: "Sync migration",
-              value: goHighLevelSyncFoundationMigration,
-            },
-            {
-              label: "Authentication",
-              value: "Server-side private integration token",
-            },
-            {
-              label: "Outbound automations",
-              value: "Disabled until owner approval",
-            },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className="rounded-lg border border-slate-200 bg-white p-3"
-            >
-              <p className="text-xs font-semibold uppercase text-slate-500">
-                {item.label}
-              </p>
-              <code className="mt-1 block break-all text-sm font-semibold text-slate-950">
-                {item.value}
-              </code>
-            </div>
-          ))}
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <p className="text-sm font-bold text-amber-950">
-              Safe setup sequence
-            </p>
-            <p className="mt-1 text-sm leading-6 text-amber-900">
-              Use the Integrations screen to check sync readiness, validate
-              credentials and location IDs, apply the additive sync mapping
-              migration, discover pipelines, map stages, then enable future sync
-              workers only after approval.
-            </p>
-          </div>
         </div>
       </div>
     </section>
@@ -55189,10 +55259,6 @@ function IntegrationCenterSection({
 
       <div className="mt-5">
         <TwilioLiveFoundationPanel />
-      </div>
-
-      <div className="mt-5">
-        <GoHighLevelLiveSyncFoundationPanel />
       </div>
 
       <div className="mt-5">

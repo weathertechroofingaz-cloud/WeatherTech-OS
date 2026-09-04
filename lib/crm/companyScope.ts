@@ -37,7 +37,11 @@ export function scopeCrmSnapshotByCompany(
   companyId: CompanyScopeId,
 ): CrmSnapshot {
   if (companyId === "all") {
-    return snapshot;
+    return {
+      ...snapshot,
+      goHighLevelResourceSnapshots:
+        snapshot.goHighLevelResourceSnapshots ?? [],
+    };
   }
 
   const companies = snapshot.companies.filter((company) => company.id === companyId);
@@ -184,6 +188,10 @@ export function scopeCrmSnapshotByCompany(
     gmailEmailAttachments: byCompany(snapshot.gmailEmailAttachments, companyId),
     smsMessages: byCompany(snapshot.smsMessages, companyId),
     businessPhoneNumbers,
+    goHighLevelResourceSnapshots: byCompany(
+      snapshot.goHighLevelResourceSnapshots ?? [],
+      companyId,
+    ),
     communicationProviderEvents: snapshot.communicationProviderEvents.filter(
       (event) =>
         event.company_id === companyId ||
