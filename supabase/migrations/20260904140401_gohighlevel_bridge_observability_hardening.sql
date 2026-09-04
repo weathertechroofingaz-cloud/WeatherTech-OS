@@ -99,7 +99,7 @@ with ranked_active_gohighlevel_syncs as (
     pg_catalog.row_number() over (
       partition by sync_log.company_id, sync_log.integration_connection_id
       order by
-        pg_catalog.coalesce(
+        coalesce(
           sync_log.last_attempted_at,
           sync_log.updated_at,
           sync_log.created_at
@@ -115,14 +115,14 @@ with ranked_active_gohighlevel_syncs as (
 update public.integration_sync_logs as sync_log
 set
   status = 'failed',
-  completed_at = pg_catalog.coalesce(
+  completed_at = coalesce(
     sync_log.completed_at,
     pg_catalog.clock_timestamp()
   ),
   next_retry_at = null,
   claim_token_sha256 = null,
   lease_expires_at = null,
-  response_summary = pg_catalog.coalesce(sync_log.response_summary, '{}'::jsonb)
+  response_summary = coalesce(sync_log.response_summary, '{}'::jsonb)
     || pg_catalog.jsonb_build_object(
       'legacyActiveDuplicateReconciled', true,
       'providerRecordsChanged', false
@@ -226,17 +226,17 @@ add column if not exists provider_content_sha256 text;
 
 update public.communication_provider_events
 set
-  provider_updated_at = pg_catalog.coalesce(
+  provider_updated_at = coalesce(
     provider_updated_at,
     occurred_at,
     received_at,
     created_at
   ),
-  provider_version_source = pg_catalog.coalesce(
+  provider_version_source = coalesce(
     provider_version_source,
     'legacy_backfill'
   ),
-  provider_status_rank = pg_catalog.coalesce(
+  provider_status_rank = coalesce(
     provider_status_rank,
     case pg_catalog.lower(status)
       when 'incoming' then 0
@@ -265,7 +265,7 @@ set
       else null
     end
   ),
-  provider_content_sha256 = pg_catalog.coalesce(
+  provider_content_sha256 = coalesce(
     provider_content_sha256,
     pg_catalog.encode(
       extensions.digest(
@@ -296,18 +296,18 @@ where provider = 'gohighlevel'
 
 update public.call_records
 set
-  provider_updated_at = pg_catalog.coalesce(
+  provider_updated_at = coalesce(
     provider_updated_at,
     started_at,
     ended_at,
     updated_at,
     created_at
   ),
-  provider_version_source = pg_catalog.coalesce(
+  provider_version_source = coalesce(
     provider_version_source,
     'legacy_backfill'
   ),
-  provider_status_rank = pg_catalog.coalesce(
+  provider_status_rank = coalesce(
     provider_status_rank,
     case call_status
       when 'incoming' then 0
@@ -327,7 +327,7 @@ set
       else null
     end
   ),
-  provider_content_sha256 = pg_catalog.coalesce(
+  provider_content_sha256 = coalesce(
     provider_content_sha256,
     pg_catalog.encode(
       extensions.digest(
@@ -930,7 +930,7 @@ declare
   target_claim_token_sha256 text;
   target_lease_seconds integer;
   normalized_request_fingerprint text := pg_catalog.lower(
-    pg_catalog.coalesce(p_claim ->> 'requestFingerprint', '')
+    coalesce(p_claim ->> 'requestFingerprint', '')
   );
   target_connection public.integration_connections%rowtype;
   existing_run public.integration_sync_logs%rowtype;
@@ -943,7 +943,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_claim) is distinct from 'object'
-    or pg_catalog.coalesce((p_claim ->> 'contractVersion')::integer, 0)
+    or coalesce((p_claim ->> 'contractVersion')::integer, 0)
       <> sync_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported sync claim contract.';
   end if;
@@ -1031,7 +1031,7 @@ begin
       next_retry_at = null,
       claim_token_sha256 = null,
       lease_expires_at = null,
-      response_summary = pg_catalog.coalesce(response_summary, '{}'::jsonb)
+      response_summary = coalesce(response_summary, '{}'::jsonb)
         || pg_catalog.jsonb_build_object(
           'staleRunRecovered', true,
           'providerRecordsChanged', false
@@ -1131,7 +1131,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_renewal) is distinct from 'object'
-    or pg_catalog.coalesce((p_renewal ->> 'contractVersion')::integer, 0)
+    or coalesce((p_renewal ->> 'contractVersion')::integer, 0)
       <> sync_contract_version
     or exists (
       select 1
@@ -1238,7 +1238,7 @@ begin
 
   update public.integration_sync_logs
   set
-    lease_expires_at = pg_catalog.greatest(
+    lease_expires_at = greatest(
       lease_expires_at,
       renewal_at + pg_catalog.make_interval(secs => target_lease_seconds)
     ),
@@ -1295,7 +1295,7 @@ declare
   target_claim_token uuid;
   target_claim_token_sha256 text;
   target_outcome text := p_completion ->> 'outcome';
-  target_error_code text := pg_catalog.nullif(
+  target_error_code text := nullif(
     pg_catalog.btrim(p_completion ->> 'errorCode'),
     ''
   );
@@ -1309,7 +1309,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_completion) is distinct from 'object'
-    or pg_catalog.coalesce((p_completion ->> 'contractVersion')::integer, 0)
+    or coalesce((p_completion ->> 'contractVersion')::integer, 0)
       <> sync_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported sync completion contract.';
   end if;
@@ -1426,7 +1426,7 @@ begin
       next_retry_at = null,
       claim_token_sha256 = null,
       lease_expires_at = null,
-      response_summary = pg_catalog.coalesce(response_summary, '{}'::jsonb)
+      response_summary = coalesce(response_summary, '{}'::jsonb)
         || pg_catalog.jsonb_build_object(
           'staleRunRecovered', true,
           'providerRecordsChanged', false
@@ -1661,8 +1661,8 @@ begin
     new.id::text,
     pg_catalog.encode(
       extensions.digest(
-        pg_catalog.coalesce(
-          pg_catalog.nullif(new.provider_call_sid, ''),
+        coalesce(
+          nullif(new.provider_call_sid, ''),
           new.id::text
         ),
         'sha256'
@@ -1670,7 +1670,7 @@ begin
       'hex'
     ),
     safe_payload,
-    pg_catalog.coalesce(new.ended_at, new.updated_at, pg_catalog.now()),
+    coalesce(new.ended_at, new.updated_at, pg_catalog.now()),
     null,
     stable_idempotency_key
   );
@@ -1697,7 +1697,7 @@ declare
   safe_error_message text;
   transition_at timestamptz := pg_catalog.clock_timestamp();
   normalized_payload_sha256 text := pg_catalog.lower(
-    pg_catalog.coalesce(p_payload_sha256, '')
+    coalesce(p_payload_sha256, '')
   );
 begin
   if not public.wtos_is_service_role_request() then
@@ -1789,7 +1789,7 @@ begin
       when p_target_status = 'failed' then safe_error_message
       else last_error
     end,
-    settings = pg_catalog.coalesce(settings, '{}'::jsonb)
+    settings = coalesce(settings, '{}'::jsonb)
       || pg_catalog.jsonb_strip_nulls(
         pg_catalog.jsonb_build_object(
           'webhooksVerified', true,
@@ -1863,7 +1863,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_batch) is distinct from 'object'
-    or pg_catalog.coalesce((p_batch ->> 'contractVersion')::integer, 0)
+    or coalesce((p_batch ->> 'contractVersion')::integer, 0)
       <> snapshot_contract_version
     or pg_catalog.octet_length(p_batch::text) > maximum_batch_bytes
     or pg_catalog.jsonb_typeof(p_batch -> 'records') is distinct from 'array' then
@@ -1921,27 +1921,27 @@ begin
       raise exception using errcode = '23514', message = 'Resource snapshot record scope mismatch.';
     end if;
 
-    target_resource_type := pg_catalog.nullif(
+    target_resource_type := nullif(
       pg_catalog.btrim(record_value ->> 'resourceType'),
       ''
     );
-    target_external_id := pg_catalog.nullif(
+    target_external_id := nullif(
       pg_catalog.btrim(record_value ->> 'externalId'),
       ''
     );
-    target_external_parent_id := pg_catalog.nullif(
+    target_external_parent_id := nullif(
       pg_catalog.btrim(record_value ->> 'externalParentId'),
       ''
     );
-    target_external_contact_id := pg_catalog.nullif(
+    target_external_contact_id := nullif(
       pg_catalog.btrim(record_value ->> 'externalContactId'),
       ''
     );
-    target_direction := pg_catalog.nullif(
+    target_direction := nullif(
       pg_catalog.btrim(record_value ->> 'direction'),
       ''
     );
-    target_status := pg_catalog.nullif(
+    target_status := nullif(
       pg_catalog.btrim(record_value ->> 'status'),
       ''
     );
@@ -1962,12 +1962,12 @@ begin
       )
       or target_external_id is null
       or pg_catalog.length(target_external_id) > 512
-      or pg_catalog.length(pg_catalog.coalesce(target_external_parent_id, '')) > 512
-      or pg_catalog.length(pg_catalog.coalesce(target_external_contact_id, '')) > 512
+      or pg_catalog.length(coalesce(target_external_parent_id, '')) > 512
+      or pg_catalog.length(coalesce(target_external_contact_id, '')) > 512
       or target_direction not in ('inbound', 'outbound')
         and target_direction is not null
-      or pg_catalog.length(pg_catalog.coalesce(target_status, '')) > 80
-      or pg_catalog.length(pg_catalog.coalesce(target_body_preview, '')) > 500
+      or pg_catalog.length(coalesce(target_status, '')) > 80
+      or pg_catalog.length(coalesce(target_body_preview, '')) > 500
       or pg_catalog.octet_length(target_payload_summary::text) > 16384
       or exists (
         select 1
@@ -1993,19 +1993,19 @@ begin
     end if;
 
     begin
-      target_customer_id := pg_catalog.nullif(
+      target_customer_id := nullif(
         pg_catalog.btrim(record_value ->> 'customerId'),
         ''
       )::uuid;
-      target_lead_id := pg_catalog.nullif(
+      target_lead_id := nullif(
         pg_catalog.btrim(record_value ->> 'leadId'),
         ''
       )::uuid;
-      target_occurred_at := pg_catalog.nullif(
+      target_occurred_at := nullif(
         pg_catalog.btrim(record_value ->> 'occurredAt'),
         ''
       )::timestamptz;
-      target_provider_updated_at := pg_catalog.nullif(
+      target_provider_updated_at := nullif(
         pg_catalog.btrim(record_value ->> 'providerUpdatedAt'),
         ''
       )::timestamptz;
@@ -2037,7 +2037,7 @@ begin
       raise exception using errcode = '23514', message = 'Resource snapshot lead scope mismatch.';
     end if;
 
-    association_authoritative := pg_catalog.coalesce(
+    association_authoritative := coalesce(
       (target_payload_summary ->> 'associationAuthoritative')::boolean,
       false
     );
@@ -2059,7 +2059,7 @@ begin
         or target_provider_updated_at < existing_snapshot.provider_updated_at
       ) then
       update public.gohighlevel_resource_snapshots
-      set last_synced_at = pg_catalog.greatest(last_synced_at, batch_synced_at)
+      set last_synced_at = greatest(last_synced_at, batch_synced_at)
       where id = existing_snapshot.id
         and company_id = target_company_id
         and integration_connection_id = target_connection_id;
@@ -2074,33 +2074,33 @@ begin
       if target_resource_type in ('message', 'call')
         and existing_snapshot.provider_updated_at is not null
         and target_provider_updated_at = existing_snapshot.provider_updated_at then
-        target_external_parent_id := pg_catalog.coalesce(
+        target_external_parent_id := coalesce(
           existing_snapshot.external_parent_id,
           target_external_parent_id
         );
-        target_external_contact_id := pg_catalog.coalesce(
+        target_external_contact_id := coalesce(
           existing_snapshot.external_contact_id,
           target_external_contact_id
         );
-        target_direction := pg_catalog.coalesce(
+        target_direction := coalesce(
           existing_snapshot.direction,
           target_direction
         );
-        target_status := pg_catalog.coalesce(
+        target_status := coalesce(
           existing_snapshot.status,
           target_status
         );
-        target_body_preview := pg_catalog.coalesce(
+        target_body_preview := coalesce(
           existing_snapshot.body_preview,
           target_body_preview
         );
-        target_occurred_at := pg_catalog.coalesce(
+        target_occurred_at := coalesce(
           existing_snapshot.occurred_at,
           target_occurred_at
         );
         target_payload_summary := pg_catalog.jsonb_strip_nulls(
           target_payload_summary
-        ) || pg_catalog.coalesce(
+        ) || coalesce(
           existing_snapshot.payload_summary,
           '{}'::jsonb
         );
@@ -2123,7 +2123,7 @@ begin
         occurred_at = target_occurred_at,
         provider_updated_at = target_provider_updated_at,
         payload_summary = target_payload_summary,
-        last_synced_at = pg_catalog.greatest(last_synced_at, batch_synced_at)
+        last_synced_at = greatest(last_synced_at, batch_synced_at)
       where id = existing_snapshot.id
         and company_id = target_company_id
         and integration_connection_id = target_connection_id
@@ -2230,7 +2230,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_resolution) is distinct from 'object'
-    or pg_catalog.coalesce((p_resolution ->> 'contractVersion')::integer, 0)
+    or coalesce((p_resolution ->> 'contractVersion')::integer, 0)
       <> identity_contract_version
     or pg_catalog.octet_length(p_resolution::text) > maximum_resolution_bytes
     or pg_catalog.jsonb_typeof(p_resolution -> 'aliases') is distinct from 'array'
@@ -2259,7 +2259,7 @@ begin
 
   target_channel := p_resolution ->> 'channel';
   target_tuple_fingerprint := pg_catalog.lower(
-    pg_catalog.nullif(
+    nullif(
       pg_catalog.btrim(p_resolution ->> 'tupleFingerprint'),
       ''
     )
@@ -2297,7 +2297,7 @@ begin
         'id',
         'altId'
       )
-      or pg_catalog.nullif(
+      or nullif(
         pg_catalog.btrim(alias_record.value ->> 'value'),
         ''
       ) is null
@@ -2315,7 +2315,7 @@ begin
   end if;
 
   if alias_count > 0 then
-    select pg_catalog.coalesce(
+    select coalesce(
       pg_catalog.jsonb_agg(
         pg_catalog.jsonb_build_object(
           'type', normalized_alias.alias_type,
@@ -2544,7 +2544,7 @@ begin
   into matched_identity_ids
   from matched_identities as matched;
 
-  matched_identity_count := pg_catalog.coalesce(
+  matched_identity_count := coalesce(
     pg_catalog.cardinality(matched_identity_ids),
     0
   );
@@ -2558,7 +2558,7 @@ begin
       and communication_identity.channel = target_channel
       and communication_identity.last_observed_tuple_fingerprint
         = target_tuple_fingerprint;
-    tuple_identity_count := pg_catalog.coalesce(
+    tuple_identity_count := coalesce(
       pg_catalog.cardinality(tuple_identity_ids),
       0
     );
@@ -2605,12 +2605,12 @@ begin
         all_conflicting_identity_ids := array(
         select candidate_identity.identity_id
         from pg_catalog.unnest(
-          pg_catalog.coalesce(
+          coalesce(
             target_conflict.candidate_identity_ids,
             '{}'::uuid[]
           )
-            || pg_catalog.coalesce(matched_identity_ids, '{}'::uuid[])
-            || pg_catalog.coalesce(tuple_identity_ids, '{}'::uuid[])
+            || coalesce(matched_identity_ids, '{}'::uuid[])
+            || coalesce(tuple_identity_ids, '{}'::uuid[])
         ) as candidate_identity(identity_id)
         where candidate_identity.identity_id is not null
         group by candidate_identity.identity_id
@@ -2647,7 +2647,7 @@ begin
         set
         alias_fingerprint = incoming_alias_fingerprint,
         alias_evidence = (
-          select pg_catalog.coalesce(
+          select coalesce(
             pg_catalog.jsonb_agg(
               evidence_record.evidence
               order by
@@ -2706,7 +2706,7 @@ begin
       and exists (
         select 1
         from pg_catalog.unnest(
-          pg_catalog.coalesce(tuple_identity_ids, '{}'::uuid[])
+          coalesce(tuple_identity_ids, '{}'::uuid[])
         ) as tuple_identity(identity_id)
         where tuple_identity.identity_id <> matched_identity_ids[1]
       )
@@ -2718,8 +2718,8 @@ begin
     all_conflicting_identity_ids := array(
       select conflict_identity.identity_id
       from pg_catalog.unnest(
-        pg_catalog.coalesce(matched_identity_ids, '{}'::uuid[])
-          || pg_catalog.coalesce(tuple_identity_ids, '{}'::uuid[])
+        coalesce(matched_identity_ids, '{}'::uuid[])
+          || coalesce(tuple_identity_ids, '{}'::uuid[])
       ) as conflict_identity(identity_id)
       where conflict_identity.identity_id is not null
       group by conflict_identity.identity_id
@@ -2840,7 +2840,7 @@ begin
       set
         conflict_count = conflict_count + 1,
         last_conflict_at = pg_catalog.clock_timestamp(),
-        last_conflict_reason = pg_catalog.coalesce(
+        last_conflict_reason = coalesce(
           last_conflict_reason,
           'provider_alias_collision'
         ),
@@ -2851,7 +2851,7 @@ begin
         and channel = target_channel
       returning * into target_identity;
 
-      target_conflict_reason := pg_catalog.coalesce(
+      target_conflict_reason := coalesce(
         target_identity.last_conflict_reason,
         'provider_alias_collision'
       );
@@ -3128,7 +3128,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_communication) is distinct from 'object'
-    or pg_catalog.coalesce(
+    or coalesce(
       (p_communication ->> 'contractVersion')::integer,
       0
     ) <> communication_contract_version
@@ -3173,15 +3173,15 @@ begin
   begin
     target_company_id := (p_communication ->> 'companyId')::uuid;
     target_connection_id := (p_communication ->> 'integrationConnectionId')::uuid;
-    target_customer_id := pg_catalog.nullif(
+    target_customer_id := nullif(
       pg_catalog.btrim(p_communication ->> 'customerId'),
       ''
     )::uuid;
-    target_lead_id := pg_catalog.nullif(
+    target_lead_id := nullif(
       pg_catalog.btrim(p_communication ->> 'leadId'),
       ''
     )::uuid;
-    target_job_id := pg_catalog.nullif(
+    target_job_id := nullif(
       pg_catalog.btrim(p_communication ->> 'jobId'),
       ''
     )::uuid;
@@ -3189,19 +3189,19 @@ begin
     target_provider_updated_at := (
       p_communication ->> 'providerUpdatedAt'
     )::timestamptz;
-    target_started_at := pg_catalog.nullif(
+    target_started_at := nullif(
       pg_catalog.btrim(p_communication ->> 'startedAt'),
       ''
     )::timestamptz;
-    target_answered_at := pg_catalog.nullif(
+    target_answered_at := nullif(
       pg_catalog.btrim(p_communication ->> 'answeredAt'),
       ''
     )::timestamptz;
-    target_ended_at := pg_catalog.nullif(
+    target_ended_at := nullif(
       pg_catalog.btrim(p_communication ->> 'endedAt'),
       ''
     )::timestamptz;
-    target_duration_seconds := pg_catalog.nullif(
+    target_duration_seconds := nullif(
       pg_catalog.btrim(p_communication ->> 'durationSeconds'),
       ''
     )::integer;
@@ -3212,38 +3212,38 @@ begin
     raise exception using errcode = '22023', message = 'Invalid HighLevel communication identity or version.';
   end;
 
-  target_provider_event_id := pg_catalog.nullif(
+  target_provider_event_id := nullif(
     pg_catalog.btrim(p_communication ->> 'canonicalExternalId'),
     ''
   );
-  target_parent_id := pg_catalog.nullif(
+  target_parent_id := nullif(
     pg_catalog.btrim(p_communication ->> 'providerParentId'),
     ''
   );
   target_channel := p_communication ->> 'channel';
   target_direction := p_communication ->> 'direction';
-  target_status := pg_catalog.nullif(
+  target_status := nullif(
     pg_catalog.btrim(p_communication ->> 'status'),
     ''
   );
   target_provider_version_source := p_communication ->> 'providerVersionSource';
-  target_from_phone := pg_catalog.nullif(
+  target_from_phone := nullif(
     pg_catalog.btrim(p_communication ->> 'fromPhone'),
     ''
   );
-  target_to_phone := pg_catalog.nullif(
+  target_to_phone := nullif(
     pg_catalog.btrim(p_communication ->> 'toPhone'),
     ''
   );
-  target_recording_id := pg_catalog.nullif(
+  target_recording_id := nullif(
     pg_catalog.btrim(p_communication ->> 'recordingId'),
     ''
   );
-  target_recording_status := pg_catalog.nullif(
+  target_recording_status := nullif(
     pg_catalog.btrim(p_communication ->> 'recordingStatus'),
     ''
   );
-  target_transcript_status := pg_catalog.nullif(
+  target_transcript_status := nullif(
     pg_catalog.btrim(p_communication ->> 'transcriptStatus'),
     ''
   );
@@ -3253,7 +3253,7 @@ begin
     or target_connection_id is null
     or target_provider_event_id is null
     or pg_catalog.length(target_provider_event_id) > 512
-    or pg_catalog.length(pg_catalog.coalesce(target_parent_id, '')) > 512
+    or pg_catalog.length(coalesce(target_parent_id, '')) > 512
     or target_channel not in ('sms', 'voice')
     or target_direction not in ('inbound', 'outbound')
     or target_status is null
@@ -3264,9 +3264,9 @@ begin
       'updated_at',
       'created_at_fallback'
     )
-    or pg_catalog.length(pg_catalog.coalesce(target_from_phone, '')) > 64
-    or pg_catalog.length(pg_catalog.coalesce(target_to_phone, '')) > 64
-    or pg_catalog.length(pg_catalog.coalesce(target_recording_id, '')) > 512
+    or pg_catalog.length(coalesce(target_from_phone, '')) > 64
+    or pg_catalog.length(coalesce(target_to_phone, '')) > 64
+    or pg_catalog.length(coalesce(target_recording_id, '')) > 512
     or target_duration_seconds < 0
     or target_duration_seconds > 604800
     or pg_catalog.octet_length(target_payload_summary::text)
@@ -3397,7 +3397,7 @@ begin
     raise exception using errcode = '23514', message = 'HighLevel communication job scope mismatch.';
   end if;
 
-  association_authoritative := pg_catalog.coalesce(
+  association_authoritative := coalesce(
     (target_payload_summary ->> 'associationAuthoritative')::boolean,
     false
   );
@@ -3408,7 +3408,7 @@ begin
     when target_direction = 'inbound' then 'voice_inbound'
     else 'voice_status'
   end;
-  target_started_at := pg_catalog.coalesce(
+  target_started_at := coalesce(
     target_started_at,
     target_occurred_at
   );
@@ -4141,7 +4141,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_binding) is distinct from 'object'
-    or pg_catalog.coalesce((p_binding ->> 'contractVersion')::integer, 0)
+    or coalesce((p_binding ->> 'contractVersion')::integer, 0)
       <> binding_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported OAuth binding contract.';
   end if;
@@ -4153,25 +4153,25 @@ begin
     raise exception using errcode = '22023', message = 'Invalid OAuth binding identity.';
   end;
 
-  target_location_id := pg_catalog.nullif(
+  target_location_id := nullif(
     pg_catalog.btrim(p_binding ->> 'externalLocationId'),
     ''
   );
-  target_external_company_id := pg_catalog.nullif(
+  target_external_company_id := nullif(
     pg_catalog.btrim(p_binding ->> 'externalCompanyId'),
     ''
   );
-  target_external_user_id := pg_catalog.nullif(
+  target_external_user_id := nullif(
     pg_catalog.btrim(p_binding ->> 'externalUserId'),
     ''
   );
-  target_display_name := pg_catalog.nullif(
+  target_display_name := nullif(
     pg_catalog.btrim(p_binding ->> 'displayName'),
     ''
   );
   target_encrypted_access_token := p_binding ->> 'encryptedAccessToken';
   target_encrypted_refresh_token := p_binding ->> 'encryptedRefreshToken';
-  target_token_type := pg_catalog.nullif(
+  target_token_type := nullif(
     pg_catalog.btrim(p_binding ->> 'tokenType'),
     ''
   );
@@ -4183,7 +4183,7 @@ begin
     or pg_catalog.length(target_location_id) > 256
     or target_external_company_id is null
     or pg_catalog.length(target_external_company_id) > 256
-    or pg_catalog.length(pg_catalog.coalesce(target_external_user_id, '')) > 256
+    or pg_catalog.length(coalesce(target_external_user_id, '')) > 256
     or target_display_name is null
     or pg_catalog.length(target_display_name) > 200
     or target_token_type is null
@@ -4210,7 +4210,7 @@ begin
     raise exception using errcode = '22023', message = 'Invalid OAuth binding.';
   end if;
 
-  select pg_catalog.coalesce(
+  select coalesce(
     pg_catalog.array_agg(granted_scope.scope_value order by granted_scope.scope_value),
     '{}'::text[]
   )
@@ -4342,7 +4342,7 @@ begin
     token_expires_at = target_token_expires_at,
     last_failure_at = null,
     last_error = null,
-    settings = pg_catalog.coalesce(settings, '{}'::jsonb) || target_settings
+    settings = coalesce(settings, '{}'::jsonb) || target_settings
   where id = target_connection.id
     and company_id = target_company_id
     and provider = 'gohighlevel'
@@ -4465,7 +4465,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_claim) is distinct from 'object'
-    or pg_catalog.coalesce((p_claim ->> 'contractVersion')::integer, 0)
+    or coalesce((p_claim ->> 'contractVersion')::integer, 0)
       <> refresh_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported token refresh claim.';
   end if;
@@ -4580,7 +4580,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_adoption) is distinct from 'object'
-    or pg_catalog.coalesce((p_adoption ->> 'contractVersion')::integer, 0)
+    or coalesce((p_adoption ->> 'contractVersion')::integer, 0)
       <> refresh_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported token refresh adoption.';
   end if;
@@ -4688,7 +4688,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_finalization) is distinct from 'object'
-    or pg_catalog.coalesce((p_finalization ->> 'contractVersion')::integer, 0)
+    or coalesce((p_finalization ->> 'contractVersion')::integer, 0)
       <> refresh_contract_version then
     raise exception using errcode = '22023', message = 'Unsupported token refresh finalization.';
   end if;
@@ -4706,7 +4706,7 @@ begin
 
   target_encrypted_access_token := p_finalization ->> 'encryptedAccessToken';
   target_encrypted_refresh_token := p_finalization ->> 'encryptedRefreshToken';
-  target_token_type := pg_catalog.nullif(
+  target_token_type := nullif(
     pg_catalog.btrim(p_finalization ->> 'tokenType'),
     ''
   );
@@ -4735,7 +4735,7 @@ begin
     raise exception using errcode = '22023', message = 'Invalid token refresh finalization.';
   end if;
 
-  select pg_catalog.coalesce(
+  select coalesce(
     pg_catalog.array_agg(granted_scope.scope_value order by granted_scope.scope_value),
     '{}'::text[]
   )
@@ -4864,7 +4864,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(p_release) is distinct from 'object'
-    or pg_catalog.coalesce((p_release ->> 'contractVersion')::integer, 0)
+    or coalesce((p_release ->> 'contractVersion')::integer, 0)
       <> refresh_contract_version
     or pg_catalog.jsonb_typeof(p_release -> 'markNeedsReauth')
       is distinct from 'boolean' then
@@ -4967,7 +4967,7 @@ declare
   anchor_credential public.gohighlevel_oauth_credentials%rowtype;
   transition_at timestamptz := pg_catalog.clock_timestamp();
   normalized_payload_sha256 text := pg_catalog.lower(
-    pg_catalog.coalesce(p_payload_sha256, '')
+    coalesce(p_payload_sha256, '')
   );
   target_external_company_id text;
   credential_count integer := 0;
@@ -5006,7 +5006,7 @@ begin
       raise exception using errcode = '23514', message = 'Company uninstall scope mismatch.';
     end if;
 
-    target_external_company_id := pg_catalog.nullif(
+    target_external_company_id := nullif(
       pg_catalog.btrim(
         pg_catalog.substr(
           existing_event.external_location_id,
@@ -5080,7 +5080,7 @@ begin
   if p_scope = 'company' then
     update public.gohighlevel_oauth_credentials
     set
-      revoked_at = pg_catalog.coalesce(revoked_at, transition_at),
+      revoked_at = coalesce(revoked_at, transition_at),
       refresh_lease_id = null,
       refresh_lease_acquired_at = null,
       refresh_lease_expires_at = null
@@ -5103,7 +5103,7 @@ begin
   else
     update public.gohighlevel_oauth_credentials
     set
-      revoked_at = pg_catalog.coalesce(revoked_at, transition_at),
+      revoked_at = coalesce(revoked_at, transition_at),
       refresh_lease_id = null,
       refresh_lease_acquired_at = null,
       refresh_lease_expires_at = null

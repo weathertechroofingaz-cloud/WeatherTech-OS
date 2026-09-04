@@ -2607,7 +2607,7 @@ test("SQL and callback contracts keep atomic writes, service-only leases, agency
   );
   assert.match(
     syncRenewalBody,
-    /lease_expires_at = pg_catalog\.greatest\([\s\S]*?last_attempted_at = renewal_at[\s\S]*?status = 'running'[\s\S]*?claim_token_sha256 = target_claim_token_sha256[\s\S]*?lease_expires_at > renewal_at/,
+    /lease_expires_at = greatest\([\s\S]*?last_attempted_at = renewal_at[\s\S]*?status = 'running'[\s\S]*?claim_token_sha256 = target_claim_token_sha256[\s\S]*?lease_expires_at > renewal_at/,
   );
   assert.doesNotMatch(syncRenewalBody, /set\s+status\s*=/);
 
@@ -2717,7 +2717,7 @@ test("SQL and callback contracts keep atomic writes, service-only leases, agency
   );
   assert.match(
     snapshotBatchBody,
-    /set last_synced_at = pg_catalog\.greatest\(last_synced_at, batch_synced_at\)/,
+    /set last_synced_at = greatest\(last_synced_at, batch_synced_at\)/,
   );
   assert.match(
     snapshotBatchBody,
@@ -2727,7 +2727,7 @@ test("SQL and callback contracts keep atomic writes, service-only leases, agency
   assert.match(snapshotBatchBody, /'skippedCount', skipped_count/);
   assert.match(
     snapshotBatchBody,
-    /target_resource_type in \('message', 'call'\)[\s\S]*?target_provider_updated_at = existing_snapshot\.provider_updated_at[\s\S]*?target_external_parent_id := pg_catalog\.coalesce\([\s\S]*?existing_snapshot\.external_parent_id[\s\S]*?target_external_contact_id := pg_catalog\.coalesce\([\s\S]*?existing_snapshot\.external_contact_id[\s\S]*?target_body_preview := pg_catalog\.coalesce\([\s\S]*?existing_snapshot\.body_preview[\s\S]*?jsonb_strip_nulls\([\s\S]*?target_payload_summary[\s\S]*?\|\| pg_catalog\.coalesce\([\s\S]*?existing_snapshot\.payload_summary/,
+    /target_resource_type in \('message', 'call'\)[\s\S]*?target_provider_updated_at = existing_snapshot\.provider_updated_at[\s\S]*?target_external_parent_id := coalesce\([\s\S]*?existing_snapshot\.external_parent_id[\s\S]*?target_external_contact_id := coalesce\([\s\S]*?existing_snapshot\.external_contact_id[\s\S]*?target_body_preview := coalesce\([\s\S]*?existing_snapshot\.body_preview[\s\S]*?jsonb_strip_nulls\([\s\S]*?target_payload_summary[\s\S]*?\|\| coalesce\([\s\S]*?existing_snapshot\.payload_summary/,
   );
   assert.doesNotMatch(snapshotBatchBody, /'accessToken'|'refreshToken'/);
 
@@ -2831,11 +2831,11 @@ test("SQL and callback contracts keep atomic writes, service-only leases, agency
   );
   assert.match(
     migration,
-    /provider_version_source = pg_catalog\.coalesce\([\s\S]*?'legacy_backfill'[\s\S]*?when 'connected' then 30[\s\S]*?when 'opened' then 50[\s\S]*?when 'clicked' then 50[\s\S]*?when 'opt_out' then 50/,
+    /provider_version_source = coalesce\([\s\S]*?'legacy_backfill'[\s\S]*?when 'connected' then 30[\s\S]*?when 'opened' then 50[\s\S]*?when 'clicked' then 50[\s\S]*?when 'opt_out' then 50/,
   );
   assert.match(
     migration,
-    /update public\.call_records[\s\S]*?provider_updated_at = pg_catalog\.coalesce\(\s*provider_updated_at,\s*started_at,\s*ended_at/,
+    /update public\.call_records[\s\S]*?provider_updated_at = coalesce\(\s*provider_updated_at,\s*started_at,\s*ended_at/,
   );
 
   const bindingBody = functionBody("wtos_bind_gohighlevel_oauth_v1");

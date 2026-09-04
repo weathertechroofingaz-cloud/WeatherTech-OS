@@ -262,7 +262,7 @@ const expectedMigrations = [
   ],
   [
     "20260904140401_gohighlevel_bridge_observability_hardening.sql",
-    "1d08462d07c1f9d906a34eb957dafe933875915dd722a780f6c289ca63454655",
+    "6aa5382c38a45de62801846b81f9b8c053551817be86f68d750d4ae10dd95df4",
   ],
 ];
 
