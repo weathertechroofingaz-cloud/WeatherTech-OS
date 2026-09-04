@@ -341,7 +341,7 @@ export function getAiPilotProviderConfig(
       0,
     ),
     timeoutMs: parseInteger(env.AI_TIMEOUT_MS, 15000),
-    retryLimit: Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2),
+    retryLimit: Math.max(0, Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2)),
     streamingEnabled: parseBoolean(env.AI_STREAMING_ENABLED, false),
     structuredOutputEnabled: parseBoolean(env.AI_STRUCTURED_OUTPUT_ENABLED, true),
     actionExecutionEnabled: false,
@@ -601,14 +601,29 @@ export async function runAiPilotCommand({
   }
 
   const { migrationApplied, readiness, context, usage, fallback } = preparation;
-  const providerResult = await callConfiguredProvider({
-    config,
-    prompt,
-    context,
-    userRole,
-    fetchImpl,
-    signal,
-  });
+  let providerResult: ProviderCallResult;
+  try {
+    providerResult = await callConfiguredProvider({
+      config,
+      prompt,
+      context,
+      userRole,
+      fetchImpl,
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
+    providerResult = {
+      ok: false,
+      statusCode: null,
+      outputText: "",
+      providerResponseId: null,
+      usage: { inputTokens: null, outputTokens: null, totalTokens: null },
+      error: "AI provider request failed or timed out.",
+    };
+  }
 
   if (!providerResult.ok) {
     const response: AiGroundedResponse = {
@@ -1592,7 +1607,12 @@ function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
     config.maxRequestTokens > 0 &&
     config.maxResponseTokens > 0 &&
     config.maxInputCostUsdPer1kTokens > 0 &&
-    config.maxOutputCostUsdPer1kTokens > 0
+    config.maxOutputCostUsdPer1kTokens > 0 &&
+    Number.isInteger(config.timeoutMs) &&
+    config.timeoutMs > 0 &&
+    Number.isInteger(config.retryLimit) &&
+    config.retryLimit >= 0 &&
+    config.retryLimit <= 2
   );
 }
 

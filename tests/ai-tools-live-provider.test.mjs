@@ -387,6 +387,14 @@ try {
   const disabled = aiProvider.getAiPilotProviderConfig({ AI_ENABLED: "false" });
   assertEqual(disabled.enabled, false, "AI provider config defaults to disabled");
   assertEqual(disabled.provider, "disabled", "Unconfigured provider is disabled");
+  const negativeRetryConfig = aiProvider.getAiPilotProviderConfig({
+    AI_RETRY_LIMIT: "-7",
+  });
+  assertEqual(
+    negativeRetryConfig.retryLimit,
+    0,
+    "A negative environment retry limit must clamp to one initial provider attempt",
+  );
 
   const disabledResult = await aiProvider.runAiPilotCommand({
     prompt: "What needs attention today?",
@@ -516,6 +524,20 @@ try {
     AI_TIMEOUT_MS: "5000",
     AI_RETRY_LIMIT: "2",
   });
+  const invalidInjectedRetryReadiness = aiProvider.buildAiPilotReadiness({
+    config: { ...productionStatusConfig, retryLimit: -1 },
+    migrationApplied: true,
+  });
+  assertEqual(
+    invalidInjectedRetryReadiness.liveProviderEnabled,
+    false,
+    "An injected negative retry limit must fail readiness closed",
+  );
+  assertEqual(
+    invalidInjectedRetryReadiness.state,
+    "usage_limit_reached",
+    "Invalid effective retry controls must report incomplete usage limits",
+  );
   const enabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
@@ -866,6 +888,161 @@ try {
     tightenedRetryResult.providerHealth.ok,
     false,
     "A failed provider request cannot report healthy provider runtime",
+  );
+
+  for (const [label, providerFailure] of [
+    ["thrown provider failure", new Error("raw-provider-error-sentinel")],
+    [
+      "timeout-shaped provider failure",
+      Object.assign(new Error("raw-timeout-error-sentinel"), {
+        name: "AbortError",
+      }),
+    ],
+  ]) {
+    const failedProviderResult = await aiProvider.runAiPilotCommand({
+      prompt: "Which estimates need follow-up?",
+      snapshot,
+      companyId: wtCompanyId,
+      userId: "user-wt",
+      now,
+      providerConfig: {
+        ...scopedConfig.config,
+        maxRequestTokens: 100_000,
+        retryLimit: 0,
+      },
+      quotaReservation,
+      fetchImpl: async () => {
+        throw providerFailure;
+      },
+    });
+    assertEqual(
+      failedProviderResult.companyId,
+      wtCompanyId,
+      `${label} must preserve the exact company`,
+    );
+    assertEqual(
+      failedProviderResult.response.mode,
+      "provider_disabled",
+      `${label} must return the safe grounded fallback`,
+    );
+    assertEqual(
+      failedProviderResult.response.readOnly,
+      true,
+      `${label} must remain read-only`,
+    );
+    assertEqual(
+      failedProviderResult.response.productionDisabled,
+      true,
+      `${label} must keep external actions disabled`,
+    );
+    assertEqual(
+      failedProviderResult.readiness.state,
+      "provider_test_failed",
+      `${label} must downgrade runtime readiness`,
+    );
+    assertEqual(
+      failedProviderResult.readiness.liveProviderEnabled,
+      false,
+      `${label} cannot retain live-provider readiness`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.tested,
+      true,
+      `${label} records a completed provider test`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.ok,
+      false,
+      `${label} records failed provider health`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.statusCode,
+      null,
+      `${label} must not invent a provider status code`,
+    );
+    assert(
+      !JSON.stringify(failedProviderResult).includes(providerFailure.message),
+      `${label} must not expose the caught provider error`,
+    );
+  }
+
+  const timedOutProviderResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    providerConfig: {
+      ...scopedConfig.config,
+      maxRequestTokens: 100_000,
+      retryLimit: 0,
+      timeoutMs: 1,
+    },
+    quotaReservation,
+    fetchImpl: async (_url, init) =>
+      await new Promise((resolve, reject) => {
+        const rejectOnAbort = () => reject(new Error("raw-timer-error-sentinel"));
+        if (init.signal.aborted) {
+          rejectOnAbort();
+          return;
+        }
+        init.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      }),
+  });
+  assertEqual(
+    timedOutProviderResult.readiness.state,
+    "provider_test_failed",
+    "The internal provider timeout must resolve to failed runtime readiness",
+  );
+  assertEqual(
+    timedOutProviderResult.readiness.liveProviderEnabled,
+    false,
+    "The internal provider timeout cannot retain live-provider readiness",
+  );
+  assertEqual(
+    timedOutProviderResult.providerHealth.tested,
+    true,
+    "The internal provider timeout records a completed provider test",
+  );
+  assertEqual(
+    timedOutProviderResult.providerHealth.ok,
+    false,
+    "The internal provider timeout records failed provider health",
+  );
+  assert(
+    !JSON.stringify(timedOutProviderResult).includes("raw-timer-error-sentinel"),
+    "The internal provider timeout must not expose its caught error",
+  );
+
+  const callerAbortController = new AbortController();
+  callerAbortController.abort();
+  const callerAbortFailure = new Error("caller-abort-sentinel");
+  let callerAbortResult = null;
+  try {
+    await aiProvider.runAiPilotCommand({
+      prompt: "Which estimates need follow-up?",
+      snapshot,
+      companyId: wtCompanyId,
+      userId: "user-wt",
+      now,
+      providerConfig: {
+        ...scopedConfig.config,
+        maxRequestTokens: 100_000,
+        retryLimit: 0,
+      },
+      quotaReservation,
+      signal: callerAbortController.signal,
+      fetchImpl: async () => {
+        throw callerAbortFailure;
+      },
+    });
+  } catch (error) {
+    callerAbortResult = error;
+  }
+  assertEqual(
+    callerAbortResult,
+    callerAbortFailure,
+    "An explicit caller abort must still reject instead of becoming provider health evidence",
   );
 
   const actionContext = openAiResult.context.records;

@@ -46,6 +46,26 @@ const WEATHERTECH_REGRESSION_COMPANY_ID =
   "503d4701-ea18-4300-a4fa-91eb62cf6609";
 const IHC_REGRESSION_COMPANY_ID =
   "c0ae6238-909a-4273-9841-d044dd42a010";
+const AI_PROVIDER_STATUS_POLICY_MARKER_PREFIX =
+  "wtos-browser-ai-status-policy-v1:";
+const AI_PROVIDER_STATUS_POLICY_STALE_MS = 15 * 60 * 1000;
+const AI_PROVIDER_STATUS_POLICY_SELECT = [
+  "id",
+  "company_id",
+  "ai_enabled",
+  "allowed_providers",
+  "allowed_models",
+  "daily_request_limit",
+  "per_user_daily_request_limit",
+  "per_company_monthly_budget_cents",
+  "expensive_task_confirmation_cents",
+  "token_limit",
+  "timeout_ms",
+  "retry_limit",
+  "last_reviewed_at",
+  "created_at",
+  "updated_at",
+].join(",");
 const JOB_PHOTO_STORAGE_BUCKET = "job-photos";
 const JOB_PHOTO_TEST_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -1028,15 +1048,13 @@ function assertAiProviderStatusPolicyFixtureCompanies(companies, target) {
   }
 }
 
-function buildAiProviderStatusPolicyFixture(companies, target) {
-  assertAiProviderStatusPolicyFixtureCompanies(companies, target);
-
-  const rows = [companies.weatherTech, companies.ihc].map((company) => ({
-    id: randomUUID(),
-    company_id: company.id,
+function buildAiProviderStatusPolicyRow(companyId, id, marker) {
+  return {
+    id,
+    company_id: companyId,
     ai_enabled: false,
     allowed_providers: ["openai"],
-    allowed_models: ["gpt-5.6-terra"],
+    allowed_models: ["gpt-5.6-terra", marker],
     daily_request_limit: 1,
     per_user_daily_request_limit: 1,
     per_company_monthly_budget_cents: 5000,
@@ -1045,22 +1063,171 @@ function buildAiProviderStatusPolicyFixture(companies, target) {
     timeout_ms: 15000,
     retry_limit: 1,
     last_reviewed_at: null,
-  }));
+  };
+}
+
+function getAiProviderStatusPolicyRunId(row) {
+  if (
+    !Array.isArray(row?.allowed_models) ||
+    row.allowed_models.length !== 2 ||
+    row.allowed_models[0] !== "gpt-5.6-terra" ||
+    typeof row.allowed_models[1] !== "string" ||
+    !row.allowed_models[1].startsWith(AI_PROVIDER_STATUS_POLICY_MARKER_PREFIX)
+  ) {
+    return null;
+  }
+
+  const runId = row.allowed_models[1].slice(
+    AI_PROVIDER_STATUS_POLICY_MARKER_PREFIX.length,
+  );
+  return /^[0-9]{17}$/.test(runId) ? runId : null;
+}
+
+function aiProviderStatusPolicyMatches(row, expected) {
+  return (
+    row?.id === expected.id &&
+    row.company_id === expected.company_id &&
+    row.ai_enabled === false &&
+    JSON.stringify(row.allowed_providers) === JSON.stringify(["openai"]) &&
+    JSON.stringify(row.allowed_models) === JSON.stringify(expected.allowed_models) &&
+    row.daily_request_limit === 1 &&
+    row.per_user_daily_request_limit === 1 &&
+    row.per_company_monthly_budget_cents === 5000 &&
+    row.expensive_task_confirmation_cents === 100 &&
+    row.token_limit === 32000 &&
+    row.timeout_ms === 15000 &&
+    row.retry_limit === 1 &&
+    row.last_reviewed_at === null
+  );
+}
+
+function buildAiProviderStatusPolicyFixture(companies, target, runId) {
+  assertAiProviderStatusPolicyFixtureCompanies(companies, target);
+  buildRegressionRunMarker(runId, TEST_PREFIX);
+  const marker = `${AI_PROVIDER_STATUS_POLICY_MARKER_PREFIX}${runId}`;
+
+  const rows = [companies.weatherTech, companies.ihc].map((company) =>
+    buildAiProviderStatusPolicyRow(company.id, randomUUID(), marker),
+  );
 
   return {
+    marker,
     rows,
     ids: rows.map((row) => row.id),
     companyIds: rows.map((row) => row.company_id),
     installed: false,
+    cleanupAuthorized: false,
+  };
+}
+
+async function findAiProviderStatusPolicyRecoveryCandidates(env, fixture) {
+  const companyFilter = encodeURIComponent(`(${fixture.companyIds.join(",")})`);
+  const idFilter = encodeURIComponent(`(${fixture.ids.join(",")})`);
+  const [byCompany, byCurrentId] = await Promise.all([
+    restRequest(
+      env,
+      `ai_usage_limits?select=${encodeURIComponent(AI_PROVIDER_STATUS_POLICY_SELECT)}&company_id=in.${companyFilter}`,
+    ),
+    restRequest(
+      env,
+      `ai_usage_limits?select=${encodeURIComponent(AI_PROVIDER_STATUS_POLICY_SELECT)}&id=in.${idFilter}`,
+    ),
+  ]);
+  return mergeRowsById(byCompany, byCurrentId);
+}
+
+async function recoverInterruptedAiProviderStatusPolicies(
+  env,
+  companies,
+  target,
+  fixture,
+  nowMs = Date.now(),
+) {
+  assertAiProviderStatusPolicyFixtureCompanies(companies, target);
+  const existing = await findAiProviderStatusPolicyRecoveryCandidates(env, fixture);
+  const companyById = new Map([
+    [companies.weatherTech.id, companies.weatherTech],
+    [companies.ihc.id, companies.ihc],
+  ]);
+
+  for (const row of existing) {
+    const fixtureRunId = getAiProviderStatusPolicyRunId(row);
+    const company = companyById.get(row.company_id);
+    const expected = fixtureRunId && company
+      ? buildAiProviderStatusPolicyRow(
+          company.id,
+          row.id,
+          `${AI_PROVIDER_STATUS_POLICY_MARKER_PREFIX}${fixtureRunId}`,
+        )
+      : null;
+    const createdAtMs = Date.parse(row.created_at ?? "");
+    const updatedAtMs = Date.parse(row.updated_at ?? "");
+
+    if (
+      !expected ||
+      !aiProviderStatusPolicyMatches(row, expected) ||
+      !Number.isFinite(createdAtMs) ||
+      !Number.isFinite(updatedAtMs) ||
+      updatedAtMs < createdAtMs
+    ) {
+      throw new Error(
+        "AI status policy recovery found an unrecognized or modified company policy; refusing to delete it.",
+      );
+    }
+
+    if (
+      Math.max(createdAtMs, updatedAtMs) >
+      nowMs - AI_PROVIDER_STATUS_POLICY_STALE_MS
+    ) {
+      throw new Error(
+        "AI status policy recovery found a fresh fixture from a potentially concurrent run; refusing to delete it.",
+      );
+    }
+  }
+
+  const deleted = [];
+  for (const row of existing) {
+    const removed = await restRequest(
+      env,
+      `ai_usage_limits?id=eq.${encodeURIComponent(row.id)}&updated_at=eq.${encodeURIComponent(row.updated_at)}`,
+      {
+        method: "DELETE",
+        headers: { Prefer: "return=representation" },
+      },
+    );
+    if (
+      !Array.isArray(removed) ||
+      removed.length !== 1 ||
+      removed[0].id !== row.id ||
+      removed[0].updated_at !== row.updated_at
+    ) {
+      throw new Error(
+        "AI status policy recovery could not delete one exact unchanged stale fixture.",
+      );
+    }
+    deleted.push(removed[0]);
+  }
+
+  const remaining = await findAiProviderStatusPolicyRecoveryCandidates(env, fixture);
+  if (remaining.length !== 0) {
+    throw new Error(
+      `AI status policy recovery left ${remaining.length} exact-company or current-ID row(s).`,
+    );
+  }
+
+  fixture.cleanupAuthorized = true;
+  return {
+    policiesDeleted: deleted.length,
+    databaseResidueCount: remaining.length,
+    residueVerified: remaining.length === 0,
   };
 }
 
 async function seedAiProviderStatusPolicies(env, fixture) {
-  const companyFilter = encodeURIComponent(`(${fixture.companyIds.join(",")})`);
-  const existing = await restRequest(
-    env,
-    `ai_usage_limits?select=id,company_id&company_id=in.${companyFilter}`,
-  );
+  if (!fixture.cleanupAuthorized) {
+    throw new Error("AI status fixture cleanup was not authorized by exact preflight.");
+  }
+  const existing = await findAiProviderStatusPolicyRecoveryCandidates(env, fixture);
   if (existing.length !== 0) {
     throw new Error(
       `AI status fixture expected zero pre-existing company policies, found ${existing.length}.`,
@@ -1080,21 +1247,7 @@ async function seedAiProviderStatusPolicies(env, fixture) {
     inserted.length !== fixture.rows.length ||
     inserted.some((row) => {
       const expected = expectedById.get(row.id);
-      return (
-        !expected ||
-        row.company_id !== expected.company_id ||
-        row.ai_enabled !== false ||
-        row.daily_request_limit !== 1 ||
-        row.per_user_daily_request_limit !== 1 ||
-        row.per_company_monthly_budget_cents !== 5000 ||
-        row.expensive_task_confirmation_cents !== 100 ||
-        row.token_limit !== 32000 ||
-        row.timeout_ms !== 15000 ||
-        row.retry_limit !== 1 ||
-        row.last_reviewed_at !== null ||
-        JSON.stringify(row.allowed_providers) !== JSON.stringify(["openai"]) ||
-        JSON.stringify(row.allowed_models) !== JSON.stringify(["gpt-5.6-terra"])
-      );
+      return !expected || !aiProviderStatusPolicyMatches(row, expected);
     })
   ) {
     throw new Error("AI status fixture policies did not match the exact safe contract.");
@@ -1102,17 +1255,52 @@ async function seedAiProviderStatusPolicies(env, fixture) {
 }
 
 async function cleanupAiProviderStatusPolicies(env, fixture) {
+  if (!fixture.cleanupAuthorized) {
+    throw new Error("AI status fixture cleanup is not authorized for these row IDs.");
+  }
   const idFilter = encodeURIComponent(`(${fixture.ids.join(",")})`);
-  const deleted =
-    (await restRequest(env, `ai_usage_limits?id=in.${idFilter}`, {
-      method: "DELETE",
-      headers: { Prefer: "return=representation" },
-    })) ?? [];
+  const candidates = await restRequest(
+    env,
+    `ai_usage_limits?select=${encodeURIComponent(AI_PROVIDER_STATUS_POLICY_SELECT)}&id=in.${idFilter}`,
+  );
+  const expectedById = new Map(fixture.rows.map((row) => [row.id, row]));
+  if (
+    candidates.some((row) => {
+      const expected = expectedById.get(row.id);
+      return !expected || !aiProviderStatusPolicyMatches(row, expected);
+    })
+  ) {
+    throw new Error(
+      "AI status fixture cleanup found a modified or unowned row; refusing to delete it.",
+    );
+  }
+
+  const deleted = [];
+  for (const row of candidates) {
+    const removed = await restRequest(
+      env,
+      `ai_usage_limits?id=eq.${encodeURIComponent(row.id)}&updated_at=eq.${encodeURIComponent(row.updated_at)}`,
+      {
+        method: "DELETE",
+        headers: { Prefer: "return=representation" },
+      },
+    );
+    if (
+      !Array.isArray(removed) ||
+      removed.length !== 1 ||
+      removed[0].id !== row.id ||
+      removed[0].updated_at !== row.updated_at
+    ) {
+      throw new Error("AI status fixture cleanup lost exact row ownership before delete.");
+    }
+    deleted.push(removed[0]);
+  }
   const remaining = await findByIds(env, "ai_usage_limits", fixture.ids);
 
   if (
     remaining.length !== 0 ||
-    (fixture.installed && deleted.length !== fixture.ids.length) ||
+    deleted.length !== candidates.length ||
+    (fixture.installed && candidates.length !== fixture.ids.length) ||
     deleted.some((row) => !fixture.ids.includes(row.id))
   ) {
     throw new Error(
@@ -1120,6 +1308,7 @@ async function cleanupAiProviderStatusPolicies(env, fixture) {
     );
   }
 
+  fixture.cleanupAuthorized = false;
   return {
     policiesDeleted: deleted.length,
     databaseResidueCount: remaining.length,
@@ -17140,6 +17329,7 @@ export function formatRegressionReport(result) {
     `Seeded job: ${result.seededJobTitle ?? "none"}`,
     `Cleanup before: ${JSON.stringify(result.cleanup.before)}`,
     `Cleanup after: ${JSON.stringify(result.cleanup.after)}`,
+    `Cleanup AI status policy recovery: ${JSON.stringify(result.cleanup.aiProviderStatusPolicyRecovery)}`,
     `Cleanup AI status policies: ${JSON.stringify(result.cleanup.aiProviderStatusPolicies)}`,
     `Browser console errors: ${result.browserConsoleErrorCount ?? "not checked"}`,
     `Browser console warnings: ${result.browserConsoleWarningCount ?? "not checked"}`,
@@ -17357,7 +17547,12 @@ export async function* createWeatherTechOsRegressionSession({
     return buildRecordCheckpoint(recordResult);
   };
 
-  let cleanup = { before: null, after: null, aiProviderStatusPolicies: null };
+  let cleanup = {
+    before: null,
+    after: null,
+    aiProviderStatusPolicyRecovery: null,
+    aiProviderStatusPolicies: null,
+  };
 
   await assertServerApplicationSafetyMarkers(baseUrl, target);
   const tab = await getTab(browser);
@@ -17378,15 +17573,6 @@ export async function* createWeatherTechOsRegressionSession({
     progress("isolation-preflight:done");
     const companies = await findCompanies(env);
     const { weatherTech, ihc } = companies;
-    if (enabledGroups.has("ai-tools")) {
-      progress("ai-provider-status-policy:seed:start");
-      aiProviderStatusPolicyFixture = buildAiProviderStatusPolicyFixture(
-        companies,
-        target,
-      );
-      await seedAiProviderStatusPolicies(env, aiProviderStatusPolicyFixture);
-      progress("ai-provider-status-policy:seed:done");
-    }
     progress("seed:start");
     seededJob = await seedTestJob(env, weatherTech.id, runId);
     progress("seed:done");
@@ -17502,8 +17688,50 @@ export async function* createWeatherTechOsRegressionSession({
     }
 
     if (enabledGroups.has("ai-tools")) {
-      yield await record("AI Command Center 3.0 shows executive recommendations, advisor modes, and grounded approval-gated responses", () =>
-        testAiToolsOperatingBrain(browser, tab, companies),
+      yield await record(
+        "AI Command Center 3.0 shows executive recommendations, advisor modes, and grounded approval-gated responses",
+        async () => {
+          aiProviderStatusPolicyFixture = buildAiProviderStatusPolicyFixture(
+            companies,
+            target,
+            runId,
+          );
+          try {
+            progress("ai-provider-status-policy:recovery:start");
+            cleanup.aiProviderStatusPolicyRecovery =
+              await recoverInterruptedAiProviderStatusPolicies(
+                env,
+                companies,
+                target,
+                aiProviderStatusPolicyFixture,
+              );
+            progress("ai-provider-status-policy:recovery:done");
+            progress("ai-provider-status-policy:seed:start");
+            await seedAiProviderStatusPolicies(
+              env,
+              aiProviderStatusPolicyFixture,
+            );
+            progress("ai-provider-status-policy:seed:done");
+            await tab.reload();
+            await tab.playwright.waitForLoadState({
+              state: "domcontentloaded",
+              timeoutMs: 15000,
+            });
+            await ensureAppShell(tab, baseUrl, progress);
+            return await testAiToolsOperatingBrain(browser, tab, companies);
+          } finally {
+            if (aiProviderStatusPolicyFixture?.cleanupAuthorized) {
+              progress("ai-provider-status-policy:cleanup:start");
+              cleanup.aiProviderStatusPolicies =
+                await cleanupAiProviderStatusPolicies(
+                  env,
+                  aiProviderStatusPolicyFixture,
+                );
+              aiProviderStatusPolicyFixture = null;
+              progress("ai-provider-status-policy:cleanup:done");
+            }
+          }
+        },
       );
     }
 
@@ -17756,7 +17984,7 @@ export async function* createWeatherTechOsRegressionSession({
           progress("cleanup:after:done");
         }
       } finally {
-        if (aiProviderStatusPolicyFixture) {
+        if (aiProviderStatusPolicyFixture?.cleanupAuthorized) {
           progress("ai-provider-status-policy:cleanup:start");
           cleanup.aiProviderStatusPolicies = await cleanupAiProviderStatusPolicies(
             env,

@@ -561,6 +561,62 @@ assert(
     !providerPreflight.includes("fetch("),
   "AI preflight must be structurally network-free and ignore only the not-yet-created reservation requirement.",
 );
+const providerRunStart = aiProvider.indexOf(
+  "export async function runAiPilotCommand({",
+);
+const providerCallStart = aiProvider.indexOf(
+  "providerResult = await callConfiguredProvider({",
+  providerRunStart,
+);
+const providerTryStart = aiProvider.lastIndexOf("try {", providerCallStart);
+const providerFailureBranch = aiProvider.indexOf(
+  "if (!providerResult.ok)",
+  providerCallStart,
+);
+const providerCallBoundary = aiProvider.slice(
+  providerTryStart,
+  providerFailureBranch,
+);
+assert(
+  providerRunStart >= 0 &&
+    providerTryStart > providerRunStart &&
+    providerCallStart > providerRunStart &&
+    providerFailureBranch > providerCallStart,
+  "The live AI provider call must have a distinct fail-closed boundary.",
+);
+for (const providerFailureBoundary of [
+  "try {",
+  "catch (error)",
+  "if (signal?.aborted)",
+  "throw error",
+  "AI provider request failed or timed out.",
+  "statusCode: null",
+  "providerResponseId: null",
+]) {
+  includes(
+    providerCallBoundary,
+    providerFailureBoundary,
+    `Thrown provider failures are missing boundary ${providerFailureBoundary}.`,
+  );
+}
+assert(
+  !providerCallBoundary.includes("error.message") &&
+    !providerCallBoundary.includes("String(error)") &&
+    !providerCallBoundary.includes("JSON.stringify(error)"),
+  "Provider failure normalization must not expose a caught provider error.",
+);
+for (const retryBoundary of [
+  "Math.max(0, Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2))",
+  "Number.isInteger(config.retryLimit)",
+  "config.retryLimit >= 0",
+  "config.retryLimit <= 2",
+]) {
+  includes(
+    aiProvider,
+    retryBoundary,
+    `AI retry configuration is missing boundary ${retryBoundary}.`,
+  );
+}
 includes(
   commandPost,
   '.eq("company_id", requestedCompanyId)',
@@ -747,7 +803,7 @@ for (const stalePersistenceClaim of [
   );
 }
 for (const browserStatusSuccessBoundary of [
-  "buildAiProviderStatusPolicyFixture(companies, target)",
+  "buildAiProviderStatusPolicyFixture(companies, target, runId)",
   "assertAiProviderStatusPolicyFixtureCompanies(companies, target)",
   'target.kind === "hosted_non_production"',
   "WEATHERTECH_REGRESSION_COMPANY_ID",
@@ -762,7 +818,19 @@ for (const browserStatusSuccessBoundary of [
   'trade: "roofing"',
   'trade: "painting"',
   'enabledGroups.has("ai-tools")',
-  "seedAiProviderStatusPolicies(env, aiProviderStatusPolicyFixture)",
+  '"wtos-browser-ai-status-policy-v1:"',
+  "AI_PROVIDER_STATUS_POLICY_STALE_MS = 15 * 60 * 1000",
+  'allowed_models: ["gpt-5.6-terra", marker]',
+  "getAiProviderStatusPolicyRunId(row)",
+  "return /^[0-9]{17}$/.test(runId) ? runId : null",
+  "findAiProviderStatusPolicyRecoveryCandidates(env, fixture)",
+  "recoverInterruptedAiProviderStatusPolicies(",
+  "AI status policy recovery found an unrecognized or modified company policy; refusing to delete it.",
+  "AI status policy recovery found a fresh fixture from a potentially concurrent run; refusing to delete it.",
+  "updated_at=eq.${encodeURIComponent(row.updated_at)}",
+  "fixture.cleanupAuthorized = true",
+  "AI status fixture cleanup was not authorized by exact preflight.",
+  "await seedAiProviderStatusPolicies(",
   "expected zero pre-existing company policies",
   'ai_enabled: false',
   'daily_request_limit: 1',
@@ -772,14 +840,14 @@ for (const browserStatusSuccessBoundary of [
   'token_limit: 32000',
   'timeout_ms: 15000',
   'retry_limit: 1',
-  "row.company_id !== expected.company_id",
-  "row.daily_request_limit !== 1",
-  "row.per_user_daily_request_limit !== 1",
-  "row.expensive_task_confirmation_cents !== 100",
-  "row.token_limit !== 32000",
-  "row.timeout_ms !== 15000",
-  "row.retry_limit !== 1",
-  "row.last_reviewed_at !== null",
+  "row.company_id === expected.company_id",
+  "row.daily_request_limit === 1",
+  "row.per_user_daily_request_limit === 1",
+  "row.expensive_task_confirmation_cents === 100",
+  "row.token_limit === 32000",
+  "row.timeout_ms === 15000",
+  "row.retry_limit === 1",
+  "row.last_reviewed_at === null",
   'phase !== "loaded"',
   'budgetCents !== "5000"',
   'card.getAttribute("data-ai-enabled") !== "false"',
@@ -799,11 +867,13 @@ for (const browserStatusSuccessBoundary of [
   'message.includes("no provider call was attempted")',
   'message.includes("showing local rule-based fallback")',
   "cleanupAiProviderStatusPolicies(",
-  "`ai_usage_limits?id=in.${idFilter}`",
+  "`ai_usage_limits?id=eq.${encodeURIComponent(row.id)}&updated_at=eq.${encodeURIComponent(row.updated_at)}`",
   'deleted.some((row) => !fixture.ids.includes(row.id))',
   'findByIds(env, "ai_usage_limits", fixture.ids)',
   "databaseResidueCount: remaining.length",
-  "cleanup.aiProviderStatusPolicies = await cleanupAiProviderStatusPolicies(",
+  "cleanup.aiProviderStatusPolicyRecovery =",
+  "cleanup.aiProviderStatusPolicies =",
+  "Cleanup AI status policy recovery: ${JSON.stringify(result.cleanup.aiProviderStatusPolicyRecovery)}",
   "Cleanup AI status policies: ${JSON.stringify(result.cleanup.aiProviderStatusPolicies)}",
 ]) {
   includes(
@@ -812,6 +882,17 @@ for (const browserStatusSuccessBoundary of [
     `The Browser regression must prove and clean a successful safe AI status fixture: ${browserStatusSuccessBoundary}`,
   );
 }
+const policyRecoveryIndex = browserRegression.indexOf(
+  "await recoverInterruptedAiProviderStatusPolicies(",
+);
+const policySeedIndex = browserRegression.indexOf(
+  "await seedAiProviderStatusPolicies(",
+  policyRecoveryIndex,
+);
+assert(
+  policyRecoveryIndex >= 0 && policySeedIndex > policyRecoveryIndex,
+  "AI status policy recovery must complete before the current run can seed policies.",
+);
 assert(
   !browserRegression.includes('!["loaded", "error"].includes(phase)'),
   "The Browser regression must not accept an error response as successful AI status evidence.",
