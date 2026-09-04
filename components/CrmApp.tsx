@@ -16872,6 +16872,7 @@ function MarketingAccountabilityPanel({
           key={`campaign-form-${companyId}-${campaignEditId || "new"}`}
           onSubmit={handleCampaignSubmit}
           data-testid="marketing-campaign-form"
+          data-company-id={companyId}
           className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
         >
           <div>
@@ -16926,6 +16927,7 @@ function MarketingAccountabilityPanel({
           key={`spend-form-${companyId}-${spendEditId || "new"}`}
           onSubmit={handleSpendSubmit}
           data-testid="marketing-spend-form"
+          data-company-id={companyId}
           className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4"
         >
           <div>
