@@ -53,6 +53,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -186,20 +187,32 @@ import {
 } from "../lib/crm/proposalOperations";
 import {
   answerAiCommand,
+  acknowledgeAiQuotaProbeRefresh,
+  beginAiQuotaProbeRefreshAttempt,
   buildAiWorkspaceModel,
+  getAiQuotaProbeRefreshRetryAfterSeconds,
+  getCurrentAiPilotError,
+  getCurrentAiResponses,
+  getCurrentAiRuntimeProviderHealth,
+  isCurrentAiCommandCompletion,
+  releaseAiQuotaProbeRefreshAttempt,
+  shouldForceAiQuotaProbeRefresh,
   type AiAdvisorModeKey,
   type AiAssistantDraft,
   type AiCommandCenterRecommendation,
   type AiGroundedResponse,
   type AiPriorityItem,
+  type AiPilotErrorEvidence,
   type AiRecommendedAction,
+  type AiResponseHistoryEvidence,
+  type AiRuntimeProviderHealthEvidence,
   type AiSourceRecord,
   type AiWorkspaceModel,
 } from "../lib/crm/aiTools";
 import type {
   AiActionPreview,
+  AiCompanyPilotStatus,
   AiPilotCommandResult,
-  AiPilotReadiness,
   AiUsageCheck,
 } from "../lib/crm/aiProvider";
 import {
@@ -5779,12 +5792,17 @@ export function CrmApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(client === null);
   const [snapshot, setSnapshot] = useState<CrmSnapshot | null>(null);
+  const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =
+    useState(0);
   const [view, setView] = useState<WorkspaceView>(initialWorkspaceLocation.view);
   const [workspaceRecordFocus, setWorkspaceRecordFocus] =
     useState<WorkspaceRecordFocus | null>(initialWorkspaceLocation.focus);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [snapshotTransitionPending, setSnapshotTransitionPending] = useState(false);
+  const snapshotLoadRequestSequenceRef = useRef(0);
+  const snapshotTransitionPendingRef = useRef(false);
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -5817,7 +5835,45 @@ export function CrmApp() {
     setTheme(nextTheme);
   };
 
+  const beginSnapshotTransition = useCallback(() => {
+    const requestSequence = snapshotLoadRequestSequenceRef.current + 1;
+    snapshotLoadRequestSequenceRef.current = requestSequence;
+    snapshotTransitionPendingRef.current = true;
+    setSnapshotTransitionPending(true);
+    setAiProviderStatusRefreshSequence((current) => current + 1);
+    return requestSequence;
+  }, []);
+
+  const completeSnapshotTransition = useCallback((requestSequence: number) => {
+    if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+      return false;
+    }
+    snapshotTransitionPendingRef.current = false;
+    setSnapshotTransitionPending(false);
+    return true;
+  }, []);
+
+  const applyImmediateSnapshotTransition = useCallback(
+    (transition: () => void) => {
+      const requestSequence = beginSnapshotTransition();
+      try {
+        transition();
+      } finally {
+        completeSnapshotTransition(requestSequence);
+      }
+    },
+    [beginSnapshotTransition, completeSnapshotTransition],
+  );
+
+  const isSnapshotContextCurrent = useCallback(
+    (requestSequence: number) =>
+      !snapshotTransitionPendingRef.current &&
+      snapshotLoadRequestSequenceRef.current === requestSequence,
+    [],
+  );
+
   const loadSnapshot = useCallback(async (crmClient: CrmClient, showLoading = true) => {
+    const requestSequence = beginSnapshotTransition();
     if (showLoading) {
       setIsLoading(true);
     }
@@ -5825,8 +5881,14 @@ export function CrmApp() {
 
     try {
       const nextSnapshot = await fetchCrmSnapshot(crmClient);
+      if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       setSnapshot(nextSnapshot);
     } catch (currentError) {
+      if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       logCaughtError("[CRM] CRM snapshot load failed", currentError);
 
       if (demoFallbackEnabled) {
@@ -5837,18 +5899,22 @@ export function CrmApp() {
 
       setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
     } finally {
-      setIsLoading(false);
+      if (completeSnapshotTransition(requestSequence)) {
+        setIsLoading(false);
+      }
     }
-  }, [demoFallbackEnabled]);
+  }, [beginSnapshotTransition, completeSnapshotTransition, demoFallbackEnabled]);
 
   useEffect(() => {
     if (!client) {
       if (demoFallbackEnabled) {
-        setUser(demoUser);
-        setSnapshot(createDemoCrmSnapshot());
-        setAuthReady(true);
-        setIsLoading(false);
-        setNotice("Using local demo CRM data because Supabase is not configured.");
+        applyImmediateSnapshotTransition(() => {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+          setNotice("Using local demo CRM data because Supabase is not configured.");
+        });
       }
 
       return;
@@ -5873,15 +5939,20 @@ export function CrmApp() {
           setAuthReady(true);
           void loadSnapshot(client);
         } else if (demoFallbackEnabled) {
-          setUser(demoUser);
-          setSnapshot(createDemoCrmSnapshot());
-          setAuthReady(true);
-          setIsLoading(false);
-          setNotice("Using local demo CRM data because Supabase sign-in is not ready.");
+          applyImmediateSnapshotTransition(() => {
+            setUser(demoUser);
+            setSnapshot(createDemoCrmSnapshot());
+            setAuthReady(true);
+            setIsLoading(false);
+            setNotice("Using local demo CRM data because Supabase sign-in is not ready.");
+          });
         } else {
-          setUser(null);
-          setAuthReady(true);
-          setIsLoading(false);
+          applyImmediateSnapshotTransition(() => {
+            setUser(null);
+            setSnapshot(null);
+            setAuthReady(true);
+            setIsLoading(false);
+          });
         }
       })
       .catch((sessionError) => {
@@ -5892,11 +5963,13 @@ export function CrmApp() {
         }
 
         if (demoFallbackEnabled) {
-          setUser(demoUser);
-          setSnapshot(createDemoCrmSnapshot());
-          setAuthReady(true);
-          setIsLoading(false);
-          setNotice("Using local demo CRM data because Supabase auth failed to load.");
+          applyImmediateSnapshotTransition(() => {
+            setUser(demoUser);
+            setSnapshot(createDemoCrmSnapshot());
+            setAuthReady(true);
+            setIsLoading(false);
+            setNotice("Using local demo CRM data because Supabase auth failed to load.");
+          });
         } else {
           setError(
             sessionError instanceof Error
@@ -5916,15 +5989,19 @@ export function CrmApp() {
         setAuthReady(true);
         void loadSnapshot(client);
       } else if (demoFallbackEnabled) {
-        setUser(demoUser);
-        setSnapshot(createDemoCrmSnapshot());
-        setAuthReady(true);
-        setIsLoading(false);
+        applyImmediateSnapshotTransition(() => {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+        });
       } else {
-        setUser(null);
-        setSnapshot(null);
-        setAuthReady(true);
-        setIsLoading(false);
+        applyImmediateSnapshotTransition(() => {
+          setUser(null);
+          setSnapshot(null);
+          setAuthReady(true);
+          setIsLoading(false);
+        });
       }
     });
 
@@ -5932,7 +6009,7 @@ export function CrmApp() {
       isMounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [client, demoFallbackEnabled, demoUser, loadSnapshot]);
+  }, [applyImmediateSnapshotTransition, client, demoFallbackEnabled, demoUser, loadSnapshot]);
 
   const handleAuthNotice = (message: string) => {
     setNotice(message);
@@ -5971,16 +6048,18 @@ export function CrmApp() {
 
   const handleDemoSnapshotChange = useCallback(
     (updater: (currentSnapshot: CrmSnapshot) => CrmSnapshot) => {
-      setSnapshot((currentSnapshot) =>
-        currentSnapshot
-          ? projectDemoAccountabilityMilestones(
-              currentSnapshot,
-              updater(currentSnapshot),
-            )
-          : currentSnapshot,
-      );
+      applyImmediateSnapshotTransition(() => {
+        setSnapshot((currentSnapshot) =>
+          currentSnapshot
+            ? projectDemoAccountabilityMilestones(
+                currentSnapshot,
+                updater(currentSnapshot),
+              )
+            : currentSnapshot,
+        );
+      });
     },
-    [],
+    [applyImmediateSnapshotTransition],
   );
 
   if (!authReady) {
@@ -6009,7 +6088,9 @@ export function CrmApp() {
           if (client) {
             void loadSnapshot(client);
           } else {
-            setSnapshot(createDemoCrmSnapshot());
+            applyImmediateSnapshotTransition(() => {
+              setSnapshot(createDemoCrmSnapshot());
+            });
           }
         }}
         onSignOut={handleSignOut}
@@ -6033,6 +6114,9 @@ export function CrmApp() {
       user={user}
       view={view}
       workspaceRecordFocus={workspaceRecordFocus}
+      aiProviderStatusRefreshSequence={aiProviderStatusRefreshSequence}
+      snapshotTransitionPending={snapshotTransitionPending}
+      isSnapshotContextCurrent={isSnapshotContextCurrent}
       theme={theme}
       onViewChange={handleWorkspaceViewChange}
       onThemeChange={handleThemeChange}
@@ -6040,7 +6124,9 @@ export function CrmApp() {
         if (client && !isDemoWorkspace) {
           await loadSnapshot(client);
         } else {
-          setSnapshot(createDemoCrmSnapshot());
+          applyImmediateSnapshotTransition(() => {
+            setSnapshot(createDemoCrmSnapshot());
+          });
         }
       }}
       onScrollPreservingReload={async () => {
@@ -6051,7 +6137,9 @@ export function CrmApp() {
           if (client && !isDemoWorkspace) {
             await loadSnapshot(client, false);
           } else {
-            setSnapshot(createDemoCrmSnapshot());
+            applyImmediateSnapshotTransition(() => {
+              setSnapshot(createDemoCrmSnapshot());
+            });
           }
         } finally {
           restoreWindowScrollPosition(scrollLeft, scrollTop);
@@ -6380,6 +6468,9 @@ type CrmWorkspaceProps = {
   user: User | null;
   view: WorkspaceView;
   workspaceRecordFocus: WorkspaceRecordFocus | null;
+  aiProviderStatusRefreshSequence: number;
+  snapshotTransitionPending: boolean;
+  isSnapshotContextCurrent: (requestSequence: number) => boolean;
   theme: ThemeMode;
   onViewChange: WorkspaceViewChange;
   onThemeChange: (theme: ThemeMode) => void;
@@ -6400,6 +6491,9 @@ function CrmWorkspace({
   user,
   view,
   workspaceRecordFocus,
+  aiProviderStatusRefreshSequence,
+  snapshotTransitionPending,
+  isSnapshotContextCurrent,
   theme,
   onViewChange,
   onThemeChange,
@@ -6410,13 +6504,22 @@ function CrmWorkspace({
   onNotice,
   onError,
 }: CrmWorkspaceProps) {
-  const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>(() => {
-    if (typeof window === "undefined") {
-      return "all";
-    }
-
-    return window.localStorage.getItem("weathertech-company-scope") ?? "all";
-  });
+  const [selectedCompanyId, setSelectedCompanyIdState] =
+    useState<CompanyScopeId>("all");
+  const selectedCompanyIdRef = useRef<CompanyScopeId>("all");
+  const setSelectedCompanyId = useCallback((companyId: CompanyScopeId) => {
+    selectedCompanyIdRef.current = companyId;
+    setSelectedCompanyIdState(companyId);
+  }, []);
+  const isAiCompanySelectionCurrent = useCallback(
+    (companyId: string) => selectedCompanyIdRef.current === companyId,
+    [],
+  );
+  const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
+  const attemptedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
+  const [aiQuotaProbeRefreshStateVersion, setAiQuotaProbeRefreshStateVersion] =
+    useState(0);
+  const [companyScopeStorageReady, setCompanyScopeStorageReady] = useState(false);
   const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
     useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -6463,6 +6566,52 @@ function CrmWorkspace({
     },
     [],
   );
+  const shouldForceQuotaProbeRefresh = useCallback(
+    (companyId: string, sequence: number) =>
+      shouldForceAiQuotaProbeRefresh(
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
+    [],
+  );
+  const beginQuotaProbeRefreshAttempt = useCallback(
+    (companyId: string, sequence: number) =>
+      beginAiQuotaProbeRefreshAttempt(
+        attemptedAiQuotaProbeRefreshSequenceRef.current,
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
+    [],
+  );
+  const releaseQuotaProbeRefreshAttempt = useCallback(
+    (companyId: string, sequence: number) =>
+      releaseAiQuotaProbeRefreshAttempt(
+        attemptedAiQuotaProbeRefreshSequenceRef.current,
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
+    [],
+  );
+  const acknowledgeQuotaProbeRefresh = useCallback(
+    (companyId: string, sequence: number) => {
+      const acknowledged = acknowledgeAiQuotaProbeRefresh(
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      );
+      if (acknowledged) {
+        setAiQuotaProbeRefreshStateVersion((current) => current + 1);
+      }
+      return acknowledged;
+    },
+    [],
+  );
+  const handleWorkspaceRefresh = useCallback(async () => {
+    await onScrollPreservingReload();
+  }, [onScrollPreservingReload]);
 
   useEffect(() => {
     jobPhotoRecoveryNoticeRef.current = onNotice;
@@ -6603,6 +6752,20 @@ function CrmWorkspace({
     () => new Map(snapshot.companies.map((company) => [company.id, company])),
     [snapshot.companies],
   );
+
+  useEffect(() => {
+    if (companyScopeStorageReady) {
+      return;
+    }
+
+    const storedCompanyId = window.localStorage.getItem("weathertech-company-scope");
+    setSelectedCompanyId(
+      storedCompanyId && snapshot.companies.some((company) => company.id === storedCompanyId)
+        ? storedCompanyId
+        : "all",
+    );
+    setCompanyScopeStorageReady(true);
+  }, [companyScopeStorageReady, setSelectedCompanyId, snapshot.companies]);
   const focusedRecordCompanyId = useMemo(() => {
     if (!workspaceRecordFocus) {
       return null;
@@ -6628,7 +6791,7 @@ function CrmWorkspace({
     if (focusedRecordCompanyId && selectedCompanyId !== focusedRecordCompanyId) {
       setSelectedCompanyId(focusedRecordCompanyId);
     }
-  }, [focusedRecordCompanyId, selectedCompanyId]);
+  }, [focusedRecordCompanyId, selectedCompanyId, setSelectedCompanyId]);
   useEffect(() => {
     if (workspaceRecordFocus && !focusedRecordCompanyId) {
       onViewChange(view, null);
@@ -6698,7 +6861,7 @@ function CrmWorkspace({
         return next;
       });
     },
-    [onViewChange],
+    [onViewChange, setSelectedCompanyId],
   );
   const handleOpenIdentityReconciliation = useCallback(
     (leadId: string) => {
@@ -6715,11 +6878,13 @@ function CrmWorkspace({
     ) {
       setSelectedCompanyId("all");
     }
-  }, [selectedCompanyId, snapshot.companies]);
+  }, [selectedCompanyId, setSelectedCompanyId, snapshot.companies]);
 
   useEffect(() => {
-    window.localStorage.setItem("weathertech-company-scope", selectedCompanyId);
-  }, [selectedCompanyId]);
+    if (companyScopeStorageReady) {
+      window.localStorage.setItem("weathertech-company-scope", selectedCompanyId);
+    }
+  }, [companyScopeStorageReady, selectedCompanyId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -6880,7 +7045,8 @@ function CrmWorkspace({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onReload()}
+                  onClick={() => void handleWorkspaceRefresh()}
+                  data-testid="workspace-refresh"
                   className="wt-control-button wt-control-button-secondary inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   <RefreshCcw className="h-4 w-4" />
@@ -7177,6 +7343,15 @@ function CrmWorkspace({
               snapshot={scopedSnapshot}
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
+              statusRefreshSequence={aiProviderStatusRefreshSequence}
+              snapshotTransitionPending={snapshotTransitionPending}
+              isSnapshotContextCurrent={isSnapshotContextCurrent}
+              isAiCompanySelectionCurrent={isAiCompanySelectionCurrent}
+              shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}
+              beginQuotaProbeRefreshAttempt={beginQuotaProbeRefreshAttempt}
+              releaseQuotaProbeRefreshAttempt={releaseQuotaProbeRefreshAttempt}
+              acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}
+              quotaProbeRefreshStateVersion={aiQuotaProbeRefreshStateVersion}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -39805,6 +39980,15 @@ type AiToolsViewProps = {
   snapshot: CrmSnapshot;
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
+  statusRefreshSequence: number;
+  snapshotTransitionPending: boolean;
+  isSnapshotContextCurrent: (requestSequence: number) => boolean;
+  isAiCompanySelectionCurrent: (companyId: string) => boolean;
+  shouldForceQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
+  beginQuotaProbeRefreshAttempt: (companyId: string, sequence: number) => boolean;
+  releaseQuotaProbeRefreshAttempt: (companyId: string, sequence: number) => boolean;
+  acknowledgeQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
+  quotaProbeRefreshStateVersion: number;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -39817,6 +40001,28 @@ type AiCommandCenterFilterState = {
   propertyKey: string;
 };
 
+type AiPilotResultEvidence = {
+  result: AiPilotCommandResult;
+  statusRefreshSequence: number;
+};
+
+type AiProviderStatusEvidence = {
+  status: AiCompanyPilotStatus;
+  statusRefreshSequence: number;
+};
+
+type AiProviderStatusErrorEvidence = {
+  companyId: string;
+  message: string;
+  statusRefreshSequence: number;
+};
+
+type AiProviderStatusCompletionEvidence = {
+  companyId: string;
+  statusRefreshSequence: number;
+  statusReloadSequence: number;
+};
+
 type AiActionReviewReceipt = {
   aiAuditEventId: string;
   decision: "approve" | "reject";
@@ -39826,6 +40032,84 @@ type AiActionReviewReceipt = {
   idempotent: boolean;
 };
 
+function getAiEndpointErrorMessage(
+  payload: unknown,
+  status: number,
+  fallback: string,
+) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    "error" in payload &&
+    typeof payload.error === "string" &&
+    payload.error.trim()
+  ) {
+    return payload.error.trim().slice(0, 320);
+  }
+
+  return `${fallback} (${status}).`;
+}
+
+function waitForAiProviderStatusRetry(
+  retryAfterSeconds: number,
+  signal: AbortSignal,
+) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timeoutId: number | null = null;
+    const finish = (ready: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      signal.removeEventListener("abort", handleAbort);
+      resolve(ready);
+    };
+    const handleAbort = () => finish(false);
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+    if (signal.aborted) {
+      finish(false);
+      return;
+    }
+    timeoutId = window.setTimeout(
+      () => finish(true),
+      retryAfterSeconds * 1_000 + 100,
+    );
+  });
+}
+
+function isAiCompanyPilotStatus(
+  value: unknown,
+  expectedCompanyId: string,
+): value is AiCompanyPilotStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const status = value as Partial<AiCompanyPilotStatus>;
+  return (
+    status.companyId === expectedCompanyId &&
+    typeof status.aiEnabled === "boolean" &&
+    typeof status.currentQuotaAvailable === "boolean" &&
+    Number.isInteger(status.monthlyBudgetCents) &&
+    Number(status.monthlyBudgetCents) >= 0 &&
+    typeof status.savedAnalysesReadAvailable === "boolean" &&
+    Boolean(status.readiness) &&
+    typeof status.readiness?.label === "string" &&
+    typeof status.readiness?.liveProviderEnabled === "boolean" &&
+    Boolean(status.companyPolicy) &&
+    status.companyPolicy?.configured === true &&
+    typeof status.companyPolicy?.aiEnabled === "boolean" &&
+    typeof status.usageAccountingConfigured === "boolean" &&
+    status.externalActionExecutionEnabled === false
+  );
+}
+
 const aiAuditReferencePattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -39834,23 +40118,52 @@ function AiToolsView({
   snapshot,
   companyMap,
   activeCompanyId,
+  statusRefreshSequence,
+  snapshotTransitionPending,
+  isSnapshotContextCurrent,
+  isAiCompanySelectionCurrent,
+  shouldForceQuotaProbeRefresh,
+  beginQuotaProbeRefreshAttempt,
+  releaseQuotaProbeRefreshAttempt,
+  acknowledgeQuotaProbeRefresh,
+  quotaProbeRefreshStateVersion,
   onReload,
   onNotice,
   onError,
 }: AiToolsViewProps) {
+  const aiDraftContextKey = `${activeCompanyId}:${statusRefreshSequence}`;
   const [scopeTemplateId, setScopeTemplateId] = useState(
     snapshot.scopeTemplates[0]?.id ?? "",
   );
   const [scopeCustomerId, setScopeCustomerId] = useState("none");
   const [scopeDraft, setScopeDraft] = useState("");
+  const [scopeDraftContextKey, setScopeDraftContextKey] =
+    useState(aiDraftContextKey);
   const [estimateSourceId, setEstimateSourceId] = useState(
     snapshot.estimates[0]?.id ?? "",
   );
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
+  const [estimateDraftContextKey, setEstimateDraftContextKey] =
+    useState(aiDraftContextKey);
   const [aiCommand, setAiCommand] = useState("");
-  const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
-  const [aiPilotResult, setAiPilotResult] = useState<AiPilotCommandResult | null>(null);
-  const [aiPilotError, setAiPilotError] = useState("");
+  const [aiResponseHistoryEvidence, setAiResponseHistoryEvidence] =
+    useState<AiResponseHistoryEvidence | null>(null);
+  const [aiPilotResultEvidence, setAiPilotResultEvidence] =
+    useState<AiPilotResultEvidence | null>(null);
+  const [aiPilotErrorEvidence, setAiPilotErrorEvidence] =
+    useState<AiPilotErrorEvidence | null>(null);
+  const [aiProviderStatusEvidence, setAiProviderStatusEvidence] =
+    useState<AiProviderStatusEvidence | null>(null);
+  const [aiProviderStatusErrorEvidence, setAiProviderStatusErrorEvidence] =
+    useState<AiProviderStatusErrorEvidence | null>(null);
+  const [aiProviderStatusLoadingCompanyId, setAiProviderStatusLoadingCompanyId] =
+    useState<string | null>(null);
+  const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
+    useState(0);
+  const [aiProviderStatusReloadSequence, setAiProviderStatusReloadSequence] =
+    useState(0);
+  const [aiRuntimeProviderHealth, setAiRuntimeProviderHealth] =
+    useState<AiRuntimeProviderHealthEvidence | null>(null);
   const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
   const [reviewingActionId, setReviewingActionId] = useState<string | null>(null);
@@ -39863,8 +40176,20 @@ function AiToolsView({
       propertyKey: "all",
     });
   const aiCommandAbortRef = useRef<AbortController | null>(null);
+  const aiProviderStatusAbortRef = useRef<AbortController | null>(null);
+  const aiProviderStatusRequestSequenceRef = useRef(0);
   const aiReviewAbortRef = useRef<AbortController | null>(null);
   const activeAiCompanyRef = useRef<CompanyScopeId>(activeCompanyId);
+  const currentStatusRefreshSequenceRef = useRef(statusRefreshSequence);
+  const observedQuotaProbeRefreshStateVersionRef = useRef(
+    quotaProbeRefreshStateVersion,
+  );
+  const locallyCompletedAiProviderStatusRef =
+    useRef<AiProviderStatusCompletionEvidence | null>(null);
+
+  useLayoutEffect(() => {
+    currentStatusRefreshSequenceRef.current = statusRefreshSequence;
+  }, [statusRefreshSequence]);
 
   const aiWorkspace = useMemo(
     () =>
@@ -39875,11 +40200,67 @@ function AiToolsView({
       }),
     [activeCompanyId, companyMap, snapshot],
   );
-  const exactAiCompanySelected = activeCompanyId !== "all";
+  const exactAiCompany =
+    activeCompanyId === "all" ? null : companyMap.get(activeCompanyId) ?? null;
+  const exactAiCompanyId = exactAiCompany?.id ?? null;
+  const exactAiCompanySelected = exactAiCompanyId !== null;
+  const currentScopeDraft =
+    scopeDraftContextKey === aiDraftContextKey ? scopeDraft : "";
+  const currentEstimateDraft =
+    estimateDraftContextKey === aiDraftContextKey ? estimateDraft : [];
+  const currentAiProviderStatus =
+    !snapshotTransitionPending &&
+    aiProviderStatusEvidence?.status.companyId === exactAiCompanyId &&
+    aiProviderStatusEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiProviderStatusEvidence.status
+      : null;
+  const currentAiPilotResult =
+    aiPilotResultEvidence?.result.companyId === exactAiCompanyId &&
+    aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiPilotResultEvidence.result
+      : null;
+  const currentAiResponses = getCurrentAiResponses({
+    evidence: aiResponseHistoryEvidence,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
+  const currentAiProviderStatusError =
+    !snapshotTransitionPending &&
+    aiProviderStatusErrorEvidence?.companyId === exactAiCompanyId &&
+    aiProviderStatusErrorEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiProviderStatusErrorEvidence.message
+      : "";
+  const currentAiPilotError = getCurrentAiPilotError({
+    evidence: aiPilotErrorEvidence,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
+  const currentAiRuntimeProviderHealth = getCurrentAiRuntimeProviderHealth({
+    evidence: aiRuntimeProviderHealth,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
+  const isAiProviderStatusLoading =
+    exactAiCompanyId !== null &&
+    (snapshotTransitionPending ||
+      aiProviderStatusLoadingCompanyId === exactAiCompanyId ||
+      (!currentAiProviderStatus && !currentAiProviderStatusError));
+  const savedAnalysesReadAvailable =
+    currentAiProviderStatus?.savedAnalysesReadAvailable === true;
+  const savedAnalysesReadPhase = currentAiProviderStatus
+    ? "loaded"
+    : isAiProviderStatusLoading
+      ? "loading"
+      : currentAiProviderStatusError
+        ? "error"
+        : exactAiCompanySelected
+          ? "pending"
+          : "selection_required";
 
   useEffect(() => {
     if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
       setScopeTemplateId(snapshot.scopeTemplates[0]?.id ?? "");
+      setScopeDraft("");
     }
   }, [scopeTemplateId, snapshot.scopeTemplates]);
 
@@ -39889,6 +40270,7 @@ function AiToolsView({
       !snapshot.customers.some((customer) => customer.id === scopeCustomerId)
     ) {
       setScopeCustomerId("none");
+      setScopeDraft("");
     }
   }, [scopeCustomerId, snapshot.customers]);
 
@@ -39900,15 +40282,33 @@ function AiToolsView({
   }, [estimateSourceId, snapshot.estimates]);
 
   useEffect(() => {
+    if (activeAiCompanyRef.current === activeCompanyId) {
+      return;
+    }
+    const previousAiCompanyId = activeAiCompanyRef.current;
+    const previousStatusController = aiProviderStatusAbortRef.current;
     aiCommandAbortRef.current?.abort();
+    previousStatusController?.abort();
     aiReviewAbortRef.current?.abort();
+    if (previousStatusController && previousAiCompanyId !== "all") {
+      releaseQuotaProbeRefreshAttempt(
+        previousAiCompanyId,
+        statusRefreshSequence,
+      );
+    }
     aiCommandAbortRef.current = null;
+    aiProviderStatusAbortRef.current = null;
     aiReviewAbortRef.current = null;
     activeAiCompanyRef.current = activeCompanyId;
+    locallyCompletedAiProviderStatusRef.current = null;
     setAiCommand("");
-    setAiResponses([]);
-    setAiPilotResult(null);
-    setAiPilotError("");
+    setAiResponseHistoryEvidence(null);
+    setAiPilotResultEvidence(null);
+    setAiPilotErrorEvidence(null);
+    setAiProviderStatusEvidence(null);
+    setAiProviderStatusErrorEvidence(null);
+    setAiProviderStatusLoadingCompanyId(null);
+    setAiRuntimeProviderHealth(null);
     setIsAiCommandRunning(false);
     setReviewedActionIds({});
     setReviewingActionId(null);
@@ -39918,7 +40318,225 @@ function AiToolsView({
       employeeId: "all",
       propertyKey: "all",
     });
-  }, [activeCompanyId]);
+  }, [activeCompanyId, releaseQuotaProbeRefreshAttempt, statusRefreshSequence]);
+
+  useEffect(() => {
+    const quotaProbeRefreshStateChanged =
+      observedQuotaProbeRefreshStateVersionRef.current !==
+      quotaProbeRefreshStateVersion;
+    observedQuotaProbeRefreshStateVersionRef.current =
+      quotaProbeRefreshStateVersion;
+    if (!exactAiCompanyId || snapshotTransitionPending) {
+      return;
+    }
+
+    const requestCompanyId = exactAiCompanyId;
+    const requestStatusRefreshSequence = statusRefreshSequence;
+    const requestStatusReloadSequence = aiProviderStatusReloadSequence;
+    const quotaProbeRefreshRequired = shouldForceQuotaProbeRefresh(
+      requestCompanyId,
+      requestStatusRefreshSequence,
+    );
+    const locallyCompletedStatus = locallyCompletedAiProviderStatusRef.current;
+    if (
+      !quotaProbeRefreshRequired &&
+      quotaProbeRefreshStateChanged &&
+      locallyCompletedStatus?.companyId === requestCompanyId &&
+      locallyCompletedStatus.statusRefreshSequence ===
+        requestStatusRefreshSequence &&
+      locallyCompletedStatus.statusReloadSequence === requestStatusReloadSequence
+    ) {
+      return;
+    }
+    const forceQuotaProbeRefresh =
+      quotaProbeRefreshRequired &&
+      beginQuotaProbeRefreshAttempt(
+        requestCompanyId,
+        requestStatusRefreshSequence,
+      );
+    if (quotaProbeRefreshRequired && !forceQuotaProbeRefresh) {
+      if (
+        aiProviderStatusAbortRef.current &&
+        !aiProviderStatusAbortRef.current.signal.aborted
+      ) {
+        return;
+      }
+      setAiProviderStatusEvidence(null);
+      setAiProviderStatusLoadingCompanyId(null);
+      setAiProviderStatusErrorEvidence((current) =>
+        current?.companyId === requestCompanyId &&
+        current.statusRefreshSequence === requestStatusRefreshSequence
+          ? current
+          : {
+              companyId: requestCompanyId,
+              message:
+                "Production AI context refresh did not complete. Use Refresh to start a new bounded attempt.",
+              statusRefreshSequence: requestStatusRefreshSequence,
+            },
+      );
+      return;
+    }
+    const requestSequence = aiProviderStatusRequestSequenceRef.current + 1;
+    aiProviderStatusRequestSequenceRef.current = requestSequence;
+    const controller = new AbortController();
+    aiProviderStatusAbortRef.current?.abort();
+    aiProviderStatusAbortRef.current = controller;
+    setAiProviderStatusEvidence(null);
+    setAiProviderStatusErrorEvidence(null);
+    setAiProviderStatusLoadingCompanyId(requestCompanyId);
+    setAiProviderStatusRequestSequence(requestSequence);
+
+    const loadAiProviderStatus = async () => {
+      try {
+        const maximumStatusAttempts = forceQuotaProbeRefresh ? 2 : 1;
+        for (
+          let statusAttemptIndex = 0;
+          statusAttemptIndex < maximumStatusAttempts;
+          statusAttemptIndex += 1
+        ) {
+          const response = await fetch(
+            forceQuotaProbeRefresh
+              ? "/api/ai-tools/status"
+              : `/api/ai-tools/status?companyId=${encodeURIComponent(requestCompanyId)}`,
+            {
+              method: forceQuotaProbeRefresh ? "POST" : "GET",
+              credentials: "same-origin",
+              cache: "no-store",
+              headers: forceQuotaProbeRefresh
+                ? { "Content-Type": "application/json" }
+                : undefined,
+              body: forceQuotaProbeRefresh
+                ? JSON.stringify({ companyId: requestCompanyId })
+                : undefined,
+              signal: controller.signal,
+            },
+          );
+          const payload = (await response.json().catch(() => null)) as unknown;
+          const retryAfterSeconds = forceQuotaProbeRefresh
+            ? getAiQuotaProbeRefreshRetryAfterSeconds({
+                status: response.status,
+                retryAfterHeader: response.headers.get("Retry-After"),
+                payload,
+                retryAlreadyAttempted: statusAttemptIndex > 0,
+              })
+            : null;
+          if (retryAfterSeconds !== null) {
+            if (
+              controller.signal.aborted ||
+              aiProviderStatusAbortRef.current !== controller ||
+              activeAiCompanyRef.current !== requestCompanyId ||
+              !isAiCompanySelectionCurrent(requestCompanyId) ||
+              !isSnapshotContextCurrent(requestStatusRefreshSequence)
+            ) {
+              return;
+            }
+            const retryReady = await waitForAiProviderStatusRetry(
+              retryAfterSeconds,
+              controller.signal,
+            );
+            if (
+              !retryReady ||
+              controller.signal.aborted ||
+              aiProviderStatusAbortRef.current !== controller ||
+              activeAiCompanyRef.current !== requestCompanyId ||
+              !isAiCompanySelectionCurrent(requestCompanyId) ||
+              !isSnapshotContextCurrent(requestStatusRefreshSequence)
+            ) {
+              return;
+            }
+            continue;
+          }
+          if (!response.ok) {
+            throw new Error(
+              getAiEndpointErrorMessage(
+                payload,
+                response.status,
+                "Production AI status could not be loaded",
+              ),
+            );
+          }
+          if (!isAiCompanyPilotStatus(payload, requestCompanyId)) {
+            throw new Error(
+              "Production AI status returned an invalid company-scoped response.",
+            );
+          }
+          if (
+            forceQuotaProbeRefresh &&
+            response.headers.get("x-wtos-ai-quota-probe-refreshed") !== "1"
+          ) {
+            throw new Error(
+              "Production AI status did not acknowledge the requested context refresh.",
+            );
+          }
+          if (
+            controller.signal.aborted ||
+            activeAiCompanyRef.current !== requestCompanyId ||
+            !isAiCompanySelectionCurrent(requestCompanyId) ||
+            !isSnapshotContextCurrent(requestStatusRefreshSequence)
+          ) {
+            return;
+          }
+          locallyCompletedAiProviderStatusRef.current = {
+            companyId: requestCompanyId,
+            statusRefreshSequence: requestStatusRefreshSequence,
+            statusReloadSequence: requestStatusReloadSequence,
+          };
+          acknowledgeQuotaProbeRefresh(
+            requestCompanyId,
+            requestStatusRefreshSequence,
+          );
+          setAiProviderStatusErrorEvidence(null);
+          setAiProviderStatusEvidence({
+            status: payload,
+            statusRefreshSequence: requestStatusRefreshSequence,
+          });
+          return;
+        }
+      } catch (currentError) {
+        if (
+          controller.signal.aborted ||
+          activeAiCompanyRef.current !== requestCompanyId ||
+          !isAiCompanySelectionCurrent(requestCompanyId) ||
+          !isSnapshotContextCurrent(requestStatusRefreshSequence)
+        ) {
+          return;
+        }
+        setAiProviderStatusErrorEvidence({
+          companyId: requestCompanyId,
+          message: getCaughtErrorMessage(
+            currentError,
+            "Production AI status could not be loaded.",
+          ),
+          statusRefreshSequence: requestStatusRefreshSequence,
+        });
+      } finally {
+        if (aiProviderStatusAbortRef.current === controller) {
+          if (!isAiCompanySelectionCurrent(requestCompanyId)) {
+            releaseQuotaProbeRefreshAttempt(
+              requestCompanyId,
+              requestStatusRefreshSequence,
+            );
+          }
+          aiProviderStatusAbortRef.current = null;
+          setAiProviderStatusLoadingCompanyId(null);
+        }
+      }
+    };
+
+    void loadAiProviderStatus();
+  }, [
+    aiProviderStatusReloadSequence,
+    acknowledgeQuotaProbeRefresh,
+    beginQuotaProbeRefreshAttempt,
+    exactAiCompanyId,
+    isAiCompanySelectionCurrent,
+    isSnapshotContextCurrent,
+    releaseQuotaProbeRefreshAttempt,
+    snapshotTransitionPending,
+    quotaProbeRefreshStateVersion,
+    shouldForceQuotaProbeRefresh,
+    statusRefreshSequence,
+  ]);
 
   useEffect(
     () => () => {
@@ -39995,29 +40613,46 @@ function AiToolsView({
       },
       {
         label: "Local answer history",
-        value: `${aiResponses.length} stateless answer${aiResponses.length === 1 ? "" : "s"} shown`,
+        value: `${currentAiResponses.length} stateless answer${currentAiResponses.length === 1 ? "" : "s"} shown`,
       },
     ],
-    [aiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
+    [currentAiResponses.length, filteredCommandCenterRecommendations, selectedCustomer, selectedEstimate],
   );
 
   const runAiCommandPrompt = async (prompt: string) => {
     const cleanPrompt = prompt.trim();
-    if (!cleanPrompt || isAiCommandRunning) {
+    if (
+      !cleanPrompt ||
+      isAiCommandRunning ||
+      !isSnapshotContextCurrent(statusRefreshSequence)
+    ) {
       return;
     }
     if (!exactAiCompanySelected) {
-      setAiPilotError(
-        "Select one company in Company Scope before running audited AI. No provider request was made.",
-      );
+      setAiPilotErrorEvidence({
+        companyId: null,
+        statusRefreshSequence,
+        message:
+          "Select one company in Company Scope before running audited AI. No provider request was made.",
+      });
       return;
     }
 
-    const requestCompanyId = activeCompanyId;
+    const requestCompanyId = exactAiCompanyId;
+    if (!requestCompanyId) {
+      setAiPilotErrorEvidence({
+        companyId: null,
+        statusRefreshSequence,
+        message:
+          "Select a current authorized company before running audited AI. No provider request was made.",
+      });
+      return;
+    }
+    const requestStatusRefreshSequence = statusRefreshSequence;
     aiReviewAbortRef.current?.abort();
     aiReviewAbortRef.current = null;
     setReviewingActionId(null);
-    setAiPilotError("");
+    setAiPilotErrorEvidence(null);
     setIsAiCommandRunning(true);
     const controller = new AbortController();
     aiCommandAbortRef.current = controller;
@@ -40035,6 +40670,7 @@ function AiToolsView({
     try {
       const response = await fetch("/api/ai-tools/command", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
@@ -40044,37 +40680,100 @@ function AiToolsView({
         }),
         signal: controller.signal,
       });
+      const payload = (await response.json().catch(() => null)) as unknown;
 
       if (!response.ok) {
-        throw new Error(`AI pilot endpoint returned ${response.status}.`);
+        throw new Error(
+          getAiEndpointErrorMessage(
+            payload,
+            response.status,
+            "AI pilot endpoint request failed",
+          ),
+        );
       }
 
-      const result = (await response.json()) as AiPilotCommandResult;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("AI pilot endpoint returned an invalid response.");
+      }
+      const result = payload as AiPilotCommandResult;
       if (
         controller.signal.aborted ||
-        activeAiCompanyRef.current !== requestCompanyId ||
-        result.companyId !== requestCompanyId
+        !isSnapshotContextCurrent(requestStatusRefreshSequence) ||
+        result.companyId !== requestCompanyId ||
+        !isCurrentAiCommandCompletion({
+          activeCompanyId: activeAiCompanyRef.current,
+          requestCompanyId,
+          currentStatusRefreshSequence: currentStatusRefreshSequenceRef.current,
+          requestStatusRefreshSequence,
+        })
       ) {
         return;
       }
-      setAiPilotResult(result);
-      setAiResponses((current) => [result.response, ...current].slice(0, 6));
+      if (result.providerHealth.tested) {
+        setAiRuntimeProviderHealth({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          state: result.providerHealth.ok ? "ready" : "failed",
+        });
+      }
+      setAiPilotResultEvidence({
+        result,
+        statusRefreshSequence: requestStatusRefreshSequence,
+      });
+      setAiResponseHistoryEvidence((current) => ({
+        companyId: requestCompanyId,
+        statusRefreshSequence: requestStatusRefreshSequence,
+        responses: [
+          result.response,
+          ...(current?.companyId === requestCompanyId &&
+          current.statusRefreshSequence === requestStatusRefreshSequence
+            ? current.responses
+            : []),
+        ].slice(0, 6),
+      }));
       setReviewedActionIds({});
     } catch (currentError) {
+      if (
+        !isSnapshotContextCurrent(requestStatusRefreshSequence) ||
+        !isCurrentAiCommandCompletion({
+          activeCompanyId: activeAiCompanyRef.current,
+          requestCompanyId,
+          currentStatusRefreshSequence: currentStatusRefreshSequenceRef.current,
+          requestStatusRefreshSequence,
+        })
+      ) {
+        return;
+      }
       if (controller.signal.aborted) {
-        if (activeAiCompanyRef.current !== requestCompanyId) {
-          return;
-        }
-        setAiPilotError("AI request canceled. No action was taken.");
+        setAiPilotErrorEvidence({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          message: "AI request canceled. No action was taken.",
+        });
       } else {
-        setAiPilotError(
-          `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
-        );
-        setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
-        setAiPilotResult(null);
+        setAiPilotErrorEvidence({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          message: `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
+        });
+        setAiResponseHistoryEvidence((current) => ({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          responses: [
+            fallbackResponse,
+            ...(current?.companyId === requestCompanyId &&
+            current.statusRefreshSequence === requestStatusRefreshSequence
+              ? current.responses
+              : []),
+          ].slice(0, 6),
+        }));
+        setAiPilotResultEvidence(null);
         setReviewedActionIds({});
       }
     } finally {
+      if (activeAiCompanyRef.current === requestCompanyId) {
+        setAiProviderStatusReloadSequence((current) => current + 1);
+      }
       if (aiCommandAbortRef.current === controller) {
         aiCommandAbortRef.current = null;
         setIsAiCommandRunning(false);
@@ -40084,7 +40783,7 @@ function AiToolsView({
 
   const runAiCommand = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!aiCommand.trim()) {
+    if (!aiCommand.trim() || !isSnapshotContextCurrent(statusRefreshSequence)) {
       return;
     }
 
@@ -40100,8 +40799,12 @@ function AiToolsView({
     action: AiRecommendedAction,
     decision: "approved" | "rejected",
   ) => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    const reviewStatusRefreshSequence = statusRefreshSequence;
     const reviewCompanyId = activeCompanyId;
-    const preview = aiPilotResult?.actionPreviews.find(
+    const preview = currentAiPilotResult?.actionPreviews.find(
       (candidate) => candidate.id === action.id,
     );
 
@@ -40118,7 +40821,7 @@ function AiToolsView({
     if (
       reviewCompanyId === "all" ||
       activeAiCompanyRef.current !== reviewCompanyId ||
-      aiPilotResult?.companyId !== reviewCompanyId ||
+      currentAiPilotResult?.companyId !== reviewCompanyId ||
       action.companyId !== reviewCompanyId ||
       preview.companyId !== reviewCompanyId
     ) {
@@ -40180,7 +40883,8 @@ function AiToolsView({
       const receipt = reviewPayload as AiActionReviewReceipt;
       if (
         reviewController.signal.aborted ||
-        activeAiCompanyRef.current !== reviewCompanyId
+        activeAiCompanyRef.current !== reviewCompanyId ||
+        !isSnapshotContextCurrent(reviewStatusRefreshSequence)
       ) {
         return;
       }
@@ -40226,7 +40930,10 @@ function AiToolsView({
       }
       throw new Error("Only internal follow-up tasks can be approved for execution.");
     } catch (currentError) {
-      if (reviewController.signal.aborted) {
+      if (
+        reviewController.signal.aborted ||
+        !isSnapshotContextCurrent(reviewStatusRefreshSequence)
+      ) {
         return;
       }
       onError(
@@ -40241,6 +40948,9 @@ function AiToolsView({
   };
 
   const generateScope = () => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
     if (!selectedTemplate) {
       onError("Choose an approved scope template before drafting.");
       return;
@@ -40249,13 +40959,17 @@ function AiToolsView({
     const customerLine = selectedCustomer
       ? `${selectedCustomer.display_name} at ${selectedCustomer.property_address}`
       : "the selected property";
+    setScopeDraftContextKey(aiDraftContextKey);
     setScopeDraft(
-      `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- Live AI provider is not configured; this draft uses approved template language and visible CRM context only.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
+      `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- This deterministic draft uses approved template language and visible CRM context only; no provider or customer action was executed.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
     );
   };
 
   const saveScopeDraft = async () => {
-    if (!selectedTemplate || !scopeDraft.trim()) {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    if (!selectedTemplate || !currentScopeDraft.trim()) {
       onError("Generate a scope draft before saving.");
       return;
     }
@@ -40285,8 +40999,9 @@ function AiToolsView({
         title: `${selectedTemplate.title} Rule-Based Draft`,
         category: selectedTemplate.category,
         status: "draft",
-        scope_body: scopeDraft,
-        notes: "Created from AI Scope Writer 2.0 in rule-based disabled-provider mode. Human review required.",
+        scope_body: currentScopeDraft,
+        notes:
+          "Created from AI Scope Writer 2.0 deterministic template mode. No provider or customer action was executed. Human review required.",
       });
       await createDocument(client, {
         company_id: savedScope.company_id,
@@ -40297,7 +41012,7 @@ function AiToolsView({
         change_order_id: null,
         title: `${savedScope.title} Document`,
         category: "scope",
-        body: scopeDraft,
+        body: currentScopeDraft,
       });
       await onReload();
       onNotice("Reviewed rule-based scope draft and document saved.");
@@ -40307,6 +41022,9 @@ function AiToolsView({
   };
 
   const generateEstimate = () => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
     if (!selectedEstimate) {
       onError("Choose an existing estimate before preparing an assistant draft.");
       return;
@@ -40317,6 +41035,7 @@ function AiToolsView({
       return;
     }
 
+    setEstimateDraftContextKey(aiDraftContextKey);
     setEstimateDraft(
       selectedEstimateItems.map((item, index) => ({
         category: item.category,
@@ -40335,7 +41054,10 @@ function AiToolsView({
   };
 
   const saveEstimateDraft = async () => {
-    if (!estimateDraft.length) {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    if (!currentEstimateDraft.length) {
       onError("Generate an estimate draft before saving.");
       return;
     }
@@ -40382,9 +41104,9 @@ function AiToolsView({
           coats: selectedEstimate.coats,
           primer_required: selectedEstimate.primer_required,
           notes:
-            "Created from AI Estimate Assistant 2.0 in rule-based disabled-provider mode using existing estimate line items. Human review required.",
+            "Created from AI Estimate Assistant 2.0 deterministic source-record mode using existing estimate line items. No provider or customer action was executed. Human review required.",
         },
-        estimateDraft,
+        currentEstimateDraft,
       );
       await createDocument(client, {
           company_id: savedEstimate.company_id,
@@ -40401,7 +41123,7 @@ function AiToolsView({
           `Tax: ${formatMoney(savedEstimate.tax_total)}`,
           `Profit margin: ${formatMoney(savedEstimate.profit_margin_total)}`,
           `Total: ${formatMoney(savedEstimate.total)}`,
-          ...estimateDraft.map(
+          ...currentEstimateDraft.map(
             (item) =>
               `${item.name}: ${item.quantity} ${item.unit ?? "each"} at ${formatMoney(
                 item.unit_cost,
@@ -40423,7 +41145,7 @@ function AiToolsView({
       discount_value: selectedEstimate?.discount_value ?? 0,
       profit_margin_rate: selectedEstimate?.profit_margin_rate ?? 0,
     },
-    estimateDraft,
+    currentEstimateDraft,
   );
 
   return (
@@ -40445,13 +41167,24 @@ function AiToolsView({
               customer-facing and provider actions remain disabled.
             </p>
           </div>
-          <AiProviderCard model={aiWorkspace} readiness={aiPilotResult?.readiness ?? null} />
+          <AiProviderCard
+            companyId={exactAiCompanyId}
+            companyName={exactAiCompany?.name ?? null}
+            requestSequence={aiProviderStatusRequestSequence}
+            status={currentAiProviderStatus}
+            statusError={currentAiProviderStatusError}
+            isLoading={isAiProviderStatusLoading}
+            runtimeProviderHealth={currentAiRuntimeProviderHealth}
+          />
         </div>
 
         <form
           onSubmit={runAiCommand}
           className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-3"
           data-testid="ai-command-bar"
+          data-ai-snapshot-transition-pending={
+            snapshotTransitionPending ? "true" : "false"
+          }
         >
           <label className="sr-only" htmlFor="ai-command-input">
             Ask AI Tools
@@ -40463,7 +41196,7 @@ function AiToolsView({
                 id="ai-command-input"
                 value={aiCommand}
                 onChange={(event) => setAiCommand(event.target.value)}
-                disabled={!exactAiCompanySelected}
+                disabled={!exactAiCompanySelected || snapshotTransitionPending}
                 className="min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
                 placeholder={
                   exactAiCompanySelected
@@ -40474,11 +41207,19 @@ function AiToolsView({
             </div>
             <button
               type="submit"
-              disabled={isAiCommandRunning || !exactAiCompanySelected}
+              disabled={
+                isAiCommandRunning ||
+                !exactAiCompanySelected ||
+                snapshotTransitionPending
+              }
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
             >
               <WandSparkles className="h-4 w-4" />
-              {isAiCommandRunning ? "Analyzing" : "Analyze"}
+              {isAiCommandRunning
+                ? "Analyzing"
+                : snapshotTransitionPending
+                  ? "Refreshing context"
+                  : "Analyze"}
             </button>
             {isAiCommandRunning ? (
               <button
@@ -40502,7 +41243,11 @@ function AiToolsView({
                 key={prompt}
                 type="button"
                 onClick={() => void runAiCommandPrompt(prompt)}
-                disabled={isAiCommandRunning || !exactAiCompanySelected}
+                disabled={
+                  isAiCommandRunning ||
+                  !exactAiCompanySelected ||
+                  snapshotTransitionPending
+                }
                 className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-sky-200 hover:text-sky-700"
               >
                 {prompt}
@@ -40520,9 +41265,9 @@ function AiToolsView({
           ) : null}
         </form>
 
-        {aiPilotError ? (
+        {currentAiPilotError ? (
           <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
-            {aiPilotError}
+            {currentAiPilotError}
           </p>
         ) : null}
 
@@ -40537,13 +41282,15 @@ function AiToolsView({
         />
 
         <AiPilotControlPanel
-          result={aiPilotResult}
-          latestResponse={aiResponses[0] ?? null}
+          result={currentAiPilotResult}
+          latestResponse={currentAiResponses[0] ?? null}
+          providerStatus={currentAiProviderStatus}
+          runtimeProviderHealth={currentAiRuntimeProviderHealth}
         />
 
         <AiGroundedResponsePanel
-          response={aiResponses[0] ?? null}
-          actionPreviews={aiPilotResult?.actionPreviews ?? []}
+          response={currentAiResponses[0] ?? null}
+          actionPreviews={currentAiPilotResult?.actionPreviews ?? []}
           reviewedActionIds={reviewedActionIds}
           reviewingActionId={reviewingActionId}
           onReviewAction={markActionReviewed}
@@ -40627,7 +41374,12 @@ function AiToolsView({
         <div className="mt-5 grid gap-3">
           <select
             value={scopeTemplateId}
-            onChange={(event) => setScopeTemplateId(event.target.value)}
+            onChange={(event) => {
+              setScopeTemplateId(event.target.value);
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft("");
+            }}
+            disabled={snapshotTransitionPending}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             {snapshot.scopeTemplates.map((template) => (
@@ -40638,7 +41390,12 @@ function AiToolsView({
           </select>
           <select
             value={scopeCustomerId}
-            onChange={(event) => setScopeCustomerId(event.target.value)}
+            onChange={(event) => {
+              setScopeCustomerId(event.target.value);
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft("");
+            }}
+            disabled={snapshotTransitionPending}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="none">No customer context</option>
@@ -40652,7 +41409,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={generateScope}
-              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+              disabled={snapshotTransitionPending}
+              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <WandSparkles className="h-4 w-4" />
               Build rule-based scope
@@ -40660,7 +41418,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => void saveScopeDraft()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentScopeDraft.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FileText className="h-4 w-4" />
               Save reviewed draft
@@ -40668,15 +41427,23 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentScopeDraft.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Printer className="h-4 w-4" />
               PDF
             </button>
           </div>
           <textarea
-            value={scopeDraft}
-            onChange={(event) => setScopeDraft(event.target.value)}
+            value={currentScopeDraft}
+            onChange={(event) => {
+              if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+                return;
+              }
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft(event.target.value);
+            }}
+            disabled={snapshotTransitionPending}
             className="min-h-96 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6"
             placeholder="Generated scope appears here"
           />
@@ -40705,8 +41472,10 @@ function AiToolsView({
               value={estimateSourceId}
               onChange={(event) => {
                 setEstimateSourceId(event.target.value);
+                setEstimateDraftContextKey(aiDraftContextKey);
                 setEstimateDraft([]);
               }}
+              disabled={snapshotTransitionPending}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Select an existing estimate</option>
@@ -40726,7 +41495,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={generateEstimate}
-              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+              disabled={snapshotTransitionPending}
+              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Calculator className="h-4 w-4" />
               Build from selected estimate
@@ -40734,7 +41504,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => void saveEstimateDraft()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentEstimateDraft.length}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FileText className="h-4 w-4" />
               Save reviewed estimate
@@ -40742,16 +41513,17 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentEstimateDraft.length}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Printer className="h-4 w-4" />
               PDF
             </button>
           </div>
           <div className="rounded-lg border border-slate-200">
-            {estimateDraft.length ? (
+            {currentEstimateDraft.length ? (
               <div className="divide-y divide-slate-100">
-                {estimateDraft.map((item) => (
+                {currentEstimateDraft.map((item) => (
                   <div key={item.name} className="px-4 py-3">
                     <div className="flex items-center justify-between gap-4">
                       <div>
@@ -40826,16 +41598,31 @@ function AiToolsView({
       <section
         className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
         data-testid="ai-saved-work"
+        data-ai-saved-analyses-phase={savedAnalysesReadPhase}
+        data-ai-saved-analyses-read-available={
+          savedAnalysesReadAvailable ? "true" : "false"
+        }
+        data-ai-saved-analyses-company-id={currentAiProviderStatus?.companyId ?? ""}
       >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-lg font-bold text-slate-950">Saved AI analyses</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Persistence is architecture-ready through migration 0033. This run did not
-              apply remote migrations or configure a live AI provider.
+              {savedAnalysesReadAvailable
+                ? "Authenticated company-scoped saved-analysis read path verified. This view does not save or share a new analysis without a separate reviewed workflow."
+                : currentAiProviderStatus
+                  ? "Saved-analysis storage could not be verified for this company. This view does not save or share a new analysis."
+                  : isAiProviderStatusLoading
+                    ? "Checking authenticated company-scoped saved-analysis availability. This view does not save or share a new analysis."
+                    : exactAiCompanySelected
+                      ? "Saved-analysis availability is not verified. This view does not save or share a new analysis."
+                      : "Select one company to verify authenticated saved-analysis availability. This view does not save or share a new analysis."}
             </p>
           </div>
-          <AiStatusBadge label="Production disabled" tone="slate" />
+          <AiStatusBadge
+            label={savedAnalysesReadAvailable ? "Read path verified" : "Not verified"}
+            tone={savedAnalysesReadAvailable ? "blue" : "amber"}
+          />
         </div>
         <AiDraftList drafts={aiWorkspace.savedAnalyses} />
       </section>
@@ -41346,43 +42133,138 @@ function aiRecommendationMatchesAdvisor(
 }
 
 function AiProviderCard({
-  model,
-  readiness,
+  companyId,
+  companyName,
+  requestSequence,
+  status,
+  statusError,
+  isLoading,
+  runtimeProviderHealth,
 }: {
-  model: AiWorkspaceModel;
-  readiness: AiPilotReadiness | null;
+  companyId: string | null;
+  companyName: string | null;
+  requestSequence: number;
+  status: AiCompanyPilotStatus | null;
+  statusError: string;
+  isLoading: boolean;
+  runtimeProviderHealth: "ready" | "failed" | null;
 }) {
-  const label = readiness?.label ?? model.provider.label;
-  const summary = readiness?.summary ?? model.provider.summary;
-  const providerLabel = readiness
-    ? `${readiness.provider} / ${readiness.model}`
-    : "disabled / not selected";
+  const runtimeProviderFailed = runtimeProviderHealth === "failed";
+  const isEnabled = Boolean(
+    !runtimeProviderFailed &&
+      status?.aiEnabled &&
+      status.currentQuotaAvailable &&
+      status.readiness.liveProviderEnabled,
+  );
+  const statusPhase = !companyName
+    ? "selection_required"
+    : isLoading
+      ? "loading"
+      : status
+        ? "loaded"
+        : statusError
+          ? "error"
+          : "pending";
+  const label = !companyName
+    ? "Select a company for Production AI"
+    : isLoading
+      ? "Checking Production AI status"
+      : runtimeProviderFailed
+        ? "Provider test failed"
+        : status
+          ? status.readiness.label
+          : statusError
+            ? "Production AI status unavailable"
+            : "Production AI status pending";
+  const summary = !companyName
+    ? "Choose WeatherTech Roofing LLC or IHC Painting to load its authenticated AI policy and monthly budget."
+    : isLoading
+      ? `Loading the authenticated, company-scoped provider policy for ${companyName}.`
+      : runtimeProviderFailed
+        ? `${companyName}: The latest live provider test failed. Production AI will remain unavailable until a later tested request succeeds.`
+        : status
+          ? `${companyName}: ${status.readiness.summary}`
+          : statusError
+            ? `${companyName}: ${statusError}`
+            : `${companyName}: Waiting for the authenticated provider status.`;
+  const providerLabel = status
+    ? `${status.readiness.provider} / ${status.readiness.model}`
+    : !companyName
+      ? "exact company scope required"
+      : statusError
+        ? "authenticated status unavailable"
+        : "authenticated status pending";
+  const cardClass = isEnabled
+    ? "rounded-2xl border border-sky-200 bg-sky-50 p-4"
+    : "rounded-2xl border border-amber-200 bg-amber-50 p-4";
+  const textClass = isEnabled ? "text-sky-950" : "text-amber-950";
+  const mutedTextClass = isEnabled ? "text-sky-900" : "text-amber-900";
+  const accentTextClass = isEnabled ? "text-sky-800" : "text-amber-800";
 
   return (
     <div
-      className="rounded-2xl border border-amber-200 bg-amber-50 p-4"
-      data-testid="ai-disabled-state"
+      className={cardClass}
+      data-testid="ai-provider-status"
+      data-ai-enabled={isEnabled ? "true" : "false"}
+      data-ai-current-quota-available={
+        status ? String(status.currentQuotaAvailable) : ""
+      }
+      data-ai-status-phase={statusPhase}
+      data-ai-request-company-id={companyId ?? ""}
+      data-ai-status-request-sequence={String(requestSequence)}
+      data-ai-status-company-id={status?.companyId ?? ""}
+      data-ai-monthly-budget-cents={status ? String(status.monthlyBudgetCents) : ""}
+      data-ai-runtime-provider-health={runtimeProviderHealth ?? "not_tested"}
+      role="status"
+      aria-live="polite"
+      aria-busy={isLoading}
     >
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+        {isEnabled ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-sky-700" />
+        ) : (
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+        )}
         <div>
-          <p className="font-semibold text-amber-950">{label}</p>
-          <p className="mt-1 text-sm leading-5 text-amber-900">{summary}</p>
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+          <p className={`font-semibold ${textClass}`}>{label}</p>
+          <p className={`mt-1 text-sm leading-5 ${mutedTextClass}`}>{summary}</p>
+          <p className={`mt-2 text-xs font-semibold uppercase tracking-wide ${accentTextClass}`}>
             {providerLabel}
           </p>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <AiStatusBadge
-          label={readiness?.state.replace(/_/g, " ") ?? "AI_ENABLED=false"}
-          tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+          label={
+            runtimeProviderFailed
+              ? "provider test failed"
+              : status?.readiness.state.replace(/_/g, " ") ?? "status not loaded"
+          }
+          tone={isEnabled ? "blue" : "amber"}
         />
-        <AiStatusBadge label="No fake AI output" tone="slate" />
-        <AiStatusBadge
-          label={readiness?.migrationStatus ?? "Owner setup required"}
-          tone={readiness?.migrationStatus === "applied" ? "blue" : "amber"}
-        />
+        {status ? (
+          <AiStatusBadge
+            label={`${formatMoney(status.monthlyBudgetCents / 100)}/month`}
+            tone={status.monthlyBudgetCents > 0 ? "blue" : "amber"}
+          />
+        ) : null}
+        {status ? (
+          <AiStatusBadge
+            label={
+              status.currentQuotaAvailable
+                ? "Current quota available"
+                : "Current quota unavailable"
+            }
+            tone={status.currentQuotaAvailable ? "blue" : "amber"}
+          />
+        ) : null}
+        <AiStatusBadge label="External actions disabled" tone="slate" />
+        {status ? (
+          <AiStatusBadge
+            label={status.readiness.migrationStatus}
+            tone={status.readiness.migrationStatus === "applied" ? "blue" : "amber"}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -41391,29 +42273,46 @@ function AiProviderCard({
 function AiPilotControlPanel({
   result,
   latestResponse,
+  providerStatus,
+  runtimeProviderHealth,
 }: {
   result: AiPilotCommandResult | null;
   latestResponse: AiGroundedResponse | null;
+  providerStatus: AiCompanyPilotStatus | null;
+  runtimeProviderHealth: "ready" | "failed" | null;
 }) {
   const usage = result?.usage;
-  const readiness = result?.readiness;
+  const readiness = providerStatus?.readiness ?? result?.readiness;
+  const runtimeProviderFailed = runtimeProviderHealth === "failed";
   const sourceCount = result?.context.records.length ?? latestResponse?.supportingRecords.length ?? 0;
 
   return (
     <div
       className="mt-4 grid gap-3 lg:grid-cols-3"
       data-testid="ai-live-pilot-controls"
+      data-ai-current-command-result={result ? "true" : "false"}
+      data-ai-runtime-provider-health={runtimeProviderHealth ?? "not_tested"}
     >
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Live provider readiness</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {readiness?.summary ??
-            "No server-side AI pilot result yet. Ask a command to test provider readiness."}
+          {runtimeProviderFailed
+            ? "The latest live provider test failed. Production AI will remain unavailable until a later tested request succeeds."
+            : readiness?.summary ??
+              "No server-side AI pilot result yet. Ask a command to test provider readiness."}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AiStatusBadge
-            label={readiness?.state.replace(/_/g, " ") ?? "not tested"}
-            tone={readiness?.liveProviderEnabled ? "blue" : "amber"}
+            label={
+              runtimeProviderFailed
+                ? "provider test failed"
+                : readiness?.state.replace(/_/g, " ") ?? "not tested"
+            }
+            tone={
+              !runtimeProviderFailed && readiness?.liveProviderEnabled
+                ? "blue"
+                : "amber"
+            }
           />
           <AiStatusBadge
             label={readiness?.productionDisabled === false ? "external actions enabled" : "external actions disabled"}
@@ -41424,16 +42323,29 @@ function AiPilotControlPanel({
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-semibold text-slate-950">Usage and cost controls</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {usage?.reason ?? "Daily budgets, per-user limits, per-company limits, token caps, timeout, and retry limits are required before live testing."}
+          {providerStatus?.usageAccountingConfigured &&
+          providerStatus.currentQuotaAvailable === false
+            ? "Usage accounting is configured, but current request capacity is unavailable. No provider call can run until quota resets or approved limits change."
+            : usage?.reason ??
+              (providerStatus?.usageAccountingConfigured
+              ? `Usage accounting is configured with a ${formatMoney(providerStatus.monthlyBudgetCents / 100)} monthly company budget.`
+              : providerStatus
+                ? "Usage accounting is not ready for this company. No provider call can run until the required controls are complete."
+                : "Select one company to load its authenticated usage and cost controls.")}
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+          <span>
+            Monthly budget: {providerStatus ? formatMoney(providerStatus.monthlyBudgetCents / 100) : "$0"}
+          </span>
           <span>Request tokens: {usage?.estimatedRequestTokens ?? 0}</span>
           <span>Max response: {usage?.maxResponseTokens ?? 0}</span>
           <span>Budget: ${usage?.dailyBudgetUsd ?? 0}</span>
           <span>One attempt: ${usage?.estimatedCostUsd ?? 0}</span>
           <span>Max attempts: {usage?.maxProviderAttempts ?? 0}</span>
           <span>Max reservation: ${usage?.maxReservedRequestCostUsd ?? 0}</span>
-          <span>Reserved today: ${usage?.reservedCostUsdToday ?? 0}</span>
+          <span>
+            Company reserved this month: ${usage?.companyReservedCostUsdThisMonth ?? 0}
+          </span>
         </div>
       </div>
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -41472,7 +42384,7 @@ function AiGroundedResponsePanel({
       <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
         Ask a read-only question or choose a suggested command. Responses will show the
         answer, supporting records, missing information, approval requirements, and
-        whether production activation is disabled.
+        whether external actions remain disabled.
       </div>
     );
   }
@@ -41607,7 +42519,7 @@ function AiAssistantPanel({
           </span>
           <h3 className="text-base font-bold text-slate-950">{title}</h3>
         </div>
-        <AiStatusBadge label={draft?.mode.replace(/_/g, " ") ?? "provider disabled"} tone="blue" />
+        <AiStatusBadge label={draft?.mode.replace(/_/g, " ") ?? "no local preview"} tone="blue" />
       </div>
       {draft ? (
         <div className="mt-4">

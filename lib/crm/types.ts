@@ -5283,6 +5283,24 @@ export type Database = {
         >;
         Relationships: [];
       };
+      ai_quota_probe_refresh_cooldowns: {
+        Row: {
+          company_id: string;
+          actor_user_id: string;
+          next_allowed_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          company_id: string;
+          actor_user_id: string;
+          next_allowed_at: string;
+          updated_at: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["ai_quota_probe_refresh_cooldowns"]["Insert"]
+        >;
+        Relationships: [];
+      };
       gmail_oauth_states: {
         Row: GmailOauthStateRecord;
         Insert: GmailOauthStateInsert;
@@ -5540,6 +5558,21 @@ export type Database = {
           p_actor_user_id: string;
           p_request_id: string;
           p_request: Record<string, unknown>;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_get_ai_quota_status_v1: {
+        Args: {
+          p_company_id: string;
+          p_actor_user_id: string;
+          p_request: Record<string, unknown>;
+        };
+        Returns: Record<string, unknown>;
+      };
+      wtos_claim_ai_quota_probe_refresh_v1: {
+        Args: {
+          p_company_id: string;
+          p_actor_user_id: string;
         };
         Returns: Record<string, unknown>;
       };

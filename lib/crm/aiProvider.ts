@@ -82,6 +82,24 @@ export type AiPilotReadiness = {
   health: "disabled" | "configuration_required" | "ready" | "failed";
 };
 
+export type AiCompanyPilotStatus = {
+  companyId: string;
+  aiEnabled: boolean;
+  currentQuotaAvailable: boolean;
+  monthlyBudgetCents: number;
+  savedAnalysesReadAvailable: boolean;
+  readiness: AiPilotReadiness;
+  companyPolicy: {
+    configured: true;
+    aiEnabled: boolean;
+    providerAllowed: boolean;
+    modelAllowed: boolean;
+    lastReviewedAt: string | null;
+  };
+  usageAccountingConfigured: boolean;
+  externalActionExecutionEnabled: false;
+};
+
 export type AiContextRecord = AiSourceRecord & {
   snippet: string;
   relevance: number;
@@ -112,7 +130,6 @@ export type AiUsageCheck = {
   estimatedCostUsd: number;
   maxProviderAttempts: number;
   maxReservedRequestCostUsd: number;
-  reservedCostUsdToday: number;
   companyReservedCostUsdThisMonth: number;
 };
 
@@ -166,6 +183,57 @@ export type AiQuotaReservationReceipt = {
   userRequestsToday: number;
   reservedCostCentsToday: number;
   companyReservedCostCentsThisMonth: number;
+};
+
+export type AiQuotaStatusReceipt = {
+  contractVersion: 1;
+  companyId: string;
+  actorUserId: string;
+  requestCapacityAvailable: boolean;
+  blockingReason: Exclude<AiQuotaBlockingReason, "quota_status_unavailable">;
+  checkedAt: string;
+  globalRequestsToday: number;
+  companyRequestsToday: number;
+  userRequestsToday: number;
+  reservedCostCentsToday: number;
+  companyReservedCostCentsThisMonth: number;
+};
+
+export type AiQuotaBlockingReason =
+  | "none"
+  | "quota_status_unavailable"
+  | "global_daily_request_limit"
+  | "company_daily_request_limit"
+  | "user_daily_request_limit"
+  | "global_daily_budget"
+  | "company_monthly_budget";
+
+export type AiQuotaStatusRequest = {
+  contractVersion: 1;
+  estimatedCostCents: number;
+  globalDailyRequestLimit: number;
+  companyDailyRequestLimit: number;
+  userDailyRequestLimit: number;
+  dailyBudgetCents: number;
+  companyMonthlyBudgetCents: number;
+};
+
+export type AiQuotaReservationRequest = {
+  contractVersion: 1;
+  provider: AiProviderKey;
+  model: string | null;
+  promptSha256: string;
+  promptCharacters: number;
+  estimatedRequestTokens: number;
+  maxResponseTokens: number;
+  estimatedCostCents: number;
+  maxProviderAttempts: number;
+  globalDailyRequestLimit: number;
+  companyDailyRequestLimit: number;
+  userDailyRequestLimit: number;
+  dailyBudgetCents: number;
+  companyMonthlyBudgetCents: number;
+  maxRequestTokens: number;
 };
 
 export type CompanyAiProviderConfigResolution =
@@ -281,6 +349,64 @@ const aiProviderCapabilities: AiProviderCapability[] = [
   "provider_disabled_fallback",
 ];
 
+const aiQuotaRequestKeys = [
+  "contractVersion",
+  "provider",
+  "model",
+  "promptSha256",
+  "promptCharacters",
+  "estimatedRequestTokens",
+  "maxResponseTokens",
+  "estimatedCostCents",
+  "maxProviderAttempts",
+  "globalDailyRequestLimit",
+  "companyDailyRequestLimit",
+  "userDailyRequestLimit",
+  "dailyBudgetCents",
+  "companyMonthlyBudgetCents",
+  "maxRequestTokens",
+] as const satisfies readonly (keyof AiQuotaReservationRequest)[];
+
+const aiQuotaStatusReceiptKeys = [
+  "contractVersion",
+  "companyId",
+  "actorUserId",
+  "requestCapacityAvailable",
+  "blockingReason",
+  "checkedAt",
+  "globalRequestsToday",
+  "companyRequestsToday",
+  "userRequestsToday",
+  "reservedCostCentsToday",
+  "companyReservedCostCentsThisMonth",
+] as const satisfies readonly (keyof AiQuotaStatusReceipt)[];
+
+const aiQuotaStatusRequestKeys = [
+  "contractVersion",
+  "estimatedCostCents",
+  "globalDailyRequestLimit",
+  "companyDailyRequestLimit",
+  "userDailyRequestLimit",
+  "dailyBudgetCents",
+  "companyMonthlyBudgetCents",
+] as const satisfies readonly (keyof AiQuotaStatusRequest)[];
+
+export const aiQuotaBounds = {
+  maxModelCharacters: 160,
+  maxPromptCharacters: 50_000,
+  maxTokens: 1_000_000,
+  maxEstimatedCostCents: 100_000_000,
+  maxProviderAttempts: 3,
+  maxProviderTimeoutMs: 2_147_483_647,
+  maxDailyRequests: 100_000,
+  maxDailyBudgetCents: 100_000_000,
+  maxCompanyMonthlyBudgetCents: 1_000_000_000,
+} as const;
+
+const aiPromptSha256Pattern = /^[0-9a-f]{64}$/;
+const aiUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const untrustedContentPatterns = [
   /ignore (all )?(previous|system|developer) instructions/i,
   /system prompt/i,
@@ -297,12 +423,7 @@ export function getAiPilotProviderConfig(
 ): AiPilotProviderConfig {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const model = env.AI_MODEL?.trim() ?? "";
-  const apiKeyConfigured =
-    provider === "openai"
-      ? Boolean(env.AI_OPENAI_API_KEY)
-      : provider === "anthropic"
-        ? Boolean(env.AI_ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY)
-        : false;
+  const apiKeyConfigured = Boolean(readAiProviderApiKey(provider, env));
 
   return {
     enabled: parseBoolean(env.AI_ENABLED, false),
@@ -323,12 +444,322 @@ export function getAiPilotProviderConfig(
       env.AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS,
       0,
     ),
-    timeoutMs: parseInteger(env.AI_TIMEOUT_MS, 15000),
-    retryLimit: Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2),
+    timeoutMs: parseProviderTimeoutMs(env.AI_TIMEOUT_MS),
+    retryLimit: Math.max(0, Math.min(parseInteger(env.AI_RETRY_LIMIT, 1), 2)),
     streamingEnabled: parseBoolean(env.AI_STREAMING_ENABLED, false),
     structuredOutputEnabled: parseBoolean(env.AI_STRUCTURED_OUTPUT_ENABLED, true),
     actionExecutionEnabled: false,
   };
+}
+
+export function isAiQuotaReservationRequestWithinBounds(
+  request: AiQuotaReservationRequest,
+) {
+  const requestKeys = Object.keys(request);
+  const modelHasValidType = request.model === null || typeof request.model === "string";
+  const model =
+    typeof request.model === "string" ? request.model.trim() || null : null;
+  const providerRequiresModel =
+    request.provider === "openai" || request.provider === "anthropic";
+  const validProvider =
+    request.provider === "disabled" ||
+    request.provider === "openai" ||
+    request.provider === "anthropic" ||
+    request.provider === "owner_approved";
+
+  return (
+    requestKeys.length === aiQuotaRequestKeys.length &&
+    aiQuotaRequestKeys.every((key) =>
+      Object.prototype.hasOwnProperty.call(request, key),
+    ) &&
+    request.contractVersion === 1 &&
+    validProvider &&
+    modelHasValidType &&
+    (!providerRequiresModel || model !== null) &&
+    (model === null ||
+      (model.length >= 1 && model.length <= aiQuotaBounds.maxModelCharacters)) &&
+    typeof request.promptSha256 === "string" &&
+    aiPromptSha256Pattern.test(request.promptSha256) &&
+    isIntegerWithin(request.promptCharacters, 1, aiQuotaBounds.maxPromptCharacters) &&
+    isIntegerWithin(request.estimatedRequestTokens, 1, aiQuotaBounds.maxTokens) &&
+    request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8) &&
+    isIntegerWithin(request.maxResponseTokens, 1, aiQuotaBounds.maxTokens) &&
+    isIntegerWithin(
+      request.estimatedCostCents,
+      providerRequiresModel ? 1 : 0,
+      aiQuotaBounds.maxEstimatedCostCents,
+    ) &&
+    isIntegerWithin(request.maxProviderAttempts, 1, aiQuotaBounds.maxProviderAttempts) &&
+    isIntegerWithin(
+      request.globalDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.companyDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.userDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(request.dailyBudgetCents, 1, aiQuotaBounds.maxDailyBudgetCents) &&
+    isIntegerWithin(
+      request.companyMonthlyBudgetCents,
+      1,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+    ) &&
+    request.estimatedCostCents <= request.dailyBudgetCents &&
+    request.estimatedCostCents <= request.companyMonthlyBudgetCents &&
+    isIntegerWithin(request.maxRequestTokens, 1, aiQuotaBounds.maxTokens) &&
+    request.estimatedRequestTokens <= request.maxRequestTokens
+  );
+}
+
+export function isAiQuotaReservationReceiptWithinBounds(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const receipt = value as Record<string, unknown>;
+
+  return (
+    isIntegerWithin(
+      receipt.globalRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.companyRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.userRequestsToday,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      receipt.reservedCostCentsToday,
+      1,
+      aiQuotaBounds.maxDailyBudgetCents,
+    ) &&
+    isIntegerWithin(
+      receipt.companyReservedCostCentsThisMonth,
+      1,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+    )
+  );
+}
+
+export function parseAiQuotaStatusReceipt(
+  value: unknown,
+  expected: { companyId: string; actorUserId: string },
+): AiQuotaStatusReceipt | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const receipt = value as Record<string, unknown>;
+  const keys = Object.keys(receipt);
+  if (
+    keys.length !== aiQuotaStatusReceiptKeys.length ||
+    !aiQuotaStatusReceiptKeys.every((key) =>
+      Object.prototype.hasOwnProperty.call(receipt, key),
+    ) ||
+    receipt.contractVersion !== 1 ||
+    receipt.companyId !== expected.companyId ||
+    receipt.actorUserId !== expected.actorUserId ||
+    typeof receipt.companyId !== "string" ||
+    !aiUuidPattern.test(receipt.companyId) ||
+    typeof receipt.actorUserId !== "string" ||
+    !aiUuidPattern.test(receipt.actorUserId) ||
+    typeof receipt.requestCapacityAvailable !== "boolean" ||
+    (receipt.blockingReason !== "none" &&
+      receipt.blockingReason !== "global_daily_request_limit" &&
+      receipt.blockingReason !== "company_daily_request_limit" &&
+      receipt.blockingReason !== "user_daily_request_limit" &&
+      receipt.blockingReason !== "global_daily_budget" &&
+      receipt.blockingReason !== "company_monthly_budget") ||
+    (receipt.requestCapacityAvailable
+      ? receipt.blockingReason !== "none"
+      : receipt.blockingReason === "none") ||
+    typeof receipt.checkedAt !== "string" ||
+    receipt.checkedAt.length > 64 ||
+    !Number.isFinite(Date.parse(receipt.checkedAt)) ||
+    !isIntegerWithin(
+      receipt.globalRequestsToday,
+      0,
+      aiQuotaBounds.maxDailyRequests + 1,
+    ) ||
+    !isIntegerWithin(
+      receipt.companyRequestsToday,
+      0,
+      aiQuotaBounds.maxDailyRequests + 1,
+    ) ||
+    !isIntegerWithin(
+      receipt.userRequestsToday,
+      0,
+      aiQuotaBounds.maxDailyRequests + 1,
+    ) ||
+    !isIntegerWithin(
+      receipt.reservedCostCentsToday,
+      0,
+      aiQuotaBounds.maxDailyBudgetCents + 1,
+    ) ||
+    !isIntegerWithin(
+      receipt.companyReservedCostCentsThisMonth,
+      0,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents + 1,
+    ) ||
+    Number(receipt.userRequestsToday) > Number(receipt.companyRequestsToday) ||
+    Number(receipt.companyRequestsToday) > Number(receipt.globalRequestsToday)
+  ) {
+    return null;
+  }
+
+  return receipt as AiQuotaStatusReceipt;
+}
+
+export function isAiQuotaStatusRequestWithinBounds(
+  request: AiQuotaStatusRequest,
+) {
+  const keys = Object.keys(request);
+  return (
+    keys.length === aiQuotaStatusRequestKeys.length &&
+    aiQuotaStatusRequestKeys.every((key) =>
+      Object.prototype.hasOwnProperty.call(request, key),
+    ) &&
+    request.contractVersion === 1 &&
+    isIntegerWithin(
+      request.estimatedCostCents,
+      1,
+      aiQuotaBounds.maxEstimatedCostCents,
+    ) &&
+    isIntegerWithin(
+      request.globalDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.companyDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.userDailyRequestLimit,
+      1,
+      aiQuotaBounds.maxDailyRequests,
+    ) &&
+    isIntegerWithin(
+      request.dailyBudgetCents,
+      1,
+      aiQuotaBounds.maxDailyBudgetCents,
+    ) &&
+    isIntegerWithin(
+      request.companyMonthlyBudgetCents,
+      1,
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+    ) &&
+    request.estimatedCostCents <= request.dailyBudgetCents &&
+    request.estimatedCostCents <= request.companyMonthlyBudgetCents
+  );
+}
+
+export function buildAiQuotaStatusRequest({
+  config,
+  companyMonthlyBudgetCents,
+  estimatedRequestTokens,
+}: {
+  config: AiPilotProviderConfig;
+  companyMonthlyBudgetCents: number;
+  estimatedRequestTokens: number;
+}): AiQuotaStatusRequest | null {
+  if (
+    !hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents) ||
+    !isIntegerWithin(estimatedRequestTokens, 1, config.maxRequestTokens)
+  ) {
+    return null;
+  }
+  const request = {
+    contractVersion: 1,
+    estimatedCostCents: getAiReservationCostCents({
+      config,
+      estimatedRequestTokens,
+    }),
+    globalDailyRequestLimit: config.dailyRequestLimit,
+    companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
+    userDailyRequestLimit: config.perUserDailyRequestLimit,
+    dailyBudgetCents: Math.floor(config.dailyBudgetUsd * 100),
+    companyMonthlyBudgetCents,
+  } satisfies AiQuotaStatusRequest;
+  return isAiQuotaStatusRequestWithinBounds(request) ? request : null;
+}
+
+export function getAiCurrentQuotaAvailability({
+  config,
+  companyMonthlyBudgetCents,
+  quotaStatus,
+  quotaProbeEstimatedRequestTokens,
+}: {
+  config: AiPilotProviderConfig;
+  companyMonthlyBudgetCents: number;
+  quotaStatus: AiQuotaStatusReceipt | null;
+  quotaProbeEstimatedRequestTokens: number | null;
+}): { available: boolean; blockingReason: AiQuotaBlockingReason } {
+  if (!quotaStatus || quotaProbeEstimatedRequestTokens === null) {
+    return { available: false, blockingReason: "quota_status_unavailable" };
+  }
+  const quotaRequest = buildAiQuotaStatusRequest({
+    config,
+    companyMonthlyBudgetCents,
+    estimatedRequestTokens: quotaProbeEstimatedRequestTokens,
+  });
+  const minimumReservationCostCents = quotaRequest?.estimatedCostCents ?? null;
+  if (
+    minimumReservationCostCents === null ||
+    !isIntegerWithin(
+      minimumReservationCostCents,
+      1,
+      aiQuotaBounds.maxEstimatedCostCents,
+    )
+  ) {
+    return { available: false, blockingReason: "quota_status_unavailable" };
+  }
+  let blockingReason: Exclude<
+    AiQuotaBlockingReason,
+    "quota_status_unavailable"
+  > = "none";
+  if (quotaStatus.globalRequestsToday >= config.dailyRequestLimit) {
+    blockingReason = "global_daily_request_limit";
+  } else if (
+    quotaStatus.companyRequestsToday >= config.perCompanyDailyRequestLimit
+  ) {
+    blockingReason = "company_daily_request_limit";
+  } else if (quotaStatus.userRequestsToday >= config.perUserDailyRequestLimit) {
+    blockingReason = "user_daily_request_limit";
+  } else if (
+    quotaStatus.reservedCostCentsToday + minimumReservationCostCents >
+    Math.floor(config.dailyBudgetUsd * 100)
+  ) {
+    blockingReason = "global_daily_budget";
+  } else if (
+    quotaStatus.companyReservedCostCentsThisMonth + minimumReservationCostCents >
+    companyMonthlyBudgetCents
+  ) {
+    blockingReason = "company_monthly_budget";
+  }
+  const computed = {
+    available: blockingReason === "none",
+    blockingReason,
+  };
+  if (
+    quotaStatus.requestCapacityAvailable !== computed.available ||
+    quotaStatus.blockingReason !== computed.blockingReason
+  ) {
+    return { available: false, blockingReason: "quota_status_unavailable" };
+  }
+  return computed;
 }
 
 export function buildAiPilotReadiness({
@@ -437,8 +868,12 @@ export function resolveCompanyAiProviderConfig({
     policy.daily_request_limit <= 0 ||
     policy.per_user_daily_request_limit <= 0 ||
     policy.per_company_monthly_budget_cents <= 0 ||
+    !Number.isInteger(policy.per_company_monthly_budget_cents) ||
+    policy.per_company_monthly_budget_cents >
+      aiQuotaBounds.maxCompanyMonthlyBudgetCents ||
     policy.token_limit <= 0 ||
-    policy.timeout_ms <= 0 ||
+    !isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
+    !isIntegerWithin(policy.timeout_ms, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
     policy.retry_limit < 0
   ) {
     return {
@@ -447,23 +882,142 @@ export function resolveCompanyAiProviderConfig({
     };
   }
 
+  const effectiveConfig = {
+    ...config,
+    perCompanyDailyRequestLimit: Math.min(
+      config.perCompanyDailyRequestLimit,
+      policy.daily_request_limit,
+    ),
+    perUserDailyRequestLimit: Math.min(
+      config.perUserDailyRequestLimit,
+      policy.per_user_daily_request_limit,
+    ),
+    maxRequestTokens: Math.min(config.maxRequestTokens, policy.token_limit),
+    timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
+    retryLimit: Math.min(config.retryLimit, policy.retry_limit),
+  };
+  if (
+    !hasQuotaCompatibleProviderConfig(
+      effectiveConfig,
+      policy.per_company_monthly_budget_cents,
+    )
+  ) {
+    return {
+      ok: false,
+      reason: "The effective company AI configuration exceeds the bounded quota contract.",
+    };
+  }
+
   return {
     ok: true,
     companyMonthlyBudgetCents: policy.per_company_monthly_budget_cents,
-    config: {
-      ...config,
-      perCompanyDailyRequestLimit: Math.min(
-        config.perCompanyDailyRequestLimit,
-        policy.daily_request_limit,
-      ),
-      perUserDailyRequestLimit: Math.min(
-        config.perUserDailyRequestLimit,
-        policy.per_user_daily_request_limit,
-      ),
-      maxRequestTokens: Math.min(config.maxRequestTokens, policy.token_limit),
-      timeoutMs: Math.min(config.timeoutMs, policy.timeout_ms),
-      retryLimit: Math.min(config.retryLimit, policy.retry_limit),
+    config: effectiveConfig,
+  };
+}
+
+export function buildAiCompanyPilotStatus({
+  companyId,
+  policy,
+  config = getAiPilotProviderConfig(),
+  savedAnalysesReadAvailable = false,
+  quotaStatus = null,
+  quotaProbeEstimatedRequestTokens = null,
+}: {
+  companyId: string;
+  policy: AiUsageLimitRecord;
+  config?: AiPilotProviderConfig;
+  savedAnalysesReadAvailable?: boolean;
+  quotaStatus?: AiQuotaStatusReceipt | null;
+  quotaProbeEstimatedRequestTokens?: number | null;
+}): AiCompanyPilotStatus {
+  const environmentReadiness = buildAiPilotReadiness({
+    config,
+    migrationApplied: savedAnalysesReadAvailable,
+  });
+  const policyMatchesCompany = policy.company_id === companyId;
+  const providerAllowed =
+    policyMatchesCompany && policy.allowed_providers.includes(config.provider);
+  const modelAllowed =
+    policyMatchesCompany &&
+    Boolean(config.model) &&
+    policy.allowed_models.includes(config.model);
+  const monthlyBudgetCents = policyMatchesCompany
+    ? policy.per_company_monthly_budget_cents
+    : 0;
+  const companyConfig = resolveCompanyAiProviderConfig({
+    config,
+    usageLimits: [policy],
+    companyId,
+  });
+  const companyConfigFailureReason =
+    "reason" in companyConfig ? companyConfig.reason : null;
+  const quotaAvailability = companyConfig.ok
+    ? getAiCurrentQuotaAvailability({
+        config: companyConfig.config,
+        companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
+        quotaStatus,
+        quotaProbeEstimatedRequestTokens,
+      })
+    : { available: false, blockingReason: "quota_status_unavailable" as const };
+  const currentQuotaAvailable = companyConfig.ok && quotaAvailability.available;
+  const liveProviderEnabled =
+    environmentReadiness.liveProviderEnabled &&
+    companyConfig.ok &&
+    currentQuotaAvailable;
+
+  let readiness = environmentReadiness;
+  if (liveProviderEnabled) {
+    readiness = {
+      ...environmentReadiness,
+      state: "live_ai_enabled",
+      label: "Production AI enabled",
+      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. An authenticated selected-company probe fits current quota; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
+      liveProviderEnabled: true,
+      requiredOwnerSetup: [],
+      health: "ready",
+    };
+  } else if (environmentReadiness.liveProviderEnabled && companyConfig.ok) {
+    readiness = {
+      ...environmentReadiness,
+      state: "usage_limit_reached",
+      label: "Production AI quota currently unavailable",
+      summary:
+        "Current audited request capacity is unavailable. No provider call can run until quota resets or the approved limits change.",
+      liveProviderEnabled: false,
+      requiredOwnerSetup: [],
+      health: "disabled",
+    };
+  } else if (environmentReadiness.liveProviderEnabled) {
+    readiness = {
+      ...environmentReadiness,
+      state: "production_ai_disabled",
+      label: "Company AI policy incomplete",
+      summary: `${companyConfigFailureReason ?? "The company AI policy is not active."} No provider call can run until the policy is complete.`,
+      liveProviderEnabled: false,
+      requiredOwnerSetup: companyConfigFailureReason
+        ? [companyConfigFailureReason]
+        : [],
+      health: "disabled",
+    };
+  }
+
+  return {
+    companyId,
+    aiEnabled: liveProviderEnabled,
+    currentQuotaAvailable,
+    monthlyBudgetCents,
+    savedAnalysesReadAvailable,
+    readiness,
+    companyPolicy: {
+      configured: true,
+      aiEnabled: policyMatchesCompany && policy.ai_enabled,
+      providerAllowed,
+      modelAllowed,
+      lastReviewedAt: policyMatchesCompany ? policy.last_reviewed_at : null,
     },
+    usageAccountingConfigured:
+      companyConfig.ok && hasConfiguredUsageLimits(companyConfig.config),
+    externalActionExecutionEnabled: false,
   };
 }
 
@@ -505,14 +1059,29 @@ export async function runAiPilotCommand({
   }
 
   const { migrationApplied, readiness, context, usage, fallback } = preparation;
-  const providerResult = await callConfiguredProvider({
-    config,
-    prompt,
-    context,
-    userRole,
-    fetchImpl,
-    signal,
-  });
+  let providerResult: ProviderCallResult;
+  try {
+    providerResult = await callConfiguredProvider({
+      config,
+      prompt,
+      context,
+      userRole,
+      fetchImpl,
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
+    providerResult = {
+      ok: false,
+      statusCode: null,
+      outputText: "",
+      providerResponseId: null,
+      usage: { inputTokens: null, outputTokens: null, totalTokens: null },
+      error: "AI provider request failed or timed out.",
+    };
+  }
 
   if (!providerResult.ok) {
     const response: AiGroundedResponse = {
@@ -537,6 +1106,8 @@ export async function runAiPilotCommand({
         state: "provider_test_failed",
         label: "Provider test failed",
         summary: "The configured provider call failed. WeatherTech OS returned the safe rule-based fallback.",
+        productionDisabled: true,
+        liveProviderEnabled: false,
         health: "failed",
       },
       context,
@@ -1003,7 +1574,6 @@ export function checkAiUsageLimits({
     maxReservedRequestCostUsd: Number(
       (estimatedCostUsd * maxProviderAttempts).toFixed(4),
     ),
-    reservedCostUsdToday,
     companyReservedCostUsdThisMonth,
   };
 }
@@ -1162,7 +1732,7 @@ async function callOpenAiProvider({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.AI_OPENAI_API_KEY ?? ""}`,
+            Authorization: `Bearer ${readAiProviderApiKey("openai", process.env)}`,
           },
           body: JSON.stringify(requestBody),
           signal: controllerSignal,
@@ -1206,7 +1776,7 @@ async function callAnthropicProvider({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": process.env.AI_ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "",
+            "x-api-key": readAiProviderApiKey("anthropic", process.env),
             "anthropic-version": process.env.AI_ANTHROPIC_VERSION ?? "2023-06-01",
           },
           body: JSON.stringify(requestBody),
@@ -1485,16 +2055,115 @@ function hasAiPersistenceTables(snapshot: CrmSnapshot) {
   );
 }
 
-function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
+function isIntegerWithin(value: unknown, minimum: number, maximum: number) {
   return (
-    config.dailyBudgetUsd > 0 &&
-    config.dailyRequestLimit > 0 &&
-    config.perUserDailyRequestLimit > 0 &&
-    config.perCompanyDailyRequestLimit > 0 &&
-    config.maxRequestTokens > 0 &&
-    config.maxResponseTokens > 0 &&
-    config.maxInputCostUsdPer1kTokens > 0 &&
-    config.maxOutputCostUsdPer1kTokens > 0
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+  );
+}
+
+function hasQuotaCompatibleProviderConfig(
+  config: AiPilotProviderConfig,
+  companyMonthlyBudgetCents: number,
+) {
+  if (
+    !Number.isFinite(config.maxInputCostUsdPer1kTokens) ||
+    config.maxInputCostUsdPer1kTokens <= 0 ||
+    !Number.isFinite(config.maxOutputCostUsdPer1kTokens) ||
+    config.maxOutputCostUsdPer1kTokens <= 0 ||
+    !isIntegerWithin(config.timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs) ||
+    !isIntegerWithin(config.retryLimit, 0, aiQuotaBounds.maxProviderAttempts - 1)
+  ) {
+    return false;
+  }
+
+  const maxProviderAttempts = config.retryLimit + 1;
+  const maximumEstimatedCostCents = getAiMaximumReservationCostCents(config);
+
+  return isAiQuotaReservationRequestWithinBounds({
+    contractVersion: 1,
+    provider: config.provider,
+    model: config.model || null,
+    promptSha256: "0".repeat(64),
+    promptCharacters: 1,
+    estimatedRequestTokens: config.maxRequestTokens,
+    maxResponseTokens: config.maxResponseTokens,
+    estimatedCostCents: maximumEstimatedCostCents,
+    maxProviderAttempts,
+    globalDailyRequestLimit: config.dailyRequestLimit,
+    companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
+    userDailyRequestLimit: config.perUserDailyRequestLimit,
+    dailyBudgetCents: Math.floor(config.dailyBudgetUsd * 100),
+    companyMonthlyBudgetCents,
+    maxRequestTokens: config.maxRequestTokens,
+  });
+}
+
+export function getAiMaximumReservationCostCents(
+  config: AiPilotProviderConfig,
+) {
+  const maximumEstimatedCostUsd = estimateCostUsd(
+    config.maxRequestTokens,
+    config.maxResponseTokens,
+    config,
+  );
+  return Math.ceil(
+    maximumEstimatedCostUsd * 100 * (config.retryLimit + 1),
+  );
+}
+
+export function getAiReservationCostCents({
+  config,
+  estimatedRequestTokens,
+}: {
+  config: AiPilotProviderConfig;
+  estimatedRequestTokens: number;
+}) {
+  const estimatedCostUsd = estimateCostUsd(
+    estimatedRequestTokens,
+    config.maxResponseTokens,
+    config,
+  );
+  return Math.max(
+    1,
+    Math.ceil(estimatedCostUsd * 100 * (config.retryLimit + 1)),
+  );
+}
+
+export function estimateAiQuotaStatusProbe({
+  config,
+  snapshot,
+  companyId,
+  userRole,
+  now = new Date().toISOString(),
+}: {
+  config: AiPilotProviderConfig;
+  snapshot: CrmSnapshot;
+  companyId: string;
+  userRole: CompanyMembershipRole | "owner" | "admin";
+  now?: string;
+}) {
+  const prompt = "a";
+  const context = retrieveAuthorizedAiContext(snapshot, {
+    prompt,
+    companyId,
+    userRole,
+    now,
+  });
+  return estimateAiRequestUsage({
+    config,
+    context,
+    prompt,
+    userRole,
+  });
+}
+
+function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
+  return hasQuotaCompatibleProviderConfig(
+    config,
+    aiQuotaBounds.maxCompanyMonthlyBudgetCents,
   );
 }
 
@@ -1507,6 +2176,23 @@ function normalizeProvider(value: string | undefined): AiProviderKey {
     return "owner_approved";
   }
   return "disabled";
+}
+
+function readAiProviderApiKey(
+  provider: AiProviderKey,
+  env: Record<string, string | undefined>,
+) {
+  if (provider === "openai") {
+    return env.AI_OPENAI_API_KEY?.trim() ?? "";
+  }
+  if (provider === "anthropic") {
+    return (
+      env.AI_ANTHROPIC_API_KEY?.trim() ||
+      env.ANTHROPIC_API_KEY?.trim() ||
+      ""
+    );
+  }
+  return "";
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean) {
@@ -1524,6 +2210,18 @@ function parseNumber(value: string | undefined, fallback: number) {
 function parseInteger(value: string | undefined, fallback: number) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseProviderTimeoutMs(value: string | undefined) {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return 15_000;
+  }
+  if (!/^\d+$/.test(normalized)) {
+    return 0;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
 }
 
 function providerLabel(provider: AiProviderKey) {
@@ -1622,8 +2320,11 @@ async function withTimeout<T>(
   parentSignal: AbortSignal | undefined,
   fn: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  if (!isIntegerWithin(timeoutMs, 1, aiQuotaBounds.maxProviderTimeoutMs)) {
+    throw new Error("AI provider timeout configuration is invalid.");
+  }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const abortParent = () => controller.abort();
   parentSignal?.addEventListener("abort", abortParent);
 

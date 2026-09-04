@@ -142,7 +142,7 @@ try {
     globalRequestsToday: 1,
     companyRequestsToday: 1,
     userRequestsToday: 1,
-    reservedCostCentsToday: 50,
+    reservedCostCentsToday: 75,
     companyReservedCostCentsThisMonth: 50,
   };
   const snapshot = emptySnapshot({
@@ -387,6 +387,14 @@ try {
   const disabled = aiProvider.getAiPilotProviderConfig({ AI_ENABLED: "false" });
   assertEqual(disabled.enabled, false, "AI provider config defaults to disabled");
   assertEqual(disabled.provider, "disabled", "Unconfigured provider is disabled");
+  const negativeRetryConfig = aiProvider.getAiPilotProviderConfig({
+    AI_RETRY_LIMIT: "-7",
+  });
+  assertEqual(
+    negativeRetryConfig.retryLimit,
+    0,
+    "A negative environment retry limit must clamp to one initial provider attempt",
+  );
 
   const disabledResult = await aiProvider.runAiPilotCommand({
     prompt: "What needs attention today?",
@@ -456,6 +464,38 @@ try {
     "usage_limit_reached",
     "Live provider is blocked until explicit usage limits are configured",
   );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "openai",
+      AI_MODEL: "owner-approved-openai-model",
+      AI_OPENAI_API_KEY: "   ",
+    }).apiKeyConfigured,
+    false,
+    "Whitespace-only OpenAI credentials cannot enable provider readiness",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "anthropic",
+      AI_MODEL: "owner-approved-anthropic-model",
+      AI_ANTHROPIC_API_KEY: " \t ",
+      ANTHROPIC_API_KEY: " \n ",
+    }).apiKeyConfigured,
+    false,
+    "Whitespace-only Anthropic credentials cannot enable provider readiness",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({
+      AI_ENABLED: "true",
+      AI_PROVIDER: "anthropic",
+      AI_MODEL: "owner-approved-anthropic-model",
+      AI_ANTHROPIC_API_KEY: "   ",
+      ANTHROPIC_API_KEY: " legacy-test-key ",
+    }).apiKeyConfigured,
+    true,
+    "A trimmed legacy Anthropic credential remains an accepted server-only fallback",
+  );
 
   const baseCompanyPolicy = {
     id: "44444444-4444-4444-8444-444444444444",
@@ -499,6 +539,797 @@ try {
   assertEqual(scopedConfig.config.perUserDailyRequestLimit, 4, "Company policy must tighten the user cap");
   assertEqual(scopedConfig.config.maxRequestTokens, 6000, "Company policy must tighten the request token cap");
   assertEqual(scopedConfig.config.retryLimit, 0, "Company policy must tighten the retry cap");
+
+  const productionStatusEnv = {
+    AI_ENABLED: "true",
+    AI_PROVIDER: "openai",
+    AI_MODEL: "owner-approved-openai-model",
+    AI_OPENAI_API_KEY: "test-secret-key-never-serialized",
+    AI_DAILY_BUDGET_USD: "5",
+    AI_DAILY_REQUEST_LIMIT: "20",
+    AI_PER_USER_DAILY_REQUEST_LIMIT: "10",
+    AI_PER_COMPANY_DAILY_REQUEST_LIMIT: "20",
+    AI_MAX_REQUEST_TOKENS: "12000",
+    AI_MAX_RESPONSE_TOKENS: "1200",
+    AI_MAX_INPUT_COST_USD_PER_1K_TOKENS: "0.10",
+    AI_MAX_OUTPUT_COST_USD_PER_1K_TOKENS: "0.30",
+    AI_TIMEOUT_MS: "5000",
+    AI_RETRY_LIMIT: "2",
+  };
+  const productionStatusConfig =
+    aiProvider.getAiPilotProviderConfig(productionStatusEnv);
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({}).timeoutMs,
+    15_000,
+    "An absent provider timeout keeps the explicit default",
+  );
+  assertEqual(
+    aiProvider.getAiPilotProviderConfig({ AI_TIMEOUT_MS: "   " }).timeoutMs,
+    15_000,
+    "An empty provider timeout keeps the explicit default",
+  );
+  const maximumTimerReadiness = aiProvider.buildAiPilotReadiness({
+    config: aiProvider.getAiPilotProviderConfig({
+      ...productionStatusEnv,
+      AI_TIMEOUT_MS: String(aiProvider.aiQuotaBounds.maxProviderTimeoutMs),
+    }),
+    migrationApplied: true,
+  });
+  assertEqual(
+    maximumTimerReadiness.liveProviderEnabled,
+    true,
+    "The largest Node-supported provider timeout remains ready",
+  );
+  for (const invalidTimeoutValue of [
+    String(aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1),
+    "4294967296",
+    String(Number.MAX_SAFE_INTEGER),
+    "9".repeat(400),
+    "2147483647ms",
+    "1.5",
+    "0",
+    "-1",
+  ]) {
+    const overflowTimerReadiness = aiProvider.buildAiPilotReadiness({
+      config: aiProvider.getAiPilotProviderConfig({
+        ...productionStatusEnv,
+        AI_TIMEOUT_MS: invalidTimeoutValue,
+      }),
+      migrationApplied: true,
+    });
+    assertEqual(
+      overflowTimerReadiness.liveProviderEnabled,
+      false,
+      `Provider timeout ${invalidTimeoutValue.slice(0, 24)} cannot enable Production AI`,
+    );
+    assertEqual(
+      overflowTimerReadiness.state,
+      "usage_limit_reached",
+      `Provider timeout ${invalidTimeoutValue.slice(0, 24)} fails the bounded configuration gate`,
+    );
+  }
+  assertEqual(
+    aiProvider.buildAiPilotReadiness({
+      config: {
+        ...productionStatusConfig,
+        timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+      },
+      migrationApplied: true,
+    }).liveProviderEnabled,
+    false,
+    "An injected overbound timeout fails closed independently of environment parsing",
+  );
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: {
+        ...productionStatusConfig,
+        timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+      },
+      usageLimits: [baseCompanyPolicy],
+      companyId: wtCompanyId,
+    }).ok,
+    "A safe company policy cannot launder an invalid environment timeout",
+  );
+  assert(
+    !aiProvider.resolveCompanyAiProviderConfig({
+      config: productionStatusConfig,
+      usageLimits: [
+        {
+          ...baseCompanyPolicy,
+          timeout_ms: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+        },
+      ],
+      companyId: wtCompanyId,
+    }).ok,
+    "A safe environment timeout cannot launder an invalid company policy timeout",
+  );
+  const minimumTimerConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: { ...productionStatusConfig, timeoutMs: 1 },
+    usageLimits: [{ ...baseCompanyPolicy, timeout_ms: 1 }],
+    companyId: wtCompanyId,
+  });
+  assert(minimumTimerConfig.ok, "The minimum Node-supported timeout remains valid");
+  assertEqual(
+    minimumTimerConfig.config.timeoutMs,
+    1,
+    "Company timeout policy is enforced exactly without silently widening it",
+  );
+  const maximumTimerConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: {
+      ...productionStatusConfig,
+      timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+    },
+    usageLimits: [
+      {
+        ...baseCompanyPolicy,
+        timeout_ms: aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+      },
+    ],
+    companyId: wtCompanyId,
+  });
+  assert(maximumTimerConfig.ok, "The maximum Node-supported timeout remains valid");
+  assertEqual(
+    maximumTimerConfig.config.timeoutMs,
+    aiProvider.aiQuotaBounds.maxProviderTimeoutMs,
+    "The maximum Node-supported timeout is preserved exactly",
+  );
+  let invalidTimeoutFetchCalls = 0;
+  const invalidTimeoutResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    providerConfig: {
+      ...scopedConfig.config,
+      timeoutMs: aiProvider.aiQuotaBounds.maxProviderTimeoutMs + 1,
+    },
+    quotaReservation,
+    fetchImpl: async () => {
+      invalidTimeoutFetchCalls += 1;
+      throw new Error("Invalid provider timeout must not call fetch.");
+    },
+  });
+  assertEqual(
+    invalidTimeoutResult.readiness.liveProviderEnabled,
+    false,
+    "An invalid injected timeout disables live provider readiness",
+  );
+  assertEqual(
+    invalidTimeoutResult.providerHealth.tested,
+    false,
+    "An invalid injected timeout does not test provider health",
+  );
+  assertEqual(
+    invalidTimeoutFetchCalls,
+    0,
+    "An invalid injected timeout is rejected before any provider request",
+  );
+  const quotaActorUserId = "99999999-9999-4999-8999-999999999999";
+  const availableQuotaStatus = {
+    contractVersion: 1,
+    companyId: wtCompanyId,
+    actorUserId: quotaActorUserId,
+    requestCapacityAvailable: true,
+    blockingReason: "none",
+    checkedAt: now,
+    globalRequestsToday: 0,
+    companyRequestsToday: 0,
+    userRequestsToday: 0,
+    reservedCostCentsToday: 0,
+    companyReservedCostCentsThisMonth: 0,
+  };
+  const effectiveStatusConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: productionStatusConfig,
+    usageLimits: [baseCompanyPolicy],
+    companyId: wtCompanyId,
+  });
+  assert(effectiveStatusConfig.ok, "Quota status tests require an effective company config");
+  const quotaProbeEstimate = aiProvider.estimateAiQuotaStatusProbe({
+    config: effectiveStatusConfig.config,
+    snapshot,
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
+  const quotaProbeContext = aiProvider.retrieveAuthorizedAiContext(snapshot, {
+    prompt: "a",
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
+  const directQuotaProbeEstimate = aiProvider.estimateAiRequestUsage({
+    config: effectiveStatusConfig.config,
+    context: quotaProbeContext,
+    prompt: "a",
+    userRole: "owner",
+  });
+  assertEqual(
+    JSON.stringify(quotaProbeEstimate),
+    JSON.stringify(directQuotaProbeEstimate),
+    "Quota status uses the same authenticated company-context estimate as POST",
+  );
+  for (const userRole of [
+    "admin",
+    "office",
+    "sales",
+    "production",
+    "field",
+    "technician",
+    "viewer",
+    "team_member",
+  ]) {
+    const roleProbeEstimate = aiProvider.estimateAiQuotaStatusProbe({
+      config: effectiveStatusConfig.config,
+      snapshot,
+      companyId: wtCompanyId,
+      userRole,
+      now,
+    });
+    const roleProbeContext = aiProvider.retrieveAuthorizedAiContext(snapshot, {
+      prompt: "a",
+      companyId: wtCompanyId,
+      userRole,
+      now,
+    });
+    assertEqual(
+      JSON.stringify(roleProbeEstimate),
+      JSON.stringify(
+        aiProvider.estimateAiRequestUsage({
+          config: effectiveStatusConfig.config,
+          context: roleProbeContext,
+          prompt: "a",
+          userRole,
+        }),
+      ),
+      `Quota status preserves POST estimator parity for the ${userRole} role`,
+    );
+  }
+  const quotaStatusRequest = aiProvider.buildAiQuotaStatusRequest({
+    config: effectiveStatusConfig.config,
+    companyMonthlyBudgetCents:
+      effectiveStatusConfig.companyMonthlyBudgetCents,
+    estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+  });
+  assert(quotaStatusRequest, "A valid authenticated probe produces a bounded quota-status request");
+  assertEqual(
+    aiProvider.parseAiQuotaStatusReceipt(availableQuotaStatus, {
+      companyId: wtCompanyId,
+      actorUserId: quotaActorUserId,
+    })?.requestCapacityAvailable,
+    true,
+    "An exact bounded current-quota receipt is accepted",
+  );
+  for (const [label, invalidQuotaStatus] of [
+    ["wrong company", { ...availableQuotaStatus, companyId: ihcCompanyId }],
+    ["wrong actor", { ...availableQuotaStatus, actorUserId: wtCompanyId }],
+    ["fractional count", { ...availableQuotaStatus, userRequestsToday: 0.5 }],
+    ["negative spend", { ...availableQuotaStatus, reservedCostCentsToday: -1 }],
+    [
+      "impossible count relation",
+      { ...availableQuotaStatus, companyRequestsToday: 1, globalRequestsToday: 0 },
+    ],
+    [
+      "contradictory availability",
+      { ...availableQuotaStatus, requestCapacityAvailable: false },
+    ],
+    ["extra property", { ...availableQuotaStatus, unexpected: true }],
+  ]) {
+    assertEqual(
+      aiProvider.parseAiQuotaStatusReceipt(invalidQuotaStatus, {
+        companyId: wtCompanyId,
+        actorUserId: quotaActorUserId,
+      }),
+      null,
+      `Current-quota receipt rejects ${label}`,
+    );
+  }
+  const invalidInjectedRetryReadiness = aiProvider.buildAiPilotReadiness({
+    config: { ...productionStatusConfig, retryLimit: -1 },
+    migrationApplied: true,
+  });
+  assertEqual(
+    invalidInjectedRetryReadiness.liveProviderEnabled,
+    false,
+    "An injected negative retry limit must fail readiness closed",
+  );
+  assertEqual(
+    invalidInjectedRetryReadiness.state,
+    "usage_limit_reached",
+    "Invalid effective retry controls must report incomplete usage limits",
+  );
+  const exactQuotaMaximums = {
+    contractVersion: 1,
+    provider: "openai",
+    model: "m".repeat(160),
+    promptSha256: "a".repeat(64),
+    promptCharacters: 50_000,
+    estimatedRequestTokens: 1_000_000,
+    maxResponseTokens: 1_000_000,
+    estimatedCostCents: 100_000_000,
+    maxProviderAttempts: 3,
+    globalDailyRequestLimit: 100_000,
+    companyDailyRequestLimit: 100_000,
+    userDailyRequestLimit: 100_000,
+    dailyBudgetCents: 100_000_000,
+    companyMonthlyBudgetCents: 1_000_000_000,
+    maxRequestTokens: 1_000_000,
+  };
+  assertEqual(
+    aiProvider.isAiQuotaReservationRequestWithinBounds(exactQuotaMaximums),
+    true,
+    "The exact quota RPC upper bounds remain valid",
+  );
+  const exactReceiptMaximums = {
+    globalRequestsToday: 100_000,
+    companyRequestsToday: 100_000,
+    userRequestsToday: 100_000,
+    reservedCostCentsToday: 100_000_000,
+    companyReservedCostCentsThisMonth: 1_000_000_000,
+  };
+  assertEqual(
+    aiProvider.isAiQuotaReservationReceiptWithinBounds(exactReceiptMaximums),
+    true,
+    "The exact quota receipt upper bounds remain valid",
+  );
+  for (const [label, invalidReceipt] of [
+    ["global request count", { ...exactReceiptMaximums, globalRequestsToday: 100_001 }],
+    ["company request count", { ...exactReceiptMaximums, companyRequestsToday: 100_001 }],
+    ["user request count", { ...exactReceiptMaximums, userRequestsToday: 100_001 }],
+    ["daily reserved cost", { ...exactReceiptMaximums, reservedCostCentsToday: 100_000_001 }],
+    [
+      "monthly company reserved cost",
+      { ...exactReceiptMaximums, companyReservedCostCentsThisMonth: 1_000_000_001 },
+    ],
+  ]) {
+    assertEqual(
+      aiProvider.isAiQuotaReservationReceiptWithinBounds(invalidReceipt),
+      false,
+      `The quota receipt rejects ${label} above its bound`,
+    );
+  }
+  for (const [label, invalidQuotaRequest] of [
+    ["model length", { ...exactQuotaMaximums, model: "m".repeat(161) }],
+    ["model type", { ...exactQuotaMaximums, model: 7 }],
+    ["empty model", { ...exactQuotaMaximums, model: "   " }],
+    ["prompt characters", { ...exactQuotaMaximums, promptCharacters: 50_001 }],
+    ["estimated request tokens", { ...exactQuotaMaximums, estimatedRequestTokens: 1_000_001 }],
+    [
+      "prompt-to-token floor",
+      {
+        ...exactQuotaMaximums,
+        promptCharacters: 50_000,
+        estimatedRequestTokens: 6_249,
+      },
+    ],
+    ["response tokens", { ...exactQuotaMaximums, maxResponseTokens: 1_000_001 }],
+    ["estimated cost", { ...exactQuotaMaximums, estimatedCostCents: 100_000_001 }],
+    ["provider attempts", { ...exactQuotaMaximums, maxProviderAttempts: 4 }],
+    ["global request limit", { ...exactQuotaMaximums, globalDailyRequestLimit: 100_001 }],
+    ["company request limit", { ...exactQuotaMaximums, companyDailyRequestLimit: 100_001 }],
+    ["user request limit", { ...exactQuotaMaximums, userDailyRequestLimit: 100_001 }],
+    ["daily budget", { ...exactQuotaMaximums, dailyBudgetCents: 100_000_001 }],
+    ["company monthly budget", { ...exactQuotaMaximums, companyMonthlyBudgetCents: 1_000_000_001 }],
+    [
+      "reservation cost above daily budget",
+      { ...exactQuotaMaximums, dailyBudgetCents: 99_999_999 },
+    ],
+    [
+      "reservation cost above company monthly budget",
+      { ...exactQuotaMaximums, companyMonthlyBudgetCents: 99_999_999 },
+    ],
+    ["request token cap", { ...exactQuotaMaximums, maxRequestTokens: 1_000_001 }],
+    ["extra property", { ...exactQuotaMaximums, unexpected: true }],
+  ]) {
+    assertEqual(
+      aiProvider.isAiQuotaReservationRequestWithinBounds(invalidQuotaRequest),
+      false,
+      `The quota contract rejects ${label} above its bound`,
+    );
+  }
+  for (const [label, configOverride] of [
+    ["model length", { model: "m".repeat(161) }],
+    ["global request limit", { dailyRequestLimit: 100_001 }],
+    ["company request limit", { perCompanyDailyRequestLimit: 100_001 }],
+    ["user request limit", { perUserDailyRequestLimit: 100_001 }],
+    ["request token cap", { maxRequestTokens: 1_000_001 }],
+    ["response token cap", { maxResponseTokens: 1_000_001 }],
+    ["daily budget", { dailyBudgetUsd: 1_000_001 }],
+    ["price-derived reservation cost", { maxInputCostUsdPer1kTokens: 1_000_000 }],
+  ]) {
+    const invalidBoundedReadiness = aiProvider.buildAiPilotReadiness({
+      config: { ...productionStatusConfig, ...configOverride },
+      migrationApplied: true,
+    });
+    assertEqual(
+      invalidBoundedReadiness.liveProviderEnabled,
+      false,
+      `Readiness fails closed for an excessive ${label}`,
+    );
+    assertEqual(
+      invalidBoundedReadiness.state,
+      "usage_limit_reached",
+      `An excessive ${label} reports bounded usage controls as incomplete`,
+    );
+    const invalidBoundedStatus = aiProvider.buildAiCompanyPilotStatus({
+      companyId: wtCompanyId,
+      policy: {
+        ...baseCompanyPolicy,
+        allowed_models: [
+          typeof configOverride.model === "string"
+            ? configOverride.model
+            : productionStatusConfig.model,
+        ],
+        daily_request_limit: 100_001,
+        per_user_daily_request_limit: 100_001,
+        per_company_monthly_budget_cents: 5000,
+        token_limit: 1_000_001,
+      },
+      config: { ...productionStatusConfig, ...configOverride },
+    });
+    assertEqual(
+      invalidBoundedStatus.aiEnabled,
+      false,
+      `Company status cannot enable AI with an excessive ${label}`,
+    );
+    assertEqual(
+      invalidBoundedStatus.usageAccountingConfigured,
+      false,
+      `Company status cannot claim accounting readiness with an excessive ${label}`,
+    );
+  }
+  const maximumBoundedConfig = {
+    ...productionStatusConfig,
+    model: "m".repeat(160),
+    dailyBudgetUsd: 1_000_000,
+    dailyRequestLimit: 100_000,
+    perCompanyDailyRequestLimit: 100_000,
+    perUserDailyRequestLimit: 100_000,
+    maxRequestTokens: 1_000_000,
+    maxResponseTokens: 1_000_000,
+    retryLimit: 2,
+  };
+  const maximumBoundedQuotaProbe = aiProvider.estimateAiQuotaStatusProbe({
+    config: maximumBoundedConfig,
+    snapshot,
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
+  const maximumBoundedStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      allowed_models: ["m".repeat(160)],
+      daily_request_limit: 100_000,
+      per_user_daily_request_limit: 100_000,
+      per_company_monthly_budget_cents: 1_000_000_000,
+      token_limit: 1_000_000,
+      retry_limit: 2,
+    },
+    config: maximumBoundedConfig,
+    quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens:
+      maximumBoundedQuotaProbe.estimatedRequestTokens,
+  });
+  assertEqual(
+    maximumBoundedStatus.aiEnabled,
+    true,
+    "Exact quota RPC maximums can enable a valid company status",
+  );
+  assertEqual(
+    maximumBoundedStatus.usageAccountingConfigured,
+    true,
+    "Exact quota RPC maximums retain accounting readiness",
+  );
+  const insufficientDailyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 5000,
+    },
+    config: {
+      ...productionStatusConfig,
+      dailyBudgetUsd: 0.01,
+    },
+  });
+  assertEqual(
+    insufficientDailyBudgetStatus.aiEnabled,
+    false,
+    "Company status cannot enable AI when one maximum reservation exceeds the daily budget",
+  );
+  assertEqual(
+    insufficientDailyBudgetStatus.usageAccountingConfigured,
+    false,
+    "Daily budget capacity is required before accounting can report ready",
+  );
+  const insufficientCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 1,
+    },
+    config: productionStatusConfig,
+  });
+  assertEqual(
+    insufficientCompanyBudgetStatus.aiEnabled,
+    false,
+    "Company status cannot enable AI when one maximum reservation exceeds its monthly budget",
+  );
+  assertEqual(
+    insufficientCompanyBudgetStatus.usageAccountingConfigured,
+    false,
+    "Company monthly budget capacity is required before accounting can report ready",
+  );
+  const enabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: true,
+    quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+  });
+  assertEqual(enabledCompanyStatus.companyId, wtCompanyId, "AI status echoes the exact company");
+  assertEqual(enabledCompanyStatus.aiEnabled, true, "Environment and company policy enable live AI together");
+  assertEqual(enabledCompanyStatus.currentQuotaAvailable, true, "Fresh quota capacity is required for live AI status");
+  assertEqual(enabledCompanyStatus.monthlyBudgetCents, 5000, "AI status exposes the exact company monthly budget");
+  assertEqual(enabledCompanyStatus.savedAnalysesReadAvailable, true, "AI status preserves authenticated saved-analysis read availability");
+  assertEqual(enabledCompanyStatus.readiness.state, "live_ai_enabled", "Enabled company status is explicit");
+  assertEqual(enabledCompanyStatus.readiness.migrationStatus, "applied", "Verified saved-analysis schema reports its migration applied");
+  assertEqual(enabledCompanyStatus.readiness.requiredOwnerSetup.length, 0, "Enabled company status has no provider setup action");
+  assertEqual(enabledCompanyStatus.usageAccountingConfigured, true, "Enabled company status confirms usage accounting controls");
+  assertEqual(enabledCompanyStatus.externalActionExecutionEnabled, false, "External action execution remains disabled");
+  const companyStatusWithoutQuotaEvidence = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: true,
+  });
+  assertEqual(
+    companyStatusWithoutQuotaEvidence.aiEnabled,
+    false,
+    "Missing fresh quota evidence fails operational status closed",
+  );
+  assertEqual(
+    companyStatusWithoutQuotaEvidence.usageAccountingConfigured,
+    true,
+    "Missing current quota evidence does not misstate configured accounting infrastructure",
+  );
+  const serializedCompanyStatus = JSON.stringify(enabledCompanyStatus);
+  assert(
+    !serializedCompanyStatus.includes("test-secret-key-never-serialized") &&
+      !serializedCompanyStatus.includes("apiKeyConfigured") &&
+      !serializedCompanyStatus.includes("globalRequestsToday") &&
+      !serializedCompanyStatus.includes("reservedCostCentsToday"),
+    "Sanitized company status must never serialize credentials, raw config, or cross-company quota totals",
+  );
+  const enabledCompanyWithUnverifiedSavedAnalyses = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: false,
+    quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+  });
+  assertEqual(
+    enabledCompanyWithUnverifiedSavedAnalyses.aiEnabled,
+    true,
+    "Optional saved-analysis schema readiness does not disable the live provider",
+  );
+  assertEqual(
+    enabledCompanyWithUnverifiedSavedAnalyses.readiness.migrationStatus,
+    "pending_or_unverified",
+    "An unverified saved-analysis schema cannot claim its migration is applied",
+  );
+  assertEqual(
+    aiProvider.isAiQuotaStatusRequestWithinBounds(quotaStatusRequest),
+    true,
+    "The current-quota read request shares the bounded reservation contract",
+  );
+  assertEqual(
+    quotaStatusRequest.estimatedCostCents,
+    aiProvider.getAiReservationCostCents({
+      config: effectiveStatusConfig.config,
+      estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+    }),
+    "Current quota status prices the authenticated request shape with the POST formula",
+  );
+  assert(
+    quotaProbeEstimate.estimatedRequestTokens > 256 &&
+      quotaProbeEstimate.estimatedRequestTokens <=
+        effectiveStatusConfig.config.maxRequestTokens,
+    "The authenticated status probe includes serialized company context and framing overhead",
+  );
+  const minimumReservationCostCents = quotaStatusRequest.estimatedCostCents;
+  assert(
+    minimumReservationCostCents > 37,
+    "The provider reservation floor includes more than the one-token cost shortcut",
+  );
+  const maximumReservationCostCents =
+    aiProvider.getAiMaximumReservationCostCents(effectiveStatusConfig.config);
+  assert(
+    maximumReservationCostCents > minimumReservationCostCents,
+    "The status fixture must distinguish minimum current capacity from maximum configuration capacity",
+  );
+  const buildQuotaAwareStatus = (quotaOverrides) =>
+    aiProvider.buildAiCompanyPilotStatus({
+      companyId: wtCompanyId,
+      policy: baseCompanyPolicy,
+      config: productionStatusConfig,
+      savedAnalysesReadAvailable: true,
+      quotaStatus: { ...availableQuotaStatus, ...quotaOverrides },
+      quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+    });
+  const availableAtExactCostBoundary = buildQuotaAwareStatus({
+    reservedCostCentsToday:
+      quotaStatusRequest.dailyBudgetCents - minimumReservationCostCents,
+    companyReservedCostCentsThisMonth:
+      quotaStatusRequest.companyMonthlyBudgetCents -
+      minimumReservationCostCents,
+  });
+  assertEqual(
+    availableAtExactCostBoundary.currentQuotaAvailable,
+    true,
+    "A provider reservation floor that exactly fits both remaining budgets remains available",
+  );
+  assert(
+    availableAtExactCostBoundary.currentQuotaAvailable &&
+      maximumReservationCostCents > minimumReservationCostCents,
+    "Status remains available when a concrete minimal request fits even though the maximum request cannot fit",
+  );
+  const belowAuthenticatedProbeTokenCap = {
+    ...effectiveStatusConfig.config,
+    maxRequestTokens: quotaProbeEstimate.estimatedRequestTokens - 1,
+  };
+  assertEqual(
+    aiProvider.buildAiQuotaStatusRequest({
+      config: belowAuthenticatedProbeTokenCap,
+      companyMonthlyBudgetCents:
+        effectiveStatusConfig.companyMonthlyBudgetCents,
+      estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+    }),
+    null,
+    "Quota status refuses a real authenticated probe that exceeds the request-token cap",
+  );
+  const belowMinimumEnvelopeStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: baseCompanyPolicy,
+    config: belowAuthenticatedProbeTokenCap,
+    savedAnalysesReadAvailable: true,
+    quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+  });
+  assertEqual(
+    belowMinimumEnvelopeStatus.aiEnabled,
+    false,
+    "Status cannot enable a provider when its authenticated company-context probe exceeds the token cap",
+  );
+  assertEqual(
+    belowMinimumEnvelopeStatus.usageAccountingConfigured,
+    true,
+    "A request-specific token-cap block does not misstate configured accounting infrastructure",
+  );
+  for (const [label, quotaOverrides] of [
+    [
+      "global daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "global_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.dailyRequestLimit,
+      },
+    ],
+    [
+      "company daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "company_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.perCompanyDailyRequestLimit,
+        companyRequestsToday: effectiveStatusConfig.config.perCompanyDailyRequestLimit,
+      },
+    ],
+    [
+      "user daily requests",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "user_daily_request_limit",
+        globalRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+        companyRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+        userRequestsToday: effectiveStatusConfig.config.perUserDailyRequestLimit,
+      },
+    ],
+    [
+      "global daily budget",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "global_daily_budget",
+        reservedCostCentsToday:
+          quotaStatusRequest.dailyBudgetCents - minimumReservationCostCents + 1,
+      },
+    ],
+    [
+      "company monthly budget",
+      {
+        requestCapacityAvailable: false,
+        blockingReason: "company_monthly_budget",
+        companyReservedCostCentsThisMonth:
+          quotaStatusRequest.companyMonthlyBudgetCents -
+          minimumReservationCostCents +
+          1,
+      },
+    ],
+  ]) {
+    const exhaustedStatus = buildQuotaAwareStatus(quotaOverrides);
+    assertEqual(
+      exhaustedStatus.aiEnabled,
+      false,
+      `${label} exhaustion disables operational live AI status`,
+    );
+    assertEqual(
+      exhaustedStatus.currentQuotaAvailable,
+      false,
+      `${label} exhaustion is reflected by the sanitized quota boolean`,
+    );
+    assertEqual(
+      exhaustedStatus.readiness.state,
+      "usage_limit_reached",
+      `${label} exhaustion uses the current quota readiness state`,
+    );
+    assertEqual(
+      exhaustedStatus.companyPolicy.aiEnabled,
+      true,
+      `${label} exhaustion does not misstate the durable company policy`,
+    );
+    assertEqual(
+      exhaustedStatus.usageAccountingConfigured,
+      true,
+      `${label} exhaustion does not misstate accounting configuration`,
+    );
+  }
+  const excessiveCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 1_000_000_001,
+    },
+    config: productionStatusConfig,
+  });
+  assertEqual(
+    excessiveCompanyBudgetStatus.aiEnabled,
+    false,
+    "A company budget above the quota RPC bound cannot enable live AI",
+  );
+  assertEqual(
+    excessiveCompanyBudgetStatus.usageAccountingConfigured,
+    false,
+    "A company budget above the quota RPC bound cannot claim accounting readiness",
+  );
+
+  const disabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: ihcCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      company_id: ihcCompanyId,
+      ai_enabled: false,
+      per_company_monthly_budget_cents: 5000,
+    },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: false,
+  });
+  assertEqual(disabledCompanyStatus.aiEnabled, false, "A disabled exact-company policy remains disabled");
+  assertEqual(disabledCompanyStatus.readiness.state, "production_ai_disabled", "Disabled company status stays fail closed");
+  assertEqual(disabledCompanyStatus.monthlyBudgetCents, 5000, "One company receives only its own policy budget");
+  assertEqual(disabledCompanyStatus.savedAnalysesReadAvailable, false, "Saved-analysis read availability stays independent from provider policy readiness");
+  assertEqual(disabledCompanyStatus.readiness.migrationStatus, "pending_or_unverified", "A failed schema probe remains visibly unverified");
+
+  const mismatchedCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, company_id: ihcCompanyId },
+    config: productionStatusConfig,
+  });
+  assertEqual(mismatchedCompanyStatus.aiEnabled, false, "A cross-company policy cannot enable AI");
+  assertEqual(mismatchedCompanyStatus.monthlyBudgetCents, 0, "A cross-company policy budget is never exposed");
+  assertEqual(mismatchedCompanyStatus.savedAnalysesReadAvailable, false, "Omitted saved-analysis readiness fails closed");
+
   assert(
     !aiProvider.resolveCompanyAiProviderConfig({
       config: scopedConfig.config,
@@ -600,7 +1431,7 @@ try {
     "A disabled provider never tests a provider",
   );
 
-  process.env.AI_OPENAI_API_KEY = "test-openai-key";
+  process.env.AI_OPENAI_API_KEY = "  test-openai-key  ";
   let openAiRequest = null;
   const openAiResult = await aiProvider.runAiPilotCommand({
     prompt: "Which estimates need follow-up?",
@@ -627,7 +1458,11 @@ try {
     },
     quotaReservation,
     fetchImpl: async (url, init) => {
-      openAiRequest = { url: String(url), body: JSON.parse(init.body) };
+      openAiRequest = {
+        url: String(url),
+        headers: init.headers,
+        body: JSON.parse(init.body),
+      };
       return new Response(
         JSON.stringify({
           id: "resp-test",
@@ -657,9 +1492,29 @@ try {
   });
   assertEqual(openAiResult.response.mode, "live_provider", "Configured OpenAI mock returns live-provider mode");
   assertEqual(openAiResult.readiness.state, "provider_connected", "Provider readiness reports connected after a successful mock call");
+  assertEqual(openAiResult.readiness.liveProviderEnabled, true, "A successful provider test keeps live-provider readiness enabled");
+  assertEqual(openAiResult.providerHealth.tested, true, "A successful provider request records a tested provider");
   assertEqual(openAiResult.providerHealth.ok, true, "Provider health is healthy after success");
   assert(openAiRequest.url.includes("api.openai.com/v1/responses"), "OpenAI adapter uses Responses API");
+  assertEqual(
+    openAiRequest.headers.Authorization,
+    "Bearer test-openai-key",
+    "OpenAI adapter trims the configured server credential before use",
+  );
   assertEqual(openAiRequest.body.store, false, "OpenAI request disables provider-side storage");
+  assertEqual(
+    Object.prototype.hasOwnProperty.call(
+      openAiResult.usage,
+      "reservedCostUsdToday",
+    ),
+    false,
+    "An exact-company result never serializes the global all-company reserved cost",
+  );
+  assertEqual(
+    openAiResult.usage.companyReservedCostUsdThisMonth,
+    0.5,
+    "An exact-company result may expose only its company-scoped monthly reservation cost",
+  );
   assertEqual(
     openAiRequest.body.text.format.type,
     "json_schema",
@@ -755,6 +1610,7 @@ try {
     },
     providerConfig: {
       ...scopedConfig.config,
+      dailyBudgetUsd: 20,
       maxRequestTokens: 100_000,
       retryLimit: 0,
     },
@@ -776,6 +1632,189 @@ try {
     tightenedRetryResult.response.mode,
     "provider_disabled",
     "A bounded provider failure returns the safe fallback",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.state,
+    "provider_test_failed",
+    "A bounded provider failure reports the exact failed runtime state",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.liveProviderEnabled,
+    false,
+    "A failed provider test cannot retain live-provider readiness",
+  );
+  assertEqual(
+    tightenedRetryResult.readiness.productionDisabled,
+    true,
+    "A failed provider test preserves the external-action boundary",
+  );
+  assertEqual(
+    tightenedRetryResult.providerHealth.tested,
+    true,
+    "A failed provider request records that the provider was tested",
+  );
+  assertEqual(
+    tightenedRetryResult.providerHealth.ok,
+    false,
+    "A failed provider request cannot report healthy provider runtime",
+  );
+
+  for (const [label, providerFailure] of [
+    ["thrown provider failure", new Error("raw-provider-error-sentinel")],
+    [
+      "timeout-shaped provider failure",
+      Object.assign(new Error("raw-timeout-error-sentinel"), {
+        name: "AbortError",
+      }),
+    ],
+  ]) {
+    const failedProviderResult = await aiProvider.runAiPilotCommand({
+      prompt: "Which estimates need follow-up?",
+      snapshot,
+      companyId: wtCompanyId,
+      userId: "user-wt",
+      now,
+      providerConfig: {
+        ...scopedConfig.config,
+        dailyBudgetUsd: 20,
+        maxRequestTokens: 100_000,
+        retryLimit: 0,
+      },
+      quotaReservation,
+      fetchImpl: async () => {
+        throw providerFailure;
+      },
+    });
+    assertEqual(
+      failedProviderResult.companyId,
+      wtCompanyId,
+      `${label} must preserve the exact company`,
+    );
+    assertEqual(
+      failedProviderResult.response.mode,
+      "provider_disabled",
+      `${label} must return the safe grounded fallback`,
+    );
+    assertEqual(
+      failedProviderResult.response.readOnly,
+      true,
+      `${label} must remain read-only`,
+    );
+    assertEqual(
+      failedProviderResult.response.productionDisabled,
+      true,
+      `${label} must keep external actions disabled`,
+    );
+    assertEqual(
+      failedProviderResult.readiness.state,
+      "provider_test_failed",
+      `${label} must downgrade runtime readiness`,
+    );
+    assertEqual(
+      failedProviderResult.readiness.liveProviderEnabled,
+      false,
+      `${label} cannot retain live-provider readiness`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.tested,
+      true,
+      `${label} records a completed provider test`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.ok,
+      false,
+      `${label} records failed provider health`,
+    );
+    assertEqual(
+      failedProviderResult.providerHealth.statusCode,
+      null,
+      `${label} must not invent a provider status code`,
+    );
+    assert(
+      !JSON.stringify(failedProviderResult).includes(providerFailure.message),
+      `${label} must not expose the caught provider error`,
+    );
+  }
+
+  const timedOutProviderResult = await aiProvider.runAiPilotCommand({
+    prompt: "Which estimates need follow-up?",
+    snapshot,
+    companyId: wtCompanyId,
+    userId: "user-wt",
+    now,
+    providerConfig: {
+      ...scopedConfig.config,
+      dailyBudgetUsd: 20,
+      maxRequestTokens: 100_000,
+      retryLimit: 0,
+      timeoutMs: 1,
+    },
+    quotaReservation,
+    fetchImpl: async (_url, init) =>
+      await new Promise((resolve, reject) => {
+        const rejectOnAbort = () => reject(new Error("raw-timer-error-sentinel"));
+        if (init.signal.aborted) {
+          rejectOnAbort();
+          return;
+        }
+        init.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      }),
+  });
+  assertEqual(
+    timedOutProviderResult.readiness.state,
+    "provider_test_failed",
+    "The internal provider timeout must resolve to failed runtime readiness",
+  );
+  assertEqual(
+    timedOutProviderResult.readiness.liveProviderEnabled,
+    false,
+    "The internal provider timeout cannot retain live-provider readiness",
+  );
+  assertEqual(
+    timedOutProviderResult.providerHealth.tested,
+    true,
+    "The internal provider timeout records a completed provider test",
+  );
+  assertEqual(
+    timedOutProviderResult.providerHealth.ok,
+    false,
+    "The internal provider timeout records failed provider health",
+  );
+  assert(
+    !JSON.stringify(timedOutProviderResult).includes("raw-timer-error-sentinel"),
+    "The internal provider timeout must not expose its caught error",
+  );
+
+  const callerAbortController = new AbortController();
+  callerAbortController.abort();
+  const callerAbortFailure = new Error("caller-abort-sentinel");
+  let callerAbortResult = null;
+  try {
+    await aiProvider.runAiPilotCommand({
+      prompt: "Which estimates need follow-up?",
+      snapshot,
+      companyId: wtCompanyId,
+      userId: "user-wt",
+      now,
+      providerConfig: {
+        ...scopedConfig.config,
+        dailyBudgetUsd: 20,
+        maxRequestTokens: 100_000,
+        retryLimit: 0,
+      },
+      quotaReservation,
+      signal: callerAbortController.signal,
+      fetchImpl: async () => {
+        throw callerAbortFailure;
+      },
+    });
+  } catch (error) {
+    callerAbortResult = error;
+  }
+  assertEqual(
+    callerAbortResult,
+    callerAbortFailure,
+    "An explicit caller abort must still reject instead of becoming provider health evidence",
   );
 
   const actionContext = openAiResult.context.records;
@@ -868,7 +1907,8 @@ try {
     "An unknown provider action type is rejected",
   );
 
-  process.env.AI_ANTHROPIC_API_KEY = "test-anthropic-key";
+  process.env.AI_ANTHROPIC_API_KEY = "   ";
+  process.env.ANTHROPIC_API_KEY = "  test-anthropic-key  ";
   let anthropicRequest = null;
   const anthropicResult = await aiProvider.runAiPilotCommand({
     prompt: "Summarize this customer.",
@@ -930,6 +1970,11 @@ try {
     "2023-06-01",
     "Anthropic adapter sends the documented API version header",
   );
+  assertEqual(
+    anthropicRequest.headers["x-api-key"],
+    "test-anthropic-key",
+    "Anthropic adapter ignores a blank primary key and trims the legacy fallback",
+  );
   assertEqual(anthropicRequest.body.max_tokens, 1200, "Anthropic adapter applies max response tokens");
 
   const unsafe = await aiProvider.runAiPilotCommand({
@@ -960,6 +2005,7 @@ try {
 
   delete process.env.AI_OPENAI_API_KEY;
   delete process.env.AI_ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
   console.log("AI Tools 2.1 live provider pilot regression passed.");
 } finally {
   rmSync(outDir, { recursive: true, force: true });

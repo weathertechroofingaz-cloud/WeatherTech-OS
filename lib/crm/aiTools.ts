@@ -40,6 +40,134 @@ export type AiTaskType =
   | "saved_analysis";
 export type AiPriority = "critical" | "high" | "medium" | "low";
 export type AiResponseCompleteness = "complete" | "partial" | "insufficient";
+export type AiRuntimeProviderHealthState = "ready" | "failed";
+export type AiRuntimeProviderHealthEvidence = {
+  companyId: string;
+  statusRefreshSequence: number;
+  state: AiRuntimeProviderHealthState;
+};
+export type AiPilotErrorEvidence = {
+  companyId: string | null;
+  statusRefreshSequence: number;
+  message: string;
+};
+
+export function isCurrentAiCommandCompletion({
+  activeCompanyId,
+  requestCompanyId,
+  currentStatusRefreshSequence,
+  requestStatusRefreshSequence,
+}: {
+  activeCompanyId: string | null;
+  requestCompanyId: string;
+  currentStatusRefreshSequence: number;
+  requestStatusRefreshSequence: number;
+}) {
+  return (
+    Boolean(requestCompanyId) &&
+    activeCompanyId === requestCompanyId &&
+    Number.isSafeInteger(currentStatusRefreshSequence) &&
+    Number.isSafeInteger(requestStatusRefreshSequence) &&
+    currentStatusRefreshSequence === requestStatusRefreshSequence
+  );
+}
+
+export function shouldForceAiQuotaProbeRefresh(
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (!companyId || !Number.isSafeInteger(sequence) || sequence <= 0) {
+    return false;
+  }
+  return consumedByCompany.get(companyId) !== sequence;
+}
+
+export function beginAiQuotaProbeRefreshAttempt(
+  attemptedByCompany: Map<string, number>,
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (
+    !shouldForceAiQuotaProbeRefresh(consumedByCompany, companyId, sequence) ||
+    attemptedByCompany.get(companyId) === sequence
+  ) {
+    return false;
+  }
+  attemptedByCompany.set(companyId, sequence);
+  return true;
+}
+
+export function releaseAiQuotaProbeRefreshAttempt(
+  attemptedByCompany: Map<string, number>,
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (
+    !shouldForceAiQuotaProbeRefresh(consumedByCompany, companyId, sequence) ||
+    attemptedByCompany.get(companyId) !== sequence
+  ) {
+    return false;
+  }
+  return attemptedByCompany.delete(companyId);
+}
+
+export function getAiQuotaProbeRefreshRetryAfterSeconds({
+  status,
+  retryAfterHeader,
+  payload,
+  retryAlreadyAttempted,
+}: {
+  status: number;
+  retryAfterHeader: string | null;
+  payload: unknown;
+  retryAlreadyAttempted: boolean;
+}) {
+  if (
+    status !== 429 ||
+    retryAlreadyAttempted ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+
+  const normalizedRetryAfter = retryAfterHeader?.trim() ?? "";
+  if (!/^(?:[1-9]|[12][0-9]|30)$/.test(normalizedRetryAfter)) {
+    return null;
+  }
+
+  const retryAfterSeconds = Number(normalizedRetryAfter);
+  const receipt = payload as {
+    code?: unknown;
+    retryAfterSeconds?: unknown;
+  };
+  return receipt.code === "ai_quota_probe_refresh_rate_limited" &&
+    Number.isSafeInteger(receipt.retryAfterSeconds) &&
+    receipt.retryAfterSeconds === retryAfterSeconds
+    ? retryAfterSeconds
+    : null;
+}
+
+export function acknowledgeAiQuotaProbeRefresh(
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (
+    !companyId ||
+    !Number.isSafeInteger(sequence) ||
+    sequence <= 0 ||
+    consumedByCompany.get(companyId) === sequence
+  ) {
+    return false;
+  }
+  consumedByCompany.set(companyId, sequence);
+  return true;
+}
 export type AiDailyOperationsTopic =
   | "attention_today"
   | "uncontacted_leads"
@@ -67,6 +195,52 @@ export type AiActionType =
   | "prepare_customer_summary"
   | "prepare_inspection_report"
   | "prepare_document_summary";
+
+export function getCurrentAiRuntimeProviderHealth({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiRuntimeProviderHealthEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}): AiRuntimeProviderHealthState | null {
+  if (
+    !evidence ||
+    !companyId ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence
+  ) {
+    return null;
+  }
+
+  return evidence.state === "ready" || evidence.state === "failed"
+    ? evidence.state
+    : null;
+}
+
+export function getCurrentAiPilotError({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiPilotErrorEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}) {
+  if (
+    !evidence ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence ||
+    !evidence.message.trim()
+  ) {
+    return "";
+  }
+
+  return evidence.message;
+}
 
 export type AiSourceRecord = {
   table: string;
@@ -142,6 +316,34 @@ export type AiGroundedResponse = {
   actions: AiRecommendedAction[];
   createdAt: string;
 };
+
+export type AiResponseHistoryEvidence = {
+  companyId: string;
+  statusRefreshSequence: number;
+  responses: AiGroundedResponse[];
+};
+
+export function getCurrentAiResponses({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiResponseHistoryEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}) {
+  if (
+    !evidence ||
+    !companyId ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence
+  ) {
+    return [];
+  }
+
+  return evidence.responses;
+}
 
 export type AiAssistantDraft = {
   id: string;
@@ -349,17 +551,13 @@ const approvalGates = [
 
 export const aiProviderReadiness: AiProviderReadiness = {
   provider: "disabled",
-  label: "AI provider not configured",
+  label: "Company-scoped AI status required",
   status: "configuration_required",
   summary:
-    "Live AI is disabled. WeatherTech OS can show rule-based insights from authorized CRM data, but model calls, streaming, and paid providers require owner setup.",
+    "Select one authorized company to load its live provider status and monthly budget from the server. Local previews remain deterministic and read-only.",
   productionDisabled: true,
   requiredOwnerSetup: [
-    "Owner-approved AI provider selection",
-    "Server-side API credentials",
-    "Approved model and token limits",
-    "Usage budget",
-    "Controlled testing approval",
+    "Select one authorized company before running audited live AI.",
   ],
   capabilities: [
     "chat completion",
@@ -551,7 +749,7 @@ export function answerAiCommand({
     missingInformation: isDailyOperationsAnswer
       ? []
       : matchedItems.length
-        ? ["Live AI provider is not configured, so this answer uses deterministic OS rules only."]
+        ? ["This fallback response uses deterministic OS rules only; run an audited exact-company command for live AI."]
         : ["No matching authorized records were available in the loaded company scope."],
     recommendedNextAction:
       responseActions[0]?.label ??
@@ -1498,7 +1696,7 @@ function buildExecutiveBrief(
       ? `${criticalCount} critical item${criticalCount === 1 ? "" : "s"} need owner attention`
       : "No critical AI priority items in the current authorized snapshot",
     summary:
-      "This is a rule-based executive brief grounded in visible CRM records. Live generative AI is disabled until an owner-approved provider is configured.",
+      "This is a deterministic executive preview grounded in visible CRM records. Use the audited command bar with one exact company for a live AI response.",
     metrics: [
       {
         label: "Priority items",
@@ -2193,7 +2391,7 @@ function buildEstimateAssistantDrafts(snapshot: CrmSnapshot): AiAssistantDraft[]
         title: "Estimate Assistant 2.0 ready",
         taskType: "estimate_assistant",
         companyId: null,
-        mode: "provider_disabled",
+        mode: "rule_based_insight",
         body:
           "No estimates are visible in this company scope. Create or select an estimate before preparing proposal sections, options, or deposit guidance.",
         missingInformation: ["estimate", "customer", "property", "line items"],
@@ -2354,7 +2552,7 @@ function buildCommunicationsAssistant(snapshot: CrmSnapshot): AiAssistantDraft[]
       title: "Communication draft safety",
       taskType: "communication_draft",
       companyId: null,
-      mode: "provider_disabled",
+      mode: "rule_based_insight",
       body:
         "AI can prepare appointment confirmations, proposal follow-ups, deposit reminders, invoice reminders, project updates, delay notices, warranty explanations, and review responses as drafts only. No email or SMS is sent from AI Tools.",
       missingInformation: communicationSources.length ? [] : ["recent communication context"],
@@ -2462,10 +2660,10 @@ function buildSavedAnalysisPreviews(
       title: "Saved AI analyses foundation",
       taskType: "saved_analysis",
       companyId: null,
-      mode: "provider_disabled",
+      mode: "rule_based_insight",
       body:
-        "Saved AI work is architecture-ready for executive briefs, customer summaries, job-risk analyses, proposal reviews, scope drafts, communication drafts, inspection summaries, and financial analyses.",
-      missingInformation: ["Apply migration 0033 before persistence is available in production."],
+        "Saved AI analysis previews remain read-only and require authenticated company-scoped storage plus a separate reviewed save workflow before persistence.",
+      missingInformation: ["A reviewed save workflow is required before new AI work is persisted."],
       sourceRecords: priorityItems.slice(0, 2).map((item) => item.source).concat(auditSources),
       actions: [],
       customerFacingSafe: false,
@@ -2489,7 +2687,7 @@ function buildAnalysisDrafts(
       mode: "rule_based_insight",
       body,
       missingInformation: items.length
-        ? ["Live model provider not configured; recommendations are deterministic."]
+        ? ["These workspace recommendations are deterministic previews; use the audited command bar for live AI."]
         : ["No matching priority records visible in this company scope."],
       sourceRecords: items.slice(0, 5).map((item) => item.source),
       actions: items.slice(0, 3).map((item) => item.suggestedAction),

@@ -252,6 +252,14 @@ const expectedMigrations = [
     "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
     "0bdf73eb47ff56b0a302043be45607879561b6dd6d13cc54d8060c3b6b2f811f",
   ],
+  [
+    "20260904060243_ai_quota_status_read_model.sql",
+    "4e0ec9cdbf7c8264c2d2781f10a87a82fa2069a963e5948feee58357e9425079",
+  ],
+  [
+    "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+    "a139c0628f8dc84c9297e40dc1e7e38ea64b3580e313d7df5a1badf448003b7b",
+  ],
 ];
 
 const files = fs
@@ -424,6 +432,12 @@ const goHighLevelReconciliationAutomationTransitionFixIndex = files.indexOf(
 const goHighLevelReconciliationEventRecoveryIndex = files.indexOf(
   "20260902140838_gohighlevel_reconciliation_event_recovery_twilio_compatibility.sql",
 );
+const aiQuotaStatusReadModelIndex = files.indexOf(
+  "20260904060243_ai_quota_status_read_model.sql",
+);
+const aiQuotaProbeRefreshCooldownIndex = files.indexOf(
+  "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+);
 
 if (
   integrationSyncIndex === -1 ||
@@ -545,6 +559,8 @@ if (
   leadAutomationEventLegacySchemaCompatibilityIndex === -1 ||
   goHighLevelReconciliationAutomationTransitionFixIndex === -1 ||
   goHighLevelReconciliationEventRecoveryIndex === -1 ||
+  aiQuotaStatusReadModelIndex === -1 ||
+  aiQuotaProbeRefreshCooldownIndex === -1 ||
   !(
     aiToolsIndex < officeTasksIndex &&
     officeTasksIndex < officeTaskCascadeIndex &&
@@ -592,12 +608,14 @@ if (
     leadAutomationEventLegacySchemaCompatibilityIndex <
       goHighLevelReconciliationAutomationTransitionFixIndex &&
     goHighLevelReconciliationAutomationTransitionFixIndex <
-      goHighLevelReconciliationEventRecoveryIndex
+      goHighLevelReconciliationEventRecoveryIndex &&
+    goHighLevelReconciliationEventRecoveryIndex < aiQuotaStatusReadModelIndex &&
+    aiQuotaStatusReadModelIndex < aiQuotaProbeRefreshCooldownIndex
   ) ||
-  goHighLevelReconciliationEventRecoveryIndex !== files.length - 1
+  aiQuotaProbeRefreshCooldownIndex !== files.length - 1
 ) {
   failures.push(
-    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, and the forward-only event-recovery/Twilio compatibility correction must remain in reviewed order.",
+    "CRM identity reconciliation, lead accountability, job-photo hardening, native proposal, deferred-invariant trigger compatibility, automation engine, GHL state machine, Mighty Apes correction, GHL guardrails, cross-schema lint corrections, guarded synthetic cleanup, GHL inbound automation bridge, legacy Twilio orphan cleanup, its Browser Voice correction, lead-trigger schema compatibility, GHL reconciliation transition fix, forward-only event-recovery/Twilio compatibility, the AI quota read model, and its durable refresh cooldown must remain in reviewed order.",
   );
 }
 
@@ -1672,6 +1690,26 @@ const automationEngineFoundationMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const aiQuotaStatusReadModelMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260904060243_ai_quota_status_read_model.sql",
+  ),
+  "utf8",
+);
+const normalizedAiQuotaStatusReadModelMigration = aiQuotaStatusReadModelMigration
+  .replace(/\s+/g, " ")
+  .trim()
+  .toLowerCase();
+const aiQuotaProbeRefreshCooldownMigration = fs.readFileSync(
+  path.join(
+    migrationsDir,
+    "20260904104733_ai_quota_probe_refresh_cooldown.sql",
+  ),
+  "utf8",
+);
+const normalizedAiQuotaProbeRefreshCooldownMigration =
+  aiQuotaProbeRefreshCooldownMigration.replace(/\s+/g, " ").trim().toLowerCase();
 const goHighLevelWebhookStateMachineMigration = fs.readFileSync(
   path.join(
     migrationsDir,
@@ -3089,6 +3127,224 @@ if (/action_type\s+in\s*\([^)]*(?:send_email|send_sms|place_call|provider_write)
 }
 
 if (
+  !normalizedAiQuotaStatusReadModelMigration.startsWith("begin;") ||
+  !normalizedAiQuotaStatusReadModelMigration.endsWith("commit;")
+) {
+  failures.push("AI quota status read model must execute as one transaction.");
+}
+
+for (const quotaStatusContract of [
+  "create or replace function public.wtos_get_ai_quota_status_v1( p_company_id uuid, p_actor_user_id uuid, p_request jsonb )",
+  "returns jsonb language plpgsql stable security invoker set search_path = ''",
+  "if (select auth.role()) is distinct from 'service_role'",
+  "from public.company_memberships as membership where membership.company_id = p_company_id and membership.user_id = p_actor_user_id and membership.role not in ('customer_portal', 'employee_portal')",
+  "utc_day_key date := (now() at time zone 'utc')::date",
+  "utc_day_start := utc_day_key::timestamp at time zone 'utc'",
+  "utc_day_end := utc_day_start + interval '1 day'",
+  "utc_month_start := date_trunc('month', utc_day_start)",
+  "utc_month_end := utc_month_start + interval '1 month'",
+  "from public.ai_audit_events as audit where audit.event_type = 'request_initiated'",
+  "reserved_cost_cents_today + estimated_cost_cents > daily_budget_cents",
+  "company_reserved_cost_cents_this_month + estimated_cost_cents > company_monthly_budget_cents",
+  "'requestcapacityavailable', blocking_reason = 'none'",
+  "revoke execute on function public.wtos_get_ai_quota_status_v1(uuid, uuid, jsonb) from public, anon, authenticated",
+  "grant execute on function public.wtos_get_ai_quota_status_v1(uuid, uuid, jsonb) to service_role",
+]) {
+  if (!normalizedAiQuotaStatusReadModelMigration.includes(quotaStatusContract)) {
+    failures.push(`AI quota status read model is missing ${quotaStatusContract}.`);
+  }
+}
+
+for (const requestKey of [
+  "contractVersion",
+  "estimatedCostCents",
+  "globalDailyRequestLimit",
+  "companyDailyRequestLimit",
+  "userDailyRequestLimit",
+  "dailyBudgetCents",
+  "companyMonthlyBudgetCents",
+]) {
+  if (!aiQuotaStatusReadModelMigration.includes(`'${requestKey}'`)) {
+    failures.push(`AI quota status request contract is missing ${requestKey}.`);
+  }
+}
+
+for (const receiptKey of [
+  "contractVersion",
+  "companyId",
+  "actorUserId",
+  "requestCapacityAvailable",
+  "blockingReason",
+  "checkedAt",
+  "globalRequestsToday",
+  "companyRequestsToday",
+  "userRequestsToday",
+  "reservedCostCentsToday",
+  "companyReservedCostCentsThisMonth",
+]) {
+  if (!aiQuotaStatusReadModelMigration.includes(`'${receiptKey}'`)) {
+    failures.push(`AI quota status receipt contract is missing ${receiptKey}.`);
+  }
+}
+
+if (
+  !normalizedAiQuotaStatusReadModelMigration.includes(
+    "not p_request ?& array[ 'contractversion', 'estimatedcostcents', 'globaldailyrequestlimit', 'companydailyrequestlimit', 'userdailyrequestlimit', 'dailybudgetcents', 'companymonthlybudgetcents' ]",
+  ) ||
+  !normalizedAiQuotaStatusReadModelMigration.includes(
+    "from jsonb_object_keys(p_request) as request_key where request_key not in ( 'contractversion', 'estimatedcostcents', 'globaldailyrequestlimit', 'companydailyrequestlimit', 'userdailyrequestlimit', 'dailybudgetcents', 'companymonthlybudgetcents' )",
+  )
+) {
+  failures.push("AI quota status request must require exactly its seven bounded keys.");
+}
+
+for (const boundedValueContract of [
+  "estimated_cost_cents not between 1 and 100000000",
+  "global_daily_request_limit not between 1 and 100000",
+  "company_daily_request_limit not between 1 and 100000",
+  "user_daily_request_limit not between 1 and 100000",
+  "daily_budget_cents not between 1 and 100000000",
+  "company_monthly_budget_cents not between 1 and 1000000000",
+  "estimated_cost_cents > daily_budget_cents",
+  "estimated_cost_cents > company_monthly_budget_cents",
+  "100000001::bigint",
+  "1000000001::bigint",
+]) {
+  if (!normalizedAiQuotaStatusReadModelMigration.includes(boundedValueContract)) {
+    failures.push(`AI quota status bounds are missing ${boundedValueContract}.`);
+  }
+}
+
+if (
+  (normalizedAiQuotaStatusReadModelMigration.match(/100001::bigint/g) ?? []).length !== 3
+) {
+  failures.push(
+    "AI quota status request counters must each cap at the daily schema maximum plus one.",
+  );
+}
+
+const quotaBlockingReasonsInOrder = [
+  "'global_daily_request_limit'",
+  "'company_daily_request_limit'",
+  "'user_daily_request_limit'",
+  "'global_daily_budget'",
+  "'company_monthly_budget'",
+];
+let previousQuotaBlockingReasonIndex = -1;
+for (const quotaBlockingReason of quotaBlockingReasonsInOrder) {
+  const quotaBlockingReasonIndex = normalizedAiQuotaStatusReadModelMigration.indexOf(
+    quotaBlockingReason,
+    previousQuotaBlockingReasonIndex + 1,
+  );
+  if (quotaBlockingReasonIndex <= previousQuotaBlockingReasonIndex) {
+    failures.push(
+      "AI quota status blocking reasons must retain atomic reservation precedence.",
+    );
+    break;
+  }
+  previousQuotaBlockingReasonIndex = quotaBlockingReasonIndex;
+}
+
+if (
+  /\bsecurity\s+definer\b/i.test(aiQuotaStatusReadModelMigration) ||
+  /\bpg_advisory(?:_xact)?_lock\b/i.test(aiQuotaStatusReadModelMigration) ||
+  /\b(?:insert\s+into|update\s+public\.|delete\s+from|truncate)\b/i.test(
+    aiQuotaStatusReadModelMigration,
+  )
+) {
+  failures.push(
+    "AI quota status read model must remain invoker-rights, lock-free, and read-only.",
+  );
+}
+
+const crmDatabaseTypes = fs.readFileSync(
+  path.join(process.cwd(), "lib", "crm", "types.ts"),
+  "utf8",
+);
+const normalizedCrmDatabaseTypes = crmDatabaseTypes.replace(/\s+/g, " ");
+if (
+  !normalizedCrmDatabaseTypes.includes(
+    "wtos_get_ai_quota_status_v1: { Args: { p_company_id: string; p_actor_user_id: string; p_request: Record<string, unknown>; }; Returns: Record<string, unknown>; };",
+  )
+) {
+  failures.push("CRM database types must expose the exact AI quota status RPC signature.");
+}
+
+if (
+  !normalizedAiQuotaProbeRefreshCooldownMigration.startsWith("begin;") ||
+  !normalizedAiQuotaProbeRefreshCooldownMigration.endsWith("commit;")
+) {
+  failures.push("AI quota-probe refresh cooldown must execute as one transaction.");
+}
+
+for (const quotaProbeRefreshContract of [
+  "create table public.ai_quota_probe_refresh_cooldowns",
+  "company_id uuid not null references public.companies(id) on delete cascade",
+  "actor_user_id uuid not null references auth.users(id) on delete cascade",
+  "primary key (company_id, actor_user_id)",
+  "alter table public.ai_quota_probe_refresh_cooldowns enable row level security",
+  "alter table public.ai_quota_probe_refresh_cooldowns force row level security",
+  "revoke all on table public.ai_quota_probe_refresh_cooldowns from public, anon, authenticated, service_role",
+  "grant select, insert, update on table public.ai_quota_probe_refresh_cooldowns to service_role",
+  "create or replace function public.wtos_claim_ai_quota_probe_refresh_v1( p_company_id uuid, p_actor_user_id uuid )",
+  "returns jsonb language plpgsql volatile security invoker set search_path = ''",
+  "trusted_claims jsonb := coalesce((select auth.jwt()), '{}'::jsonb)",
+  "if trusted_claims ->> 'role' is distinct from 'service_role'",
+  "from public.company_memberships as membership where membership.company_id = p_company_id and membership.user_id = p_actor_user_id and membership.role not in ('customer_portal', 'employee_portal')",
+  "checked_at timestamptz := clock_timestamp()",
+  "checked_at + interval '30 seconds'",
+  "on conflict (company_id, actor_user_id) do update",
+  "where cooldown.next_allowed_at <= checked_at",
+  "returning next_allowed_at into claimed_next_allowed_at",
+  "retry_after_seconds := greatest( 1, least( 30, ceil(extract(epoch from claimed_next_allowed_at - checked_at))::integer ) )",
+  "revoke all on function public.wtos_claim_ai_quota_probe_refresh_v1(uuid, uuid) from public, anon, authenticated, service_role",
+  "grant execute on function public.wtos_claim_ai_quota_probe_refresh_v1(uuid, uuid) to service_role",
+]) {
+  if (!normalizedAiQuotaProbeRefreshCooldownMigration.includes(quotaProbeRefreshContract)) {
+    failures.push(
+      `AI quota-probe refresh cooldown is missing ${quotaProbeRefreshContract}.`,
+    );
+  }
+}
+
+for (const receiptKey of [
+  "contractVersion",
+  "companyId",
+  "actorUserId",
+  "allowed",
+  "retryAfterSeconds",
+  "checkedAt",
+]) {
+  if (!aiQuotaProbeRefreshCooldownMigration.includes(`'${receiptKey}'`)) {
+    failures.push(`AI quota-probe refresh claim receipt is missing ${receiptKey}.`);
+  }
+}
+
+if (
+  /\bsecurity\s+definer\b/i.test(aiQuotaProbeRefreshCooldownMigration) ||
+  /\b(?:delete\s+from|truncate|pg_advisory(?:_xact)?_lock)\b/i.test(
+    aiQuotaProbeRefreshCooldownMigration,
+  )
+) {
+  failures.push(
+    "AI quota-probe refresh cooldown must remain invoker-rights, bounded-row, and free of destructive or advisory-lock operations.",
+  );
+}
+
+if (
+  !normalizedCrmDatabaseTypes.includes(
+    "ai_quota_probe_refresh_cooldowns: { Row: { company_id: string; actor_user_id: string; next_allowed_at: string; updated_at: string; }; Insert: { company_id: string; actor_user_id: string; next_allowed_at: string; updated_at: string; }; Update: Partial< Database[\"public\"][\"Tables\"][\"ai_quota_probe_refresh_cooldowns\"][\"Insert\"] >; Relationships: []; };",
+  ) ||
+  !normalizedCrmDatabaseTypes.includes(
+    "wtos_claim_ai_quota_probe_refresh_v1: { Args: { p_company_id: string; p_actor_user_id: string; }; Returns: Record<string, unknown>; };",
+  )
+) {
+  failures.push(
+    "CRM database types must expose the exact AI quota-probe refresh table and RPC signature.",
+  );
+}
+
+if (
   automationEngineFoundationIndex === -1 ||
   goHighLevelWebhookStateMachineIndex === -1 ||
   automationEngineFoundationIndex >= goHighLevelWebhookStateMachineIndex
@@ -3342,4 +3598,7 @@ console.log(
 );
 console.log(
   "Verified 0028 Google Calendar schema, service-only credentials, company-scoped calendar metadata, sync mapping fields, and transactional wrapper.",
+);
+console.log(
+  "Verified the service-role-only AI quota status RPC is bounded, exact-company scoped, UTC aligned, lock-free, and read-only.",
 );

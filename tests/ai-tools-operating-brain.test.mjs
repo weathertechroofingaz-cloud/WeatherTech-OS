@@ -116,6 +116,518 @@ try {
   const now = "2026-08-04T16:00:00.000Z";
   const wtCompanyId = "11111111-1111-4111-8111-111111111111";
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
+  const consumedQuotaProbeRefreshes = new Map();
+  const attemptedQuotaProbeRefreshes = new Map();
+  const priorGenerationConsumed = new Map([
+    [wtCompanyId, 1],
+    [ihcCompanyId, 1],
+  ]);
+  const currentGenerationAttempted = new Map([
+    [wtCompanyId, 2],
+    [ihcCompanyId, 2],
+  ]);
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "Returning to WeatherTech must release its current aborted attempt after a prior acknowledged generation",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "Company-effect and request-finally release must be idempotent",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "An aborted current WeatherTech generation must admit one replacement status operation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "The replacement WeatherTech status operation must remain one-shot",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "A stale finally block must not release WeatherTech's newer attempt",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A stale release must leave the newer WeatherTech attempt intact",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      ihcCompanyId,
+      2,
+    ),
+    false,
+    "Releasing WeatherTech must preserve IHC's independent current attempt",
+  );
+  assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "The replacement WeatherTech operation must remain acknowledgeable",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "An acknowledged attempt must not be released",
+  );
+  assertEqual(
+    currentGenerationAttempted.get(wtCompanyId),
+    2,
+    "Rejecting an acknowledged release must leave the exact attempt marker intact",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      currentGenerationAttempted,
+      priorGenerationConsumed,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A rejected acknowledged release must leave WeatherTech consumed",
+  );
+  const validQuotaProbeRateLimitPayload = {
+    code: "ai_quota_probe_refresh_rate_limited",
+    retryAfterSeconds: 17,
+  };
+  assertEqual(
+    aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+      status: 429,
+      retryAfterHeader: "17",
+      payload: validQuotaProbeRateLimitPayload,
+      retryAlreadyAttempted: false,
+    }),
+    17,
+    "A first exact bounded quota-probe cooldown receipt must allow one delayed retry",
+  );
+  for (const [name, input] of [
+    ["ordinary success", { status: 200 }],
+    ["service unavailable", { status: 503 }],
+    ["already retried", { retryAlreadyAttempted: true }],
+    ["missing header", { retryAfterHeader: null }],
+    ["zero header", { retryAfterHeader: "0" }],
+    ["negative header", { retryAfterHeader: "-1" }],
+    ["fractional header", { retryAfterHeader: "1.5" }],
+    ["HTTP-date header", { retryAfterHeader: "Fri, 04 Sep 2026 12:00:00 GMT" }],
+    ["overbound header", { retryAfterHeader: "31" }],
+    ["missing payload", { payload: null }],
+    ["array payload", { payload: [] }],
+    ["wrong code", { payload: { ...validQuotaProbeRateLimitPayload, code: "other" } }],
+    ["missing body delay", { payload: { code: "ai_quota_probe_refresh_rate_limited" } }],
+    [
+      "string body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: "17" } },
+    ],
+    [
+      "mismatched body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: 16 } },
+    ],
+    [
+      "fractional body delay",
+      { payload: { ...validQuotaProbeRateLimitPayload, retryAfterSeconds: 17.5 } },
+    ],
+  ]) {
+    assertEqual(
+      aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+        status: input.status ?? 429,
+        retryAfterHeader:
+          input.retryAfterHeader === undefined ? "17" : input.retryAfterHeader,
+        payload:
+          input.payload === undefined ? validQuotaProbeRateLimitPayload : input.payload,
+        retryAlreadyAttempted: input.retryAlreadyAttempted ?? false,
+      }),
+      null,
+      `Quota-probe status must not retry an invalid cooldown receipt: ${name}`,
+    );
+  }
+  for (const retryAfterSeconds of [1, 30]) {
+    assertEqual(
+      aiTools.getAiQuotaProbeRefreshRetryAfterSeconds({
+        status: 429,
+        retryAfterHeader: ` ${retryAfterSeconds} `,
+        payload: {
+          code: "ai_quota_probe_refresh_rate_limited",
+          retryAfterSeconds,
+        },
+        retryAlreadyAttempted: false,
+      }),
+      retryAfterSeconds,
+      `Quota-probe retry boundary ${retryAfterSeconds} seconds must remain valid`,
+    );
+  }
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      0,
+    ),
+    false,
+    "Initial status load must not force an explicit CRM context refresh",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "WeatherTech must require its first explicit Refresh generation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "WeatherTech must issue exactly one explicit refresh attempt for a new generation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An unacknowledged WeatherTech generation must not start a second status operation after reloads or remounts",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    false,
+    "A company switch must not release a different WeatherTech refresh generation",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    false,
+    "A company switch must not release another company's refresh attempt",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "Aborting WeatherTech on a real company switch must release its exact unacknowledged attempt",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Concurrent company-effect and request-finally cleanup must release an attempt idempotently",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "Returning to WeatherTech must allow one replacement operation for the aborted attempt",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "A failed attempt must remain unacknowledged until a new explicit Refresh generation",
+  );
+  assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "A valid exact-company status response must acknowledge its Refresh generation",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Repeated WeatherTech status reloads after acknowledgement must reuse the fresh estimate",
+  );
+  assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Repeated acknowledgement must not claim a new refresh-state transition",
+  );
+  assertEqual(
+    aiTools.releaseAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An acknowledged WeatherTech refresh must never be released by a later company switch",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      new Map(),
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "An acknowledged generation must never start another forced attempt even with fresh local attempt state",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    true,
+    "IHC must independently consume the same global Refresh generation",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    true,
+    "IHC must receive its own single attempt for the shared generation",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "A later WeatherTech Refresh generation must force one new context estimate",
+  );
+  assertEqual(
+    aiTools.beginAiQuotaProbeRefreshAttempt(
+      attemptedQuotaProbeRefreshes,
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "A genuinely new WeatherTech generation must restore one explicit refresh attempt",
+  );
+  const currentFailedProviderHealth = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 7,
+    state: "failed",
+  };
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 7,
+    }),
+    "failed",
+    "Current exact-company provider failure remains authoritative",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 8,
+    }),
+    null,
+    "A provider result from before Refresh cannot override the newer status generation",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: ihcCompanyId,
+      statusRefreshSequence: 7,
+    }),
+    null,
+    "WeatherTech provider evidence cannot affect IHC",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: {
+        companyId: wtCompanyId,
+        statusRefreshSequence: 9,
+        state: "ready",
+      },
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "ready",
+    "A tested success from the current generation restores provider health",
+  );
+  const currentErrorEvidence = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 9,
+    message: "Current exact-company fallback.",
+  };
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "Current exact-company fallback.",
+    "A current exact-company error remains visible",
+  );
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 10,
+    }),
+    "",
+    "Refresh immediately hides an older command error",
+  );
+  assertEqual(
+    aiTools.getCurrentAiPilotError({
+      evidence: currentErrorEvidence,
+      companyId: ihcCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "",
+    "WeatherTech command errors never appear in IHC",
+  );
+  const currentResponseHistory = [{ id: "current-grounded-response" }];
+  const currentResponseEvidence = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 9,
+    responses: currentResponseHistory,
+  };
+  assertEqual(
+    aiTools.getCurrentAiResponses({
+      evidence: currentResponseEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    currentResponseHistory,
+    "Current exact-company response history remains visible in its accepted generation",
+  );
+  for (const staleResponseSelection of [
+    { companyId: wtCompanyId, statusRefreshSequence: 10 },
+    { companyId: ihcCompanyId, statusRefreshSequence: 9 },
+    { companyId: null, statusRefreshSequence: 9 },
+    { companyId: wtCompanyId, statusRefreshSequence: Number.NaN },
+  ]) {
+    assertEqual(
+      aiTools.getCurrentAiResponses({
+        evidence: currentResponseEvidence,
+        ...staleResponseSelection,
+      }).length,
+      0,
+      "Stale, cross-company, unselected, or invalid response evidence must stay hidden",
+    );
+  }
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: wtCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    true,
+    "An exact-company command may publish only in its current refresh generation",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: wtCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 12,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A pre-Refresh command cannot publish a late answer in the new generation",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: ihcCompanyId,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A WeatherTech command cannot publish after switching to IHC",
+  );
+  assertEqual(
+    aiTools.isCurrentAiCommandCompletion({
+      activeCompanyId: null,
+      requestCompanyId: wtCompanyId,
+      currentStatusRefreshSequence: 11,
+      requestStatusRefreshSequence: 11,
+    }),
+    false,
+    "A command cannot publish without an exact active company",
+  );
   const snapshot = emptySnapshot({
     companies: [
       {
