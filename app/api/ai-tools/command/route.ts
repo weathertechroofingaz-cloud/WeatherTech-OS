@@ -123,10 +123,20 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const savedAnalysesReadProbe = await client
+    .from("ai_saved_analyses")
+    .select(
+      "id, company_id, customer_id, lead_id, estimate_id, proposal_revision_id, job_id, inspection_id, invoice_id, document_id, title, task_type, mode, provider, model, prompt_summary, output, source_records, approval_state, status, created_by, expires_at, archived_at, created_at, updated_at",
+      { head: true },
+    )
+    .eq("company_id", authorization.companyId)
+    .limit(1);
+
   const status = buildAiCompanyPilotStatus({
     companyId: authorization.companyId,
     policy: policyRows[0] as AiUsageLimitRecord,
     config: getAiPilotProviderConfig(),
+    savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null,
   });
   return noStoreJson(status, 200);
 }

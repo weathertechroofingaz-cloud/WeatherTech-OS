@@ -520,10 +520,12 @@ try {
     companyId: wtCompanyId,
     policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
     config: productionStatusConfig,
+    savedAnalysesReadAvailable: true,
   });
   assertEqual(enabledCompanyStatus.companyId, wtCompanyId, "AI status echoes the exact company");
   assertEqual(enabledCompanyStatus.aiEnabled, true, "Environment and company policy enable live AI together");
   assertEqual(enabledCompanyStatus.monthlyBudgetCents, 5000, "AI status exposes the exact company monthly budget");
+  assertEqual(enabledCompanyStatus.savedAnalysesReadAvailable, true, "AI status preserves authenticated saved-analysis read availability");
   assertEqual(enabledCompanyStatus.readiness.state, "live_ai_enabled", "Enabled company status is explicit");
   assertEqual(enabledCompanyStatus.readiness.requiredOwnerSetup.length, 0, "Enabled company status has no provider setup action");
   assertEqual(enabledCompanyStatus.usageAccountingConfigured, true, "Enabled company status confirms usage accounting controls");
@@ -544,10 +546,12 @@ try {
       per_company_monthly_budget_cents: 5000,
     },
     config: productionStatusConfig,
+    savedAnalysesReadAvailable: false,
   });
   assertEqual(disabledCompanyStatus.aiEnabled, false, "A disabled exact-company policy remains disabled");
   assertEqual(disabledCompanyStatus.readiness.state, "production_ai_disabled", "Disabled company status stays fail closed");
   assertEqual(disabledCompanyStatus.monthlyBudgetCents, 5000, "One company receives only its own policy budget");
+  assertEqual(disabledCompanyStatus.savedAnalysesReadAvailable, false, "Saved-analysis read availability stays independent from provider policy readiness");
 
   const mismatchedCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
@@ -556,6 +560,7 @@ try {
   });
   assertEqual(mismatchedCompanyStatus.aiEnabled, false, "A cross-company policy cannot enable AI");
   assertEqual(mismatchedCompanyStatus.monthlyBudgetCents, 0, "A cross-company policy budget is never exposed");
+  assertEqual(mismatchedCompanyStatus.savedAnalysesReadAvailable, false, "Omitted saved-analysis readiness fails closed");
 
   assert(
     !aiProvider.resolveCompanyAiProviderConfig({

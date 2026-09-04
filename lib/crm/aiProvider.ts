@@ -86,6 +86,7 @@ export type AiCompanyPilotStatus = {
   companyId: string;
   aiEnabled: boolean;
   monthlyBudgetCents: number;
+  savedAnalysesReadAvailable: boolean;
   readiness: AiPilotReadiness;
   companyPolicy: {
     configured: true;
@@ -487,10 +488,12 @@ export function buildAiCompanyPilotStatus({
   companyId,
   policy,
   config = getAiPilotProviderConfig(),
+  savedAnalysesReadAvailable = false,
 }: {
   companyId: string;
   policy: AiUsageLimitRecord;
   config?: AiPilotProviderConfig;
+  savedAnalysesReadAvailable?: boolean;
 }): AiCompanyPilotStatus {
   const environmentReadiness = buildAiPilotReadiness({
     config,
@@ -545,6 +548,7 @@ export function buildAiCompanyPilotStatus({
     companyId,
     aiEnabled: liveProviderEnabled,
     monthlyBudgetCents,
+    savedAnalysesReadAvailable,
     readiness,
     companyPolicy: {
       configured: true,

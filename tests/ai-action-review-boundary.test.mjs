@@ -59,12 +59,16 @@ const statusAuthIndex = statusRoute.indexOf("client.auth.getUser()");
 const statusMembershipIndex = statusRoute.indexOf('.from("company_memberships")');
 const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
 const statusQuotaConfigIndex = statusRoute.indexOf("hasSupabaseServiceRoleConfig()");
+const statusSavedAnalysesIndex = statusRoute.indexOf('.from("ai_saved_analyses")');
 const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
 assert(
   statusAuthIndex >= 0 &&
     statusMembershipIndex > statusAuthIndex &&
     statusPolicyIndex > statusMembershipIndex &&
     statusQuotaConfigIndex > statusPolicyIndex &&
+    statusSavedAnalysesIndex > statusPolicyIndex &&
+    statusSavedAnalysesIndex > statusMembershipIndex &&
+    statusBuildIndex > statusSavedAnalysesIndex &&
     statusBuildIndex > statusQuotaConfigIndex &&
     statusBuildIndex > statusPolicyIndex,
   "AI status must authenticate and authorize the exact company before reading its policy.",
@@ -80,6 +84,10 @@ for (const statusBoundary of [
   "getAiPilotProviderConfig()",
   "hasSupabaseServiceRoleConfig()",
   "The audited AI quota service is unavailable. Production AI status is not ready.",
+  '.from("ai_saved_analyses")',
+  '{ head: true }',
+  '.eq("company_id", authorization.companyId)',
+  "savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null",
   "return noStoreJson(status, 200)",
 ]) {
   includes(
@@ -92,7 +100,9 @@ assert(
   !statusRoute.includes("getSupabaseServiceRoleClient") &&
     !statusRoute.includes("runAiPilotCommand") &&
     !statusRoute.includes("wtos_reserve_ai_request_v1") &&
+    !statusRoute.includes(".rpc(") &&
     !statusRoute.includes(".insert(") &&
+    !statusRoute.includes(".upsert(") &&
     !statusRoute.includes(".update(") &&
     !statusRoute.includes(".delete("),
   "Production AI status must remain authenticated, RLS-scoped, and mutation-free.",
@@ -112,6 +122,17 @@ for (const serviceBoundary of [
     supabaseService,
     serviceBoundary,
     `The status and command paths must share the exact service-role readiness predicate: ${serviceBoundary}`,
+  );
+}
+for (const savedAnalysesStatusBoundary of [
+  "savedAnalysesReadAvailable: boolean;",
+  "savedAnalysesReadAvailable = false",
+  "savedAnalysesReadAvailable,",
+]) {
+  includes(
+    aiProvider,
+    savedAnalysesStatusBoundary,
+    `Saved-analysis schema readiness must remain a sanitized fail-closed status boolean: ${savedAnalysesStatusBoundary}`,
   );
 }
 
@@ -333,11 +354,29 @@ for (const statusUiBoundary of [
   "getAiEndpointErrorMessage(",
   "aiProviderStatusRequestSequenceRef.current + 1",
   "setAiProviderStatusRequestSequence(requestSequence)",
+  'typeof status.savedAnalysesReadAvailable === "boolean"',
+  "currentAiProviderStatus?.savedAnalysesReadAvailable === true",
+  'data-testid="ai-saved-work"',
+  'data-ai-saved-analyses-phase={savedAnalysesReadPhase}',
+  'data-ai-saved-analyses-read-available={',
+  'data-ai-saved-analyses-company-id={currentAiProviderStatus?.companyId ?? ""}',
+  "Authenticated company-scoped saved-analysis read path verified.",
+  'label={savedAnalysesReadAvailable ? "Read path verified" : "Not verified"}',
 ]) {
   includes(
     crmApp,
     statusUiBoundary,
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
+  );
+}
+for (const stalePersistenceClaim of [
+  "Production persistence is deployed",
+  "Persistence available",
+  "Saved AI persistence is deployed",
+]) {
+  assert(
+    !`${crmApp}\n${aiToolsSource}`.includes(stalePersistenceClaim),
+    `The AI workspace must not claim unverified persistence: ${stalePersistenceClaim}.`,
   );
 }
 for (const browserStatusSuccessBoundary of [
@@ -377,6 +416,13 @@ for (const browserStatusSuccessBoundary of [
   'phase !== "loaded"',
   'budgetCents !== "5000"',
   'card.getAttribute("data-ai-enabled") !== "false"',
+  'savedWork.getAttribute("data-ai-saved-analyses-phase") !== "loaded"',
+  'savedWork.getAttribute("data-ai-saved-analyses-read-available") !== "true"',
+  'savedWork.getAttribute("data-ai-saved-analyses-company-id") !==',
+  '"authenticated company-scoped saved-analysis read path verified"',
+  'allCompanyGate.savedAnalysesPhase !== "selection_required"',
+  'allCompanyGate.savedAnalysesReadAvailable !== "false"',
+  'allCompanyGate.savedAnalysesCompanyId !== ""',
   'text.includes("$50/month")',
   'text.includes("usage accounting is not ready for this company")',
   'text.includes("no provider call can run")',

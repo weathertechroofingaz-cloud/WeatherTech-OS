@@ -39870,6 +39870,7 @@ function isAiCompanyPilotStatus(
     typeof status.aiEnabled === "boolean" &&
     Number.isInteger(status.monthlyBudgetCents) &&
     Number(status.monthlyBudgetCents) >= 0 &&
+    typeof status.savedAnalysesReadAvailable === "boolean" &&
     Boolean(status.readiness) &&
     typeof status.readiness?.label === "string" &&
     typeof status.readiness?.liveProviderEnabled === "boolean" &&
@@ -39960,6 +39961,17 @@ function AiToolsView({
   const isAiProviderStatusLoading =
     aiProviderStatusLoadingCompanyId === exactAiCompanyId &&
     exactAiCompanyId !== null;
+  const savedAnalysesReadAvailable =
+    currentAiProviderStatus?.savedAnalysesReadAvailable === true;
+  const savedAnalysesReadPhase = currentAiProviderStatus
+    ? "loaded"
+    : isAiProviderStatusLoading
+      ? "loading"
+      : currentAiProviderStatusError
+        ? "error"
+        : exactAiCompanySelected
+          ? "pending"
+          : "selection_required";
 
   useEffect(() => {
     if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
@@ -41018,16 +41030,31 @@ function AiToolsView({
       <section
         className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
         data-testid="ai-saved-work"
+        data-ai-saved-analyses-phase={savedAnalysesReadPhase}
+        data-ai-saved-analyses-read-available={
+          savedAnalysesReadAvailable ? "true" : "false"
+        }
+        data-ai-saved-analyses-company-id={currentAiProviderStatus?.companyId ?? ""}
       >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-lg font-bold text-slate-950">Saved AI analyses</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Production persistence is deployed. This view does not save or share a new
-              analysis without a separate reviewed workflow.
+              {savedAnalysesReadAvailable
+                ? "Authenticated company-scoped saved-analysis read path verified. This view does not save or share a new analysis without a separate reviewed workflow."
+                : currentAiProviderStatus
+                  ? "Saved-analysis storage could not be verified for this company. This view does not save or share a new analysis."
+                  : isAiProviderStatusLoading
+                    ? "Checking authenticated company-scoped saved-analysis availability. This view does not save or share a new analysis."
+                    : exactAiCompanySelected
+                      ? "Saved-analysis availability is not verified. This view does not save or share a new analysis."
+                      : "Select one company to verify authenticated saved-analysis availability. This view does not save or share a new analysis."}
             </p>
           </div>
-          <AiStatusBadge label="Persistence available" tone="blue" />
+          <AiStatusBadge
+            label={savedAnalysesReadAvailable ? "Read path verified" : "Not verified"}
+            tone={savedAnalysesReadAvailable ? "blue" : "amber"}
+          />
         </div>
         <AiDraftList drafts={aiWorkspace.savedAnalyses} />
       </section>

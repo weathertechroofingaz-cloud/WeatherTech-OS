@@ -4246,7 +4246,8 @@ async function waitForAiProviderStatus(
     tab,
     ({ expectedName, expectedId, differentFromId, priorRequestSequence }) => {
       const card = document.querySelector('[data-testid="ai-provider-status"]');
-      if (!card) {
+      const savedWork = document.querySelector('[data-testid="ai-saved-work"]');
+      if (!card || !savedWork) {
         return false;
       }
 
@@ -4258,6 +4259,7 @@ async function waitForAiProviderStatus(
         card.getAttribute("data-ai-status-request-sequence") ?? "0",
       );
       const text = card.textContent?.toLowerCase() ?? "";
+      const savedWorkText = savedWork.textContent?.toLowerCase() ?? "";
 
       if (
         phase !== "loaded" ||
@@ -4279,7 +4281,14 @@ async function waitForAiProviderStatus(
         budgetCents !== "5000" ||
         card.getAttribute("data-ai-enabled") !== "false" ||
         !text.includes("$50/month") ||
-        !text.includes("external actions disabled")
+        !text.includes("external actions disabled") ||
+        savedWork.getAttribute("data-ai-saved-analyses-phase") !== "loaded" ||
+        savedWork.getAttribute("data-ai-saved-analyses-read-available") !== "true" ||
+        savedWork.getAttribute("data-ai-saved-analyses-company-id") !==
+          requestCompanyId ||
+        !savedWorkText.includes(
+          "authenticated company-scoped saved-analysis read path verified",
+        )
       ) {
         return false;
       }
@@ -5425,7 +5434,9 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
         text.includes("document intelligence") &&
         text.includes("approval gates") &&
         text.includes("saved ai analyses") &&
-        text.includes("persistence available")
+        text.includes(
+          "select one company to verify authenticated saved-analysis availability",
+        )
       );
     },
     "AI Command Center 3.0 workspace",
@@ -5441,6 +5452,7 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
       );
       const note = form.querySelector('[data-testid="ai-exact-company-required"]');
       const providerStatus = document.querySelector('[data-testid="ai-provider-status"]');
+      const savedWork = document.querySelector('[data-testid="ai-saved-work"]');
       return {
         inputDisabled: input?.tagName === "INPUT" && input.disabled,
         analyzeDisabled: analyze?.tagName === "BUTTON" && analyze.disabled,
@@ -5449,6 +5461,12 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
         providerCompanyId:
           providerStatus?.getAttribute("data-ai-request-company-id") ?? "",
         providerBusy: providerStatus?.getAttribute("aria-busy") ?? "",
+        savedAnalysesPhase:
+          savedWork?.getAttribute("data-ai-saved-analyses-phase") ?? "",
+        savedAnalysesReadAvailable:
+          savedWork?.getAttribute("data-ai-saved-analyses-read-available") ?? "",
+        savedAnalysesCompanyId:
+          savedWork?.getAttribute("data-ai-saved-analyses-company-id") ?? "",
       };
     });
   if (
@@ -5458,7 +5476,10 @@ async function testAiToolsOperatingBrain(browser, tab, companies) {
     !allCompanyGate.note.includes("combined workspace below remains read-only") ||
     allCompanyGate.providerPhase !== "selection_required" ||
     allCompanyGate.providerCompanyId !== "" ||
-    allCompanyGate.providerBusy !== "false"
+    allCompanyGate.providerBusy !== "false" ||
+    allCompanyGate.savedAnalysesPhase !== "selection_required" ||
+    allCompanyGate.savedAnalysesReadAvailable !== "false" ||
+    allCompanyGate.savedAnalysesCompanyId !== ""
   ) {
     throw new Error("AI all-company scope did not fail closed with an exact-company instruction.");
   }

@@ -2460,7 +2460,7 @@ function buildSavedAnalysisPreviews(
       companyId: null,
       mode: "rule_based_insight",
       body:
-        "Saved AI persistence is deployed for executive briefs, customer summaries, job-risk analyses, proposal reviews, scope drafts, communication drafts, inspection summaries, and financial analyses.",
+        "Saved AI analysis previews remain read-only and require authenticated company-scoped storage plus a separate reviewed save workflow before persistence.",
       missingInformation: ["A reviewed save workflow is required before new AI work is persisted."],
       sourceRecords: priorityItems.slice(0, 2).map((item) => item.source).concat(auditSources),
       actions: [],
