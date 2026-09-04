@@ -66,6 +66,15 @@ const statusQuotaCapabilityIndex = statusRoute.indexOf(
 const statusCompanyConfigIndex = statusRoute.indexOf(
   "const companyConfig = resolveCompanyAiProviderConfig({",
 );
+const statusQuotaProbeCacheIndex = statusRoute.indexOf(
+  "await readCachedAiQuotaProbeEstimatedRequestTokens({",
+);
+const statusQuotaSnapshotIndex = statusRoute.indexOf(
+  "const quotaProbeSnapshot = await fetchCrmSnapshot(client)",
+);
+const statusQuotaEstimateIndex = statusRoute.indexOf(
+  "return estimateAiQuotaStatusProbe({",
+);
 const statusQuotaReadIndex = statusRoute.indexOf(
   "await readSupabaseAiQuotaStatus({",
 );
@@ -80,7 +89,10 @@ assert(
     statusPolicyIndex > statusMembershipIndex &&
     statusQuotaCapabilityIndex > statusPolicyIndex &&
     statusCompanyConfigIndex > statusQuotaCapabilityIndex &&
-    statusQuotaReadIndex > statusCompanyConfigIndex &&
+    statusQuotaProbeCacheIndex > statusCompanyConfigIndex &&
+    statusQuotaSnapshotIndex > statusQuotaProbeCacheIndex &&
+    statusQuotaEstimateIndex > statusQuotaSnapshotIndex &&
+    statusQuotaReadIndex > statusQuotaEstimateIndex &&
     statusQuotaParseIndex > statusQuotaReadIndex &&
     statusSavedAnalysesIndex > statusPolicyIndex &&
     statusSavedAnalysesIndex > statusQuotaParseIndex &&
@@ -102,6 +114,15 @@ for (const statusBoundary of [
   "await verifySupabaseAiQuotaServiceCapability()",
   "The audited AI quota service is unavailable. Production AI status is not ready.",
   "buildAiQuotaStatusRequest({",
+  "await readCachedAiQuotaProbeEstimatedRequestTokens({",
+  "actorUserId: user.id",
+  "policyId: companyPolicy.id",
+  "policyUpdatedAt: companyPolicy.updated_at",
+  "const quotaProbeSnapshot = await fetchCrmSnapshot(client)",
+  "estimateAiQuotaStatusProbe({",
+  "companyId: authorization.companyId",
+  "userRole: authorization.role",
+  "estimatedRequestTokens: quotaProbeEstimatedRequestTokens",
   "await readSupabaseAiQuotaStatus({",
   "parseAiQuotaStatusReceipt(quotaStatusPayload",
   "Current audited AI quota capacity could not be verified. Production AI status is unavailable.",
@@ -110,6 +131,7 @@ for (const statusBoundary of [
   '.eq("company_id", authorization.companyId)',
   "savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null",
   "quotaStatus,",
+  "quotaProbeEstimatedRequestTokens,",
   "return noStoreJson(status, 200)",
 ]) {
   includes(
@@ -158,7 +180,11 @@ for (const serviceBoundary of [
   'endpoint.searchParams.set("p_request", JSON.stringify(request))',
   "AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000",
   "AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000",
+  "AI_QUOTA_PROBE_SUCCESS_TTL_MS = 30_000",
+  "AI_QUOTA_PROBE_FAILURE_TTL_MS = 5_000",
+  "AI_QUOTA_PROBE_CACHE_MAX_ENTRIES = 128",
   "const aiQuotaCapabilityCache = new WeakMap",
+  "const aiQuotaProbeCache = new Map",
   'createHash("sha256")',
   "if (cacheEntry.inFlight)",
   "return cacheEntry.inFlight",
@@ -232,6 +258,7 @@ new Function("require", "module", "exports", compiledSupabaseService)(
   serviceModuleUnderTest.exports,
 );
 const {
+  readCachedAiQuotaProbeEstimatedRequestTokens,
   readSupabaseAiQuotaStatus,
   verifySupabaseAiQuotaServiceCapability,
 } =
@@ -411,6 +438,230 @@ assert(
   })) && missingConfigFetchCalls === 0,
   "Missing service-role configuration must fail before a network request.",
 );
+
+const quotaProbeCacheInput = {
+  companyId: "11111111-1111-4111-8111-111111111111",
+  actorUserId: "99999999-9999-4999-8999-999999999999",
+  userRole: "owner",
+  policyId: "33333333-3333-4333-8333-333333333333",
+  policyUpdatedAt: "2026-09-04T07:30:00.000Z",
+  companyMonthlyBudgetCents: 5_000,
+  config: {
+    enabled: true,
+    provider: "openai",
+    model: "owner-approved-model",
+    apiKeyConfigured: true,
+    dailyBudgetUsd: 100,
+    dailyRequestLimit: 500,
+    perUserDailyRequestLimit: 500,
+    perCompanyDailyRequestLimit: 500,
+    maxRequestTokens: 32_000,
+    maxResponseTokens: 1_200,
+    maxInputCostUsdPer1kTokens: 0.1,
+    maxOutputCostUsdPer1kTokens: 0.3,
+    timeoutMs: 15_000,
+    retryLimit: 1,
+    streamingEnabled: false,
+    structuredOutputEnabled: true,
+    actionExecutionEnabled: false,
+  },
+};
+let quotaProbeNow = 1_000;
+let quotaProbeLoads = 0;
+let resolveQuotaProbeLoad = null;
+const quotaProbeLoad = async () => {
+  quotaProbeLoads += 1;
+  return new Promise((resolve) => {
+    resolveQuotaProbeLoad = resolve;
+  });
+};
+const firstQuotaProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  { ...quotaProbeCacheInput, load: quotaProbeLoad },
+  () => quotaProbeNow,
+);
+const secondQuotaProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  { ...quotaProbeCacheInput, load: quotaProbeLoad },
+  () => quotaProbeNow,
+);
+await Promise.resolve();
+assert(
+  quotaProbeLoads === 1 && typeof resolveQuotaProbeLoad === "function",
+  "Concurrent identical status probes must coalesce before loading the CRM snapshot.",
+);
+resolveQuotaProbeLoad(3_210);
+assert(
+  (await firstQuotaProbe) === 3_210 && (await secondQuotaProbe) === 3_210,
+  "Every coalesced status probe must receive the same bounded token estimate.",
+);
+quotaProbeNow = 30_999;
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...quotaProbeCacheInput,
+      load: async () => {
+        quotaProbeLoads += 1;
+        return 3_300;
+      },
+    },
+    () => quotaProbeNow,
+  )) === 3_210 && quotaProbeLoads === 1,
+  "A successful CRM snapshot estimate is reused only within its bounded TTL.",
+);
+quotaProbeNow = 31_001;
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...quotaProbeCacheInput,
+      load: async () => {
+        quotaProbeLoads += 1;
+        return 3_300;
+      },
+    },
+    () => quotaProbeNow,
+  )) === 3_300 && quotaProbeLoads === 2,
+  "An expired CRM snapshot estimate must be loaded again.",
+);
+
+let failedQuotaProbeNow = 100_000;
+let failedQuotaProbeLoads = 0;
+const failedQuotaProbeInput = {
+  ...quotaProbeCacheInput,
+  policyId: "44444444-4444-4444-8444-444444444444",
+};
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...failedQuotaProbeInput,
+      load: async () => {
+        failedQuotaProbeLoads += 1;
+        throw new Error("raw snapshot failure must not escape");
+      },
+    },
+    () => failedQuotaProbeNow,
+  )) === null && failedQuotaProbeLoads === 1,
+  "A failed CRM snapshot estimate must fail closed without surfacing its error.",
+);
+failedQuotaProbeNow = 104_999;
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...failedQuotaProbeInput,
+      load: async () => {
+        failedQuotaProbeLoads += 1;
+        return 3_400;
+      },
+    },
+    () => failedQuotaProbeNow,
+  )) === null && failedQuotaProbeLoads === 1,
+  "A failed CRM snapshot estimate must be briefly cached to bound outage polling.",
+);
+failedQuotaProbeNow = 105_001;
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...failedQuotaProbeInput,
+      load: async () => {
+        failedQuotaProbeLoads += 1;
+        return 3_400;
+      },
+    },
+    () => failedQuotaProbeNow,
+  )) === 3_400 && failedQuotaProbeLoads === 2,
+  "A failed CRM snapshot estimate must retry after its shorter bounded TTL.",
+);
+
+let isolatedQuotaProbeLoads = 0;
+const isolatedQuotaProbeVariants = [
+  { actorUserId: "88888888-8888-4888-8888-888888888888" },
+  { companyId: "22222222-2222-4222-8222-222222222222" },
+  { userRole: "technician" },
+  { policyUpdatedAt: "2026-09-04T07:31:00.000Z" },
+  { config: { ...quotaProbeCacheInput.config, model: "other-model" } },
+  { config: { ...quotaProbeCacheInput.config, maxRequestTokens: 31_999 } },
+  { config: { ...quotaProbeCacheInput.config, retryLimit: 0 } },
+];
+for (const variant of isolatedQuotaProbeVariants) {
+  const value = await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...quotaProbeCacheInput,
+      ...variant,
+      load: async () => {
+        isolatedQuotaProbeLoads += 1;
+        return 4_000 + isolatedQuotaProbeLoads;
+      },
+    },
+    () => 200_000,
+  );
+  assert(value !== null, "An isolated bounded quota probe cache key must load.");
+}
+assert(
+  isolatedQuotaProbeLoads === isolatedQuotaProbeVariants.length,
+  "Company, actor, role, policy revision, model, token cap, and retry changes must not share a CRM estimate.",
+);
+
+const quotaProbeCapacityResolvers = [];
+const quotaProbeCapacityPromises = [];
+let quotaProbeCapacityLoads = 0;
+for (let index = 0; index < 128; index += 1) {
+  const actorSuffix = index.toString(16).padStart(12, "0");
+  quotaProbeCapacityPromises.push(
+    readCachedAiQuotaProbeEstimatedRequestTokens(
+      {
+        ...quotaProbeCacheInput,
+        actorUserId: `aaaaaaaa-aaaa-4aaa-8aaa-${actorSuffix}`,
+        load: async () => {
+          quotaProbeCapacityLoads += 1;
+          return new Promise((resolve) => {
+            quotaProbeCapacityResolvers.push(resolve);
+          });
+        },
+      },
+      () => 500_000,
+    ),
+  );
+}
+await Promise.resolve();
+assert(
+  quotaProbeCapacityLoads === 128 && quotaProbeCapacityResolvers.length === 128,
+  "The bounded cache fixture must occupy every in-flight slot.",
+);
+let overflowQuotaProbeLoads = 0;
+const overflowQuotaProbeInput = {
+  ...quotaProbeCacheInput,
+  actorUserId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+};
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...overflowQuotaProbeInput,
+      load: async () => {
+        overflowQuotaProbeLoads += 1;
+        return 5_000;
+      },
+    },
+    () => 500_000,
+  )) === null && overflowQuotaProbeLoads === 0,
+  "A full all-in-flight cache must fail closed instead of starting an untracked snapshot fan-out.",
+);
+quotaProbeCapacityResolvers[0](5_000);
+await quotaProbeCapacityPromises[0];
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...overflowQuotaProbeInput,
+      load: async () => {
+        overflowQuotaProbeLoads += 1;
+        return 5_100;
+      },
+    },
+    () => 500_000,
+  )) === 5_100 && overflowQuotaProbeLoads === 1,
+  "A settled entry must make room for one new bounded status probe.",
+);
+for (const resolve of quotaProbeCapacityResolvers.slice(1)) {
+  resolve(5_000);
+}
+await Promise.all(quotaProbeCapacityPromises.slice(1));
 
 async function rejectsQuotaCapability(responseFactory) {
   return !(await verifySupabaseAiQuotaServiceCapability(
@@ -797,13 +1048,13 @@ for (const quotaContractBoundary of [
   "export function parseAiQuotaStatusReceipt(",
   "export function getAiCurrentQuotaAvailability({",
   "export function buildAiQuotaStatusRequest({",
-  "if (!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents))",
-  "getAiMinimumProviderReservation(config)",
-  'prompt: "a"',
-  'records: []',
-  "estimateProviderRequestTokenUpperBound({",
-  "minimumEstimatedCostUsd * 100 * (config.retryLimit + 1)",
-  "A concrete minimum provider request fits current quota; every submitted command is atomically checked against its actual estimated size.",
+  "!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents)",
+  "export function estimateAiQuotaStatusProbe({",
+  "const context = retrieveAuthorizedAiContext(snapshot, {",
+  "return estimateAiRequestUsage({",
+  "export function getAiReservationCostCents({",
+  "estimatedCostUsd * 100 * (config.retryLimit + 1)",
+  "An authenticated selected-company probe fits current quota; every submitted command is atomically checked against its actual estimated size.",
   "request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8)",
   "request.estimatedRequestTokens <= request.maxRequestTokens",
   "request.estimatedCostCents <= request.dailyBudgetCents",
@@ -888,8 +1139,9 @@ for (const quotaBoundary of [
   "isAiQuotaReservationReceiptWithinBounds(receipt)",
   'serviceClient.rpc("wtos_reserve_ai_request_v1"',
   "p_request: quotaRequest",
-  "estimatedCostUsd *",
-  "(providerConfig.retryLimit + 1)",
+  "getAiReservationCostCents({",
+  "config: providerConfig",
+  "estimatedRequestTokens: requestEstimate.estimatedRequestTokens",
   "const maxProviderAttempts = providerConfig.retryLimit + 1",
   "companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents",
   "quotaReservation,",

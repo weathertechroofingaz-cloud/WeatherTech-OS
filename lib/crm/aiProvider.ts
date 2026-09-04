@@ -668,17 +668,24 @@ export function isAiQuotaStatusRequestWithinBounds(
 export function buildAiQuotaStatusRequest({
   config,
   companyMonthlyBudgetCents,
+  estimatedRequestTokens,
 }: {
   config: AiPilotProviderConfig;
   companyMonthlyBudgetCents: number;
+  estimatedRequestTokens: number;
 }): AiQuotaStatusRequest | null {
-  if (!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents)) {
+  if (
+    !hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents) ||
+    !isIntegerWithin(estimatedRequestTokens, 1, config.maxRequestTokens)
+  ) {
     return null;
   }
-  const minimumReservation = getAiMinimumProviderReservation(config);
   const request = {
     contractVersion: 1,
-    estimatedCostCents: minimumReservation.estimatedCostCents,
+    estimatedCostCents: getAiReservationCostCents({
+      config,
+      estimatedRequestTokens,
+    }),
     globalDailyRequestLimit: config.dailyRequestLimit,
     companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
     userDailyRequestLimit: config.perUserDailyRequestLimit,
@@ -692,17 +699,20 @@ export function getAiCurrentQuotaAvailability({
   config,
   companyMonthlyBudgetCents,
   quotaStatus,
+  quotaProbeEstimatedRequestTokens,
 }: {
   config: AiPilotProviderConfig;
   companyMonthlyBudgetCents: number;
   quotaStatus: AiQuotaStatusReceipt | null;
+  quotaProbeEstimatedRequestTokens: number | null;
 }): { available: boolean; blockingReason: AiQuotaBlockingReason } {
-  if (!quotaStatus) {
+  if (!quotaStatus || quotaProbeEstimatedRequestTokens === null) {
     return { available: false, blockingReason: "quota_status_unavailable" };
   }
   const quotaRequest = buildAiQuotaStatusRequest({
     config,
     companyMonthlyBudgetCents,
+    estimatedRequestTokens: quotaProbeEstimatedRequestTokens,
   });
   const minimumReservationCostCents = quotaRequest?.estimatedCostCents ?? null;
   if (
@@ -909,12 +919,14 @@ export function buildAiCompanyPilotStatus({
   config = getAiPilotProviderConfig(),
   savedAnalysesReadAvailable = false,
   quotaStatus = null,
+  quotaProbeEstimatedRequestTokens = null,
 }: {
   companyId: string;
   policy: AiUsageLimitRecord;
   config?: AiPilotProviderConfig;
   savedAnalysesReadAvailable?: boolean;
   quotaStatus?: AiQuotaStatusReceipt | null;
+  quotaProbeEstimatedRequestTokens?: number | null;
 }): AiCompanyPilotStatus {
   const environmentReadiness = buildAiPilotReadiness({
     config,
@@ -942,6 +954,7 @@ export function buildAiCompanyPilotStatus({
         config: companyConfig.config,
         companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
         quotaStatus,
+        quotaProbeEstimatedRequestTokens,
       })
     : { available: false, blockingReason: "quota_status_unavailable" as const };
   const currentQuotaAvailable = companyConfig.ok && quotaAvailability.available;
@@ -956,7 +969,7 @@ export function buildAiCompanyPilotStatus({
       ...environmentReadiness,
       state: "live_ai_enabled",
       label: "Production AI enabled",
-      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. A concrete minimum provider request fits current quota; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
+      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. An authenticated selected-company probe fits current quota; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
       liveProviderEnabled: true,
       requiredOwnerSetup: [],
       health: "ready",
@@ -2066,21 +2079,6 @@ function hasQuotaCompatibleProviderConfig(
   }
 
   const maxProviderAttempts = config.retryLimit + 1;
-  const minimumReservation = getAiMinimumProviderReservation(config);
-  if (
-    !isIntegerWithin(
-      minimumReservation.estimatedRequestTokens,
-      1,
-      config.maxRequestTokens,
-    ) ||
-    !isIntegerWithin(
-      minimumReservation.estimatedCostCents,
-      1,
-      aiQuotaBounds.maxEstimatedCostCents,
-    )
-  ) {
-    return false;
-  }
   const maximumEstimatedCostCents = getAiMaximumReservationCostCents(config);
 
   return isAiQuotaReservationRequestWithinBounds({
@@ -2115,39 +2113,50 @@ export function getAiMaximumReservationCostCents(
   );
 }
 
-export function getAiMinimumProviderReservation(
-  config: AiPilotProviderConfig,
-) {
-  const providerPrompt = buildProviderPrompt({
-    prompt: "a",
-    context: {
-      companyScope: "Selected company",
-      recordLimit: 0,
-      promptSummary: "a",
-      records: [],
-      missingInformation: [],
-      safetyFlags: [],
-    },
-    userRole: "owner",
-  });
-  const estimatedRequestTokens = estimateProviderRequestTokenUpperBound({
-    config,
-    providerPrompt,
-  });
-  const minimumEstimatedCostUsd = estimateCostUsd(
+export function getAiReservationCostCents({
+  config,
+  estimatedRequestTokens,
+}: {
+  config: AiPilotProviderConfig;
+  estimatedRequestTokens: number;
+}) {
+  const estimatedCostUsd = estimateCostUsd(
     estimatedRequestTokens,
     config.maxResponseTokens,
     config,
   );
-  return {
-    estimatedRequestTokens,
-    estimatedCostCents: Math.max(
-      1,
-      Math.ceil(
-        minimumEstimatedCostUsd * 100 * (config.retryLimit + 1),
-      ),
-    ),
-  };
+  return Math.max(
+    1,
+    Math.ceil(estimatedCostUsd * 100 * (config.retryLimit + 1)),
+  );
+}
+
+export function estimateAiQuotaStatusProbe({
+  config,
+  snapshot,
+  companyId,
+  userRole,
+  now = new Date().toISOString(),
+}: {
+  config: AiPilotProviderConfig;
+  snapshot: CrmSnapshot;
+  companyId: string;
+  userRole: CompanyMembershipRole | "owner" | "admin";
+  now?: string;
+}) {
+  const prompt = "a";
+  const context = retrieveAuthorizedAiContext(snapshot, {
+    prompt,
+    companyId,
+    userRole,
+    now,
+  });
+  return estimateAiRequestUsage({
+    config,
+    context,
+    prompt,
+    userRole,
+  });
 }
 
 function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {

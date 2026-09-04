@@ -4,7 +4,9 @@ import { fetchCrmSnapshot } from "../../../../lib/crm/repository";
 import {
   buildAiQuotaStatusRequest,
   buildAiCompanyPilotStatus,
+  estimateAiQuotaStatusProbe,
   getAiPilotProviderConfig,
+  getAiReservationCostCents,
   estimateAiRequestUsage,
   isAiQuotaReservationRequestWithinBounds,
   isAiQuotaReservationReceiptWithinBounds,
@@ -30,6 +32,7 @@ import { readBoundedJsonBody } from "../../../../lib/http/boundedJson";
 import { getSupabaseServerClient } from "../../../../lib/supabase/server";
 import {
   getSupabaseServiceRoleClient,
+  readCachedAiQuotaProbeEstimatedRequestTokens,
   readSupabaseAiQuotaStatus,
   verifySupabaseAiQuotaServiceCapability,
 } from "../../../../lib/supabase/service";
@@ -118,6 +121,7 @@ export async function GET(request: NextRequest) {
       503,
     );
   }
+  const companyPolicy = policyRows[0] as AiUsageLimitRecord;
 
   if (!(await verifySupabaseAiQuotaServiceCapability())) {
     return noStoreJson(
@@ -132,14 +136,44 @@ export async function GET(request: NextRequest) {
   const providerConfig = getAiPilotProviderConfig();
   const companyConfig = resolveCompanyAiProviderConfig({
     config: providerConfig,
-    usageLimits: policyRows as AiUsageLimitRecord[],
+    usageLimits: [companyPolicy],
     companyId: authorization.companyId,
   });
   let quotaStatus = null;
+  let quotaProbeEstimatedRequestTokens = null;
   if (companyConfig.ok) {
+    quotaProbeEstimatedRequestTokens =
+      await readCachedAiQuotaProbeEstimatedRequestTokens({
+        companyId: authorization.companyId,
+        actorUserId: user.id,
+        userRole: authorization.role,
+        policyId: companyPolicy.id,
+        policyUpdatedAt: companyPolicy.updated_at,
+        companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
+        config: companyConfig.config,
+        load: async () => {
+          const quotaProbeSnapshot = await fetchCrmSnapshot(client);
+          return estimateAiQuotaStatusProbe({
+            config: companyConfig.config,
+            snapshot: quotaProbeSnapshot,
+            companyId: authorization.companyId,
+            userRole: authorization.role,
+          }).estimatedRequestTokens;
+        },
+      });
+    if (quotaProbeEstimatedRequestTokens === null) {
+      return noStoreJson(
+        {
+          error:
+            "Current audited AI quota capacity could not be verified. Production AI status is unavailable.",
+        },
+        503,
+      );
+    }
     const quotaStatusRequest = buildAiQuotaStatusRequest({
       config: companyConfig.config,
       companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
+      estimatedRequestTokens: quotaProbeEstimatedRequestTokens,
     });
     if (!quotaStatusRequest) {
       return noStoreJson(
@@ -181,10 +215,11 @@ export async function GET(request: NextRequest) {
 
   const status = buildAiCompanyPilotStatus({
     companyId: authorization.companyId,
-    policy: policyRows[0] as AiUsageLimitRecord,
+    policy: companyPolicy,
     config: providerConfig,
     savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null,
     quotaStatus,
+    quotaProbeEstimatedRequestTokens,
   });
   return noStoreJson(status, 200);
 }
@@ -357,14 +392,10 @@ export async function POST(request: NextRequest) {
   }
 
   const requestId = randomUUID();
-  const estimatedCostCents = Math.max(
-    1,
-    Math.ceil(
-      requestEstimate.estimatedCostUsd *
-        100 *
-        (providerConfig.retryLimit + 1),
-    ),
-  );
+  const estimatedCostCents = getAiReservationCostCents({
+    config: providerConfig,
+    estimatedRequestTokens: requestEstimate.estimatedRequestTokens,
+  });
   const maxProviderAttempts = providerConfig.retryLimit + 1;
   const dailyBudgetCents = Math.floor(providerConfig.dailyBudgetUsd * 100);
   const quotaRequest = {

@@ -570,6 +570,79 @@ try {
     reservedCostCentsToday: 0,
     companyReservedCostCentsThisMonth: 0,
   };
+  const effectiveStatusConfig = aiProvider.resolveCompanyAiProviderConfig({
+    config: productionStatusConfig,
+    usageLimits: [baseCompanyPolicy],
+    companyId: wtCompanyId,
+  });
+  assert(effectiveStatusConfig.ok, "Quota status tests require an effective company config");
+  const quotaProbeEstimate = aiProvider.estimateAiQuotaStatusProbe({
+    config: effectiveStatusConfig.config,
+    snapshot,
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
+  const quotaProbeContext = aiProvider.retrieveAuthorizedAiContext(snapshot, {
+    prompt: "a",
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
+  const directQuotaProbeEstimate = aiProvider.estimateAiRequestUsage({
+    config: effectiveStatusConfig.config,
+    context: quotaProbeContext,
+    prompt: "a",
+    userRole: "owner",
+  });
+  assertEqual(
+    JSON.stringify(quotaProbeEstimate),
+    JSON.stringify(directQuotaProbeEstimate),
+    "Quota status uses the same authenticated company-context estimate as POST",
+  );
+  for (const userRole of [
+    "admin",
+    "office",
+    "sales",
+    "production",
+    "field",
+    "technician",
+    "viewer",
+    "team_member",
+  ]) {
+    const roleProbeEstimate = aiProvider.estimateAiQuotaStatusProbe({
+      config: effectiveStatusConfig.config,
+      snapshot,
+      companyId: wtCompanyId,
+      userRole,
+      now,
+    });
+    const roleProbeContext = aiProvider.retrieveAuthorizedAiContext(snapshot, {
+      prompt: "a",
+      companyId: wtCompanyId,
+      userRole,
+      now,
+    });
+    assertEqual(
+      JSON.stringify(roleProbeEstimate),
+      JSON.stringify(
+        aiProvider.estimateAiRequestUsage({
+          config: effectiveStatusConfig.config,
+          context: roleProbeContext,
+          prompt: "a",
+          userRole,
+        }),
+      ),
+      `Quota status preserves POST estimator parity for the ${userRole} role`,
+    );
+  }
+  const quotaStatusRequest = aiProvider.buildAiQuotaStatusRequest({
+    config: effectiveStatusConfig.config,
+    companyMonthlyBudgetCents:
+      effectiveStatusConfig.companyMonthlyBudgetCents,
+    estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+  });
+  assert(quotaStatusRequest, "A valid authenticated probe produces a bounded quota-status request");
   assertEqual(
     aiProvider.parseAiQuotaStatusReceipt(availableQuotaStatus, {
       companyId: wtCompanyId,
@@ -756,6 +829,24 @@ try {
       `Company status cannot claim accounting readiness with an excessive ${label}`,
     );
   }
+  const maximumBoundedConfig = {
+    ...productionStatusConfig,
+    model: "m".repeat(160),
+    dailyBudgetUsd: 1_000_000,
+    dailyRequestLimit: 100_000,
+    perCompanyDailyRequestLimit: 100_000,
+    perUserDailyRequestLimit: 100_000,
+    maxRequestTokens: 1_000_000,
+    maxResponseTokens: 1_000_000,
+    retryLimit: 2,
+  };
+  const maximumBoundedQuotaProbe = aiProvider.estimateAiQuotaStatusProbe({
+    config: maximumBoundedConfig,
+    snapshot,
+    companyId: wtCompanyId,
+    userRole: "owner",
+    now,
+  });
   const maximumBoundedStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: {
@@ -767,18 +858,10 @@ try {
       token_limit: 1_000_000,
       retry_limit: 2,
     },
-    config: {
-      ...productionStatusConfig,
-      model: "m".repeat(160),
-      dailyBudgetUsd: 1_000_000,
-      dailyRequestLimit: 100_000,
-      perCompanyDailyRequestLimit: 100_000,
-      perUserDailyRequestLimit: 100_000,
-      maxRequestTokens: 1_000_000,
-      maxResponseTokens: 1_000_000,
-      retryLimit: 2,
-    },
+    config: maximumBoundedConfig,
     quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens:
+      maximumBoundedQuotaProbe.estimatedRequestTokens,
   });
   assertEqual(
     maximumBoundedStatus.aiEnabled,
@@ -835,6 +918,7 @@ try {
     config: productionStatusConfig,
     savedAnalysesReadAvailable: true,
     quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
   });
   assertEqual(enabledCompanyStatus.companyId, wtCompanyId, "AI status echoes the exact company");
   assertEqual(enabledCompanyStatus.aiEnabled, true, "Environment and company policy enable live AI together");
@@ -876,6 +960,7 @@ try {
     config: productionStatusConfig,
     savedAnalysesReadAvailable: false,
     quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
   });
   assertEqual(
     enabledCompanyWithUnverifiedSavedAnalyses.aiEnabled,
@@ -887,35 +972,24 @@ try {
     "pending_or_unverified",
     "An unverified saved-analysis schema cannot claim its migration is applied",
   );
-  const effectiveStatusConfig = aiProvider.resolveCompanyAiProviderConfig({
-    config: productionStatusConfig,
-    usageLimits: [baseCompanyPolicy],
-    companyId: wtCompanyId,
-  });
-  assert(effectiveStatusConfig.ok, "Quota status tests require an effective company config");
-  const quotaStatusRequest = aiProvider.buildAiQuotaStatusRequest({
-    config: effectiveStatusConfig.config,
-    companyMonthlyBudgetCents:
-      effectiveStatusConfig.companyMonthlyBudgetCents,
-  });
-  assert(quotaStatusRequest, "A valid company config produces a bounded quota-status request");
   assertEqual(
     aiProvider.isAiQuotaStatusRequestWithinBounds(quotaStatusRequest),
     true,
     "The current-quota read request shares the bounded reservation contract",
   );
-  const minimumProviderReservation =
-    aiProvider.getAiMinimumProviderReservation(effectiveStatusConfig.config);
   assertEqual(
     quotaStatusRequest.estimatedCostCents,
-    minimumProviderReservation.estimatedCostCents,
-    "Current quota status probes a concrete minimal provider request envelope",
+    aiProvider.getAiReservationCostCents({
+      config: effectiveStatusConfig.config,
+      estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+    }),
+    "Current quota status prices the authenticated request shape with the POST formula",
   );
   assert(
-    minimumProviderReservation.estimatedRequestTokens > 256 &&
-      minimumProviderReservation.estimatedRequestTokens <=
+    quotaProbeEstimate.estimatedRequestTokens > 256 &&
+      quotaProbeEstimate.estimatedRequestTokens <=
         effectiveStatusConfig.config.maxRequestTokens,
-    "The minimum reservation includes the serialized provider request and framing overhead",
+    "The authenticated status probe includes serialized company context and framing overhead",
   );
   const minimumReservationCostCents = quotaStatusRequest.estimatedCostCents;
   assert(
@@ -935,6 +1009,7 @@ try {
       config: productionStatusConfig,
       savedAnalysesReadAvailable: true,
       quotaStatus: { ...availableQuotaStatus, ...quotaOverrides },
+      quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
     });
   const availableAtExactCostBoundary = buildQuotaAwareStatus({
     reservedCostCentsToday:
@@ -953,25 +1028,37 @@ try {
       maximumReservationCostCents > minimumReservationCostCents,
     "Status remains available when a concrete minimal request fits even though the maximum request cannot fit",
   );
+  const belowAuthenticatedProbeTokenCap = {
+    ...effectiveStatusConfig.config,
+    maxRequestTokens: quotaProbeEstimate.estimatedRequestTokens - 1,
+  };
+  assertEqual(
+    aiProvider.buildAiQuotaStatusRequest({
+      config: belowAuthenticatedProbeTokenCap,
+      companyMonthlyBudgetCents:
+        effectiveStatusConfig.companyMonthlyBudgetCents,
+      estimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
+    }),
+    null,
+    "Quota status refuses a real authenticated probe that exceeds the request-token cap",
+  );
   const belowMinimumEnvelopeStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
     policy: baseCompanyPolicy,
-    config: {
-      ...productionStatusConfig,
-      maxRequestTokens: minimumProviderReservation.estimatedRequestTokens - 1,
-    },
+    config: belowAuthenticatedProbeTokenCap,
     savedAnalysesReadAvailable: true,
     quotaStatus: availableQuotaStatus,
+    quotaProbeEstimatedRequestTokens: quotaProbeEstimate.estimatedRequestTokens,
   });
   assertEqual(
     belowMinimumEnvelopeStatus.aiEnabled,
     false,
-    "Status cannot enable a provider when the smallest serialized request exceeds its token cap",
+    "Status cannot enable a provider when its authenticated company-context probe exceeds the token cap",
   );
   assertEqual(
     belowMinimumEnvelopeStatus.usageAccountingConfigured,
-    false,
-    "An unrunnable minimum provider envelope cannot claim accounting readiness",
+    true,
+    "A request-specific token-cap block does not misstate configured accounting infrastructure",
   );
   for (const [label, quotaOverrides] of [
     [

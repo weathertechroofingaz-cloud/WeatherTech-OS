@@ -1,7 +1,10 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import type { AiQuotaStatusRequest } from "../crm/aiProvider";
+import type {
+  AiPilotProviderConfig,
+  AiQuotaStatusRequest,
+} from "../crm/aiProvider";
 import type { Database } from "../crm/types";
 
 const AI_QUOTA_RPC_PATH = "/rpc/wtos_reserve_ai_request_v1";
@@ -18,6 +21,10 @@ const SUPABASE_AI_QUOTA_STATUS_MAX_BYTES = 16 * 1024;
 const SUPABASE_AI_QUOTA_STATUS_TIMEOUT_MS = 8_000;
 const AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000;
 const AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000;
+const AI_QUOTA_PROBE_SUCCESS_TTL_MS = 30_000;
+const AI_QUOTA_PROBE_FAILURE_TTL_MS = 5_000;
+const AI_QUOTA_PROBE_CACHE_MAX_ENTRIES = 128;
+const AI_QUOTA_PROBE_MAX_REQUEST_TOKENS = 1_000_000;
 
 type AiQuotaCapabilityCacheEntry = {
   value: boolean | null;
@@ -29,6 +36,14 @@ const aiQuotaCapabilityCache = new WeakMap<
   typeof fetch,
   Map<string, AiQuotaCapabilityCacheEntry>
 >();
+
+type AiQuotaProbeCacheEntry = {
+  value: number | null;
+  expiresAt: number;
+  inFlight: Promise<number | null> | null;
+};
+
+const aiQuotaProbeCache = new Map<string, AiQuotaProbeCacheEntry>();
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -238,6 +253,171 @@ export async function verifySupabaseAiQuotaServiceCapability(
       }
     });
   cacheEntry.inFlight = inFlight;
+  return inFlight;
+}
+
+function makeAiQuotaProbeCacheKey({
+  companyId,
+  actorUserId,
+  userRole,
+  policyId,
+  policyUpdatedAt,
+  companyMonthlyBudgetCents,
+  config,
+}: {
+  companyId: string;
+  actorUserId: string;
+  userRole: string;
+  policyId: string;
+  policyUpdatedAt: string;
+  companyMonthlyBudgetCents: number;
+  config: AiPilotProviderConfig;
+}) {
+  if (
+    !uuidPattern.test(companyId) ||
+    !uuidPattern.test(actorUserId) ||
+    !uuidPattern.test(policyId) ||
+    !userRole ||
+    userRole.length > 64 ||
+    !Number.isFinite(Date.parse(policyUpdatedAt)) ||
+    !Number.isSafeInteger(companyMonthlyBudgetCents) ||
+    companyMonthlyBudgetCents <= 0
+  ) {
+    return null;
+  }
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        companyId,
+        actorUserId,
+        userRole,
+        policyId,
+        policyUpdatedAt,
+        companyMonthlyBudgetCents,
+        config.enabled,
+        config.provider,
+        config.model,
+        config.apiKeyConfigured,
+        config.dailyBudgetUsd,
+        config.dailyRequestLimit,
+        config.perUserDailyRequestLimit,
+        config.perCompanyDailyRequestLimit,
+        config.maxRequestTokens,
+        config.maxResponseTokens,
+        config.maxInputCostUsdPer1kTokens,
+        config.maxOutputCostUsdPer1kTokens,
+        config.timeoutMs,
+        config.retryLimit,
+        config.streamingEnabled,
+        config.structuredOutputEnabled,
+        config.actionExecutionEnabled,
+      ]),
+    )
+    .digest("hex");
+}
+
+function makeAiQuotaProbeCacheRoom(checkedAt: number) {
+  for (const [key, entry] of aiQuotaProbeCache) {
+    if (!entry.inFlight && entry.expiresAt <= checkedAt) {
+      aiQuotaProbeCache.delete(key);
+    }
+  }
+  while (aiQuotaProbeCache.size >= AI_QUOTA_PROBE_CACHE_MAX_ENTRIES) {
+    const oldestSettledKey = [...aiQuotaProbeCache].find(
+      ([, entry]) => !entry.inFlight,
+    )?.[0];
+    if (!oldestSettledKey) {
+      return false;
+    }
+    aiQuotaProbeCache.delete(oldestSettledKey);
+  }
+  return true;
+}
+
+/**
+ * Coalesces the expensive authenticated CRM snapshot used only to estimate a
+ * concrete quota probe. Cache entries retain a bounded token count, never CRM
+ * rows, credentials, identifiers, or errors. Quota counters remain uncached.
+ */
+export async function readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    companyId,
+    actorUserId,
+    userRole,
+    policyId,
+    policyUpdatedAt,
+    companyMonthlyBudgetCents,
+    config,
+    load,
+  }: {
+    companyId: string;
+    actorUserId: string;
+    userRole: string;
+    policyId: string;
+    policyUpdatedAt: string;
+    companyMonthlyBudgetCents: number;
+    config: AiPilotProviderConfig;
+    load: () => Promise<number>;
+  },
+  now: () => number = Date.now,
+) {
+  const cacheKey = makeAiQuotaProbeCacheKey({
+    companyId,
+    actorUserId,
+    userRole,
+    policyId,
+    policyUpdatedAt,
+    companyMonthlyBudgetCents,
+    config,
+  });
+  if (!cacheKey) {
+    return null;
+  }
+  const checkedAt = now();
+  let cacheEntry = aiQuotaProbeCache.get(cacheKey);
+  if (cacheEntry) {
+    aiQuotaProbeCache.delete(cacheKey);
+    aiQuotaProbeCache.set(cacheKey, cacheEntry);
+    if (cacheEntry.expiresAt > checkedAt) {
+      return cacheEntry.value;
+    }
+    if (cacheEntry.inFlight) {
+      return cacheEntry.inFlight;
+    }
+  } else {
+    if (!makeAiQuotaProbeCacheRoom(checkedAt)) {
+      return null;
+    }
+    cacheEntry = { value: null, expiresAt: 0, inFlight: null };
+    aiQuotaProbeCache.set(cacheKey, cacheEntry);
+  }
+
+  const activeEntry = cacheEntry;
+  const inFlight = Promise.resolve()
+    .then(load)
+    .then((value) =>
+      Number.isSafeInteger(value) &&
+      value >= 1 &&
+      value <= AI_QUOTA_PROBE_MAX_REQUEST_TOKENS
+        ? value
+        : null,
+    )
+    .catch(() => null)
+    .then((value) => {
+      activeEntry.value = value;
+      activeEntry.expiresAt =
+        now() +
+        (value === null
+          ? AI_QUOTA_PROBE_FAILURE_TTL_MS
+          : AI_QUOTA_PROBE_SUCCESS_TTL_MS);
+      return value;
+    })
+    .finally(() => {
+      if (activeEntry.inFlight === inFlight) {
+        activeEntry.inFlight = null;
+      }
+    });
+  activeEntry.inFlight = inFlight;
   return inFlight;
 }
 
