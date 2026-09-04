@@ -2,6 +2,19 @@ import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../crm/types";
 
+function readSupabaseServiceRoleConfig(env: NodeJS.ProcessEnv) {
+  const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  return url && serviceRoleKey ? { url, serviceRoleKey } : null;
+}
+
+export function hasSupabaseServiceRoleConfig(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return readSupabaseServiceRoleConfig(env) !== null;
+}
+
 /**
  * Creates a short-lived server-only client for bounded background work.
  *
@@ -9,14 +22,12 @@ import type { Database } from "../crm/types";
  * remain available only to trusted route handlers and background workers.
  */
 export function getSupabaseServiceRoleClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!url || !serviceRoleKey) {
+  const config = readSupabaseServiceRoleConfig(process.env);
+  if (!config) {
     return null;
   }
 
-  return createClient<Database>(url, serviceRoleKey, {
+  return createClient<Database>(config.url, config.serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,

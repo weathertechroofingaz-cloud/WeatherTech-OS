@@ -23,7 +23,10 @@ import type {
 } from "../../../../lib/crm/types";
 import { readBoundedJsonBody } from "../../../../lib/http/boundedJson";
 import { getSupabaseServerClient } from "../../../../lib/supabase/server";
-import { getSupabaseServiceRoleClient } from "../../../../lib/supabase/service";
+import {
+  getSupabaseServiceRoleClient,
+  hasSupabaseServiceRoleConfig,
+} from "../../../../lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -105,6 +108,16 @@ export async function GET(request: NextRequest) {
       {
         error:
           "Exactly one authorized company AI policy is required before Production AI status can be shown.",
+      },
+      503,
+    );
+  }
+
+  if (!hasSupabaseServiceRoleConfig()) {
+    return noStoreJson(
+      {
+        error:
+          "The audited AI quota service is unavailable. Production AI status is not ready.",
       },
       503,
     );

@@ -20,6 +20,10 @@ const boundedJson = readFileSync(
 );
 const aiProvider = readFileSync(join(cwd, "lib/crm/aiProvider.ts"), "utf8");
 const aiToolsSource = readFileSync(join(cwd, "lib/crm/aiTools.ts"), "utf8");
+const supabaseService = readFileSync(
+  join(cwd, "lib/supabase/service.ts"),
+  "utf8",
+);
 const crmApp = readFileSync(join(cwd, "components/CrmApp.tsx"), "utf8");
 const browserRegression = readFileSync(
   join(cwd, "tests/codex-browser/weathertech-os-regression.mjs"),
@@ -54,11 +58,14 @@ assert(
 const statusAuthIndex = statusRoute.indexOf("client.auth.getUser()");
 const statusMembershipIndex = statusRoute.indexOf('.from("company_memberships")');
 const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
+const statusQuotaConfigIndex = statusRoute.indexOf("hasSupabaseServiceRoleConfig()");
 const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
 assert(
   statusAuthIndex >= 0 &&
     statusMembershipIndex > statusAuthIndex &&
     statusPolicyIndex > statusMembershipIndex &&
+    statusQuotaConfigIndex > statusPolicyIndex &&
+    statusBuildIndex > statusQuotaConfigIndex &&
     statusBuildIndex > statusPolicyIndex,
   "AI status must authenticate and authorize the exact company before reading its policy.",
 );
@@ -71,6 +78,8 @@ for (const statusBoundary of [
   ".limit(2)",
   "policyRows?.length !== 1",
   "getAiPilotProviderConfig()",
+  "hasSupabaseServiceRoleConfig()",
+  "The audited AI quota service is unavailable. Production AI status is not ready.",
   "return noStoreJson(status, 200)",
 ]) {
   includes(
@@ -86,8 +95,25 @@ assert(
     !statusRoute.includes(".insert(") &&
     !statusRoute.includes(".update(") &&
     !statusRoute.includes(".delete("),
-  "Production AI status must remain an authenticated, RLS-scoped, mutation-free read.",
+  "Production AI status must remain authenticated, RLS-scoped, and mutation-free.",
 );
+
+for (const serviceBoundary of [
+  "function readSupabaseServiceRoleConfig",
+  "env.NEXT_PUBLIC_SUPABASE_URL?.trim()",
+  "env.SUPABASE_SERVICE_ROLE_KEY?.trim()",
+  "url && serviceRoleKey ? { url, serviceRoleKey } : null",
+  "export function hasSupabaseServiceRoleConfig",
+  "return readSupabaseServiceRoleConfig(env) !== null",
+  "const config = readSupabaseServiceRoleConfig(process.env)",
+  "createClient<Database>(config.url, config.serviceRoleKey",
+]) {
+  includes(
+    supabaseService,
+    serviceBoundary,
+    `The status and command paths must share the exact service-role readiness predicate: ${serviceBoundary}`,
+  );
+}
 
 const membershipLookupIndex = commandPost.indexOf('.from("company_memberships")');
 const preflightIndex = commandPost.indexOf("const localResult = preflightAiPilotCommand({");
