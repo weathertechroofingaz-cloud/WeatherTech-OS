@@ -675,11 +675,10 @@ export function buildAiQuotaStatusRequest({
   if (!hasQuotaCompatibleProviderConfig(config, companyMonthlyBudgetCents)) {
     return null;
   }
-  const minimumReservationCostCents =
-    getAiMinimumReservationCostCents(config);
+  const minimumReservation = getAiMinimumProviderReservation(config);
   const request = {
     contractVersion: 1,
-    estimatedCostCents: minimumReservationCostCents,
+    estimatedCostCents: minimumReservation.estimatedCostCents,
     globalDailyRequestLimit: config.dailyRequestLimit,
     companyDailyRequestLimit: config.perCompanyDailyRequestLimit,
     userDailyRequestLimit: config.perUserDailyRequestLimit,
@@ -957,7 +956,7 @@ export function buildAiCompanyPilotStatus({
       ...environmentReadiness,
       state: "live_ai_enabled",
       label: "Production AI enabled",
-      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. Minimum quota headroom is available; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
+      summary: `${providerLabel(config.provider)} is enabled for audited, company-scoped internal analysis. A concrete minimum provider request fits current quota; every submitted command is atomically checked against its actual estimated size. Customer-facing and external provider actions remain disabled.`,
       liveProviderEnabled: true,
       requiredOwnerSetup: [],
       health: "ready",
@@ -2067,6 +2066,21 @@ function hasQuotaCompatibleProviderConfig(
   }
 
   const maxProviderAttempts = config.retryLimit + 1;
+  const minimumReservation = getAiMinimumProviderReservation(config);
+  if (
+    !isIntegerWithin(
+      minimumReservation.estimatedRequestTokens,
+      1,
+      config.maxRequestTokens,
+    ) ||
+    !isIntegerWithin(
+      minimumReservation.estimatedCostCents,
+      1,
+      aiQuotaBounds.maxEstimatedCostCents,
+    )
+  ) {
+    return false;
+  }
   const maximumEstimatedCostCents = getAiMaximumReservationCostCents(config);
 
   return isAiQuotaReservationRequestWithinBounds({
@@ -2101,20 +2115,39 @@ export function getAiMaximumReservationCostCents(
   );
 }
 
-export function getAiMinimumReservationCostCents(
+export function getAiMinimumProviderReservation(
   config: AiPilotProviderConfig,
 ) {
+  const providerPrompt = buildProviderPrompt({
+    prompt: "a",
+    context: {
+      companyScope: "Selected company",
+      recordLimit: 0,
+      promptSummary: "a",
+      records: [],
+      missingInformation: [],
+      safetyFlags: [],
+    },
+    userRole: "owner",
+  });
+  const estimatedRequestTokens = estimateProviderRequestTokenUpperBound({
+    config,
+    providerPrompt,
+  });
   const minimumEstimatedCostUsd = estimateCostUsd(
-    1,
+    estimatedRequestTokens,
     config.maxResponseTokens,
     config,
   );
-  return Math.max(
-    1,
-    Math.ceil(
-      minimumEstimatedCostUsd * 100 * (config.retryLimit + 1),
+  return {
+    estimatedRequestTokens,
+    estimatedCostCents: Math.max(
+      1,
+      Math.ceil(
+        minimumEstimatedCostUsd * 100 * (config.retryLimit + 1),
+      ),
     ),
-  );
+  };
 }
 
 function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {

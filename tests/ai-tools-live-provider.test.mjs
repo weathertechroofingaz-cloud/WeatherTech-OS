@@ -904,16 +904,23 @@ try {
     true,
     "The current-quota read request shares the bounded reservation contract",
   );
+  const minimumProviderReservation =
+    aiProvider.getAiMinimumProviderReservation(effectiveStatusConfig.config);
   assertEqual(
     quotaStatusRequest.estimatedCostCents,
-    aiProvider.getAiMinimumReservationCostCents(effectiveStatusConfig.config),
-    "Current quota status probes the provider reservation cost floor",
+    minimumProviderReservation.estimatedCostCents,
+    "Current quota status probes a concrete minimal provider request envelope",
+  );
+  assert(
+    minimumProviderReservation.estimatedRequestTokens > 256 &&
+      minimumProviderReservation.estimatedRequestTokens <=
+        effectiveStatusConfig.config.maxRequestTokens,
+    "The minimum reservation includes the serialized provider request and framing overhead",
   );
   const minimumReservationCostCents = quotaStatusRequest.estimatedCostCents;
-  assertEqual(
-    minimumReservationCostCents,
-    37,
-    "The provider reservation floor includes fixed response tokens and allowed attempts",
+  assert(
+    minimumReservationCostCents > 37,
+    "The provider reservation floor includes more than the one-token cost shortcut",
   );
   const maximumReservationCostCents =
     aiProvider.getAiMaximumReservationCostCents(effectiveStatusConfig.config);
@@ -944,7 +951,27 @@ try {
   assert(
     availableAtExactCostBoundary.currentQuotaAvailable &&
       maximumReservationCostCents > minimumReservationCostCents,
-    "Status remains available when minimum quota headroom remains even though the maximum request cannot fit",
+    "Status remains available when a concrete minimal request fits even though the maximum request cannot fit",
+  );
+  const belowMinimumEnvelopeStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: baseCompanyPolicy,
+    config: {
+      ...productionStatusConfig,
+      maxRequestTokens: minimumProviderReservation.estimatedRequestTokens - 1,
+    },
+    savedAnalysesReadAvailable: true,
+    quotaStatus: availableQuotaStatus,
+  });
+  assertEqual(
+    belowMinimumEnvelopeStatus.aiEnabled,
+    false,
+    "Status cannot enable a provider when the smallest serialized request exceeds its token cap",
+  );
+  assertEqual(
+    belowMinimumEnvelopeStatus.usageAccountingConfigured,
+    false,
+    "An unrunnable minimum provider envelope cannot claim accounting readiness",
   );
   for (const [label, quotaOverrides] of [
     [
