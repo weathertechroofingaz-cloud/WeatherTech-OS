@@ -1521,8 +1521,7 @@ for (const exactCompanyUiBoundary of [
   "const exactAiCompanySelected = exactAiCompanyId !== null",
   "const requestCompanyId = exactAiCompanyId",
   'if (!exactAiCompanySelected)',
-  'disabled={!exactAiCompanySelected}',
-  'disabled={isAiCommandRunning || !exactAiCompanySelected}',
+  'disabled={!exactAiCompanySelected || snapshotTransitionPending}',
   'data-testid="ai-exact-company-required"',
   'Select WeatherTech Roofing LLC or IHC Painting in Company Scope',
 ]) {
@@ -1533,7 +1532,8 @@ for (const exactCompanyUiBoundary of [
   );
 }
 for (const statusUiBoundary of [
-  'useState<AiCompanyPilotStatus | null>(null)',
+  "type AiProviderStatusEvidence = {",
+  "useState<AiProviderStatusEvidence | null>(null)",
   '`/api/ai-tools/command?companyId=${encodeURIComponent(requestCompanyId)}`',
   '"x-wtos-ai-quota-probe-refresh": "1"',
   'response.headers.get("x-wtos-ai-quota-probe-refresh") !== "1"',
@@ -1543,7 +1543,8 @@ for (const statusUiBoundary of [
   'cache: "no-store"',
   "isAiCompanyPilotStatus(payload, requestCompanyId)",
   "activeAiCompanyRef.current !== requestCompanyId",
-  "aiProviderStatus?.companyId === exactAiCompanyId",
+  "aiProviderStatusEvidence?.status.companyId === exactAiCompanyId",
+  "aiProviderStatusEvidence.statusRefreshSequence === statusRefreshSequence",
   "companyId={exactAiCompanyId}",
   'data-testid="ai-provider-status"',
   'data-ai-status-phase={statusPhase}',
@@ -1642,21 +1643,119 @@ const providerStatusAbortGuardIndex = crmApp.indexOf(
   "controller.signal.aborted ||",
   providerStatusValidationIndex,
 );
-const providerStatusRefreshAckIndex = crmApp.indexOf(
-  "acknowledgeQuotaProbeRefresh(",
+const providerStatusSnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
   providerStatusAbortGuardIndex,
 );
+const providerStatusRefreshAckIndex = crmApp.indexOf(
+  "acknowledgeQuotaProbeRefresh(",
+  providerStatusSnapshotGuardIndex,
+);
 const providerStatusPublishIndex = crmApp.indexOf(
-  "setAiProviderStatus(payload)",
+  "setAiProviderStatusEvidence({",
   providerStatusRefreshAckIndex,
+);
+const providerStatusPublishGenerationIndex = crmApp.indexOf(
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  providerStatusPublishIndex,
 );
 assert(
   providerStatusEffectIndex >= 0 &&
     providerStatusValidationIndex > providerStatusEffectIndex &&
     providerStatusAbortGuardIndex > providerStatusValidationIndex &&
-    providerStatusRefreshAckIndex > providerStatusAbortGuardIndex &&
-    providerStatusPublishIndex > providerStatusRefreshAckIndex,
+    providerStatusSnapshotGuardIndex > providerStatusAbortGuardIndex &&
+    providerStatusRefreshAckIndex > providerStatusSnapshotGuardIndex &&
+    providerStatusPublishIndex > providerStatusRefreshAckIndex &&
+    providerStatusPublishGenerationIndex > providerStatusPublishIndex,
   "An explicit quota-probe Refresh must be acknowledged only after a valid, current exact-company status response.",
+);
+const providerStatusPendingGuardIndex = crmApp.lastIndexOf(
+  "if (!exactAiCompanyId || snapshotTransitionPending)",
+  providerStatusEffectIndex,
+);
+const providerStatusCatchIndex = crmApp.indexOf(
+  "} catch (currentError) {",
+  providerStatusPublishIndex,
+);
+const providerStatusCatchContextGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
+  providerStatusCatchIndex,
+);
+const providerStatusErrorPublishIndex = crmApp.indexOf(
+  "setAiProviderStatusErrorEvidence({",
+  providerStatusCatchContextGuardIndex,
+);
+const providerStatusErrorGenerationIndex = crmApp.indexOf(
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  providerStatusErrorPublishIndex,
+);
+assert(
+  providerStatusPendingGuardIndex >= 0 &&
+    providerStatusPendingGuardIndex < providerStatusEffectIndex &&
+    providerStatusCatchIndex > providerStatusPublishIndex &&
+    providerStatusCatchContextGuardIndex > providerStatusCatchIndex &&
+    providerStatusErrorPublishIndex > providerStatusCatchContextGuardIndex &&
+    providerStatusErrorGenerationIndex > providerStatusErrorPublishIndex,
+  "AI status loading and errors must pause during snapshot transitions and reject stale root context.",
+);
+for (const snapshotPendingUiBoundary of [
+  "aiProviderStatusEvidence?.status.companyId === exactAiCompanyId",
+  "aiProviderStatusErrorEvidence?.companyId === exactAiCompanyId",
+  "(snapshotTransitionPending ||",
+  'data-ai-snapshot-transition-pending={',
+  'snapshotTransitionPending ? "true" : "false"',
+  'disabled={!exactAiCompanySelected || snapshotTransitionPending}',
+  'snapshotTransitionPending\n                  ? "Refreshing context"',
+]) {
+  includes(
+    crmApp,
+    snapshotPendingUiBoundary,
+    `AI status and command UI must fail closed while CRM context reloads: ${snapshotPendingUiBoundary}.`,
+  );
+}
+const currentProviderStatusSelectorIndex = crmApp.indexOf(
+  "const currentAiProviderStatus =",
+);
+const currentProviderStatusSelectorEndIndex = crmApp.indexOf(
+  "const currentAiPilotResult =",
+  currentProviderStatusSelectorIndex,
+);
+const currentProviderStatusSelectorBoundary = crmApp.slice(
+  currentProviderStatusSelectorIndex,
+  currentProviderStatusSelectorEndIndex,
+);
+const currentProviderErrorSelectorIndex = crmApp.indexOf(
+  "const currentAiProviderStatusError =",
+  currentProviderStatusSelectorEndIndex,
+);
+const currentProviderErrorSelectorEndIndex = crmApp.indexOf(
+  "const currentAiPilotError =",
+  currentProviderErrorSelectorIndex,
+);
+const currentProviderErrorSelectorBoundary = crmApp.slice(
+  currentProviderErrorSelectorIndex,
+  currentProviderErrorSelectorEndIndex,
+);
+assert(
+  currentProviderStatusSelectorIndex >= 0 &&
+    currentProviderStatusSelectorEndIndex > currentProviderStatusSelectorIndex &&
+    currentProviderStatusSelectorBoundary.includes("!snapshotTransitionPending") &&
+    currentProviderStatusSelectorBoundary.includes(
+      "aiProviderStatusEvidence?.status.companyId === exactAiCompanyId",
+    ) &&
+    currentProviderStatusSelectorBoundary.includes(
+      "aiProviderStatusEvidence.statusRefreshSequence === statusRefreshSequence",
+    ) &&
+    currentProviderErrorSelectorIndex > currentProviderStatusSelectorEndIndex &&
+    currentProviderErrorSelectorEndIndex > currentProviderErrorSelectorIndex &&
+    currentProviderErrorSelectorBoundary.includes("!snapshotTransitionPending") &&
+    currentProviderErrorSelectorBoundary.includes(
+      "aiProviderStatusErrorEvidence?.companyId === exactAiCompanyId",
+    ) &&
+    currentProviderErrorSelectorBoundary.includes(
+      "aiProviderStatusErrorEvidence.statusRefreshSequence === statusRefreshSequence",
+    ),
+  "Provider status and error selectors must require exact company, exact Refresh generation, and a settled snapshot.",
 );
 assert(
   !aiProvider.includes("reservedCostUsdToday: number;") &&
@@ -1666,27 +1765,50 @@ assert(
   "Exact-company AI results must not serialize or render global all-company reserved spend.",
 );
 
+const aiCommandRunIndex = crmApp.indexOf("const runAiCommandPrompt = async");
+const aiCommandStartSnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(statusRefreshSequence)",
+  aiCommandRunIndex,
+);
+const aiCommandFallbackBuildIndex = crmApp.indexOf(
+  "const fallbackResponse = answerAiCommand({",
+  aiCommandStartSnapshotGuardIndex,
+);
+const aiCommandSuccessSnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
+  aiCommandFallbackBuildIndex,
+);
 const aiCommandCompletionGuardIndex = crmApp.indexOf(
   "!isCurrentAiCommandCompletion({",
-  crmApp.indexOf("const requestStatusRefreshSequence = statusRefreshSequence"),
+  aiCommandSuccessSnapshotGuardIndex,
 );
 const aiCommandSuccessResponseIndex = crmApp.indexOf(
   "setAiResponseHistoryEvidence((current) => ({",
   aiCommandCompletionGuardIndex,
 );
 const aiCommandCatchIndex = crmApp.indexOf("} catch (currentError) {", aiCommandSuccessResponseIndex);
+const aiCommandCatchSnapshotGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(requestStatusRefreshSequence)",
+  aiCommandCatchIndex,
+);
 const aiCommandCatchGuardIndex = crmApp.indexOf(
   "!isCurrentAiCommandCompletion({",
-  aiCommandCatchIndex,
+  aiCommandCatchSnapshotGuardIndex,
 );
 const aiCommandFallbackResponseIndex = crmApp.indexOf(
   "setAiResponseHistoryEvidence((current) => ({",
   aiCommandCatchGuardIndex,
 );
 assert(
-  aiCommandCompletionGuardIndex >= 0 &&
+  aiCommandRunIndex >= 0 &&
+    aiCommandStartSnapshotGuardIndex > aiCommandRunIndex &&
+    aiCommandFallbackBuildIndex > aiCommandStartSnapshotGuardIndex &&
+    aiCommandSuccessSnapshotGuardIndex > aiCommandFallbackBuildIndex &&
+    aiCommandCompletionGuardIndex > aiCommandSuccessSnapshotGuardIndex &&
     aiCommandSuccessResponseIndex > aiCommandCompletionGuardIndex &&
+    aiCommandCatchSnapshotGuardIndex > aiCommandCatchIndex &&
     aiCommandCatchGuardIndex > aiCommandCatchIndex &&
+    aiCommandCatchGuardIndex > aiCommandCatchSnapshotGuardIndex &&
     aiCommandFallbackResponseIndex > aiCommandCatchGuardIndex,
   "Current company and Refresh generation must be verified before publishing live or fallback AI responses.",
 );
@@ -1721,19 +1843,500 @@ for (const runtimeHealthSelectorBoundary of [
   );
 }
 const workspaceRefreshIndex = crmApp.indexOf("const handleWorkspaceRefresh = useCallback");
-const refreshGenerationIndex = crmApp.indexOf(
-  "setAiProviderStatusRefreshSequence((current) => current + 1)",
-  workspaceRefreshIndex,
-);
 const workspaceReloadIndex = crmApp.indexOf(
   "await onScrollPreservingReload()",
   workspaceRefreshIndex,
 );
 assert(
-  workspaceRefreshIndex >= 0 &&
-    refreshGenerationIndex > workspaceRefreshIndex &&
-    workspaceReloadIndex > refreshGenerationIndex,
-  "Workspace Refresh must invalidate AI evidence before beginning the snapshot reload.",
+  workspaceRefreshIndex >= 0 && workspaceReloadIndex > workspaceRefreshIndex,
+  "Workspace Refresh must use the root snapshot reload boundary.",
+);
+const snapshotReloadIndex = crmApp.indexOf("const loadSnapshot = useCallback");
+const snapshotTransitionIndex = crmApp.indexOf(
+  "const beginSnapshotTransition = useCallback",
+);
+const snapshotRequestCaptureIndex = crmApp.indexOf(
+  "const requestSequence = snapshotLoadRequestSequenceRef.current + 1",
+  snapshotTransitionIndex,
+);
+const snapshotRequestPublishIndex = crmApp.indexOf(
+  "snapshotLoadRequestSequenceRef.current = requestSequence",
+  snapshotRequestCaptureIndex,
+);
+const snapshotPendingRefSetIndex = crmApp.indexOf(
+  "snapshotTransitionPendingRef.current = true",
+  snapshotRequestPublishIndex,
+);
+const snapshotPendingStateSetIndex = crmApp.indexOf(
+  "setSnapshotTransitionPending(true)",
+  snapshotPendingRefSetIndex,
+);
+const snapshotReloadGenerationIndex = crmApp.indexOf(
+  "setAiProviderStatusRefreshSequence((current) => current + 1)",
+  snapshotPendingStateSetIndex,
+);
+const snapshotTransitionReturnIndex = crmApp.indexOf(
+  "return requestSequence",
+  snapshotReloadGenerationIndex,
+);
+const snapshotTransitionCompleteIndex = crmApp.indexOf(
+  "const completeSnapshotTransition = useCallback",
+  snapshotTransitionReturnIndex,
+);
+const snapshotTransitionCompleteGuardIndex = crmApp.indexOf(
+  "snapshotLoadRequestSequenceRef.current !== requestSequence",
+  snapshotTransitionCompleteIndex,
+);
+const snapshotPendingRefClearIndex = crmApp.indexOf(
+  "snapshotTransitionPendingRef.current = false",
+  snapshotTransitionCompleteGuardIndex,
+);
+const snapshotPendingStateClearIndex = crmApp.indexOf(
+  "setSnapshotTransitionPending(false)",
+  snapshotPendingRefClearIndex,
+);
+const immediateTransitionIndex = crmApp.indexOf(
+  "const applyImmediateSnapshotTransition = useCallback",
+  snapshotPendingStateClearIndex,
+);
+const immediateTransitionStartIndex = crmApp.indexOf(
+  "const requestSequence = beginSnapshotTransition()",
+  immediateTransitionIndex,
+);
+const immediateTransitionTryIndex = crmApp.indexOf("try {", immediateTransitionStartIndex);
+const immediateTransitionRunIndex = crmApp.indexOf("transition()", immediateTransitionTryIndex);
+const immediateTransitionFinallyIndex = crmApp.indexOf(
+  "} finally {",
+  immediateTransitionRunIndex,
+);
+const immediateTransitionCompleteIndex = crmApp.indexOf(
+  "completeSnapshotTransition(requestSequence)",
+  immediateTransitionFinallyIndex,
+);
+const snapshotContextCurrentIndex = crmApp.indexOf(
+  "const isSnapshotContextCurrent = useCallback",
+  immediateTransitionCompleteIndex,
+);
+const snapshotContextPendingGuardIndex = crmApp.indexOf(
+  "!snapshotTransitionPendingRef.current",
+  snapshotContextCurrentIndex,
+);
+const snapshotContextSequenceGuardIndex = crmApp.indexOf(
+  "snapshotLoadRequestSequenceRef.current === requestSequence",
+  snapshotContextPendingGuardIndex,
+);
+const snapshotLoadTransitionIndex = crmApp.indexOf(
+  "const requestSequence = beginSnapshotTransition()",
+  snapshotReloadIndex,
+);
+const snapshotLoadingIndex = crmApp.indexOf("if (showLoading)", snapshotReloadIndex);
+const snapshotFetchIndex = crmApp.indexOf(
+  "await fetchCrmSnapshot(crmClient)",
+  snapshotReloadIndex,
+);
+const snapshotSuccessGuardIndex = crmApp.indexOf(
+  "snapshotLoadRequestSequenceRef.current !== requestSequence",
+  snapshotFetchIndex,
+);
+const snapshotPublishIndex = crmApp.indexOf(
+  "setSnapshot(nextSnapshot)",
+  snapshotSuccessGuardIndex,
+);
+const snapshotCatchIndex = crmApp.indexOf("} catch (currentError) {", snapshotPublishIndex);
+const snapshotCatchGuardIndex = crmApp.indexOf(
+  "snapshotLoadRequestSequenceRef.current !== requestSequence",
+  snapshotCatchIndex,
+);
+const snapshotErrorLogIndex = crmApp.indexOf(
+  'logCaughtError("[CRM] CRM snapshot load failed", currentError)',
+  snapshotCatchGuardIndex,
+);
+const snapshotFinallyIndex = crmApp.indexOf("} finally {", snapshotErrorLogIndex);
+const snapshotFinallyCompletionIndex = crmApp.indexOf(
+  "completeSnapshotTransition(requestSequence)",
+  snapshotFinallyIndex,
+);
+const snapshotLoadingClearIndex = crmApp.indexOf(
+  "setIsLoading(false)",
+  snapshotFinallyCompletionIndex,
+);
+assert(
+  snapshotTransitionIndex >= 0 &&
+    snapshotRequestCaptureIndex > snapshotTransitionIndex &&
+    snapshotRequestPublishIndex > snapshotRequestCaptureIndex &&
+    snapshotPendingRefSetIndex > snapshotRequestPublishIndex &&
+    snapshotPendingStateSetIndex > snapshotPendingRefSetIndex &&
+    snapshotReloadGenerationIndex > snapshotPendingStateSetIndex &&
+    snapshotTransitionReturnIndex > snapshotReloadGenerationIndex &&
+    snapshotTransitionCompleteIndex > snapshotTransitionReturnIndex &&
+    snapshotTransitionCompleteGuardIndex > snapshotTransitionCompleteIndex &&
+    snapshotPendingRefClearIndex > snapshotTransitionCompleteGuardIndex &&
+    snapshotPendingStateClearIndex > snapshotPendingRefClearIndex &&
+    immediateTransitionIndex > snapshotPendingStateClearIndex &&
+    immediateTransitionStartIndex > immediateTransitionIndex &&
+    immediateTransitionTryIndex > immediateTransitionStartIndex &&
+    immediateTransitionRunIndex > immediateTransitionTryIndex &&
+    immediateTransitionFinallyIndex > immediateTransitionRunIndex &&
+    immediateTransitionCompleteIndex > immediateTransitionFinallyIndex &&
+    snapshotContextCurrentIndex > immediateTransitionCompleteIndex &&
+    snapshotContextPendingGuardIndex > snapshotContextCurrentIndex &&
+    snapshotContextSequenceGuardIndex > snapshotContextPendingGuardIndex &&
+    snapshotReloadIndex > snapshotContextSequenceGuardIndex &&
+    snapshotLoadTransitionIndex > snapshotReloadIndex &&
+    snapshotLoadingIndex > snapshotLoadTransitionIndex &&
+    snapshotFetchIndex > snapshotLoadTransitionIndex &&
+    snapshotSuccessGuardIndex > snapshotFetchIndex &&
+    snapshotPublishIndex > snapshotSuccessGuardIndex &&
+    snapshotCatchGuardIndex > snapshotCatchIndex &&
+    snapshotErrorLogIndex > snapshotCatchGuardIndex &&
+    snapshotFinallyCompletionIndex > snapshotFinallyIndex &&
+    snapshotLoadingClearIndex > snapshotFinallyCompletionIndex,
+  "Every snapshot transition must synchronously invalidate AI evidence, expose pending context, and reject stale success, error, and loading commits.",
+);
+const demoSnapshotChangeIndex = crmApp.indexOf(
+  "const handleDemoSnapshotChange = useCallback",
+);
+const demoSnapshotGenerationIndex = crmApp.indexOf(
+  "applyImmediateSnapshotTransition(() => {",
+  demoSnapshotChangeIndex,
+);
+const demoSnapshotWriteIndex = crmApp.indexOf(
+  "setSnapshot((currentSnapshot) =>",
+  demoSnapshotChangeIndex,
+);
+assert(
+  demoSnapshotChangeIndex >= 0 &&
+    demoSnapshotGenerationIndex > demoSnapshotChangeIndex &&
+    demoSnapshotWriteIndex > demoSnapshotGenerationIndex,
+  "Every demo snapshot mutation must synchronously supersede live loads before changing context.",
+);
+for (const snapshotGenerationBoundary of [
+  "aiProviderStatusRefreshSequence: number",
+  "aiProviderStatusRefreshSequence={aiProviderStatusRefreshSequence}",
+  "statusRefreshSequence={aiProviderStatusRefreshSequence}",
+  "snapshotTransitionPending: boolean",
+  "snapshotTransitionPending={snapshotTransitionPending}",
+  "isSnapshotContextCurrent: (requestSequence: number) => boolean",
+  "isSnapshotContextCurrent={isSnapshotContextCurrent}",
+]) {
+  includes(
+    crmApp,
+    snapshotGenerationBoundary,
+    `AI snapshot generation must survive workspace reloads: ${snapshotGenerationBoundary}.`,
+  );
+}
+const crmAppRootIndex = crmApp.indexOf("export function CrmApp()");
+const crmWorkspacePropsIndex = crmApp.indexOf("type CrmWorkspaceProps = {");
+const crmWorkspaceFunctionIndex = crmApp.indexOf("function CrmWorkspace({");
+const crmAppRootStateBoundary = crmApp.slice(crmAppRootIndex, crmWorkspacePropsIndex);
+const crmWorkspaceStateBoundary = crmApp.slice(
+  crmWorkspaceFunctionIndex,
+  workspaceRefreshIndex,
+);
+assert(
+  crmAppRootStateBoundary.includes(
+    "const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =",
+  ) &&
+    crmAppRootStateBoundary.includes(
+      "const [snapshotTransitionPending, setSnapshotTransitionPending] = useState(false)",
+    ) &&
+    crmAppRootStateBoundary.includes("const snapshotLoadRequestSequenceRef = useRef(0)") &&
+    crmAppRootStateBoundary.includes(
+      "const snapshotTransitionPendingRef = useRef(false)",
+    ) &&
+    !crmWorkspaceStateBoundary.includes(
+      "const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =",
+    ),
+  "AI snapshot generation must be owned above CrmWorkspace so full reloads cannot reset it.",
+);
+const workspaceRefreshBoundary = crmApp.slice(
+  workspaceRefreshIndex,
+  crmApp.indexOf("useEffect(() =>", workspaceRefreshIndex),
+);
+assert(
+  !workspaceRefreshBoundary.includes("setAiProviderStatusRefreshSequence") &&
+    workspaceRefreshBoundary.includes("await onScrollPreservingReload()"),
+  "Header Refresh must delegate to the centralized snapshot invalidation without double advancing.",
+);
+const crmWorkspaceRenderIndex = crmApp.indexOf("<CrmWorkspace", crmAppRootIndex);
+const crmWorkspaceRenderBoundary = crmApp.slice(
+  crmWorkspaceRenderIndex,
+  crmApp.indexOf("function LoadingScreen", crmWorkspaceRenderIndex),
+);
+assert(
+  (
+    crmWorkspaceRenderBoundary.match(
+      /applyImmediateSnapshotTransition\(\(\) => \{/g,
+    ) ?? []
+  ).length === 2,
+  "Both root demo reload callbacks must supersede live loads before replacing the snapshot.",
+);
+const crmRootSnapshotBoundary = crmApp.slice(
+  crmAppRootIndex,
+  crmApp.indexOf("function LoadingScreen", crmAppRootIndex),
+);
+assert(
+  (crmRootSnapshotBoundary.match(/\bsetSnapshot\(/g) ?? []).length === 12 &&
+    (
+      crmRootSnapshotBoundary.match(
+        /applyImmediateSnapshotTransition\(\(\) => \{/g,
+      ) ?? []
+    ).length === 10 &&
+    (crmRootSnapshotBoundary.match(/\bbeginSnapshotTransition\(\)/g) ?? []).length ===
+      2,
+  "Every direct root auth, demo, retry, and workspace snapshot transition must use the shared synchronous invalidator; guarded live success and fallback reuse their captured token.",
+);
+const crmRootSnapshotLines = crmRootSnapshotBoundary.split("\n");
+const liveSnapshotStartLine = crmRootSnapshotLines.findIndex((line) =>
+  line.includes("const loadSnapshot = useCallback"),
+);
+const liveSnapshotEndLine = crmRootSnapshotLines.findIndex(
+  (line, index) =>
+    index > liveSnapshotStartLine &&
+    line.includes("[beginSnapshotTransition, completeSnapshotTransition"),
+);
+const rootSnapshotWriteLines = crmRootSnapshotLines
+  .map((line, index) => ({ line, index }))
+  .filter(({ line }) => /\bsetSnapshot\(/.test(line));
+assert(
+  liveSnapshotStartLine >= 0 &&
+    liveSnapshotEndLine > liveSnapshotStartLine &&
+    rootSnapshotWriteLines.filter(
+      ({ index }) => index > liveSnapshotStartLine && index < liveSnapshotEndLine,
+    ).length === 2,
+  "The live snapshot loader must own exactly its guarded success and fallback writes.",
+);
+for (const { index } of rootSnapshotWriteLines) {
+  if (index > liveSnapshotStartLine && index < liveSnapshotEndLine) {
+    continue;
+  }
+  assert(
+    crmRootSnapshotLines
+      .slice(Math.max(0, index - 4), index)
+      .some((line) => line.includes("applyImmediateSnapshotTransition(() => {")),
+    `Root snapshot write on source line ${index + 1} bypasses the synchronous transition boundary.`,
+  );
+}
+const markActionReviewedIndex = crmApp.indexOf("const markActionReviewed = async (");
+const generateScopeIndex = crmApp.indexOf("const generateScope = () =>", markActionReviewedIndex);
+const saveScopeDraftIndex = crmApp.indexOf("const saveScopeDraft = async () =>");
+const generateEstimateIndex = crmApp.indexOf("const generateEstimate = () =>", saveScopeDraftIndex);
+const saveEstimateDraftIndex = crmApp.indexOf("const saveEstimateDraft = async () =>");
+const estimateTotalsIndex = crmApp.indexOf(
+  "const estimateTotals = calculateEstimateTotals(",
+  saveEstimateDraftIndex,
+);
+const saveScopeReloadCount = (
+  crmApp.slice(saveScopeDraftIndex, generateEstimateIndex).match(/await onReload\(\)/g) ?? []
+).length;
+const saveEstimateReloadCount = (
+  crmApp.slice(saveEstimateDraftIndex, estimateTotalsIndex).match(/await onReload\(\)/g) ?? []
+).length;
+assert(
+  saveScopeDraftIndex >= 0 &&
+    generateEstimateIndex > saveScopeDraftIndex &&
+    saveEstimateDraftIndex > generateEstimateIndex &&
+    estimateTotalsIndex > saveEstimateDraftIndex &&
+    saveScopeReloadCount === 1 &&
+    saveEstimateReloadCount === 1,
+  "Saved AI scope and estimate drafts must cross the snapshot-generation reload boundary.",
+);
+const aiToolsViewIndex = crmApp.indexOf("function AiToolsView({");
+const draftContextKeyIndex = crmApp.indexOf(
+  "const aiDraftContextKey = `${activeCompanyId}:${statusRefreshSequence}`",
+  aiToolsViewIndex,
+);
+const currentScopeDraftIndex = crmApp.indexOf(
+  "scopeDraftContextKey === aiDraftContextKey ? scopeDraft : \"\"",
+  draftContextKeyIndex,
+);
+const currentEstimateDraftIndex = crmApp.indexOf(
+  "estimateDraftContextKey === aiDraftContextKey ? estimateDraft : []",
+  currentScopeDraftIndex,
+);
+const generateScopeBoundary = crmApp.slice(generateScopeIndex, saveScopeDraftIndex);
+const saveScopeBoundary = crmApp.slice(saveScopeDraftIndex, generateEstimateIndex);
+const generateEstimateBoundary = crmApp.slice(
+  generateEstimateIndex,
+  saveEstimateDraftIndex,
+);
+const saveEstimateBoundary = crmApp.slice(saveEstimateDraftIndex, estimateTotalsIndex);
+const estimateTotalsBoundary = crmApp.slice(
+  estimateTotalsIndex,
+  crmApp.indexOf("return (", estimateTotalsIndex),
+);
+assert(
+  aiToolsViewIndex >= 0 &&
+    draftContextKeyIndex > aiToolsViewIndex &&
+    currentScopeDraftIndex > draftContextKeyIndex &&
+    currentEstimateDraftIndex > currentScopeDraftIndex &&
+    generateScopeBoundary.includes(
+      "if (!isSnapshotContextCurrent(statusRefreshSequence))",
+    ) &&
+    generateScopeBoundary.includes("setScopeDraftContextKey(aiDraftContextKey)") &&
+    saveScopeBoundary.includes(
+      "if (!isSnapshotContextCurrent(statusRefreshSequence))",
+    ) &&
+    saveScopeBoundary.includes("scope_body: currentScopeDraft") &&
+    saveScopeBoundary.includes("body: currentScopeDraft") &&
+    (saveScopeBoundary.match(/\bcurrentScopeDraft\b/g) ?? []).length === 3 &&
+    !/\bscopeDraft\b/.test(saveScopeBoundary) &&
+    generateEstimateBoundary.includes(
+      "if (!isSnapshotContextCurrent(statusRefreshSequence))",
+    ) &&
+    generateEstimateBoundary.includes(
+      "setEstimateDraftContextKey(aiDraftContextKey)",
+    ) &&
+    saveEstimateBoundary.includes(
+      "if (!isSnapshotContextCurrent(statusRefreshSequence))",
+    ) &&
+    saveEstimateBoundary.includes("if (!currentEstimateDraft.length)") &&
+    (saveEstimateBoundary.match(/\bcurrentEstimateDraft\b/g) ?? []).length === 3 &&
+    !/\bestimateDraft\b/.test(saveEstimateBoundary) &&
+    estimateTotalsBoundary.includes("currentEstimateDraft") &&
+    !/\bestimateDraft\b/.test(estimateTotalsBoundary),
+  "Scope and estimate drafts must be exact-scope, exact-generation evidence and may only build or save against current root snapshot context.",
+);
+const scopeWriterUiIndex = crmApp.indexOf('data-testid="ai-scope-writer-2"');
+const estimateAssistantUiIndex = crmApp.indexOf(
+  'data-testid="ai-estimate-assistant-2"',
+  scopeWriterUiIndex,
+);
+const scopeWriterUiBoundary = crmApp.slice(scopeWriterUiIndex, estimateAssistantUiIndex);
+const estimateAssistantUiBoundary = crmApp.slice(
+  estimateAssistantUiIndex,
+  crmApp.indexOf('data-testid="ai-saved-work"', estimateAssistantUiIndex),
+);
+assert(
+  scopeWriterUiIndex >= 0 &&
+    estimateAssistantUiIndex > scopeWriterUiIndex &&
+    scopeWriterUiBoundary.includes("value={currentScopeDraft}") &&
+    scopeWriterUiBoundary.includes(
+      "disabled={snapshotTransitionPending || !currentScopeDraft.trim()}",
+    ) &&
+    (scopeWriterUiBoundary.match(/disabled=\{snapshotTransitionPending\}/g) ?? [])
+      .length >= 3 &&
+    estimateAssistantUiBoundary.includes("currentEstimateDraft.length") &&
+    estimateAssistantUiBoundary.includes(
+      "disabled={snapshotTransitionPending || !currentEstimateDraft.length}",
+    ) &&
+    (estimateAssistantUiBoundary.match(/disabled=\{snapshotTransitionPending\}/g) ?? [])
+      .length >= 2,
+  "Snapshot-derived draft controls must hide stale evidence and remain disabled throughout a context transition.",
+);
+const scopeTemplateSelectIndex = crmApp.indexOf(
+  "value={scopeTemplateId}",
+  scopeWriterUiIndex,
+);
+const scopeTemplateSelectEndIndex = crmApp.indexOf(
+  "</select>",
+  scopeTemplateSelectIndex,
+);
+const scopeCustomerSelectIndex = crmApp.indexOf(
+  "value={scopeCustomerId}",
+  scopeTemplateSelectEndIndex,
+);
+const scopeCustomerSelectEndIndex = crmApp.indexOf(
+  "</select>",
+  scopeCustomerSelectIndex,
+);
+const estimateSourceSelectIndex = crmApp.indexOf(
+  "value={estimateSourceId}",
+  estimateAssistantUiIndex,
+);
+const estimateSourceSelectEndIndex = crmApp.indexOf(
+  "</select>",
+  estimateSourceSelectIndex,
+);
+assert(
+  scopeTemplateSelectIndex >= scopeWriterUiIndex &&
+    scopeTemplateSelectEndIndex > scopeTemplateSelectIndex &&
+    scopeCustomerSelectIndex > scopeTemplateSelectEndIndex &&
+    scopeCustomerSelectEndIndex > scopeCustomerSelectIndex &&
+    estimateSourceSelectIndex >= estimateAssistantUiIndex &&
+    estimateSourceSelectEndIndex > estimateSourceSelectIndex,
+  "Snapshot-derived draft selector test boundaries must remain exact and ordered.",
+);
+for (const [label, boundary, contextSetter, draftClear] of [
+  [
+    "scope template",
+    crmApp.slice(scopeTemplateSelectIndex, scopeTemplateSelectEndIndex),
+    "setScopeDraftContextKey(aiDraftContextKey)",
+    'setScopeDraft("")',
+  ],
+  [
+    "scope customer",
+    crmApp.slice(scopeCustomerSelectIndex, scopeCustomerSelectEndIndex),
+    "setScopeDraftContextKey(aiDraftContextKey)",
+    'setScopeDraft("")',
+  ],
+  [
+    "estimate source",
+    crmApp.slice(estimateSourceSelectIndex, estimateSourceSelectEndIndex),
+    "setEstimateDraftContextKey(aiDraftContextKey)",
+    "setEstimateDraft([])",
+  ],
+]) {
+  assert(
+    boundary.includes(contextSetter) &&
+      boundary.indexOf(draftClear) > boundary.indexOf(contextSetter),
+    `Changing the ${label} must bind and clear its prior snapshot-derived draft.`,
+  );
+}
+const actionReviewReloadCount = (
+  crmApp.slice(markActionReviewedIndex, generateScopeIndex).match(/await onReload\(\)/g) ?? []
+).length;
+const actionReviewBoundary = crmApp.slice(markActionReviewedIndex, generateScopeIndex);
+const actionReviewStartGuardIndex = crmApp.indexOf(
+  "if (!isSnapshotContextCurrent(statusRefreshSequence))",
+  markActionReviewedIndex,
+);
+const actionReviewGenerationCaptureIndex = crmApp.indexOf(
+  "const reviewStatusRefreshSequence = statusRefreshSequence",
+  actionReviewStartGuardIndex,
+);
+const actionReviewReceiptDeclarationIndex = crmApp.indexOf(
+  "const receipt = reviewPayload as AiActionReviewReceipt",
+  actionReviewGenerationCaptureIndex,
+);
+const actionReviewResponseContextGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(reviewStatusRefreshSequence)",
+  actionReviewReceiptDeclarationIndex,
+);
+const actionReviewReceiptValidationIndex = crmApp.indexOf(
+  "receipt.aiAuditEventId !== preview.auditReference",
+  actionReviewResponseContextGuardIndex,
+);
+const actionReviewCatchIndex = crmApp.indexOf(
+  "} catch (currentError) {",
+  actionReviewReceiptValidationIndex,
+);
+const actionReviewCatchContextGuardIndex = crmApp.indexOf(
+  "!isSnapshotContextCurrent(reviewStatusRefreshSequence)",
+  actionReviewCatchIndex,
+);
+const actionReviewErrorPublishIndex = crmApp.indexOf(
+  "onError(",
+  actionReviewCatchContextGuardIndex,
+);
+assert(
+  markActionReviewedIndex >= 0 &&
+    generateScopeIndex > markActionReviewedIndex &&
+    actionReviewReloadCount === 2 &&
+    actionReviewStartGuardIndex > markActionReviewedIndex &&
+    actionReviewGenerationCaptureIndex > actionReviewStartGuardIndex &&
+    actionReviewReceiptDeclarationIndex > actionReviewGenerationCaptureIndex &&
+    actionReviewResponseContextGuardIndex > actionReviewReceiptDeclarationIndex &&
+    actionReviewReceiptValidationIndex > actionReviewResponseContextGuardIndex &&
+    actionReviewCatchIndex > actionReviewReceiptValidationIndex &&
+    actionReviewCatchContextGuardIndex > actionReviewCatchIndex &&
+    actionReviewErrorPublishIndex > actionReviewCatchContextGuardIndex &&
+    (
+      actionReviewBoundary.match(
+        /isSnapshotContextCurrent\(reviewStatusRefreshSequence\)/g,
+      ) ?? []
+    ).length === 2,
+  "Both durable AI action-review outcomes must cross the snapshot-generation reload boundary.",
 );
 const runtimeProviderHealthWriteIndex = crmApp.indexOf(
   "setAiRuntimeProviderHealth({",

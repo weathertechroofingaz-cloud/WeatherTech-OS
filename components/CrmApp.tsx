@@ -5789,12 +5789,17 @@ export function CrmApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(client === null);
   const [snapshot, setSnapshot] = useState<CrmSnapshot | null>(null);
+  const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =
+    useState(0);
   const [view, setView] = useState<WorkspaceView>(initialWorkspaceLocation.view);
   const [workspaceRecordFocus, setWorkspaceRecordFocus] =
     useState<WorkspaceRecordFocus | null>(initialWorkspaceLocation.focus);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [snapshotTransitionPending, setSnapshotTransitionPending] = useState(false);
+  const snapshotLoadRequestSequenceRef = useRef(0);
+  const snapshotTransitionPendingRef = useRef(false);
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -5827,7 +5832,45 @@ export function CrmApp() {
     setTheme(nextTheme);
   };
 
+  const beginSnapshotTransition = useCallback(() => {
+    const requestSequence = snapshotLoadRequestSequenceRef.current + 1;
+    snapshotLoadRequestSequenceRef.current = requestSequence;
+    snapshotTransitionPendingRef.current = true;
+    setSnapshotTransitionPending(true);
+    setAiProviderStatusRefreshSequence((current) => current + 1);
+    return requestSequence;
+  }, []);
+
+  const completeSnapshotTransition = useCallback((requestSequence: number) => {
+    if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+      return false;
+    }
+    snapshotTransitionPendingRef.current = false;
+    setSnapshotTransitionPending(false);
+    return true;
+  }, []);
+
+  const applyImmediateSnapshotTransition = useCallback(
+    (transition: () => void) => {
+      const requestSequence = beginSnapshotTransition();
+      try {
+        transition();
+      } finally {
+        completeSnapshotTransition(requestSequence);
+      }
+    },
+    [beginSnapshotTransition, completeSnapshotTransition],
+  );
+
+  const isSnapshotContextCurrent = useCallback(
+    (requestSequence: number) =>
+      !snapshotTransitionPendingRef.current &&
+      snapshotLoadRequestSequenceRef.current === requestSequence,
+    [],
+  );
+
   const loadSnapshot = useCallback(async (crmClient: CrmClient, showLoading = true) => {
+    const requestSequence = beginSnapshotTransition();
     if (showLoading) {
       setIsLoading(true);
     }
@@ -5835,8 +5878,14 @@ export function CrmApp() {
 
     try {
       const nextSnapshot = await fetchCrmSnapshot(crmClient);
+      if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       setSnapshot(nextSnapshot);
     } catch (currentError) {
+      if (snapshotLoadRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       logCaughtError("[CRM] CRM snapshot load failed", currentError);
 
       if (demoFallbackEnabled) {
@@ -5847,18 +5896,22 @@ export function CrmApp() {
 
       setError(getCaughtErrorMessage(currentError, "Unable to load CRM records."));
     } finally {
-      setIsLoading(false);
+      if (completeSnapshotTransition(requestSequence)) {
+        setIsLoading(false);
+      }
     }
-  }, [demoFallbackEnabled]);
+  }, [beginSnapshotTransition, completeSnapshotTransition, demoFallbackEnabled]);
 
   useEffect(() => {
     if (!client) {
       if (demoFallbackEnabled) {
-        setUser(demoUser);
-        setSnapshot(createDemoCrmSnapshot());
-        setAuthReady(true);
-        setIsLoading(false);
-        setNotice("Using local demo CRM data because Supabase is not configured.");
+        applyImmediateSnapshotTransition(() => {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+          setNotice("Using local demo CRM data because Supabase is not configured.");
+        });
       }
 
       return;
@@ -5883,15 +5936,20 @@ export function CrmApp() {
           setAuthReady(true);
           void loadSnapshot(client);
         } else if (demoFallbackEnabled) {
-          setUser(demoUser);
-          setSnapshot(createDemoCrmSnapshot());
-          setAuthReady(true);
-          setIsLoading(false);
-          setNotice("Using local demo CRM data because Supabase sign-in is not ready.");
+          applyImmediateSnapshotTransition(() => {
+            setUser(demoUser);
+            setSnapshot(createDemoCrmSnapshot());
+            setAuthReady(true);
+            setIsLoading(false);
+            setNotice("Using local demo CRM data because Supabase sign-in is not ready.");
+          });
         } else {
-          setUser(null);
-          setAuthReady(true);
-          setIsLoading(false);
+          applyImmediateSnapshotTransition(() => {
+            setUser(null);
+            setSnapshot(null);
+            setAuthReady(true);
+            setIsLoading(false);
+          });
         }
       })
       .catch((sessionError) => {
@@ -5902,11 +5960,13 @@ export function CrmApp() {
         }
 
         if (demoFallbackEnabled) {
-          setUser(demoUser);
-          setSnapshot(createDemoCrmSnapshot());
-          setAuthReady(true);
-          setIsLoading(false);
-          setNotice("Using local demo CRM data because Supabase auth failed to load.");
+          applyImmediateSnapshotTransition(() => {
+            setUser(demoUser);
+            setSnapshot(createDemoCrmSnapshot());
+            setAuthReady(true);
+            setIsLoading(false);
+            setNotice("Using local demo CRM data because Supabase auth failed to load.");
+          });
         } else {
           setError(
             sessionError instanceof Error
@@ -5926,15 +5986,19 @@ export function CrmApp() {
         setAuthReady(true);
         void loadSnapshot(client);
       } else if (demoFallbackEnabled) {
-        setUser(demoUser);
-        setSnapshot(createDemoCrmSnapshot());
-        setAuthReady(true);
-        setIsLoading(false);
+        applyImmediateSnapshotTransition(() => {
+          setUser(demoUser);
+          setSnapshot(createDemoCrmSnapshot());
+          setAuthReady(true);
+          setIsLoading(false);
+        });
       } else {
-        setUser(null);
-        setSnapshot(null);
-        setAuthReady(true);
-        setIsLoading(false);
+        applyImmediateSnapshotTransition(() => {
+          setUser(null);
+          setSnapshot(null);
+          setAuthReady(true);
+          setIsLoading(false);
+        });
       }
     });
 
@@ -5942,7 +6006,7 @@ export function CrmApp() {
       isMounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [client, demoFallbackEnabled, demoUser, loadSnapshot]);
+  }, [applyImmediateSnapshotTransition, client, demoFallbackEnabled, demoUser, loadSnapshot]);
 
   const handleAuthNotice = (message: string) => {
     setNotice(message);
@@ -5981,16 +6045,18 @@ export function CrmApp() {
 
   const handleDemoSnapshotChange = useCallback(
     (updater: (currentSnapshot: CrmSnapshot) => CrmSnapshot) => {
-      setSnapshot((currentSnapshot) =>
-        currentSnapshot
-          ? projectDemoAccountabilityMilestones(
-              currentSnapshot,
-              updater(currentSnapshot),
-            )
-          : currentSnapshot,
-      );
+      applyImmediateSnapshotTransition(() => {
+        setSnapshot((currentSnapshot) =>
+          currentSnapshot
+            ? projectDemoAccountabilityMilestones(
+                currentSnapshot,
+                updater(currentSnapshot),
+              )
+            : currentSnapshot,
+        );
+      });
     },
-    [],
+    [applyImmediateSnapshotTransition],
   );
 
   if (!authReady) {
@@ -6019,7 +6085,9 @@ export function CrmApp() {
           if (client) {
             void loadSnapshot(client);
           } else {
-            setSnapshot(createDemoCrmSnapshot());
+            applyImmediateSnapshotTransition(() => {
+              setSnapshot(createDemoCrmSnapshot());
+            });
           }
         }}
         onSignOut={handleSignOut}
@@ -6043,6 +6111,9 @@ export function CrmApp() {
       user={user}
       view={view}
       workspaceRecordFocus={workspaceRecordFocus}
+      aiProviderStatusRefreshSequence={aiProviderStatusRefreshSequence}
+      snapshotTransitionPending={snapshotTransitionPending}
+      isSnapshotContextCurrent={isSnapshotContextCurrent}
       theme={theme}
       onViewChange={handleWorkspaceViewChange}
       onThemeChange={handleThemeChange}
@@ -6050,7 +6121,9 @@ export function CrmApp() {
         if (client && !isDemoWorkspace) {
           await loadSnapshot(client);
         } else {
-          setSnapshot(createDemoCrmSnapshot());
+          applyImmediateSnapshotTransition(() => {
+            setSnapshot(createDemoCrmSnapshot());
+          });
         }
       }}
       onScrollPreservingReload={async () => {
@@ -6061,7 +6134,9 @@ export function CrmApp() {
           if (client && !isDemoWorkspace) {
             await loadSnapshot(client, false);
           } else {
-            setSnapshot(createDemoCrmSnapshot());
+            applyImmediateSnapshotTransition(() => {
+              setSnapshot(createDemoCrmSnapshot());
+            });
           }
         } finally {
           restoreWindowScrollPosition(scrollLeft, scrollTop);
@@ -6390,6 +6465,9 @@ type CrmWorkspaceProps = {
   user: User | null;
   view: WorkspaceView;
   workspaceRecordFocus: WorkspaceRecordFocus | null;
+  aiProviderStatusRefreshSequence: number;
+  snapshotTransitionPending: boolean;
+  isSnapshotContextCurrent: (requestSequence: number) => boolean;
   theme: ThemeMode;
   onViewChange: WorkspaceViewChange;
   onThemeChange: (theme: ThemeMode) => void;
@@ -6410,6 +6488,9 @@ function CrmWorkspace({
   user,
   view,
   workspaceRecordFocus,
+  aiProviderStatusRefreshSequence,
+  snapshotTransitionPending,
+  isSnapshotContextCurrent,
   theme,
   onViewChange,
   onThemeChange,
@@ -6421,8 +6502,6 @@ function CrmWorkspace({
   onError,
 }: CrmWorkspaceProps) {
   const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>("all");
-  const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =
-    useState(0);
   const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
   const [companyScopeStorageReady, setCompanyScopeStorageReady] = useState(false);
   const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
@@ -6490,7 +6569,6 @@ function CrmWorkspace({
     [],
   );
   const handleWorkspaceRefresh = useCallback(async () => {
-    setAiProviderStatusRefreshSequence((current) => current + 1);
     await onScrollPreservingReload();
   }, [onScrollPreservingReload]);
 
@@ -7225,6 +7303,8 @@ function CrmWorkspace({
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
               statusRefreshSequence={aiProviderStatusRefreshSequence}
+              snapshotTransitionPending={snapshotTransitionPending}
+              isSnapshotContextCurrent={isSnapshotContextCurrent}
               shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}
               acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}
               onReload={onReload}
@@ -39856,6 +39936,8 @@ type AiToolsViewProps = {
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
   statusRefreshSequence: number;
+  snapshotTransitionPending: boolean;
+  isSnapshotContextCurrent: (requestSequence: number) => boolean;
   shouldForceQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   acknowledgeQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   onReload: () => Promise<void>;
@@ -39872,6 +39954,17 @@ type AiCommandCenterFilterState = {
 
 type AiPilotResultEvidence = {
   result: AiPilotCommandResult;
+  statusRefreshSequence: number;
+};
+
+type AiProviderStatusEvidence = {
+  status: AiCompanyPilotStatus;
+  statusRefreshSequence: number;
+};
+
+type AiProviderStatusErrorEvidence = {
+  companyId: string;
+  message: string;
   statusRefreshSequence: number;
 };
 
@@ -39939,21 +40032,28 @@ function AiToolsView({
   companyMap,
   activeCompanyId,
   statusRefreshSequence,
+  snapshotTransitionPending,
+  isSnapshotContextCurrent,
   shouldForceQuotaProbeRefresh,
   acknowledgeQuotaProbeRefresh,
   onReload,
   onNotice,
   onError,
 }: AiToolsViewProps) {
+  const aiDraftContextKey = `${activeCompanyId}:${statusRefreshSequence}`;
   const [scopeTemplateId, setScopeTemplateId] = useState(
     snapshot.scopeTemplates[0]?.id ?? "",
   );
   const [scopeCustomerId, setScopeCustomerId] = useState("none");
   const [scopeDraft, setScopeDraft] = useState("");
+  const [scopeDraftContextKey, setScopeDraftContextKey] =
+    useState(aiDraftContextKey);
   const [estimateSourceId, setEstimateSourceId] = useState(
     snapshot.estimates[0]?.id ?? "",
   );
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
+  const [estimateDraftContextKey, setEstimateDraftContextKey] =
+    useState(aiDraftContextKey);
   const [aiCommand, setAiCommand] = useState("");
   const [aiResponseHistoryEvidence, setAiResponseHistoryEvidence] =
     useState<AiResponseHistoryEvidence | null>(null);
@@ -39961,12 +40061,10 @@ function AiToolsView({
     useState<AiPilotResultEvidence | null>(null);
   const [aiPilotErrorEvidence, setAiPilotErrorEvidence] =
     useState<AiPilotErrorEvidence | null>(null);
-  const [aiProviderStatus, setAiProviderStatus] =
-    useState<AiCompanyPilotStatus | null>(null);
-  const [aiProviderStatusError, setAiProviderStatusError] = useState<{
-    companyId: string;
-    message: string;
-  } | null>(null);
+  const [aiProviderStatusEvidence, setAiProviderStatusEvidence] =
+    useState<AiProviderStatusEvidence | null>(null);
+  const [aiProviderStatusErrorEvidence, setAiProviderStatusErrorEvidence] =
+    useState<AiProviderStatusErrorEvidence | null>(null);
   const [aiProviderStatusLoadingCompanyId, setAiProviderStatusLoadingCompanyId] =
     useState<string | null>(null);
   const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
@@ -40010,8 +40108,16 @@ function AiToolsView({
     activeCompanyId === "all" ? null : companyMap.get(activeCompanyId) ?? null;
   const exactAiCompanyId = exactAiCompany?.id ?? null;
   const exactAiCompanySelected = exactAiCompanyId !== null;
+  const currentScopeDraft =
+    scopeDraftContextKey === aiDraftContextKey ? scopeDraft : "";
+  const currentEstimateDraft =
+    estimateDraftContextKey === aiDraftContextKey ? estimateDraft : [];
   const currentAiProviderStatus =
-    aiProviderStatus?.companyId === exactAiCompanyId ? aiProviderStatus : null;
+    !snapshotTransitionPending &&
+    aiProviderStatusEvidence?.status.companyId === exactAiCompanyId &&
+    aiProviderStatusEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiProviderStatusEvidence.status
+      : null;
   const currentAiPilotResult =
     aiPilotResultEvidence?.result.companyId === exactAiCompanyId &&
     aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence
@@ -40023,8 +40129,10 @@ function AiToolsView({
     statusRefreshSequence,
   });
   const currentAiProviderStatusError =
-    aiProviderStatusError?.companyId === exactAiCompanyId
-      ? aiProviderStatusError.message
+    !snapshotTransitionPending &&
+    aiProviderStatusErrorEvidence?.companyId === exactAiCompanyId &&
+    aiProviderStatusErrorEvidence.statusRefreshSequence === statusRefreshSequence
+      ? aiProviderStatusErrorEvidence.message
       : "";
   const currentAiPilotError = getCurrentAiPilotError({
     evidence: aiPilotErrorEvidence,
@@ -40037,8 +40145,10 @@ function AiToolsView({
     statusRefreshSequence,
   });
   const isAiProviderStatusLoading =
-    aiProviderStatusLoadingCompanyId === exactAiCompanyId &&
-    exactAiCompanyId !== null;
+    exactAiCompanyId !== null &&
+    (snapshotTransitionPending ||
+      aiProviderStatusLoadingCompanyId === exactAiCompanyId ||
+      (!currentAiProviderStatus && !currentAiProviderStatusError));
   const savedAnalysesReadAvailable =
     currentAiProviderStatus?.savedAnalysesReadAvailable === true;
   const savedAnalysesReadPhase = currentAiProviderStatus
@@ -40054,6 +40164,7 @@ function AiToolsView({
   useEffect(() => {
     if (!snapshot.scopeTemplates.some((template) => template.id === scopeTemplateId)) {
       setScopeTemplateId(snapshot.scopeTemplates[0]?.id ?? "");
+      setScopeDraft("");
     }
   }, [scopeTemplateId, snapshot.scopeTemplates]);
 
@@ -40063,6 +40174,7 @@ function AiToolsView({
       !snapshot.customers.some((customer) => customer.id === scopeCustomerId)
     ) {
       setScopeCustomerId("none");
+      setScopeDraft("");
     }
   }, [scopeCustomerId, snapshot.customers]);
 
@@ -40085,8 +40197,8 @@ function AiToolsView({
     setAiResponseHistoryEvidence(null);
     setAiPilotResultEvidence(null);
     setAiPilotErrorEvidence(null);
-    setAiProviderStatus(null);
-    setAiProviderStatusError(null);
+    setAiProviderStatusEvidence(null);
+    setAiProviderStatusErrorEvidence(null);
     setAiProviderStatusLoadingCompanyId(null);
     setAiRuntimeProviderHealth(null);
     setIsAiCommandRunning(false);
@@ -40101,7 +40213,7 @@ function AiToolsView({
   }, [activeCompanyId]);
 
   useEffect(() => {
-    if (!exactAiCompanyId) {
+    if (!exactAiCompanyId || snapshotTransitionPending) {
       return;
     }
 
@@ -40116,8 +40228,8 @@ function AiToolsView({
     const controller = new AbortController();
     aiProviderStatusAbortRef.current?.abort();
     aiProviderStatusAbortRef.current = controller;
-    setAiProviderStatus(null);
-    setAiProviderStatusError(null);
+    setAiProviderStatusEvidence(null);
+    setAiProviderStatusErrorEvidence(null);
     setAiProviderStatusLoadingCompanyId(requestCompanyId);
     setAiProviderStatusRequestSequence(requestSequence);
 
@@ -40158,7 +40270,8 @@ function AiToolsView({
         }
         if (
           controller.signal.aborted ||
-          activeAiCompanyRef.current !== requestCompanyId
+          activeAiCompanyRef.current !== requestCompanyId ||
+          !isSnapshotContextCurrent(requestStatusRefreshSequence)
         ) {
           return;
         }
@@ -40166,20 +40279,25 @@ function AiToolsView({
           requestCompanyId,
           requestStatusRefreshSequence,
         );
-        setAiProviderStatus(payload);
+        setAiProviderStatusEvidence({
+          status: payload,
+          statusRefreshSequence: requestStatusRefreshSequence,
+        });
       } catch (currentError) {
         if (
           controller.signal.aborted ||
-          activeAiCompanyRef.current !== requestCompanyId
+          activeAiCompanyRef.current !== requestCompanyId ||
+          !isSnapshotContextCurrent(requestStatusRefreshSequence)
         ) {
           return;
         }
-        setAiProviderStatusError({
+        setAiProviderStatusErrorEvidence({
           companyId: requestCompanyId,
           message: getCaughtErrorMessage(
             currentError,
             "Production AI status could not be loaded.",
           ),
+          statusRefreshSequence: requestStatusRefreshSequence,
         });
       } finally {
         if (aiProviderStatusAbortRef.current === controller) {
@@ -40195,6 +40313,8 @@ function AiToolsView({
     aiProviderStatusReloadSequence,
     acknowledgeQuotaProbeRefresh,
     exactAiCompanyId,
+    isSnapshotContextCurrent,
+    snapshotTransitionPending,
     shouldForceQuotaProbeRefresh,
     statusRefreshSequence,
   ]);
@@ -40283,7 +40403,11 @@ function AiToolsView({
 
   const runAiCommandPrompt = async (prompt: string) => {
     const cleanPrompt = prompt.trim();
-    if (!cleanPrompt || isAiCommandRunning) {
+    if (
+      !cleanPrompt ||
+      isAiCommandRunning ||
+      !isSnapshotContextCurrent(statusRefreshSequence)
+    ) {
       return;
     }
     if (!exactAiCompanySelected) {
@@ -40356,6 +40480,7 @@ function AiToolsView({
       const result = payload as AiPilotCommandResult;
       if (
         controller.signal.aborted ||
+        !isSnapshotContextCurrent(requestStatusRefreshSequence) ||
         result.companyId !== requestCompanyId ||
         !isCurrentAiCommandCompletion({
           activeCompanyId: activeAiCompanyRef.current,
@@ -40391,6 +40516,7 @@ function AiToolsView({
       setReviewedActionIds({});
     } catch (currentError) {
       if (
+        !isSnapshotContextCurrent(requestStatusRefreshSequence) ||
         !isCurrentAiCommandCompletion({
           activeCompanyId: activeAiCompanyRef.current,
           requestCompanyId,
@@ -40439,7 +40565,7 @@ function AiToolsView({
 
   const runAiCommand = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!aiCommand.trim()) {
+    if (!aiCommand.trim() || !isSnapshotContextCurrent(statusRefreshSequence)) {
       return;
     }
 
@@ -40455,6 +40581,10 @@ function AiToolsView({
     action: AiRecommendedAction,
     decision: "approved" | "rejected",
   ) => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    const reviewStatusRefreshSequence = statusRefreshSequence;
     const reviewCompanyId = activeCompanyId;
     const preview = currentAiPilotResult?.actionPreviews.find(
       (candidate) => candidate.id === action.id,
@@ -40535,7 +40665,8 @@ function AiToolsView({
       const receipt = reviewPayload as AiActionReviewReceipt;
       if (
         reviewController.signal.aborted ||
-        activeAiCompanyRef.current !== reviewCompanyId
+        activeAiCompanyRef.current !== reviewCompanyId ||
+        !isSnapshotContextCurrent(reviewStatusRefreshSequence)
       ) {
         return;
       }
@@ -40581,7 +40712,10 @@ function AiToolsView({
       }
       throw new Error("Only internal follow-up tasks can be approved for execution.");
     } catch (currentError) {
-      if (reviewController.signal.aborted) {
+      if (
+        reviewController.signal.aborted ||
+        !isSnapshotContextCurrent(reviewStatusRefreshSequence)
+      ) {
         return;
       }
       onError(
@@ -40596,6 +40730,9 @@ function AiToolsView({
   };
 
   const generateScope = () => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
     if (!selectedTemplate) {
       onError("Choose an approved scope template before drafting.");
       return;
@@ -40604,13 +40741,17 @@ function AiToolsView({
     const customerLine = selectedCustomer
       ? `${selectedCustomer.display_name} at ${selectedCustomer.property_address}`
       : "the selected property";
+    setScopeDraftContextKey(aiDraftContextKey);
     setScopeDraft(
       `${selectedTemplate.template_body}\n\nRule-based drafting notes:\n- Customer/property: ${customerLine}\n- Source template: ${selectedTemplate.title}\n- Confirm measurements, access, colors/materials, exclusions, and warranty before sending.\n- This deterministic draft uses approved template language and visible CRM context only; no provider or customer action was executed.\n\nReviewer prompt:\n${selectedTemplate.ai_prompt}`,
     );
   };
 
   const saveScopeDraft = async () => {
-    if (!selectedTemplate || !scopeDraft.trim()) {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    if (!selectedTemplate || !currentScopeDraft.trim()) {
       onError("Generate a scope draft before saving.");
       return;
     }
@@ -40640,7 +40781,7 @@ function AiToolsView({
         title: `${selectedTemplate.title} Rule-Based Draft`,
         category: selectedTemplate.category,
         status: "draft",
-        scope_body: scopeDraft,
+        scope_body: currentScopeDraft,
         notes:
           "Created from AI Scope Writer 2.0 deterministic template mode. No provider or customer action was executed. Human review required.",
       });
@@ -40653,7 +40794,7 @@ function AiToolsView({
         change_order_id: null,
         title: `${savedScope.title} Document`,
         category: "scope",
-        body: scopeDraft,
+        body: currentScopeDraft,
       });
       await onReload();
       onNotice("Reviewed rule-based scope draft and document saved.");
@@ -40663,6 +40804,9 @@ function AiToolsView({
   };
 
   const generateEstimate = () => {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
     if (!selectedEstimate) {
       onError("Choose an existing estimate before preparing an assistant draft.");
       return;
@@ -40673,6 +40817,7 @@ function AiToolsView({
       return;
     }
 
+    setEstimateDraftContextKey(aiDraftContextKey);
     setEstimateDraft(
       selectedEstimateItems.map((item, index) => ({
         category: item.category,
@@ -40691,7 +40836,10 @@ function AiToolsView({
   };
 
   const saveEstimateDraft = async () => {
-    if (!estimateDraft.length) {
+    if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+      return;
+    }
+    if (!currentEstimateDraft.length) {
       onError("Generate an estimate draft before saving.");
       return;
     }
@@ -40740,7 +40888,7 @@ function AiToolsView({
           notes:
             "Created from AI Estimate Assistant 2.0 deterministic source-record mode using existing estimate line items. No provider or customer action was executed. Human review required.",
         },
-        estimateDraft,
+        currentEstimateDraft,
       );
       await createDocument(client, {
           company_id: savedEstimate.company_id,
@@ -40757,7 +40905,7 @@ function AiToolsView({
           `Tax: ${formatMoney(savedEstimate.tax_total)}`,
           `Profit margin: ${formatMoney(savedEstimate.profit_margin_total)}`,
           `Total: ${formatMoney(savedEstimate.total)}`,
-          ...estimateDraft.map(
+          ...currentEstimateDraft.map(
             (item) =>
               `${item.name}: ${item.quantity} ${item.unit ?? "each"} at ${formatMoney(
                 item.unit_cost,
@@ -40779,7 +40927,7 @@ function AiToolsView({
       discount_value: selectedEstimate?.discount_value ?? 0,
       profit_margin_rate: selectedEstimate?.profit_margin_rate ?? 0,
     },
-    estimateDraft,
+    currentEstimateDraft,
   );
 
   return (
@@ -40816,6 +40964,9 @@ function AiToolsView({
           onSubmit={runAiCommand}
           className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-3"
           data-testid="ai-command-bar"
+          data-ai-snapshot-transition-pending={
+            snapshotTransitionPending ? "true" : "false"
+          }
         >
           <label className="sr-only" htmlFor="ai-command-input">
             Ask AI Tools
@@ -40827,7 +40978,7 @@ function AiToolsView({
                 id="ai-command-input"
                 value={aiCommand}
                 onChange={(event) => setAiCommand(event.target.value)}
-                disabled={!exactAiCompanySelected}
+                disabled={!exactAiCompanySelected || snapshotTransitionPending}
                 className="min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
                 placeholder={
                   exactAiCompanySelected
@@ -40838,11 +40989,19 @@ function AiToolsView({
             </div>
             <button
               type="submit"
-              disabled={isAiCommandRunning || !exactAiCompanySelected}
+              disabled={
+                isAiCommandRunning ||
+                !exactAiCompanySelected ||
+                snapshotTransitionPending
+              }
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
             >
               <WandSparkles className="h-4 w-4" />
-              {isAiCommandRunning ? "Analyzing" : "Analyze"}
+              {isAiCommandRunning
+                ? "Analyzing"
+                : snapshotTransitionPending
+                  ? "Refreshing context"
+                  : "Analyze"}
             </button>
             {isAiCommandRunning ? (
               <button
@@ -40866,7 +41025,11 @@ function AiToolsView({
                 key={prompt}
                 type="button"
                 onClick={() => void runAiCommandPrompt(prompt)}
-                disabled={isAiCommandRunning || !exactAiCompanySelected}
+                disabled={
+                  isAiCommandRunning ||
+                  !exactAiCompanySelected ||
+                  snapshotTransitionPending
+                }
                 className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-sky-200 hover:text-sky-700"
               >
                 {prompt}
@@ -40993,7 +41156,12 @@ function AiToolsView({
         <div className="mt-5 grid gap-3">
           <select
             value={scopeTemplateId}
-            onChange={(event) => setScopeTemplateId(event.target.value)}
+            onChange={(event) => {
+              setScopeTemplateId(event.target.value);
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft("");
+            }}
+            disabled={snapshotTransitionPending}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             {snapshot.scopeTemplates.map((template) => (
@@ -41004,7 +41172,12 @@ function AiToolsView({
           </select>
           <select
             value={scopeCustomerId}
-            onChange={(event) => setScopeCustomerId(event.target.value)}
+            onChange={(event) => {
+              setScopeCustomerId(event.target.value);
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft("");
+            }}
+            disabled={snapshotTransitionPending}
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="none">No customer context</option>
@@ -41018,7 +41191,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={generateScope}
-              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+              disabled={snapshotTransitionPending}
+              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <WandSparkles className="h-4 w-4" />
               Build rule-based scope
@@ -41026,7 +41200,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => void saveScopeDraft()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentScopeDraft.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FileText className="h-4 w-4" />
               Save reviewed draft
@@ -41034,15 +41209,23 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentScopeDraft.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Printer className="h-4 w-4" />
               PDF
             </button>
           </div>
           <textarea
-            value={scopeDraft}
-            onChange={(event) => setScopeDraft(event.target.value)}
+            value={currentScopeDraft}
+            onChange={(event) => {
+              if (!isSnapshotContextCurrent(statusRefreshSequence)) {
+                return;
+              }
+              setScopeDraftContextKey(aiDraftContextKey);
+              setScopeDraft(event.target.value);
+            }}
+            disabled={snapshotTransitionPending}
             className="min-h-96 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6"
             placeholder="Generated scope appears here"
           />
@@ -41071,8 +41254,10 @@ function AiToolsView({
               value={estimateSourceId}
               onChange={(event) => {
                 setEstimateSourceId(event.target.value);
+                setEstimateDraftContextKey(aiDraftContextKey);
                 setEstimateDraft([]);
               }}
+              disabled={snapshotTransitionPending}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Select an existing estimate</option>
@@ -41092,7 +41277,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={generateEstimate}
-              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+              disabled={snapshotTransitionPending}
+              className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Calculator className="h-4 w-4" />
               Build from selected estimate
@@ -41100,7 +41286,8 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => void saveEstimateDraft()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentEstimateDraft.length}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FileText className="h-4 w-4" />
               Save reviewed estimate
@@ -41108,16 +41295,17 @@ function AiToolsView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={snapshotTransitionPending || !currentEstimateDraft.length}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Printer className="h-4 w-4" />
               PDF
             </button>
           </div>
           <div className="rounded-lg border border-slate-200">
-            {estimateDraft.length ? (
+            {currentEstimateDraft.length ? (
               <div className="divide-y divide-slate-100">
-                {estimateDraft.map((item) => (
+                {currentEstimateDraft.map((item) => (
                   <div key={item.name} className="px-4 py-3">
                     <div className="flex items-center justify-between gap-4">
                       <div>
