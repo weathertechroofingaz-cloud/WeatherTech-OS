@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 
 const cwd = process.cwd();
 const commandRoute = readFileSync(
@@ -58,18 +59,20 @@ assert(
 const statusAuthIndex = statusRoute.indexOf("client.auth.getUser()");
 const statusMembershipIndex = statusRoute.indexOf('.from("company_memberships")');
 const statusPolicyIndex = statusRoute.indexOf('.from("ai_usage_limits")');
-const statusQuotaConfigIndex = statusRoute.indexOf("hasSupabaseServiceRoleConfig()");
+const statusQuotaCapabilityIndex = statusRoute.indexOf(
+  "await verifySupabaseAiQuotaServiceCapability()",
+);
 const statusSavedAnalysesIndex = statusRoute.indexOf('.from("ai_saved_analyses")');
 const statusBuildIndex = statusRoute.indexOf("buildAiCompanyPilotStatus({");
 assert(
   statusAuthIndex >= 0 &&
     statusMembershipIndex > statusAuthIndex &&
     statusPolicyIndex > statusMembershipIndex &&
-    statusQuotaConfigIndex > statusPolicyIndex &&
+    statusQuotaCapabilityIndex > statusPolicyIndex &&
     statusSavedAnalysesIndex > statusPolicyIndex &&
     statusSavedAnalysesIndex > statusMembershipIndex &&
     statusBuildIndex > statusSavedAnalysesIndex &&
-    statusBuildIndex > statusQuotaConfigIndex &&
+    statusBuildIndex > statusQuotaCapabilityIndex &&
     statusBuildIndex > statusPolicyIndex,
   "AI status must authenticate and authorize the exact company before reading its policy.",
 );
@@ -82,7 +85,7 @@ for (const statusBoundary of [
   ".limit(2)",
   "policyRows?.length !== 1",
   "getAiPilotProviderConfig()",
-  "hasSupabaseServiceRoleConfig()",
+  "await verifySupabaseAiQuotaServiceCapability()",
   "The audited AI quota service is unavailable. Production AI status is not ready.",
   '.from("ai_saved_analyses")',
   '{ head: true }',
@@ -115,6 +118,25 @@ for (const serviceBoundary of [
   "url && serviceRoleKey ? { url, serviceRoleKey } : null",
   "export function hasSupabaseServiceRoleConfig",
   "return readSupabaseServiceRoleConfig(env) !== null",
+  "export async function verifySupabaseAiQuotaServiceCapability",
+  'document.swagger !== "2.0"',
+  '"get" in rpcPath',
+  'new URL("/rest/v1/", config.url)',
+  'Accept: "application/openapi+json"',
+  '"Accept-Profile": "public"',
+  "apikey: config.serviceRoleKey",
+  "Authorization: `Bearer ${config.serviceRoleKey}`",
+  'cache: "no-store"',
+  'redirect: "error"',
+  "AbortSignal.timeout(SUPABASE_OPENAPI_TIMEOUT_MS)",
+  "SUPABASE_OPENAPI_MAX_BYTES",
+  'const AI_QUOTA_RPC_PATH = "/rpc/wtos_reserve_ai_request_v1"',
+  '"p_company_id"',
+  '"p_actor_user_id"',
+  '"p_request_id"',
+  '"p_request"',
+  "hasExactAiQuotaRpcContract(JSON.parse(responseText) as unknown)",
+  "await response.body?.cancel()",
   "const config = readSupabaseServiceRoleConfig(process.env)",
   "createClient<Database>(config.url, config.serviceRoleKey",
 ]) {
@@ -122,6 +144,236 @@ for (const serviceBoundary of [
     supabaseService,
     serviceBoundary,
     `The status and command paths must share the exact service-role readiness predicate: ${serviceBoundary}`,
+  );
+}
+const quotaCapabilityStart = supabaseService.indexOf(
+  "export async function verifySupabaseAiQuotaServiceCapability",
+);
+const serviceClientStart = supabaseService.indexOf(
+  "export function getSupabaseServiceRoleClient",
+);
+const quotaCapabilitySource = supabaseService.slice(
+  quotaCapabilityStart,
+  serviceClientStart,
+);
+assert(
+  quotaCapabilityStart >= 0 &&
+    serviceClientStart > quotaCapabilityStart &&
+    !quotaCapabilitySource.includes("createClient") &&
+    !quotaCapabilitySource.includes(".rpc(") &&
+    !quotaCapabilitySource.includes("console.") &&
+    !quotaCapabilitySource.includes("responseText:"),
+  "The quota capability probe must remain non-mutating and must not log or return credentials or the OpenAPI document.",
+);
+assert(
+  !statusRoute.includes("hasSupabaseServiceRoleConfig()"),
+  "Configuration-string presence alone must never gate the Production AI enabled status.",
+);
+
+const compiledSupabaseService = ts.transpileModule(supabaseService, {
+  compilerOptions: {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.CommonJS,
+  },
+}).outputText;
+const serviceModuleUnderTest = { exports: {} };
+const requireForServiceTest = (specifier) => {
+  if (specifier === "server-only") {
+    return {};
+  }
+  if (specifier === "@supabase/supabase-js") {
+    return {
+      createClient() {
+        throw new Error("The read-only capability test must not create a Supabase client.");
+      },
+    };
+  }
+  throw new Error(`Unexpected service module dependency: ${specifier}`);
+};
+new Function("require", "module", "exports", compiledSupabaseService)(
+  requireForServiceTest,
+  serviceModuleUnderTest,
+  serviceModuleUnderTest.exports,
+);
+const { verifySupabaseAiQuotaServiceCapability } =
+  serviceModuleUnderTest.exports;
+
+function exactQuotaOpenApiDocument() {
+  return {
+    swagger: "2.0",
+    paths: {
+      "/rpc/wtos_reserve_ai_request_v1": {
+        post: {
+          parameters: [
+            {
+              in: "body",
+              name: "args",
+              required: true,
+              schema: {
+                properties: {
+                  p_actor_user_id: { format: "uuid", type: "string" },
+                  p_company_id: { format: "uuid", type: "string" },
+                  p_request: { format: "jsonb" },
+                  p_request_id: { format: "uuid", type: "string" },
+                },
+                required: [
+                  "p_company_id",
+                  "p_actor_user_id",
+                  "p_request_id",
+                  "p_request",
+                ],
+                type: "object",
+              },
+            },
+            { $ref: "#/parameters/preferParams" },
+          ],
+          responses: { 200: { description: "OK" } },
+        },
+      },
+    },
+  };
+}
+
+function openApiResponse(body, options = {}) {
+  return new Response(body, {
+    status: options.status ?? 200,
+    headers: {
+      "content-type": options.contentType ?? "application/openapi+json; charset=utf-8",
+    },
+  });
+}
+
+const testServiceEnv = {
+  NEXT_PUBLIC_SUPABASE_URL: " https://quota-capability.test ",
+  SUPABASE_SERVICE_ROLE_KEY: " unit-test-service-role-secret ",
+};
+let capabilityFetchCalls = 0;
+let capturedCapabilityRequest = null;
+const validQuotaCapability = await verifySupabaseAiQuotaServiceCapability(
+  testServiceEnv,
+  async (input, init) => {
+    capabilityFetchCalls += 1;
+    capturedCapabilityRequest = { input: String(input), init };
+    return openApiResponse(JSON.stringify(exactQuotaOpenApiDocument()));
+  },
+);
+assert(validQuotaCapability, "The exact service-role quota RPC contract must pass.");
+assert(
+  capabilityFetchCalls === 1 &&
+    capturedCapabilityRequest?.input === "https://quota-capability.test/rest/v1/" &&
+    capturedCapabilityRequest?.init?.method === "GET" &&
+    capturedCapabilityRequest?.init?.cache === "no-store" &&
+    capturedCapabilityRequest?.init?.redirect === "error" &&
+    capturedCapabilityRequest?.init?.headers?.Accept === "application/openapi+json" &&
+    capturedCapabilityRequest?.init?.headers?.["Accept-Profile"] === "public" &&
+    capturedCapabilityRequest?.init?.headers?.apikey ===
+      "unit-test-service-role-secret" &&
+    capturedCapabilityRequest?.init?.headers?.Authorization ===
+      "Bearer unit-test-service-role-secret" &&
+    !capturedCapabilityRequest.input.includes("unit-test-service-role-secret"),
+  "The capability request must be an exact, non-cached, server-authenticated schema read without credentials in the URL.",
+);
+
+let missingConfigFetchCalls = 0;
+assert(
+  !(await verifySupabaseAiQuotaServiceCapability({}, async () => {
+    missingConfigFetchCalls += 1;
+    return openApiResponse(JSON.stringify(exactQuotaOpenApiDocument()));
+  })) && missingConfigFetchCalls === 0,
+  "Missing service-role configuration must fail before a network request.",
+);
+
+async function rejectsQuotaCapability(responseFactory) {
+  return !(await verifySupabaseAiQuotaServiceCapability(
+    testServiceEnv,
+    responseFactory,
+  ));
+}
+
+const invalidQuotaDocuments = [
+  {},
+  { swagger: "3.0", paths: exactQuotaOpenApiDocument().paths },
+  { swagger: "2.0", paths: {} },
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].get = {};
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    delete document.paths["/rpc/wtos_reserve_ai_request_v1"].post;
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.required.pop();
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.required = [
+      "p_company_id",
+      "p_actor_user_id",
+      "p_request_id",
+      "p_request_id",
+    ];
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.extra = {
+      type: "string",
+    };
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    delete document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.p_company_id;
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.p_actor_user_id.type =
+      "number";
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.p_request_id.format =
+      "text";
+    return document;
+  })(),
+  (() => {
+    const document = exactQuotaOpenApiDocument();
+    document.paths["/rpc/wtos_reserve_ai_request_v1"].post.parameters[0].schema.properties.p_request.format =
+      "json";
+    return document;
+  })(),
+];
+for (const invalidDocument of invalidQuotaDocuments) {
+  assert(
+    await rejectsQuotaCapability(async () =>
+      openApiResponse(JSON.stringify(invalidDocument)),
+    ),
+    "A stale, missing, overloaded, or mismatched quota RPC contract must fail closed.",
+  );
+}
+for (const invalidResponseFactory of [
+  async () => openApiResponse("{}", { status: 401 }),
+  async () => openApiResponse("{}", { contentType: "application/json" }),
+  async () => openApiResponse("not-json"),
+  async () =>
+    openApiResponse(
+      `${"x".repeat(2 * 1024 * 1024 + 1)}`,
+    ),
+  async () => new Response(null, { status: 200, headers: { "content-type": "application/openapi+json" } }),
+  async () => {
+    throw new Error("synthetic network failure");
+  },
+]) {
+  assert(
+    await rejectsQuotaCapability(invalidResponseFactory),
+    "Credential, media-type, parse, size, body, and network failures must fail closed.",
   );
 }
 for (const savedAnalysesStatusBoundary of [

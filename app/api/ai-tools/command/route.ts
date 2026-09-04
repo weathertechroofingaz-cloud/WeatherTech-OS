@@ -25,7 +25,7 @@ import { readBoundedJsonBody } from "../../../../lib/http/boundedJson";
 import { getSupabaseServerClient } from "../../../../lib/supabase/server";
 import {
   getSupabaseServiceRoleClient,
-  hasSupabaseServiceRoleConfig,
+  verifySupabaseAiQuotaServiceCapability,
 } from "../../../../lib/supabase/service";
 
 export const dynamic = "force-dynamic";
@@ -113,7 +113,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (!hasSupabaseServiceRoleConfig()) {
+  if (!(await verifySupabaseAiQuotaServiceCapability())) {
     return noStoreJson(
       {
         error:
