@@ -40,6 +40,12 @@ export type AiTaskType =
   | "saved_analysis";
 export type AiPriority = "critical" | "high" | "medium" | "low";
 export type AiResponseCompleteness = "complete" | "partial" | "insufficient";
+export type AiRuntimeProviderHealthState = "ready" | "failed";
+export type AiRuntimeProviderHealthEvidence = {
+  companyId: string;
+  statusRefreshSequence: number;
+  state: AiRuntimeProviderHealthState;
+};
 export type AiDailyOperationsTopic =
   | "attention_today"
   | "uncontacted_leads"
@@ -67,6 +73,30 @@ export type AiActionType =
   | "prepare_customer_summary"
   | "prepare_inspection_report"
   | "prepare_document_summary";
+
+export function getCurrentAiRuntimeProviderHealth({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiRuntimeProviderHealthEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}): AiRuntimeProviderHealthState | null {
+  if (
+    !evidence ||
+    !companyId ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence
+  ) {
+    return null;
+  }
+
+  return evidence.state === "ready" || evidence.state === "failed"
+    ? evidence.state
+    : null;
+}
 
 export type AiSourceRecord = {
   table: string;

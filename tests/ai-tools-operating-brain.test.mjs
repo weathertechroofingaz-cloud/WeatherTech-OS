@@ -116,6 +116,51 @@ try {
   const now = "2026-08-04T16:00:00.000Z";
   const wtCompanyId = "11111111-1111-4111-8111-111111111111";
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
+  const currentFailedProviderHealth = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 7,
+    state: "failed",
+  };
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 7,
+    }),
+    "failed",
+    "Current exact-company provider failure remains authoritative",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 8,
+    }),
+    null,
+    "A provider result from before Refresh cannot override the newer status generation",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: currentFailedProviderHealth,
+      companyId: ihcCompanyId,
+      statusRefreshSequence: 7,
+    }),
+    null,
+    "WeatherTech provider evidence cannot affect IHC",
+  );
+  assertEqual(
+    aiTools.getCurrentAiRuntimeProviderHealth({
+      evidence: {
+        companyId: wtCompanyId,
+        statusRefreshSequence: 9,
+        state: "ready",
+      },
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    "ready",
+    "A tested success from the current generation restores provider health",
+  );
   const snapshot = emptySnapshot({
     companies: [
       {

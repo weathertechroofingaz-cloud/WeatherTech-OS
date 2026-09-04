@@ -187,12 +187,14 @@ import {
 import {
   answerAiCommand,
   buildAiWorkspaceModel,
+  getCurrentAiRuntimeProviderHealth,
   type AiAdvisorModeKey,
   type AiAssistantDraft,
   type AiCommandCenterRecommendation,
   type AiGroundedResponse,
   type AiPriorityItem,
   type AiRecommendedAction,
+  type AiRuntimeProviderHealthEvidence,
   type AiSourceRecord,
   type AiWorkspaceModel,
 } from "../lib/crm/aiTools";
@@ -6461,11 +6463,8 @@ function CrmWorkspace({
     [],
   );
   const handleWorkspaceRefresh = useCallback(async () => {
-    try {
-      await onScrollPreservingReload();
-    } finally {
-      setAiProviderStatusRefreshSequence((current) => current + 1);
-    }
+    setAiProviderStatusRefreshSequence((current) => current + 1);
+    await onScrollPreservingReload();
   }, [onScrollPreservingReload]);
 
   useEffect(() => {
@@ -39937,10 +39936,8 @@ function AiToolsView({
     useState<string | null>(null);
   const [aiProviderStatusRequestSequence, setAiProviderStatusRequestSequence] =
     useState(0);
-  const [aiRuntimeProviderHealth, setAiRuntimeProviderHealth] = useState<{
-    companyId: string;
-    state: "ready" | "failed";
-  } | null>(null);
+  const [aiRuntimeProviderHealth, setAiRuntimeProviderHealth] =
+    useState<AiRuntimeProviderHealthEvidence | null>(null);
   const [isAiCommandRunning, setIsAiCommandRunning] = useState(false);
   const [reviewedActionIds, setReviewedActionIds] = useState<Record<string, "approved" | "rejected">>({});
   const [reviewingActionId, setReviewingActionId] = useState<string | null>(null);
@@ -39984,10 +39981,11 @@ function AiToolsView({
     aiProviderStatusError?.companyId === exactAiCompanyId
       ? aiProviderStatusError.message
       : "";
-  const currentAiRuntimeProviderHealth =
-    aiRuntimeProviderHealth?.companyId === exactAiCompanyId
-      ? aiRuntimeProviderHealth.state
-      : null;
+  const currentAiRuntimeProviderHealth = getCurrentAiRuntimeProviderHealth({
+    evidence: aiRuntimeProviderHealth,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
   const isAiProviderStatusLoading =
     aiProviderStatusLoadingCompanyId === exactAiCompanyId &&
     exactAiCompanyId !== null;
@@ -40285,6 +40283,7 @@ function AiToolsView({
       if (result.providerHealth.tested) {
         setAiRuntimeProviderHealth({
           companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
           state: result.providerHealth.ok ? "ready" : "failed",
         });
       }

@@ -841,6 +841,7 @@ for (const statusUiBoundary of [
   "result={currentAiPilotResult}",
   'data-ai-current-command-result={result ? "true" : "false"}',
   "runtimeProviderHealth={currentAiRuntimeProviderHealth}",
+  "getCurrentAiRuntimeProviderHealth({",
   "setAiRuntimeProviderHealth(null)",
   "if (result.providerHealth.tested)",
   'state: result.providerHealth.ok ? "ready" : "failed"',
@@ -860,6 +861,52 @@ for (const statusUiBoundary of [
     crmApp,
     statusUiBoundary,
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
+  );
+}
+for (const runtimeHealthSelectorBoundary of [
+  "export function getCurrentAiRuntimeProviderHealth({",
+  "evidence.companyId !== companyId",
+  "evidence.statusRefreshSequence !== statusRefreshSequence",
+  'evidence.state === "ready" || evidence.state === "failed"',
+]) {
+  includes(
+    aiToolsSource,
+    runtimeHealthSelectorBoundary,
+    `Runtime provider-health selection is missing boundary ${runtimeHealthSelectorBoundary}.`,
+  );
+}
+const workspaceRefreshIndex = crmApp.indexOf("const handleWorkspaceRefresh = useCallback");
+const refreshGenerationIndex = crmApp.indexOf(
+  "setAiProviderStatusRefreshSequence((current) => current + 1)",
+  workspaceRefreshIndex,
+);
+const workspaceReloadIndex = crmApp.indexOf(
+  "await onScrollPreservingReload()",
+  workspaceRefreshIndex,
+);
+assert(
+  workspaceRefreshIndex >= 0 &&
+    refreshGenerationIndex > workspaceRefreshIndex &&
+    workspaceReloadIndex > refreshGenerationIndex,
+  "Workspace Refresh must invalidate AI evidence before beginning the snapshot reload.",
+);
+const runtimeProviderHealthWriteIndex = crmApp.indexOf(
+  "setAiRuntimeProviderHealth({",
+  crmApp.indexOf("const runAiCommandPrompt = async"),
+);
+const runtimeProviderHealthWriteBoundary = crmApp.slice(
+  runtimeProviderHealthWriteIndex,
+  runtimeProviderHealthWriteIndex + 360,
+);
+for (const runtimeEvidenceBoundary of [
+  "companyId: requestCompanyId",
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  'state: result.providerHealth.ok ? "ready" : "failed"',
+]) {
+  includes(
+    runtimeProviderHealthWriteBoundary,
+    runtimeEvidenceBoundary,
+    `Runtime provider-health evidence is missing boundary ${runtimeEvidenceBoundary}.`,
   );
 }
 for (const stalePersistenceClaim of [
