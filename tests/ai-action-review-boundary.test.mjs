@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
@@ -130,6 +131,13 @@ for (const serviceBoundary of [
   'redirect: "error"',
   "AbortSignal.timeout(SUPABASE_OPENAPI_TIMEOUT_MS)",
   "SUPABASE_OPENAPI_MAX_BYTES",
+  "AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000",
+  "AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000",
+  "const aiQuotaCapabilityCache = new WeakMap",
+  'createHash("sha256")',
+  "if (cacheEntry.inFlight)",
+  "return cacheEntry.inFlight",
+  "cacheEntry.expiresAt > checkedAt",
   'const AI_QUOTA_RPC_PATH = "/rpc/wtos_reserve_ai_request_v1"',
   '"p_company_id"',
   '"p_actor_user_id"',
@@ -187,6 +195,9 @@ const requireForServiceTest = (specifier) => {
         throw new Error("The read-only capability test must not create a Supabase client.");
       },
     };
+  }
+  if (specifier === "node:crypto") {
+    return { createHash };
   }
   throw new Error(`Unexpected service module dependency: ${specifier}`);
 };
@@ -272,6 +283,96 @@ assert(
       "Bearer unit-test-service-role-secret" &&
     !capturedCapabilityRequest.input.includes("unit-test-service-role-secret"),
   "The capability request must be an exact, non-cached, server-authenticated schema read without credentials in the URL.",
+);
+
+let coalescedFetchCalls = 0;
+let resolveCoalescedFetch = null;
+let capabilityNow = 1_000;
+const coalescedFetcher = async () => {
+  coalescedFetchCalls += 1;
+  await new Promise((resolve) => {
+    resolveCoalescedFetch = resolve;
+  });
+  return openApiResponse(JSON.stringify(exactQuotaOpenApiDocument()));
+};
+const firstCoalescedCapability = verifySupabaseAiQuotaServiceCapability(
+  testServiceEnv,
+  coalescedFetcher,
+  () => capabilityNow,
+);
+const secondCoalescedCapability = verifySupabaseAiQuotaServiceCapability(
+  testServiceEnv,
+  coalescedFetcher,
+  () => capabilityNow,
+);
+await Promise.resolve();
+assert(
+  coalescedFetchCalls === 1 && typeof resolveCoalescedFetch === "function",
+  "Concurrent status checks must coalesce into one quota capability request.",
+);
+resolveCoalescedFetch();
+assert(
+  (await firstCoalescedCapability) === true &&
+    (await secondCoalescedCapability) === true,
+  "Every coalesced caller must receive the same successful capability result.",
+);
+capabilityNow = 60_999;
+assert(
+  (await verifySupabaseAiQuotaServiceCapability(
+    testServiceEnv,
+    coalescedFetcher,
+    () => capabilityNow,
+  )) === true && coalescedFetchCalls === 1,
+  "A successful capability result must be reused only within its bounded TTL.",
+);
+capabilityNow = 61_001;
+const expiredCapability = verifySupabaseAiQuotaServiceCapability(
+  testServiceEnv,
+  coalescedFetcher,
+  () => capabilityNow,
+);
+await Promise.resolve();
+assert(
+  coalescedFetchCalls === 2 && typeof resolveCoalescedFetch === "function",
+  "An expired capability result must trigger one fresh request.",
+);
+resolveCoalescedFetch();
+assert(
+  (await expiredCapability) === true,
+  "The refreshed capability request must update the bounded cache.",
+);
+
+let failedCapabilityFetchCalls = 0;
+let failedCapabilityNow = 2_000;
+const failedCapabilityFetcher = async () => {
+  failedCapabilityFetchCalls += 1;
+  return openApiResponse("{}", { status: 401 });
+};
+assert(
+  (await verifySupabaseAiQuotaServiceCapability(
+    testServiceEnv,
+    failedCapabilityFetcher,
+    () => failedCapabilityNow,
+  )) === false && failedCapabilityFetchCalls === 1,
+  "A rejected service credential must fail closed.",
+);
+failedCapabilityNow = 6_999;
+assert(
+  (await verifySupabaseAiQuotaServiceCapability(
+    testServiceEnv,
+    failedCapabilityFetcher,
+    () => failedCapabilityNow,
+  )) === false && failedCapabilityFetchCalls === 1,
+  "A failed capability result must be briefly cached to bound outage polling.",
+);
+failedCapabilityNow = 7_001;
+assert(
+  (await verifySupabaseAiQuotaServiceCapability(
+    testServiceEnv,
+    failedCapabilityFetcher,
+    () => failedCapabilityNow,
+  )) === false && failedCapabilityFetchCalls === 2,
+  "A failed capability result must retry after its shorter bounded TTL.",
 );
 
 let missingConfigFetchCalls = 0;

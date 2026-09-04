@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../crm/types";
 
@@ -11,6 +12,19 @@ const AI_QUOTA_RPC_ARGUMENTS = [
 ] as const;
 const SUPABASE_OPENAPI_MAX_BYTES = 2 * 1024 * 1024;
 const SUPABASE_OPENAPI_TIMEOUT_MS = 8_000;
+const AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS = 60_000;
+const AI_QUOTA_CAPABILITY_FAILURE_TTL_MS = 5_000;
+
+type AiQuotaCapabilityCacheEntry = {
+  value: boolean | null;
+  expiresAt: number;
+  inFlight: Promise<boolean> | null;
+};
+
+const aiQuotaCapabilityCache = new WeakMap<
+  typeof fetch,
+  Map<string, AiQuotaCapabilityCacheEntry>
+>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -127,19 +141,10 @@ export function hasSupabaseServiceRoleConfig(
   return readSupabaseServiceRoleConfig(env) !== null;
 }
 
-/**
- * Verifies the trusted quota RPC through PostgREST's role-filtered OpenAPI
- * document. This checks the active service credential, grant, and exact RPC
- * signature without invoking the reservation function or mutating quota data.
- */
-export async function verifySupabaseAiQuotaServiceCapability(
-  env: NodeJS.ProcessEnv = process.env,
-  fetcher: typeof fetch = fetch,
+async function probeSupabaseAiQuotaServiceCapability(
+  config: { url: string; serviceRoleKey: string },
+  fetcher: typeof fetch,
 ) {
-  const config = readSupabaseServiceRoleConfig(env);
-  if (!config) {
-    return false;
-  }
   try {
     const response = await fetcher(new URL("/rest/v1/", config.url), {
       method: "GET",
@@ -168,6 +173,63 @@ export async function verifySupabaseAiQuotaServiceCapability(
   } catch {
     return false;
   }
+}
+
+/**
+ * Verifies the trusted quota RPC through PostgREST's role-filtered OpenAPI
+ * document. This checks the active service credential, grant, and exact RPC
+ * signature without invoking the reservation function or mutating quota data.
+ */
+export async function verifySupabaseAiQuotaServiceCapability(
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
+  now: () => number = Date.now,
+) {
+  const config = readSupabaseServiceRoleConfig(env);
+  if (!config) {
+    return false;
+  }
+
+  let fetcherCache = aiQuotaCapabilityCache.get(fetcher);
+  if (!fetcherCache) {
+    fetcherCache = new Map();
+    aiQuotaCapabilityCache.set(fetcher, fetcherCache);
+  }
+  const cacheKey = createHash("sha256")
+    .update(config.url)
+    .update("\0")
+    .update(config.serviceRoleKey)
+    .digest("hex");
+  let cacheEntry = fetcherCache.get(cacheKey);
+  if (!cacheEntry) {
+    cacheEntry = { value: null, expiresAt: 0, inFlight: null };
+    fetcherCache.set(cacheKey, cacheEntry);
+  }
+  const checkedAt = now();
+  if (cacheEntry.value !== null && cacheEntry.expiresAt > checkedAt) {
+    return cacheEntry.value;
+  }
+  if (cacheEntry.inFlight) {
+    return cacheEntry.inFlight;
+  }
+
+  const inFlight = probeSupabaseAiQuotaServiceCapability(config, fetcher)
+    .then((value) => {
+      cacheEntry.value = value;
+      cacheEntry.expiresAt =
+        now() +
+        (value
+          ? AI_QUOTA_CAPABILITY_SUCCESS_TTL_MS
+          : AI_QUOTA_CAPABILITY_FAILURE_TTL_MS);
+      return value;
+    })
+    .finally(() => {
+      if (cacheEntry.inFlight === inFlight) {
+        cacheEntry.inFlight = null;
+      }
+    });
+  cacheEntry.inFlight = inFlight;
+  return inFlight;
 }
 
 /**
