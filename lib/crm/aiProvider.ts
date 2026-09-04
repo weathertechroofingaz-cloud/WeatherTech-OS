@@ -456,6 +456,8 @@ export function isAiQuotaReservationRequestWithinBounds(
       1,
       aiQuotaBounds.maxCompanyMonthlyBudgetCents,
     ) &&
+    request.estimatedCostCents <= request.dailyBudgetCents &&
+    request.estimatedCostCents <= request.companyMonthlyBudgetCents &&
     isIntegerWithin(request.maxRequestTokens, 1, aiQuotaBounds.maxTokens) &&
     request.estimatedRequestTokens <= request.maxRequestTokens
   );
@@ -1817,7 +1819,10 @@ function hasQuotaCompatibleProviderConfig(
 }
 
 function hasConfiguredUsageLimits(config: AiPilotProviderConfig) {
-  return hasQuotaCompatibleProviderConfig(config, 1);
+  return hasQuotaCompatibleProviderConfig(
+    config,
+    aiQuotaBounds.maxCompanyMonthlyBudgetCents,
+  );
 }
 
 function normalizeProvider(value: string | undefined): AiProviderKey {

@@ -610,6 +610,14 @@ try {
     ["user request limit", { ...exactQuotaMaximums, userDailyRequestLimit: 100_001 }],
     ["daily budget", { ...exactQuotaMaximums, dailyBudgetCents: 100_000_001 }],
     ["company monthly budget", { ...exactQuotaMaximums, companyMonthlyBudgetCents: 1_000_000_001 }],
+    [
+      "reservation cost above daily budget",
+      { ...exactQuotaMaximums, dailyBudgetCents: 99_999_999 },
+    ],
+    [
+      "reservation cost above company monthly budget",
+      { ...exactQuotaMaximums, companyMonthlyBudgetCents: 99_999_999 },
+    ],
     ["request token cap", { ...exactQuotaMaximums, maxRequestTokens: 1_000_001 }],
     ["extra property", { ...exactQuotaMaximums, unexpected: true }],
   ]) {
@@ -702,6 +710,45 @@ try {
     maximumBoundedStatus.usageAccountingConfigured,
     true,
     "Exact quota RPC maximums retain accounting readiness",
+  );
+  const insufficientDailyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 5000,
+    },
+    config: {
+      ...productionStatusConfig,
+      dailyBudgetUsd: 0.01,
+    },
+  });
+  assertEqual(
+    insufficientDailyBudgetStatus.aiEnabled,
+    false,
+    "Company status cannot enable AI when one maximum reservation exceeds the daily budget",
+  );
+  assertEqual(
+    insufficientDailyBudgetStatus.usageAccountingConfigured,
+    false,
+    "Daily budget capacity is required before accounting can report ready",
+  );
+  const insufficientCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: {
+      ...baseCompanyPolicy,
+      per_company_monthly_budget_cents: 1,
+    },
+    config: productionStatusConfig,
+  });
+  assertEqual(
+    insufficientCompanyBudgetStatus.aiEnabled,
+    false,
+    "Company status cannot enable AI when one maximum reservation exceeds its monthly budget",
+  );
+  assertEqual(
+    insufficientCompanyBudgetStatus.usageAccountingConfigured,
+    false,
+    "Company monthly budget capacity is required before accounting can report ready",
   );
   const enabledCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
@@ -1025,6 +1072,7 @@ try {
     },
     providerConfig: {
       ...scopedConfig.config,
+      dailyBudgetUsd: 20,
       maxRequestTokens: 100_000,
       retryLimit: 0,
     },
@@ -1090,6 +1138,7 @@ try {
       now,
       providerConfig: {
         ...scopedConfig.config,
+        dailyBudgetUsd: 20,
         maxRequestTokens: 100_000,
         retryLimit: 0,
       },
@@ -1157,6 +1206,7 @@ try {
     now,
     providerConfig: {
       ...scopedConfig.config,
+      dailyBudgetUsd: 20,
       maxRequestTokens: 100_000,
       retryLimit: 0,
       timeoutMs: 1,
@@ -1210,6 +1260,7 @@ try {
       now,
       providerConfig: {
         ...scopedConfig.config,
+        dailyBudgetUsd: 20,
         maxRequestTokens: 100_000,
         retryLimit: 0,
       },

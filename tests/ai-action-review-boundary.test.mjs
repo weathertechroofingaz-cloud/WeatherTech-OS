@@ -629,6 +629,8 @@ for (const quotaContractBoundary of [
   "export function isAiQuotaReservationReceiptWithinBounds(",
   "request.estimatedRequestTokens >= Math.ceil(request.promptCharacters / 8)",
   "request.estimatedRequestTokens <= request.maxRequestTokens",
+  "request.estimatedCostCents <= request.dailyBudgetCents",
+  "request.estimatedCostCents <= request.companyMonthlyBudgetCents",
   "maximumEstimatedCostUsd * 100 * maxProviderAttempts",
   "hasQuotaCompatibleProviderConfig(",
 ]) {
