@@ -724,7 +724,10 @@ export type GoHighLevelOAuthBindingResult =
     }
   | {
       ok: false;
-      reason: "location_company_conflict" | "binding_failed";
+      reason:
+        | "location_company_conflict"
+        | "company_location_conflict"
+        | "binding_failed";
       error: string;
     };
 
@@ -771,6 +774,14 @@ export async function bindGoHighLevelOAuthConnection({
       ok: false,
       reason: "location_company_conflict",
       error: "This HighLevel location is already mapped to another WeatherTech OS company.",
+    };
+  }
+  if (disposition === "company_location_conflict") {
+    return {
+      ok: false,
+      reason: "company_location_conflict",
+      error:
+        "This WeatherTech OS company is already mapped to another HighLevel location.",
     };
   }
 

@@ -1332,6 +1332,58 @@ try {
     "Product review reads do not send the rejected locationId parameter",
   );
 
+  const reviewPageRequests = [];
+  const reviewPages = await sync.fetchGoHighLevelReviewPages({
+    accessToken: "test-token",
+    locationId: "location-weathertech",
+    pageLimit: 2,
+    fetchImpl: async (url, init) => {
+      const requestUrl = new URL(String(url));
+      reviewPageRequests.push({
+        pathname: requestUrl.pathname,
+        offset: requestUrl.searchParams.get("offset"),
+        altId: requestUrl.searchParams.get("altId"),
+        altType: requestUrl.searchParams.get("altType"),
+        version: init.headers.Version,
+      });
+
+      return requestUrl.searchParams.get("offset") === "0"
+        ? jsonResponse(200, {
+            data: [
+              { id: "review-1", locationId: "location-weathertech" },
+              { id: "review-2", locationId: "location-weathertech" },
+            ],
+            total: 3,
+          })
+        : jsonResponse(200, {
+            data: [
+              { id: "review-3", locationId: "location-weathertech" },
+            ],
+            total: 3,
+          });
+    },
+  });
+  assertEqual(reviewPages.ok, true, "Official product review envelopes are accepted");
+  assertEqual(reviewPages.pages, 2, "Product reviews follow offset pagination");
+  assertEqual(reviewPages.fetched, 3, "Product review pagination counts every row");
+  assertEqual(reviewPages.records.length, 3, "Product review pages retain every identity");
+  assertEqual(reviewPages.failedPages, 0, "Official product review pages do not fail");
+  assertEqual(
+    reviewPageRequests.map((request) => request.offset).join(","),
+    "0,2",
+    "Product review offsets advance by the returned page size",
+  );
+  assert(
+    reviewPageRequests.every(
+      (request) =>
+        request.pathname === "/products/reviews" &&
+        request.altId === "location-weathertech" &&
+        request.altType === "location" &&
+        request.version === "v3",
+    ),
+    "Every product review page uses the documented location-scoped v3 contract",
+  );
+
   const connection = {
     id: "connection-weathertech",
     company_id: "company-weathertech",

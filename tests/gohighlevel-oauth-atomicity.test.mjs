@@ -402,8 +402,15 @@ function makeBinding(overrides = {}) {
   };
 }
 
-function createAtomicBindingService({ failLocationId = null } = {}) {
-  let storage = { connections: [], credentials: [] };
+function createAtomicBindingService({
+  failLocationId = null,
+  initialConnections = [],
+  initialCredentials = [],
+} = {}) {
+  let storage = {
+    connections: structuredClone(initialConnections),
+    credentials: structuredClone(initialCredentials),
+  };
   const calls = [];
   let sequence = 1;
   const nextId = () =>
@@ -439,15 +446,29 @@ function createAtomicBindingService({ failLocationId = null } = {}) {
         };
       }
 
+      const companyMapping = staged.connections.find(
+        (item) => item.companyId === binding.companyId,
+      );
+      if (
+        companyMapping?.externalLocationId &&
+        companyMapping.externalLocationId !== binding.externalLocationId
+      ) {
+        return {
+          data: {
+            contractVersion: 1,
+            disposition: "company_location_conflict",
+            companyId: binding.companyId,
+            locationId: binding.externalLocationId,
+          },
+          error: null,
+        };
+      }
+
       let connection = existingCredential
         ? staged.connections.find(
             (item) => item.id === existingCredential.connectionId,
           )
-        : staged.connections.find(
-            (item) =>
-              item.companyId === binding.companyId &&
-              item.externalLocationId === binding.externalLocationId,
-          );
+        : companyMapping;
       const reconnect = Boolean(connection || existingCredential);
       if (!connection) {
         connection = {
@@ -458,6 +479,10 @@ function createAtomicBindingService({ failLocationId = null } = {}) {
         };
         staged.connections.push(connection);
       }
+      Object.assign(connection, {
+        externalLocationId: binding.externalLocationId,
+        status: "connected",
+      });
 
       if (binding.externalLocationId === failLocationId) {
         return {
@@ -1794,6 +1819,45 @@ test("atomic callback binding rolls back, reconnects idempotently, and rejects c
   assert.equal(bindingService.snapshot().connections.length, 1);
   assert.equal(bindingService.snapshot().credentials.length, 1);
 
+  const beforeCompanyRebind = bindingService.snapshot();
+  const companyRebind = await oauth.bindGoHighLevelOAuthConnection({
+    serviceClient: bindingService.client,
+    binding: makeBinding({ externalLocationId: "location-beta" }),
+  });
+  assert.deepEqual(companyRebind, {
+    ok: false,
+    reason: "company_location_conflict",
+    error:
+      "This WeatherTech OS company is already mapped to another HighLevel location.",
+  });
+  assert.deepEqual(bindingService.snapshot(), beforeCompanyRebind);
+
+  const placeholderConnectionId =
+    "40000000-0000-4000-8000-000000000099";
+  const placeholderService = createAtomicBindingService({
+    initialConnections: [
+      {
+        id: placeholderConnectionId,
+        companyId: makeBinding().companyId,
+        externalLocationId: null,
+        status: "paused",
+      },
+    ],
+  });
+  const adoptedPlaceholder = await oauth.bindGoHighLevelOAuthConnection({
+    serviceClient: placeholderService.client,
+    binding: makeBinding(),
+  });
+  assert.equal(adoptedPlaceholder.ok, true);
+  assert.equal(adoptedPlaceholder.connectionId, placeholderConnectionId);
+  assert.equal(placeholderService.snapshot().connections.length, 1);
+  assert.equal(placeholderService.snapshot().credentials.length, 1);
+  assert.equal(
+    placeholderService.snapshot().connections[0].externalLocationId,
+    "location-alpha",
+  );
+  assert.equal(placeholderService.snapshot().connections[0].status, "connected");
+
   const beforeConflict = bindingService.snapshot();
   const conflict = await oauth.bindGoHighLevelOAuthConnection({
     serviceClient: bindingService.client,
@@ -2839,10 +2903,30 @@ test("SQL and callback contracts keep atomic writes, service-only leases, agency
   );
 
   const bindingBody = functionBody("wtos_bind_gohighlevel_oauth_v1");
-  assert.match(bindingBody, /pg_advisory_xact_lock/);
+  assert.match(
+    migration,
+    /create unique index if not exists integration_connections_gohighlevel_company_uidx[\s\S]*?on public\.integration_connections\(company_id\)[\s\S]*?where provider = 'gohighlevel'/,
+  );
+  assert.match(
+    bindingBody,
+    /pg_advisory_xact_lock\([\s\S]*?oauth:company:[\s\S]*?pg_advisory_xact_lock\([\s\S]*?oauth:location:/,
+  );
   assert.match(
     bindingBody,
     /credential\.external_location_id = target_location_id[\s\S]*?existing_credential\.company_id is distinct from target_company_id/,
+  );
+  assert.match(
+    bindingBody,
+    /connection\.company_id = target_company_id[\s\S]*?connection\.provider = 'gohighlevel'[\s\S]*?existing_company_connection\.external_account_id[\s\S]*?is distinct from target_location_id[\s\S]*?'disposition', 'company_location_conflict'/,
+  );
+  assert.ok(
+    bindingBody.indexOf("'disposition', 'company_location_conflict'") <
+      bindingBody.indexOf("insert into public.integration_connections"),
+    "company/location conflicts must return before connection mutation",
+  );
+  assert.match(
+    bindingBody,
+    /target_connection := existing_company_connection[\s\S]*?if target_connection\.id is null then[\s\S]*?insert into public\.integration_connections/,
   );
   assert.match(bindingBody, /insert into public\.integration_connections/);
   assert.match(bindingBody, /update public\.integration_connections/);

@@ -56,6 +56,13 @@ create index if not exists gohighlevel_oauth_credentials_refresh_lease_idx
 on public.gohighlevel_oauth_credentials(refresh_lease_expires_at)
 where refresh_lease_id is not null;
 
+-- A WTOS company has one exact HighLevel connection. Enforce that invariant at
+-- storage level so callbacks for two different locations cannot race into two
+-- rows even if they arrive in separate serverless invocations.
+create unique index if not exists integration_connections_gohighlevel_company_uidx
+on public.integration_connections(company_id)
+where provider = 'gohighlevel';
+
 -- Exact sync-run ownership is persisted in the audit row itself. Legacy rows
 -- remain readable; a legacy running row without a lease is treated as stale by
 -- the claim RPC and transitioned before a replacement run is inserted.
@@ -4133,6 +4140,7 @@ declare
   target_settings jsonb;
   existing_credential public.gohighlevel_oauth_credentials%rowtype;
   attached_credential public.gohighlevel_oauth_credentials%rowtype;
+  existing_company_connection public.integration_connections%rowtype;
   target_connection public.integration_connections%rowtype;
   reconnect boolean := false;
 begin
@@ -4231,7 +4239,14 @@ begin
 
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(
-      'wtos:gohighlevel:oauth:' || target_location_id,
+      'wtos:gohighlevel:oauth:company:' || target_company_id::text,
+      0
+    )
+  );
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      'wtos:gohighlevel:oauth:location:' || target_location_id,
       0
     )
   );
@@ -4252,6 +4267,26 @@ begin
     );
   end if;
 
+  select connection.*
+  into existing_company_connection
+  from public.integration_connections as connection
+  where connection.company_id = target_company_id
+    and connection.provider = 'gohighlevel'
+  order by connection.id
+  limit 1
+  for update;
+
+  if existing_company_connection.id is not null
+    and existing_company_connection.external_account_id
+      is distinct from target_location_id then
+    return pg_catalog.jsonb_build_object(
+      'contractVersion', binding_contract_version,
+      'disposition', 'company_location_conflict',
+      'companyId', target_company_id,
+      'locationId', target_location_id
+    );
+  end if;
+
   if existing_credential.id is not null then
     select connection.*
     into target_connection
@@ -4266,13 +4301,7 @@ begin
     end if;
     reconnect := true;
   else
-    select connection.*
-    into target_connection
-    from public.integration_connections as connection
-    where connection.company_id = target_company_id
-      and connection.provider = 'gohighlevel'
-      and connection.external_account_id = target_location_id
-    for update;
+    target_connection := existing_company_connection;
 
     if target_connection.id is null then
       insert into public.integration_connections (
