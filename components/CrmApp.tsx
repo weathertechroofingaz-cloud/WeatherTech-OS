@@ -41673,8 +41673,10 @@ function AiPilotControlPanel({
         <p className="text-sm font-semibold text-slate-950">Usage and cost controls</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {usage?.reason ??
-            (providerStatus
+            (providerStatus?.usageAccountingConfigured
               ? `Usage accounting is configured with a ${formatMoney(providerStatus.monthlyBudgetCents / 100)} monthly company budget.`
+              : providerStatus
+                ? "Usage accounting is not ready for this company. No provider call can run until the required controls are complete."
               : "Select one company to load its authenticated usage and cost controls.")}
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">

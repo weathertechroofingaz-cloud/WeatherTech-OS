@@ -307,6 +307,8 @@ for (const statusUiBoundary of [
   'aria-busy={isLoading}',
   'label={`${formatMoney(status.monthlyBudgetCents / 100)}/month`}',
   'label="External actions disabled"',
+  "providerStatus?.usageAccountingConfigured",
+  "Usage accounting is not ready for this company. No provider call can run until the required controls are complete.",
   "getAiEndpointErrorMessage(",
   "aiProviderStatusRequestSequenceRef.current + 1",
   "setAiProviderStatusRequestSequence(requestSequence)",
