@@ -139,6 +139,8 @@ export async function GET(request: NextRequest) {
     usageLimits: [companyPolicy],
     companyId: authorization.companyId,
   });
+  const forceQuotaProbeRefresh =
+    request.headers.get("x-wtos-ai-quota-probe-refresh") === "1";
   let quotaStatus = null;
   let quotaProbeEstimatedRequestTokens = null;
   if (companyConfig.ok) {
@@ -151,6 +153,7 @@ export async function GET(request: NextRequest) {
         policyUpdatedAt: companyPolicy.updated_at,
         companyMonthlyBudgetCents: companyConfig.companyMonthlyBudgetCents,
         config: companyConfig.config,
+        forceRefresh: forceQuotaProbeRefresh,
         load: async () => {
           const quotaProbeSnapshot = await fetchCrmSnapshot(client);
           return estimateAiQuotaStatusProbe({
@@ -221,7 +224,11 @@ export async function GET(request: NextRequest) {
     quotaStatus,
     quotaProbeEstimatedRequestTokens,
   });
-  return noStoreJson(status, 200);
+  const statusResponse = noStoreJson(status, 200);
+  if (forceQuotaProbeRefresh) {
+    statusResponse.headers.set("x-wtos-ai-quota-probe-refresh", "1");
+  }
+  return statusResponse;
 }
 
 export async function POST(request: NextRequest) {

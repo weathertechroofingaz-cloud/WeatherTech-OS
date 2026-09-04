@@ -116,6 +116,70 @@ try {
   const now = "2026-08-04T16:00:00.000Z";
   const wtCompanyId = "11111111-1111-4111-8111-111111111111";
   const ihcCompanyId = "22222222-2222-4222-8222-222222222222";
+  const consumedQuotaProbeRefreshes = new Map();
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      0,
+    ),
+    false,
+    "Initial status load must not force an explicit CRM context refresh",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "WeatherTech must require its first explicit Refresh generation",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "An unacknowledged or aborted WeatherTech Refresh must keep forcing a fresh snapshot",
+  );
+  assertEqual(
+    aiTools.acknowledgeAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    true,
+    "A valid exact-company status response must acknowledge its Refresh generation",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      1,
+    ),
+    false,
+    "Repeated WeatherTech status reloads after acknowledgement must reuse the fresh estimate",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      ihcCompanyId,
+      1,
+    ),
+    true,
+    "IHC must independently consume the same global Refresh generation",
+  );
+  assertEqual(
+    aiTools.shouldForceAiQuotaProbeRefresh(
+      consumedQuotaProbeRefreshes,
+      wtCompanyId,
+      2,
+    ),
+    true,
+    "A later WeatherTech Refresh generation must force one new context estimate",
+  );
   const currentFailedProviderHealth = {
     companyId: wtCompanyId,
     statusRefreshSequence: 7,
@@ -193,6 +257,36 @@ try {
     "",
     "WeatherTech command errors never appear in IHC",
   );
+  const currentResponseHistory = [{ id: "current-grounded-response" }];
+  const currentResponseEvidence = {
+    companyId: wtCompanyId,
+    statusRefreshSequence: 9,
+    responses: currentResponseHistory,
+  };
+  assertEqual(
+    aiTools.getCurrentAiResponses({
+      evidence: currentResponseEvidence,
+      companyId: wtCompanyId,
+      statusRefreshSequence: 9,
+    }),
+    currentResponseHistory,
+    "Current exact-company response history remains visible in its accepted generation",
+  );
+  for (const staleResponseSelection of [
+    { companyId: wtCompanyId, statusRefreshSequence: 10 },
+    { companyId: ihcCompanyId, statusRefreshSequence: 9 },
+    { companyId: null, statusRefreshSequence: 9 },
+    { companyId: wtCompanyId, statusRefreshSequence: Number.NaN },
+  ]) {
+    assertEqual(
+      aiTools.getCurrentAiResponses({
+        evidence: currentResponseEvidence,
+        ...staleResponseSelection,
+      }).length,
+      0,
+      "Stale, cross-company, unselected, or invalid response evidence must stay hidden",
+    );
+  }
   assertEqual(
     aiTools.isCurrentAiCommandCompletion({
       activeCompanyId: wtCompanyId,

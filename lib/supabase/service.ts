@@ -41,6 +41,7 @@ type AiQuotaProbeCacheEntry = {
   value: number | null;
   expiresAt: number;
   inFlight: Promise<number | null> | null;
+  queuedRefresh: Promise<number | null> | null;
 };
 
 const aiQuotaProbeCache = new Map<string, AiQuotaProbeCacheEntry>();
@@ -318,13 +319,13 @@ function makeAiQuotaProbeCacheKey({
 
 function makeAiQuotaProbeCacheRoom(checkedAt: number) {
   for (const [key, entry] of aiQuotaProbeCache) {
-    if (!entry.inFlight && entry.expiresAt <= checkedAt) {
+    if (!entry.inFlight && !entry.queuedRefresh && entry.expiresAt <= checkedAt) {
       aiQuotaProbeCache.delete(key);
     }
   }
   while (aiQuotaProbeCache.size >= AI_QUOTA_PROBE_CACHE_MAX_ENTRIES) {
     const oldestSettledKey = [...aiQuotaProbeCache].find(
-      ([, entry]) => !entry.inFlight,
+      ([, entry]) => !entry.inFlight && !entry.queuedRefresh,
     )?.[0];
     if (!oldestSettledKey) {
       return false;
@@ -334,66 +335,13 @@ function makeAiQuotaProbeCacheRoom(checkedAt: number) {
   return true;
 }
 
-/**
- * Coalesces the expensive authenticated CRM snapshot used only to estimate a
- * concrete quota probe. Cache entries retain a bounded token count, never CRM
- * rows, credentials, identifiers, or errors. Quota counters remain uncached.
- */
-export async function readCachedAiQuotaProbeEstimatedRequestTokens(
-  {
-    companyId,
-    actorUserId,
-    userRole,
-    policyId,
-    policyUpdatedAt,
-    companyMonthlyBudgetCents,
-    config,
-    load,
-  }: {
-    companyId: string;
-    actorUserId: string;
-    userRole: string;
-    policyId: string;
-    policyUpdatedAt: string;
-    companyMonthlyBudgetCents: number;
-    config: AiPilotProviderConfig;
-    load: () => Promise<number>;
-  },
-  now: () => number = Date.now,
+function startAiQuotaProbeLoad(
+  activeEntry: AiQuotaProbeCacheEntry,
+  load: () => Promise<number>,
+  now: () => number,
 ) {
-  const cacheKey = makeAiQuotaProbeCacheKey({
-    companyId,
-    actorUserId,
-    userRole,
-    policyId,
-    policyUpdatedAt,
-    companyMonthlyBudgetCents,
-    config,
-  });
-  if (!cacheKey) {
-    return null;
-  }
-  const checkedAt = now();
-  let cacheEntry = aiQuotaProbeCache.get(cacheKey);
-  if (cacheEntry) {
-    aiQuotaProbeCache.delete(cacheKey);
-    aiQuotaProbeCache.set(cacheKey, cacheEntry);
-    if (cacheEntry.expiresAt > checkedAt) {
-      return cacheEntry.value;
-    }
-    if (cacheEntry.inFlight) {
-      return cacheEntry.inFlight;
-    }
-  } else {
-    if (!makeAiQuotaProbeCacheRoom(checkedAt)) {
-      return null;
-    }
-    cacheEntry = { value: null, expiresAt: 0, inFlight: null };
-    aiQuotaProbeCache.set(cacheKey, cacheEntry);
-  }
-
-  const activeEntry = cacheEntry;
-  const inFlight = Promise.resolve()
+  let inFlight: Promise<number | null>;
+  inFlight = Promise.resolve()
     .then(load)
     .then((value) =>
       Number.isSafeInteger(value) &&
@@ -419,6 +367,116 @@ export async function readCachedAiQuotaProbeEstimatedRequestTokens(
     });
   activeEntry.inFlight = inFlight;
   return inFlight;
+}
+
+function queueAiQuotaProbeRefresh(
+  activeEntry: AiQuotaProbeCacheEntry,
+  load: () => Promise<number>,
+  now: () => number,
+) {
+  if (!activeEntry.inFlight) {
+    return startAiQuotaProbeLoad(activeEntry, load, now);
+  }
+  if (activeEntry.queuedRefresh) {
+    return activeEntry.queuedRefresh;
+  }
+
+  const precedingLoad = activeEntry.inFlight;
+  let queuedPromise: Promise<number | null>;
+  queuedPromise = precedingLoad.then(() => {
+    if (activeEntry.queuedRefresh !== queuedPromise) {
+      return null;
+    }
+    activeEntry.queuedRefresh = null;
+    if (activeEntry.inFlight) {
+      return activeEntry.inFlight;
+    }
+    return startAiQuotaProbeLoad(activeEntry, load, now);
+  });
+  activeEntry.queuedRefresh = queuedPromise;
+  return queuedPromise;
+}
+
+/**
+ * Coalesces the expensive authenticated CRM snapshot used only to estimate a
+ * concrete quota probe. Cache entries retain a bounded token count, never CRM
+ * rows, credentials, identifiers, or errors. Explicit Refresh requests bypass
+ * a settled value and serialize behind at most one active plus one queued load
+ * per stable key. Quota counters remain uncached.
+ */
+export async function readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    companyId,
+    actorUserId,
+    userRole,
+    policyId,
+    policyUpdatedAt,
+    companyMonthlyBudgetCents,
+    config,
+    forceRefresh,
+    load,
+  }: {
+    companyId: string;
+    actorUserId: string;
+    userRole: string;
+    policyId: string;
+    policyUpdatedAt: string;
+    companyMonthlyBudgetCents: number;
+    config: AiPilotProviderConfig;
+    forceRefresh: boolean;
+    load: () => Promise<number>;
+  },
+  now: () => number = Date.now,
+) {
+  const cacheKey = makeAiQuotaProbeCacheKey({
+    companyId,
+    actorUserId,
+    userRole,
+    policyId,
+    policyUpdatedAt,
+    companyMonthlyBudgetCents,
+    config,
+  });
+  if (!cacheKey) {
+    return null;
+  }
+  if (typeof forceRefresh !== "boolean") {
+    return null;
+  }
+  const checkedAt = now();
+  let cacheEntry = aiQuotaProbeCache.get(cacheKey);
+  if (cacheEntry) {
+    aiQuotaProbeCache.delete(cacheKey);
+    aiQuotaProbeCache.set(cacheKey, cacheEntry);
+    if (cacheEntry.queuedRefresh) {
+      return cacheEntry.queuedRefresh;
+    }
+    if (forceRefresh) {
+      if (cacheEntry.inFlight) {
+        return queueAiQuotaProbeRefresh(cacheEntry, load, now);
+      }
+      return startAiQuotaProbeLoad(cacheEntry, load, now);
+    }
+    if (cacheEntry.inFlight) {
+      return cacheEntry.inFlight;
+    }
+    if (cacheEntry.expiresAt > checkedAt) {
+      return cacheEntry.value;
+    }
+  } else {
+    if (!makeAiQuotaProbeCacheRoom(checkedAt)) {
+      return null;
+    }
+    cacheEntry = {
+      value: null,
+      expiresAt: 0,
+      inFlight: null,
+      queuedRefresh: null,
+    };
+    aiQuotaProbeCache.set(cacheKey, cacheEntry);
+  }
+
+  return startAiQuotaProbeLoad(cacheEntry, load, now);
 }
 
 /**

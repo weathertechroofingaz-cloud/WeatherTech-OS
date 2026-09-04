@@ -187,10 +187,13 @@ import {
 } from "../lib/crm/proposalOperations";
 import {
   answerAiCommand,
+  acknowledgeAiQuotaProbeRefresh,
   buildAiWorkspaceModel,
   getCurrentAiPilotError,
+  getCurrentAiResponses,
   getCurrentAiRuntimeProviderHealth,
   isCurrentAiCommandCompletion,
+  shouldForceAiQuotaProbeRefresh,
   type AiAdvisorModeKey,
   type AiAssistantDraft,
   type AiCommandCenterRecommendation,
@@ -198,6 +201,7 @@ import {
   type AiPriorityItem,
   type AiPilotErrorEvidence,
   type AiRecommendedAction,
+  type AiResponseHistoryEvidence,
   type AiRuntimeProviderHealthEvidence,
   type AiSourceRecord,
   type AiWorkspaceModel,
@@ -6419,6 +6423,7 @@ function CrmWorkspace({
   const [selectedCompanyId, setSelectedCompanyId] = useState<CompanyScopeId>("all");
   const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence] =
     useState(0);
+  const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>());
   const [companyScopeStorageReady, setCompanyScopeStorageReady] = useState(false);
   const [identityReconciliationFocusLeadId, setIdentityReconciliationFocusLeadId] =
     useState<string | null>(null);
@@ -6464,6 +6469,24 @@ function CrmWorkspace({
       );
       setJobPhotoRecoveryScanVersion((current) => current + 1);
     },
+    [],
+  );
+  const shouldForceQuotaProbeRefresh = useCallback(
+    (companyId: string, sequence: number) =>
+      shouldForceAiQuotaProbeRefresh(
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
+    [],
+  );
+  const acknowledgeQuotaProbeRefresh = useCallback(
+    (companyId: string, sequence: number) =>
+      acknowledgeAiQuotaProbeRefresh(
+        consumedAiQuotaProbeRefreshSequenceRef.current,
+        companyId,
+        sequence,
+      ),
     [],
   );
   const handleWorkspaceRefresh = useCallback(async () => {
@@ -7202,6 +7225,8 @@ function CrmWorkspace({
               companyMap={companyMap}
               activeCompanyId={selectedCompanyId}
               statusRefreshSequence={aiProviderStatusRefreshSequence}
+              shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}
+              acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}
               onReload={onReload}
               onNotice={onNotice}
               onError={onError}
@@ -39831,6 +39856,8 @@ type AiToolsViewProps = {
   companyMap: Map<string, CompanyRecord>;
   activeCompanyId: CompanyScopeId;
   statusRefreshSequence: number;
+  shouldForceQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
+  acknowledgeQuotaProbeRefresh: (companyId: string, sequence: number) => boolean;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
@@ -39912,6 +39939,8 @@ function AiToolsView({
   companyMap,
   activeCompanyId,
   statusRefreshSequence,
+  shouldForceQuotaProbeRefresh,
+  acknowledgeQuotaProbeRefresh,
   onReload,
   onNotice,
   onError,
@@ -39926,8 +39955,8 @@ function AiToolsView({
   );
   const [estimateDraft, setEstimateDraft] = useState<EstimateLineItemInput[]>([]);
   const [aiCommand, setAiCommand] = useState("");
-  const [aiResponses, setAiResponses] = useState<AiGroundedResponse[]>([]);
-  const [aiResponseCompanyId, setAiResponseCompanyId] = useState<string | null>(null);
+  const [aiResponseHistoryEvidence, setAiResponseHistoryEvidence] =
+    useState<AiResponseHistoryEvidence | null>(null);
   const [aiPilotResultEvidence, setAiPilotResultEvidence] =
     useState<AiPilotResultEvidence | null>(null);
   const [aiPilotErrorEvidence, setAiPilotErrorEvidence] =
@@ -39988,8 +40017,11 @@ function AiToolsView({
     aiPilotResultEvidence.statusRefreshSequence === statusRefreshSequence
       ? aiPilotResultEvidence.result
       : null;
-  const currentAiResponses =
-    aiResponseCompanyId === exactAiCompanyId ? aiResponses : [];
+  const currentAiResponses = getCurrentAiResponses({
+    evidence: aiResponseHistoryEvidence,
+    companyId: exactAiCompanyId,
+    statusRefreshSequence,
+  });
   const currentAiProviderStatusError =
     aiProviderStatusError?.companyId === exactAiCompanyId
       ? aiProviderStatusError.message
@@ -40050,8 +40082,7 @@ function AiToolsView({
     aiReviewAbortRef.current = null;
     activeAiCompanyRef.current = activeCompanyId;
     setAiCommand("");
-    setAiResponses([]);
-    setAiResponseCompanyId(null);
+    setAiResponseHistoryEvidence(null);
     setAiPilotResultEvidence(null);
     setAiPilotErrorEvidence(null);
     setAiProviderStatus(null);
@@ -40075,6 +40106,11 @@ function AiToolsView({
     }
 
     const requestCompanyId = exactAiCompanyId;
+    const requestStatusRefreshSequence = statusRefreshSequence;
+    const forceQuotaProbeRefresh = shouldForceQuotaProbeRefresh(
+      requestCompanyId,
+      requestStatusRefreshSequence,
+    );
     const requestSequence = aiProviderStatusRequestSequenceRef.current + 1;
     aiProviderStatusRequestSequenceRef.current = requestSequence;
     const controller = new AbortController();
@@ -40093,6 +40129,9 @@ function AiToolsView({
             method: "GET",
             credentials: "same-origin",
             cache: "no-store",
+            headers: forceQuotaProbeRefresh
+              ? { "x-wtos-ai-quota-probe-refresh": "1" }
+              : undefined,
             signal: controller.signal,
           },
         );
@@ -40110,11 +40149,23 @@ function AiToolsView({
           throw new Error("Production AI status returned an invalid company-scoped response.");
         }
         if (
+          forceQuotaProbeRefresh &&
+          response.headers.get("x-wtos-ai-quota-probe-refresh") !== "1"
+        ) {
+          throw new Error(
+            "Production AI status did not acknowledge the requested context refresh.",
+          );
+        }
+        if (
           controller.signal.aborted ||
           activeAiCompanyRef.current !== requestCompanyId
         ) {
           return;
         }
+        acknowledgeQuotaProbeRefresh(
+          requestCompanyId,
+          requestStatusRefreshSequence,
+        );
         setAiProviderStatus(payload);
       } catch (currentError) {
         if (
@@ -40142,7 +40193,9 @@ function AiToolsView({
     return () => controller.abort();
   }, [
     aiProviderStatusReloadSequence,
+    acknowledgeQuotaProbeRefresh,
     exactAiCompanyId,
+    shouldForceQuotaProbeRefresh,
     statusRefreshSequence,
   ]);
 
@@ -40324,8 +40377,17 @@ function AiToolsView({
         result,
         statusRefreshSequence: requestStatusRefreshSequence,
       });
-      setAiResponseCompanyId(requestCompanyId);
-      setAiResponses((current) => [result.response, ...current].slice(0, 6));
+      setAiResponseHistoryEvidence((current) => ({
+        companyId: requestCompanyId,
+        statusRefreshSequence: requestStatusRefreshSequence,
+        responses: [
+          result.response,
+          ...(current?.companyId === requestCompanyId &&
+          current.statusRefreshSequence === requestStatusRefreshSequence
+            ? current.responses
+            : []),
+        ].slice(0, 6),
+      }));
       setReviewedActionIds({});
     } catch (currentError) {
       if (
@@ -40350,8 +40412,17 @@ function AiToolsView({
           statusRefreshSequence: requestStatusRefreshSequence,
           message: `${getCaughtErrorMessage(currentError, "AI pilot endpoint unavailable.")} Showing local rule-based fallback.`,
         });
-        setAiResponseCompanyId(requestCompanyId);
-        setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6));
+        setAiResponseHistoryEvidence((current) => ({
+          companyId: requestCompanyId,
+          statusRefreshSequence: requestStatusRefreshSequence,
+          responses: [
+            fallbackResponse,
+            ...(current?.companyId === requestCompanyId &&
+            current.statusRefreshSequence === requestStatusRefreshSequence
+              ? current.responses
+              : []),
+          ].slice(0, 6),
+        }));
         setAiPilotResultEvidence(null);
         setReviewedActionIds({});
       }

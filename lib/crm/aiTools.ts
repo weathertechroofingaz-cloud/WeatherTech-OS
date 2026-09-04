@@ -71,6 +71,29 @@ export function isCurrentAiCommandCompletion({
     currentStatusRefreshSequence === requestStatusRefreshSequence
   );
 }
+
+export function shouldForceAiQuotaProbeRefresh(
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (!companyId || !Number.isSafeInteger(sequence) || sequence <= 0) {
+    return false;
+  }
+  return consumedByCompany.get(companyId) !== sequence;
+}
+
+export function acknowledgeAiQuotaProbeRefresh(
+  consumedByCompany: Map<string, number>,
+  companyId: string,
+  sequence: number,
+) {
+  if (!companyId || !Number.isSafeInteger(sequence) || sequence <= 0) {
+    return false;
+  }
+  consumedByCompany.set(companyId, sequence);
+  return true;
+}
 export type AiDailyOperationsTopic =
   | "attention_today"
   | "uncontacted_leads"
@@ -219,6 +242,34 @@ export type AiGroundedResponse = {
   actions: AiRecommendedAction[];
   createdAt: string;
 };
+
+export type AiResponseHistoryEvidence = {
+  companyId: string;
+  statusRefreshSequence: number;
+  responses: AiGroundedResponse[];
+};
+
+export function getCurrentAiResponses({
+  evidence,
+  companyId,
+  statusRefreshSequence,
+}: {
+  evidence: AiResponseHistoryEvidence | null;
+  companyId: string | null;
+  statusRefreshSequence: number;
+}) {
+  if (
+    !evidence ||
+    !companyId ||
+    evidence.companyId !== companyId ||
+    !Number.isSafeInteger(statusRefreshSequence) ||
+    evidence.statusRefreshSequence !== statusRefreshSequence
+  ) {
+    return [];
+  }
+
+  return evidence.responses;
+}
 
 export type AiAssistantDraft = {
   id: string;

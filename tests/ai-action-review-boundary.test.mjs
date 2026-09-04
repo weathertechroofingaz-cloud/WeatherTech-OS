@@ -66,6 +66,9 @@ const statusQuotaCapabilityIndex = statusRoute.indexOf(
 const statusCompanyConfigIndex = statusRoute.indexOf(
   "const companyConfig = resolveCompanyAiProviderConfig({",
 );
+const statusQuotaProbeRefreshIndex = statusRoute.indexOf(
+  'request.headers.get("x-wtos-ai-quota-probe-refresh") === "1"',
+);
 const statusQuotaProbeCacheIndex = statusRoute.indexOf(
   "await readCachedAiQuotaProbeEstimatedRequestTokens({",
 );
@@ -89,7 +92,8 @@ assert(
     statusPolicyIndex > statusMembershipIndex &&
     statusQuotaCapabilityIndex > statusPolicyIndex &&
     statusCompanyConfigIndex > statusQuotaCapabilityIndex &&
-    statusQuotaProbeCacheIndex > statusCompanyConfigIndex &&
+    statusQuotaProbeRefreshIndex > statusCompanyConfigIndex &&
+    statusQuotaProbeCacheIndex > statusQuotaProbeRefreshIndex &&
     statusQuotaSnapshotIndex > statusQuotaProbeCacheIndex &&
     statusQuotaEstimateIndex > statusQuotaSnapshotIndex &&
     statusQuotaReadIndex > statusQuotaEstimateIndex &&
@@ -104,6 +108,7 @@ assert(
 );
 for (const statusBoundary of [
   'request.nextUrl.searchParams.get("companyId")',
+  'request.headers.get("x-wtos-ai-quota-probe-refresh") === "1"',
   "resolveExactAiCompanyAuthorization",
   '.eq("user_id", user.id)',
   '.eq("company_id", requestedCompanyId)',
@@ -118,6 +123,7 @@ for (const statusBoundary of [
   "actorUserId: user.id",
   "policyId: companyPolicy.id",
   "policyUpdatedAt: companyPolicy.updated_at",
+  "forceRefresh: forceQuotaProbeRefresh",
   "const quotaProbeSnapshot = await fetchCrmSnapshot(client)",
   "estimateAiQuotaStatusProbe({",
   "companyId: authorization.companyId",
@@ -132,7 +138,9 @@ for (const statusBoundary of [
   "savedAnalysesReadAvailable: savedAnalysesReadProbe.error === null",
   "quotaStatus,",
   "quotaProbeEstimatedRequestTokens,",
-  "return noStoreJson(status, 200)",
+  'statusResponse.headers.set("x-wtos-ai-quota-probe-refresh", "1")',
+  "const statusResponse = noStoreJson(status, 200)",
+  "return statusResponse",
 ]) {
   includes(
     statusRoute,
@@ -186,6 +194,8 @@ for (const serviceBoundary of [
   "const aiQuotaCapabilityCache = new WeakMap",
   "const aiQuotaProbeCache = new Map",
   'createHash("sha256")',
+  "queuedRefresh",
+  "queueAiQuotaProbeRefresh(",
   "if (cacheEntry.inFlight)",
   "return cacheEntry.inFlight",
   "cacheEntry.expiresAt > checkedAt",
@@ -465,6 +475,7 @@ const quotaProbeCacheInput = {
     structuredOutputEnabled: true,
     actionExecutionEnabled: false,
   },
+  forceRefresh: false,
 };
 let quotaProbeNow = 1_000;
 let quotaProbeLoads = 0;
@@ -520,6 +531,262 @@ assert(
     () => quotaProbeNow,
   )) === 3_300 && quotaProbeLoads === 2,
   "An expired CRM snapshot estimate must be loaded again.",
+);
+
+let explicitRefreshLoads = 0;
+const explicitRefreshInput = {
+  ...quotaProbeCacheInput,
+  policyId: "77777777-7777-4777-8777-777777777777",
+};
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...explicitRefreshInput,
+      load: async () => {
+        explicitRefreshLoads += 1;
+        return 4_100;
+      },
+    },
+    () => 50_000,
+  )) === 4_100 && explicitRefreshLoads === 1,
+  "The initial status request must load one bounded CRM snapshot estimate.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...explicitRefreshInput,
+      forceRefresh: true,
+      load: async () => {
+        explicitRefreshLoads += 1;
+        return 4_200;
+      },
+    },
+    () => 50_001,
+  )) === 4_200 && explicitRefreshLoads === 2,
+  "An explicit Refresh must replace a still-live cached estimate.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...explicitRefreshInput,
+      load: async () => {
+        explicitRefreshLoads += 1;
+        return 4_250;
+      },
+    },
+    () => 50_002,
+  )) === 4_200 && explicitRefreshLoads === 2,
+  "A normal status reload after explicit Refresh must reuse its fresh estimate.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...explicitRefreshInput,
+      forceRefresh: true,
+      load: async () => {
+        explicitRefreshLoads += 1;
+        return 4_300;
+      },
+    },
+    () => 50_003,
+  )) === 4_300 && explicitRefreshLoads === 3,
+  "Each later explicit Refresh must replace the prior estimate in the same stable slot.",
+);
+
+let queuedRefreshLoads = 0;
+const queuedRefreshResolvers = [];
+const queuedRefreshInput = {
+  ...quotaProbeCacheInput,
+  policyId: "88888888-8888-4888-8888-888888888888",
+};
+const queuedRefreshLoad = async () => {
+  queuedRefreshLoads += 1;
+  return new Promise((resolve) => queuedRefreshResolvers.push(resolve));
+};
+const preRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  { ...queuedRefreshInput, load: queuedRefreshLoad },
+  () => 60_000,
+);
+await Promise.resolve();
+const queuedRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...queuedRefreshInput,
+    forceRefresh: true,
+    load: queuedRefreshLoad,
+  },
+  () => 60_001,
+);
+const coalescedQueuedRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...queuedRefreshInput,
+    forceRefresh: true,
+    load: queuedRefreshLoad,
+  },
+  () => 60_001,
+);
+const normalBehindQueuedRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...queuedRefreshInput,
+    load: queuedRefreshLoad,
+  },
+  () => 60_001,
+);
+await Promise.resolve();
+assert(
+  queuedRefreshLoads === 1 && queuedRefreshResolvers.length === 1,
+  "A Refresh arriving behind an older snapshot load must queue without concurrent fan-out.",
+);
+const latestQueuedRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...queuedRefreshInput,
+    forceRefresh: true,
+    load: queuedRefreshLoad,
+  },
+  () => 60_002,
+);
+await Promise.resolve();
+assert(
+  queuedRefreshLoads === 1,
+  "Rapid Refresh generations must collapse behind the one active snapshot load.",
+);
+queuedRefreshResolvers[0](4_400);
+assert(
+  (await preRefreshProbe) === 4_400,
+  "The older in-flight estimate must settle for its original caller.",
+);
+await Promise.resolve();
+assert(
+  queuedRefreshLoads === 2 && queuedRefreshResolvers.length === 2,
+  "The one coalesced Refresh must start after the older load settles.",
+);
+queuedRefreshResolvers[1](4_500);
+assert(
+  (await queuedRefreshProbe) === 4_500 &&
+    (await coalescedQueuedRefreshProbe) === 4_500 &&
+    (await latestQueuedRefreshProbe) === 4_500 &&
+    (await normalBehindQueuedRefreshProbe) === 4_500,
+  "All forced or normal callers behind a queued Refresh must receive the one freshly reloaded estimate.",
+);
+
+let activeRefreshLoads = 0;
+const activeRefreshResolvers = [];
+const activeRefreshInput = {
+  ...quotaProbeCacheInput,
+  policyId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  forceRefresh: true,
+};
+const firstActiveRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...activeRefreshInput,
+    load: async () => {
+      activeRefreshLoads += 1;
+      return new Promise((resolve) => activeRefreshResolvers.push(resolve));
+    },
+  },
+  () => 70_000,
+);
+await Promise.resolve();
+const laterActiveRefreshProbe = readCachedAiQuotaProbeEstimatedRequestTokens(
+  {
+    ...activeRefreshInput,
+    load: async () => {
+      activeRefreshLoads += 1;
+      return new Promise((resolve) => activeRefreshResolvers.push(resolve));
+    },
+  },
+  () => 70_001,
+);
+const normalBehindActiveRefreshProbe =
+  readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...activeRefreshInput,
+      forceRefresh: false,
+      load: async () => {
+        activeRefreshLoads += 1;
+        return 4_650;
+      },
+    },
+    () => 70_001,
+  );
+await Promise.resolve();
+assert(
+  activeRefreshLoads === 1 && activeRefreshResolvers.length === 1,
+  "A later explicit Refresh must queue behind an active Refresh without parallel fan-out.",
+);
+activeRefreshResolvers[0](4_600);
+assert(
+  (await firstActiveRefreshProbe) === 4_600,
+  "The first explicit Refresh must settle for its original caller.",
+);
+await Promise.resolve();
+assert(
+  activeRefreshLoads === 2 && activeRefreshResolvers.length === 2,
+  "A later explicit Refresh must run once after the earlier Refresh snapshot settles.",
+);
+activeRefreshResolvers[1](4_700);
+assert(
+  (await laterActiveRefreshProbe) === 4_700 &&
+    (await normalBehindActiveRefreshProbe) === 4_700,
+  "The later Refresh and following normal status request must receive the post-click estimate.",
+);
+
+let forcedFailureLoads = 0;
+const forcedFailureInput = {
+  ...quotaProbeCacheInput,
+  policyId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+};
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...forcedFailureInput,
+      load: async () => {
+        forcedFailureLoads += 1;
+        return 4_800;
+      },
+    },
+    () => 80_000,
+  )) === 4_800 && forcedFailureLoads === 1,
+  "The forced-failure fixture must begin with a warm successful estimate.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...forcedFailureInput,
+      forceRefresh: true,
+      load: async () => {
+        forcedFailureLoads += 1;
+        throw new Error("forced refresh failure must stay private");
+      },
+    },
+    () => 80_001,
+  )) === null && forcedFailureLoads === 2,
+  "A failed explicit Refresh must replace a warm success with fail-closed state.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...forcedFailureInput,
+      load: async () => {
+        forcedFailureLoads += 1;
+        return 4_900;
+      },
+    },
+    () => 85_000,
+  )) === null && forcedFailureLoads === 2,
+  "A failed explicit Refresh must never fall back to the older successful estimate.",
+);
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...forcedFailureInput,
+      load: async () => {
+        forcedFailureLoads += 1;
+        return 4_900;
+      },
+    },
+    () => 85_002,
+  )) === 4_900 && forcedFailureLoads === 3,
+  "A failed explicit Refresh must retry after the bounded failure TTL.",
 );
 
 let failedQuotaProbeNow = 100_000;
@@ -662,6 +929,23 @@ for (const resolve of quotaProbeCapacityResolvers.slice(1)) {
   resolve(5_000);
 }
 await Promise.all(quotaProbeCapacityPromises.slice(1));
+
+let invalidForceRefreshLoads = 0;
+assert(
+  (await readCachedAiQuotaProbeEstimatedRequestTokens(
+    {
+      ...quotaProbeCacheInput,
+      policyId: "99999999-9999-4999-8999-999999999999",
+      forceRefresh: "1",
+      load: async () => {
+        invalidForceRefreshLoads += 1;
+        return 5_200;
+      },
+    },
+    () => 600_000,
+  )) === null && invalidForceRefreshLoads === 0,
+  "Only an exact internal boolean may force the expensive quota-probe reload.",
+);
 
 async function rejectsQuotaCapability(responseFactory) {
   return !(await verifySupabaseAiQuotaServiceCapability(
@@ -1197,11 +1481,10 @@ for (const companySwitchBoundary of [
   "aiProviderStatusAbortRef.current?.abort()",
   "aiReviewAbortRef.current?.abort()",
   "activeAiCompanyRef.current = activeCompanyId",
-  "setAiResponses([])",
-  "setAiResponseCompanyId(null)",
+  "setAiResponseHistoryEvidence(null)",
   "setAiPilotResultEvidence(null)",
   "result.companyId !== requestCompanyId",
-  "aiResponseCompanyId === exactAiCompanyId",
+  "getCurrentAiResponses({",
   'reviewCompanyId === "all"',
   "currentAiPilotResult?.companyId !== reviewCompanyId",
   "action.companyId !== reviewCompanyId",
@@ -1233,6 +1516,10 @@ for (const exactCompanyUiBoundary of [
 for (const statusUiBoundary of [
   'useState<AiCompanyPilotStatus | null>(null)',
   '`/api/ai-tools/command?companyId=${encodeURIComponent(requestCompanyId)}`',
+  '"x-wtos-ai-quota-probe-refresh": "1"',
+  'response.headers.get("x-wtos-ai-quota-probe-refresh") !== "1"',
+  "shouldForceQuotaProbeRefresh(",
+  "acknowledgeQuotaProbeRefresh(",
   'credentials: "same-origin"',
   'cache: "no-store"',
   "isAiCompanyPilotStatus(payload, requestCompanyId)",
@@ -1265,10 +1552,13 @@ for (const statusUiBoundary of [
   "aiProviderStatusReloadSequence",
   "setAiProviderStatusReloadSequence((current) => current + 1)",
   "const [aiProviderStatusRefreshSequence, setAiProviderStatusRefreshSequence]",
+  "const consumedAiQuotaProbeRefreshSequenceRef = useRef(new Map<string, number>())",
   "await onScrollPreservingReload()",
   "setAiProviderStatusRefreshSequence((current) => current + 1)",
   'data-testid="workspace-refresh"',
   "statusRefreshSequence={aiProviderStatusRefreshSequence}",
+  "shouldForceQuotaProbeRefresh={shouldForceQuotaProbeRefresh}",
+  "acknowledgeQuotaProbeRefresh={acknowledgeQuotaProbeRefresh}",
   "type AiPilotResultEvidence = {",
   "statusRefreshSequence: number",
   "const requestStatusRefreshSequence = statusRefreshSequence",
@@ -1324,6 +1614,31 @@ for (const errorEvidenceBoundary of [
     `AI command errors must be exact-company and Refresh-generation scoped: ${errorEvidenceBoundary}.`,
   );
 }
+const providerStatusEffectIndex = crmApp.indexOf("const loadAiProviderStatus = async () =>");
+const providerStatusValidationIndex = crmApp.indexOf(
+  "isAiCompanyPilotStatus(payload, requestCompanyId)",
+  providerStatusEffectIndex,
+);
+const providerStatusAbortGuardIndex = crmApp.indexOf(
+  "controller.signal.aborted ||",
+  providerStatusValidationIndex,
+);
+const providerStatusRefreshAckIndex = crmApp.indexOf(
+  "acknowledgeQuotaProbeRefresh(",
+  providerStatusAbortGuardIndex,
+);
+const providerStatusPublishIndex = crmApp.indexOf(
+  "setAiProviderStatus(payload)",
+  providerStatusRefreshAckIndex,
+);
+assert(
+  providerStatusEffectIndex >= 0 &&
+    providerStatusValidationIndex > providerStatusEffectIndex &&
+    providerStatusAbortGuardIndex > providerStatusValidationIndex &&
+    providerStatusRefreshAckIndex > providerStatusAbortGuardIndex &&
+    providerStatusPublishIndex > providerStatusRefreshAckIndex,
+  "An explicit quota-probe Refresh must be acknowledged only after a valid, current exact-company status response.",
+);
 assert(
   !aiProvider.includes("reservedCostUsdToday: number;") &&
     !crmApp.includes("Reserved today:") &&
@@ -1337,7 +1652,7 @@ const aiCommandCompletionGuardIndex = crmApp.indexOf(
   crmApp.indexOf("const requestStatusRefreshSequence = statusRefreshSequence"),
 );
 const aiCommandSuccessResponseIndex = crmApp.indexOf(
-  "setAiResponses((current) => [result.response, ...current].slice(0, 6))",
+  "setAiResponseHistoryEvidence((current) => ({",
   aiCommandCompletionGuardIndex,
 );
 const aiCommandCatchIndex = crmApp.indexOf("} catch (currentError) {", aiCommandSuccessResponseIndex);
@@ -1346,7 +1661,7 @@ const aiCommandCatchGuardIndex = crmApp.indexOf(
   aiCommandCatchIndex,
 );
 const aiCommandFallbackResponseIndex = crmApp.indexOf(
-  "setAiResponses((current) => [fallbackResponse, ...current].slice(0, 6))",
+  "setAiResponseHistoryEvidence((current) => ({",
   aiCommandCatchGuardIndex,
 );
 assert(
@@ -1356,6 +1671,24 @@ assert(
     aiCommandFallbackResponseIndex > aiCommandCatchGuardIndex,
   "Current company and Refresh generation must be verified before publishing live or fallback AI responses.",
 );
+for (const responseEvidenceBoundary of [
+  "export type AiResponseHistoryEvidence = {",
+  "export function getCurrentAiResponses({",
+  "evidence.companyId !== companyId",
+  "evidence.statusRefreshSequence !== statusRefreshSequence",
+  "useState<AiResponseHistoryEvidence | null>(null)",
+  "evidence: aiResponseHistoryEvidence",
+  "companyId: requestCompanyId",
+  "statusRefreshSequence: requestStatusRefreshSequence",
+  "current?.companyId === requestCompanyId",
+  "current.statusRefreshSequence === requestStatusRefreshSequence",
+]) {
+  includes(
+    `${aiToolsSource}\n${crmApp}`,
+    responseEvidenceBoundary,
+    `Grounded AI response history must be exact-company and Refresh-generation scoped: ${responseEvidenceBoundary}.`,
+  );
+}
 for (const runtimeHealthSelectorBoundary of [
   "export function getCurrentAiRuntimeProviderHealth({",
   "evidence.companyId !== companyId",
