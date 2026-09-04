@@ -41711,7 +41711,12 @@ function AiProviderCard({
           />
         ) : null}
         <AiStatusBadge label="External actions disabled" tone="slate" />
-        {status ? <AiStatusBadge label={status.readiness.migrationStatus} tone="blue" /> : null}
+        {status ? (
+          <AiStatusBadge
+            label={status.readiness.migrationStatus}
+            tone={status.readiness.migrationStatus === "applied" ? "blue" : "amber"}
+          />
+        ) : null}
       </div>
     </div>
   );

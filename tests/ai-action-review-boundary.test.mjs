@@ -480,6 +480,7 @@ for (const invalidResponseFactory of [
 for (const savedAnalysesStatusBoundary of [
   "savedAnalysesReadAvailable: boolean;",
   "savedAnalysesReadAvailable = false",
+  "migrationApplied: savedAnalysesReadAvailable",
   "savedAnalysesReadAvailable,",
 ]) {
   includes(
@@ -822,6 +823,7 @@ for (const statusUiBoundary of [
   'aria-busy={isLoading}',
   'label={`${formatMoney(status.monthlyBudgetCents / 100)}/month`}',
   'label="External actions disabled"',
+  'tone={status.readiness.migrationStatus === "applied" ? "blue" : "amber"}',
   "providerStatus?.usageAccountingConfigured",
   "Usage accounting is not ready for this company. No provider call can run until the required controls are complete.",
   "getAiEndpointErrorMessage(",

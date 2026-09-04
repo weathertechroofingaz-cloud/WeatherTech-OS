@@ -663,7 +663,7 @@ export function buildAiCompanyPilotStatus({
 }): AiCompanyPilotStatus {
   const environmentReadiness = buildAiPilotReadiness({
     config,
-    migrationApplied: true,
+    migrationApplied: savedAnalysesReadAvailable,
   });
   const policyMatchesCompany = policy.company_id === companyId;
   const providerAllowed =

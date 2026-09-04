@@ -761,6 +761,7 @@ try {
   assertEqual(enabledCompanyStatus.monthlyBudgetCents, 5000, "AI status exposes the exact company monthly budget");
   assertEqual(enabledCompanyStatus.savedAnalysesReadAvailable, true, "AI status preserves authenticated saved-analysis read availability");
   assertEqual(enabledCompanyStatus.readiness.state, "live_ai_enabled", "Enabled company status is explicit");
+  assertEqual(enabledCompanyStatus.readiness.migrationStatus, "applied", "Verified saved-analysis schema reports its migration applied");
   assertEqual(enabledCompanyStatus.readiness.requiredOwnerSetup.length, 0, "Enabled company status has no provider setup action");
   assertEqual(enabledCompanyStatus.usageAccountingConfigured, true, "Enabled company status confirms usage accounting controls");
   assertEqual(enabledCompanyStatus.externalActionExecutionEnabled, false, "External action execution remains disabled");
@@ -769,6 +770,22 @@ try {
     !serializedCompanyStatus.includes("test-secret-key-never-serialized") &&
       !serializedCompanyStatus.includes("apiKeyConfigured"),
     "Sanitized company status must never serialize provider credentials or raw config",
+  );
+  const enabledCompanyWithUnverifiedSavedAnalyses = aiProvider.buildAiCompanyPilotStatus({
+    companyId: wtCompanyId,
+    policy: { ...baseCompanyPolicy, per_company_monthly_budget_cents: 5000 },
+    config: productionStatusConfig,
+    savedAnalysesReadAvailable: false,
+  });
+  assertEqual(
+    enabledCompanyWithUnverifiedSavedAnalyses.aiEnabled,
+    true,
+    "Optional saved-analysis schema readiness does not disable the live provider",
+  );
+  assertEqual(
+    enabledCompanyWithUnverifiedSavedAnalyses.readiness.migrationStatus,
+    "pending_or_unverified",
+    "An unverified saved-analysis schema cannot claim its migration is applied",
   );
   const excessiveCompanyBudgetStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
@@ -804,6 +821,7 @@ try {
   assertEqual(disabledCompanyStatus.readiness.state, "production_ai_disabled", "Disabled company status stays fail closed");
   assertEqual(disabledCompanyStatus.monthlyBudgetCents, 5000, "One company receives only its own policy budget");
   assertEqual(disabledCompanyStatus.savedAnalysesReadAvailable, false, "Saved-analysis read availability stays independent from provider policy readiness");
+  assertEqual(disabledCompanyStatus.readiness.migrationStatus, "pending_or_unverified", "A failed schema probe remains visibly unverified");
 
   const mismatchedCompanyStatus = aiProvider.buildAiCompanyPilotStatus({
     companyId: wtCompanyId,
