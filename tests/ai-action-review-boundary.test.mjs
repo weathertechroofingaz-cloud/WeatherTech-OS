@@ -116,17 +116,38 @@ for (const serviceBoundary of [
 }
 
 const membershipLookupIndex = commandPost.indexOf('.from("company_memberships")');
+const companyConfigIndex = commandPost.indexOf(
+  "const companyConfig = resolveCompanyAiProviderConfig({",
+);
 const preflightIndex = commandPost.indexOf("const localResult = preflightAiPilotCommand({");
 const requestAuditIndex = commandPost.indexOf('serviceClient.rpc("wtos_reserve_ai_request_v1"');
 const providerCallIndex = commandPost.indexOf("runAiPilotCommand({");
 
 assert(
   membershipLookupIndex >= 0 &&
+    companyConfigIndex > membershipLookupIndex &&
+    preflightIndex > companyConfigIndex &&
     preflightIndex > membershipLookupIndex &&
     requestAuditIndex > preflightIndex &&
     requestAuditIndex > membershipLookupIndex &&
     providerCallIndex > requestAuditIndex,
   "Command authorization and network-free local preflight must complete before the atomic reservation and provider call.",
+);
+const companyConfigExitBlock = commandPost.slice(companyConfigIndex, preflightIndex);
+for (const companyConfigExitBoundary of [
+  "if (!companyConfig.ok)",
+  "No provider call was attempted.",
+]) {
+  includes(
+    companyConfigExitBlock,
+    companyConfigExitBoundary,
+    `Disabled company AI policy must reject before quota reservation or provider execution: ${companyConfigExitBoundary}`,
+  );
+}
+assert(
+  !companyConfigExitBlock.includes("wtos_reserve_ai_request_v1") &&
+    !companyConfigExitBlock.includes("runAiPilotCommand({"),
+  "Disabled company AI policy must reject before quota reservation or provider execution.",
 );
 const localExitBlock = commandPost.slice(preflightIndex, requestAuditIndex);
 for (const localExitBoundary of [
@@ -319,6 +340,68 @@ for (const statusUiBoundary of [
     `Production AI UI status is missing boundary ${statusUiBoundary}.`,
   );
 }
+for (const browserStatusSuccessBoundary of [
+  "buildAiProviderStatusPolicyFixture(companies, target)",
+  "assertAiProviderStatusPolicyFixtureCompanies(companies, target)",
+  'target.kind === "hosted_non_production"',
+  "WEATHERTECH_REGRESSION_COMPANY_ID",
+  "IHC_REGRESSION_COMPANY_ID",
+  '"503d4701-ea18-4300-a4fa-91eb62cf6609"',
+  '"c0ae6238-909a-4273-9841-d044dd42a010"',
+  'hostedId: WEATHERTECH_REGRESSION_COMPANY_ID',
+  'hostedId: IHC_REGRESSION_COMPANY_ID',
+  "target.projectRef !== WEATHERTECH_REGRESSION_SUPABASE_PROJECT_REF",
+  "company.name !== name",
+  "company.trade !== trade",
+  'trade: "roofing"',
+  'trade: "painting"',
+  'enabledGroups.has("ai-tools")',
+  "seedAiProviderStatusPolicies(env, aiProviderStatusPolicyFixture)",
+  "expected zero pre-existing company policies",
+  'ai_enabled: false',
+  'daily_request_limit: 1',
+  'per_user_daily_request_limit: 1',
+  'per_company_monthly_budget_cents: 5000',
+  'expensive_task_confirmation_cents: 100',
+  'token_limit: 32000',
+  'timeout_ms: 15000',
+  'retry_limit: 1',
+  "row.company_id !== expected.company_id",
+  "row.daily_request_limit !== 1",
+  "row.per_user_daily_request_limit !== 1",
+  "row.expensive_task_confirmation_cents !== 100",
+  "row.token_limit !== 32000",
+  "row.timeout_ms !== 15000",
+  "row.retry_limit !== 1",
+  "row.last_reviewed_at !== null",
+  'phase !== "loaded"',
+  'budgetCents !== "5000"',
+  'card.getAttribute("data-ai-enabled") !== "false"',
+  'text.includes("$50/month")',
+  'text.includes("usage accounting is not ready for this company")',
+  'text.includes("no provider call can run")',
+  'text.includes("usage accounting is configured")',
+  'message.includes("ai provider access is disabled for this company")',
+  'message.includes("no provider call was attempted")',
+  'message.includes("showing local rule-based fallback")',
+  "cleanupAiProviderStatusPolicies(",
+  "`ai_usage_limits?id=in.${idFilter}`",
+  'deleted.some((row) => !fixture.ids.includes(row.id))',
+  'findByIds(env, "ai_usage_limits", fixture.ids)',
+  "databaseResidueCount: remaining.length",
+  "cleanup.aiProviderStatusPolicies = await cleanupAiProviderStatusPolicies(",
+  "Cleanup AI status policies: ${JSON.stringify(result.cleanup.aiProviderStatusPolicies)}",
+]) {
+  includes(
+    browserRegression,
+    browserStatusSuccessBoundary,
+    `The Browser regression must prove and clean a successful safe AI status fixture: ${browserStatusSuccessBoundary}`,
+  );
+}
+assert(
+  !browserRegression.includes('!["loaded", "error"].includes(phase)'),
+  "The Browser regression must not accept an error response as successful AI status evidence.",
+);
 for (const staleProviderClaim of [
   "AI provider not configured",
   "Live AI is disabled",
@@ -349,7 +432,7 @@ for (const companyScopeHydrationBoundary of [
 }
 for (const browserStatusBoundary of [
   "async function waitForAiProviderStatus(",
-  '!["loaded", "error"].includes(phase)',
+  'phase !== "loaded"',
   "requestSequence <= priorRequestSequence",
   "async function getAiProviderStatusRequestSequence(tab)",
   'card.getAttribute("data-ai-status-request-sequence")',
