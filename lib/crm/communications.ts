@@ -8,6 +8,7 @@ import {
   smsMessageStatusLabel,
 } from "./integrations";
 import { getLeadOwnerUserId } from "./marketingAccountability";
+import { getRecoveredGoHighLevelSyncLogs } from "./gohighlevelSyncRecovery";
 import type {
   BusinessPhoneNumberRecord,
   CalendarEventSyncRecord,
@@ -2434,9 +2435,15 @@ export function buildUnifiedInboxItems(
     };
   });
 
+  const recoveredIntegrationLogs = getRecoveredGoHighLevelSyncLogs(
+    snapshot.integrationSyncLogs, snapshot.integrationConnections,
+  );
   const integrationItems: UnifiedInboxItem[] = snapshot.integrationSyncLogs.map((log) => {
     const lead = getIntegrationLogLead(snapshot, log);
     const provider = getIntegrationInboxProvider(log.provider);
+    const recovery = recoveredIntegrationLogs.get(log.id);
+    const recovered = Boolean(recovery);
+    const needsReview = !recovered && (log.status === "failed" || log.status === "retrying");
 
     return {
       id: `integration-${log.id}`,
@@ -2476,23 +2483,29 @@ export function buildUnifiedInboxItems(
       attachments: compactAttachments([log.request_fingerprint]),
       createdAt: log.completed_at ?? log.last_attempted_at ?? log.created_at,
       updatedAt: log.updated_at,
-      status: integrationSyncLogStatusLabel(log.status),
-      priority: log.status === "failed" ? "high" : log.status === "retrying" ? "medium" : "low",
-      responseStatus: log.status === "failed" || log.status === "retrying" ? "waiting_on_us" : "resolved",
+      status: recovered
+        ? `${integrationSyncLogStatusLabel(log.status)} (${recovery?.kind === "setup_superseded" ? "earlier setup" : "recovered"})`
+        : integrationSyncLogStatusLabel(log.status),
+      priority: needsReview ? log.status === "failed" ? "high" : "medium" : "low",
+      responseStatus: needsReview ? "waiting_on_us" : "resolved",
       matchStatus: lead?.customer_id ? "matched_customer" : lead ? "matched_lead" : "manual_review_required",
       routingStatus: lead ? "Matched" : "Needs review",
       deliveryState: "not_applicable",
-      syncState: getSyncStateFromIntegrationStatus(log.status),
-      waitingSince: log.status === "failed" || log.status === "retrying" ? log.last_attempted_at ?? log.created_at : null,
-      suggestedNextAction: log.status === "failed" || log.status === "retrying"
+      syncState: recovered ? "synced" : getSyncStateFromIntegrationStatus(log.status),
+      waitingSince: needsReview ? log.last_attempted_at ?? log.created_at : null,
+      suggestedNextAction: recovered
+        ? recovery?.kind === "setup_superseded"
+          ? "Earlier setup attempt superseded by successful company connection"
+          : "Review historical failure; a newer matching operation succeeded"
+        : needsReview
         ? "Review provider sync failure and retry only when safe"
         : "Open the related CRM record",
-      isUnread: log.status === "failed" || log.status === "retrying",
+      isUnread: needsReview,
       isArchived: false,
-      isFailed: log.status === "failed",
+      isFailed: !recovered && log.status === "failed",
       isMissedCall: false,
-      isUnassigned: !lead?.customer_id,
-      followUpAt: log.next_retry_at,
+      isUnassigned: !recovered && !lead?.customer_id,
+      followUpAt: recovered ? null : log.next_retry_at,
       assignedTo: null,
       failureDetail: sanitizeIntegrationSyncLogText(log.error_message),
     };
@@ -2742,6 +2755,9 @@ export function buildCommunicationProviderReadiness(
   snapshot: CrmSnapshot,
   items: UnifiedInboxItem[],
 ): CommunicationProviderReadiness[] {
+  const recoveredIntegrationLogs = getRecoveredGoHighLevelSyncLogs(
+    snapshot.integrationSyncLogs, snapshot.integrationConnections,
+  );
   const providerDefinitions: Array<{
     provider: CommunicationProvider;
     label: string;
@@ -2775,7 +2791,7 @@ export function buildCommunicationProviderReadiness(
     {
       provider: "gohighlevel",
       label: "GoHighLevel",
-      detail: "GoHighLevel dry-run and sync-log activity is visible without enabling automations.",
+      detail: "Read-only HighLevel communication history and sync activity are visible; customer-facing actions remain disabled.",
     },
     {
       provider: "quickbooks",
@@ -2805,8 +2821,14 @@ export function buildCommunicationProviderReadiness(
     const providerLogs = snapshot.integrationSyncLogs.filter(
       (log) => getIntegrationInboxProvider(log.provider) === provider,
     );
-    const failedItems = providerItems.filter((item) => item.isFailed);
-    const failedLogs = providerLogs.filter((log) => log.status === "failed" || log.status === "retrying");
+    const failedItems = providerItems.filter((item) =>
+      item.isFailed && !(item.kind === "Integration" &&
+        recoveredIntegrationLogs.has(item.id.replace(/^integration-/, ""))),
+    );
+    const failedLogs = providerLogs.filter((log) =>
+      (log.status === "failed" || log.status === "retrying") &&
+      !recoveredIntegrationLogs.has(log.id),
+    );
     const businessPhoneCount =
       provider === "twilio"
         ? snapshot.businessPhoneNumbers.filter(

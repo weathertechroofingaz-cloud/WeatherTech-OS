@@ -19,6 +19,7 @@ import {
 } from "./aiTools";
 import { scopeCrmSnapshotByCompany, type CompanyScopeId } from "./companyScope";
 import { validateProviderActionCandidate } from "./aiActionRuntime";
+import { getRecoveredGoHighLevelSyncLogs } from "./gohighlevelSyncRecovery";
 
 export type AiPilotReadinessState =
   | "foundation_complete"
@@ -1477,10 +1478,18 @@ export function retrieveAuthorizedAiContext(
     );
   }
 
+  const recoveredIntegrationLogs = getRecoveredGoHighLevelSyncLogs(
+    scopedSnapshot.integrationSyncLogs, scopedSnapshot.integrationConnections,
+  );
   for (const log of scopedSnapshot.integrationSyncLogs.slice(0, 8)) {
+    const recovery = recoveredIntegrationLogs.get(log.id);
     push(
       sourceRecord("integration_sync_logs", log.id, `${log.provider} ${log.event_type}`, log.company_id, "Settings"),
-      `${log.status} ${log.error_message ?? ""} attempts ${log.attempt_count}`,
+      recovery
+        ? recovery.kind === "setup_superseded"
+          ? `Historical failed setup attempt superseded by successful company connection at ${recovery.log.completed_at}. The earlier attempted location is unknown; this row does not describe the current connection. Previous error: ${log.error_message ?? "none"}.`
+          : `Historical ${log.status} audit, recovered by a matching ${recovery.log.event_type} success at ${recovery.log.completed_at}. This row is not a current failure. Previous error: ${log.error_message ?? "none"}.`
+        : `${log.status} ${log.error_message ?? ""} attempts ${log.attempt_count}`,
       "saved_analysis",
       8,
     );

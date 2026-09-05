@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import { scopeCrmSnapshotByCompany, type CompanyScopeId } from "./companyScope";
 import { getLeadOwnerUserId } from "./marketingAccountability";
+import { getRecoveredGoHighLevelSyncLogs } from "./gohighlevelSyncRecovery";
 
 export type AiProviderKey = "disabled" | "openai" | "anthropic" | "owner_approved";
 export type AiTaskType =
@@ -1796,8 +1797,11 @@ export function buildAiPriorityItems(
     });
   }
 
+  const recoveredIntegrationLogs = getRecoveredGoHighLevelSyncLogs(
+    authorizedSnapshot.integrationSyncLogs, authorizedSnapshot.integrationConnections,
+  );
   for (const log of authorizedSnapshot.integrationSyncLogs) {
-    if (log.status === "failed" || log.status === "retrying") {
+    if ((log.status === "failed" || log.status === "retrying") && !recoveredIntegrationLogs.has(log.id)) {
       const source = integrationSource(log);
       push({
         id: `integration-${log.id}`,
